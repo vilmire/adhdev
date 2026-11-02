@@ -159,6 +159,24 @@ describe('plan (mini-DAG) availability', () => {
 })
 
 describe('deriveSessionActivity', () => {
+    it('finalizing and stopping stay in Running and are not labelled generating', () => {
+        for (const word of ['finalizing', 'stopping'] as const) {
+            const groups = buildBlueprintGroups(
+                [task({ id: `t-${word}`, status: 'assigned', assignedSessionId: 's1', assignedNodeId: 'node-1' })],
+                statusWithSession('s1', word),
+            )
+            expect(groups.running.map(row => row.task.id)).toEqual([`t-${word}`])
+            expect(groups.running[0].statusToken).toBe(word)
+            expect(groups.running[0].statusToken).not.toBe('generating')
+            const activity = deriveSessionActivity(statusWithSession('s1', word), { assignedSessionId: 's1' })
+            expect(activity?.generating).toBe(false)
+            expect(activity?.settling).toBe(word)
+        }
+        const mixed = deriveSessionActivity(statusWithSession('s1', 'stopping generating'), { assignedSessionId: 's1' })
+        expect(mixed?.settling).toBe('stopping')
+        expect(mixed?.generating).toBe(false)
+    })
+
     it('joins via assignedSessionId and reads generating/approval/choice from the status text', () => {
         expect(deriveSessionActivity(statusWithSession('s1', 'generating'), { assignedSessionId: 's1' })?.generating).toBe(true)
         expect(deriveSessionActivity(statusWithSession('s1', 'waiting_approval'), { assignedSessionId: 's1' })?.awaitingApproval).toBe(true)

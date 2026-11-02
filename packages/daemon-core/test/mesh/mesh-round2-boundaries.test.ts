@@ -21,7 +21,7 @@ const meshId = 'review-mesh';
 let workspace: string;
 const claim = { providerType: 'codex-cli', assignedModel: 'gpt-5.4', allowedTaskDifficulties: ['medium', 'difficult'] as const };
 const context = () => ({ deps: { statusInstanceId: 'daemon-host' }, components: () => ({}) }) as any;
-const proof = () => ({ workspace, machineId: 'review-machine' });
+const proof = () => ({ workspace, machineId: 'review-machine', repoIdentity: 'repo' });
 const row = (id: string) => getQueueEntryById(meshId, id)!;
 const task = (message = 'Task', targetNodeId = 'node', ownedPaths: string[] | undefined = ['file.ts']) =>
     enqueueTask(meshId, message, { difficulty: 'medium', targetNodeId, ownedPaths });
@@ -145,7 +145,7 @@ for (const phase of ['source', 'integration'] as const) {
             const store = MeshRuntimeStore.getInstance(); const scoped = task('Scoped');
             if (ordering === 'attested-first') expect(await revise(scoped.id, { phase })).toMatchObject({ success: true });
             const legacy = task('Legacy', 'legacy-alias', ['legacy.ts']);
-            expect(store.claimNextQueueTask(meshId, 'legacy-alias', 'legacy', [], { ...claim, physicalContext: { workspace: alias, machineId: 'review-machine' } })?.id).toBe(legacy.id);
+            expect(store.claimNextQueueTask(meshId, 'legacy-alias', 'legacy', [], { ...claim, physicalContext: { workspace: alias, machineId: 'review-machine', repoIdentity: 'repo' } })?.id).toBe(legacy.id);
             if (ordering === 'legacy-first') {
                 const before = row(scoped.id);
                 expect(await revise(scoped.id, { phase })).toMatchObject({ success: false }); expect(row(scoped.id)).toEqual(before);
@@ -159,7 +159,7 @@ it('integration is fenced beside a legacy writer in a real separate worktree, in
     const other = otherWorktree(); const integration = task('Integration');
     expect(await revise(integration.id, { phase: 'integration' })).toMatchObject({ success: true });
     const legacy = task('Legacy', 'other', ['legacy.ts']); const store = MeshRuntimeStore.getInstance();
-    expect(store.claimNextQueueTask(meshId, 'other', 'legacy', [], { ...claim, physicalContext: { workspace: other, machineId: 'review-machine' } })?.id).toBe(legacy.id);
+    expect(store.claimNextQueueTask(meshId, 'other', 'legacy', [], { ...claim, physicalContext: { workspace: other, machineId: 'review-machine', repoIdentity: 'repo' } })?.id).toBe(legacy.id);
     __resetMeshRuntimeStoreForTests();
     expect(MeshRuntimeStore.getInstance().claimNextQueueTask(meshId, 'node', 'integrator', [], { ...claim, physicalContext: proof() })).toBeNull();
     expect(row(legacy.id).status).toBe('assigned');
@@ -167,10 +167,12 @@ it('integration is fenced beside a legacy writer in a real separate worktree, in
 it('unknown legacy context and absent logical declarations remain fences despite caller workspace strings', async () => {
     const s = await source(); const legacy = enqueueTask(meshId, 'Unknown legacy', { difficulty: 'medium', targetNodeId: 'unknown' });
     const store = MeshRuntimeStore.getInstance();
-    expect(store.claimNextQueueTask(meshId, 'unknown', 'legacy', [], { ...claim, physicalContext: { workspace: '/invented/independent', machineId: 'fake' } })?.id).toBe(legacy.id);
-    expect(evaluateTaskOwnedPathsAdmission(store, meshId, row(s.id)).allowed).toBe(false);
-    expect(store.claimNextQueueTask(meshId, 'node', 'second', [], { ...claim, physicalContext: proof() })).toBeNull();
+    expect(store.claimNextQueueTask(meshId, 'unknown', 'legacy', [], { ...claim, physicalContext: { workspace: '/invented/independent', machineId: 'fake', repoIdentity: 'repo' } })).toBeNull();
+    expect(row(legacy.id).status).toBe('pending');
+    expect(row(legacy.id).hold?.reason).toBe('ownership_unproven');
     expect(row(legacy.id).ownershipScope).toBeUndefined();
+    expect(evaluateTaskOwnedPathsAdmission(store, meshId, row(s.id)).allowed).toBe(true);
+    expect(store.claimNextQueueTask(meshId, 'node', 'second', [], { ...claim, physicalContext: proof() })?.id).toBe(s.id);
 });
 it('pending launch reservations fence both ingress and claims, exclude self and expire normally', async () => {
     const s = await source(); const legacy = task('Reserved legacy', 'other', ['legacy.ts']); const store = MeshRuntimeStore.getInstance();
@@ -188,7 +190,7 @@ it('CONTROL two proven disjoint source worktrees retain concurrency and integrat
     expect(await revise(second.id, { phase: 'source' })).toMatchObject({ success: true });
     const store = MeshRuntimeStore.getInstance();
     expect(store.claimNextQueueTask(meshId, 'node', 'first', [], { ...claim, physicalContext: proof() })?.id).toBe(first.id);
-    expect(store.claimNextQueueTask(meshId, 'other', 'second', [], { ...claim, physicalContext: { workspace: state.mesh.nodes[1].workspace, machineId: 'review-machine' } })?.id).toBe(second.id);
+    expect(store.claimNextQueueTask(meshId, 'other', 'second', [], { ...claim, physicalContext: { workspace: state.mesh.nodes[1].workspace, machineId: 'review-machine', repoIdentity: 'repo' } })?.id).toBe(second.id);
     const integration = task('Integration'); const before = row(integration.id);
     expect(await revise(integration.id, { phase: 'integration' })).toMatchObject({ success: false }); expect(row(integration.id)).toEqual(before);
 });

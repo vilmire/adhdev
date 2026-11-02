@@ -19,6 +19,8 @@
         "failed": "실패",
         "idle": "대기",
         "generating": "작업 중",
+        "finalizing": "Finalizing",
+        "stopping": "Stopping",
         "awaitingApproval": "승인 필요"
     },
     "language": {
@@ -1136,6 +1138,8 @@
                 "sectionRecent": "최근",
                 "sectionHistory": "히스토리",
                 "generating": "생성 중",
+                "finalizing": "Finalizing",
+                "stopping": "Stopping",
                 "approvalNeeded": "승인 필요",
                 "choiceNeeded": "선택 필요",
                 "stageImplementing": "구현 중",
@@ -2116,6 +2120,8 @@
         "openingPanel": "여는 중...",
         "busyNoProgress": "에이전트가 진행 상황이 없습니다.",
         "busyGenerating": "에이전트가 응답을 생성 중입니다.",
+        "busyFinalizing": "Finalizing. Pending safe settlement is not generating.",
+        "busyStopping": "Stopping. Pending safe settlement is not generating.",
         "busyWaitingApproval": "승인 대기 중",
         "activityToggleLabel": "도구 단계",
         "activityToggleTitle": "도구·터미널·생각 단계 표시",

@@ -37,7 +37,7 @@ import {
     hasLoggedMigrationFailure,
     markLoggedMigrationFailure,
 } from './mesh-runtime-store-schema.js';
-import { claimNextQueueTask } from './mesh-runtime-store-claim.js';
+import { claimNextQueueTask, registerMeshRuntimeStoreForAdmission } from './mesh-runtime-store-claim.js';
 
 // A pre-idle terminal report cannot release a writer still awaiting quiescence.
 const ACTIVE_WRITER_CLAIM_SQL =
@@ -1099,6 +1099,8 @@ export class MeshRuntimeStore {
     deleteHandoffNoteTextOlderThan(cutoffIso: string): number { return deleteHandoffNoteTextOlderThan(this.db, cutoffIso); }
 
 }
+
+registerMeshRuntimeStoreForAdmission(() => MeshRuntimeStore.getInstance());
 
 // Re-export barrel: the retention sweep moved to mesh-runtime-store-turn-rows.ts
 // (pure move, file-size gate) — every existing

@@ -35,6 +35,8 @@ export const BLUEPRINT_HISTORY_LOAD_STEP = 30
 /** What the assigned session is live-doing, joined via assignedSessionId. */
 export interface BlueprintSessionActivity {
     generating: boolean
+    /** Pending safe settlement. Wins over a generating substring in the same text. */
+    settling?: 'finalizing' | 'stopping'
     awaitingApproval: boolean
     awaitingChoice: boolean
     /** Short human line (statusNote/title) for the blocked badge tooltip. */
@@ -58,8 +60,12 @@ export function deriveSessionActivity(
         for (const session of node.activeSessionDetails ?? []) {
             if (session?.sessionId !== sessionId) continue
             const text = `${session.state ?? ''} ${session.chatStatus ?? ''} ${session.lifecycle ?? ''}`.toLowerCase()
+            const settling = text.includes('stopping') ? 'stopping' as const
+                : text.includes('finalizing') ? 'finalizing' as const
+                : undefined
             return {
-                generating: text.includes('generating'),
+                generating: !settling && text.includes('generating'),
+                ...(settling ? { settling } : {}),
                 awaitingApproval: text.includes('approval'),
                 awaitingChoice: text.includes('choice'),
                 ...(session.statusNote || session.title ? { note: session.statusNote ?? session.title ?? undefined } : {}),
@@ -184,7 +190,7 @@ export interface BlueprintTaskRow {
      * 'generating' overrides 'assigned' when the claiming session is live
      * generating — the distinction the wireframe's 0.1-second read wants.
      */
-    statusToken: 'generating' | MeshTaskStatus
+    statusToken: 'generating' | 'finalizing' | 'stopping' | MeshTaskStatus
     /** Unmet dependency ids (scheduler predicate — dep status !== completed). */
     waitingOn: string[]
     /** `waitingOn`, named — the row's "waiting on: <short id · title>" line. */
@@ -280,7 +286,7 @@ export function buildBlueprintGroups(
             kind: 'task',
             section: isBlocked ? 'blocked' : isTerminal ? 'history' : 'running',
             task,
-            statusToken: activity?.generating ? 'generating' : task.status,
+            statusToken: activity?.settling ?? (activity?.generating ? 'generating' : task.status),
             waitingOn: node.waitingOn,
             waitingOnRefs: node.waitingOn.map(id => describeDepRef(id, taskById.get(id))),
             blockedByDeadDependency: node.waitingOn.some(id => {
@@ -303,7 +309,9 @@ export function buildBlueprintGroups(
     // Running: live work first (generating, then assigned), queued after,
     // newest first within each band — the top of the list is what moves.
     const runningRank = (row: BlueprintTaskRow): number =>
-        row.statusToken === 'generating' ? 0 : row.statusToken === 'assigned' ? 1 : 2
+        row.statusToken === 'generating' ? 0
+            : row.statusToken === 'finalizing' || row.statusToken === 'stopping' || row.statusToken === 'assigned' ? 1
+            : 2
     running.sort((a, b) => {
         const rank = runningRank(a) - runningRank(b)
         if (rank !== 0) return rank

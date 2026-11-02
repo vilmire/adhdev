@@ -56,11 +56,13 @@ import {
     directDispatchRecord,
     turnCancel,
 } from '../ipc/turn-commands.js';
-import { isMeshTaskDifficulty, MESH_TASK_DIFFICULTIES, appendWorkerProtocolFooter, readString } from '@adhdev/mesh-shared';
+import { isMeshTaskDifficulty, MESH_TASK_DIFFICULTIES, appendWorkerProtocolFooter, readString, daemonIdsEquivalent, normalizeOwnedPaths } from '@adhdev/mesh-shared';
 import {
     type MeshDeliveryMode,
     type MeshWorkQueueEntry,
     isTaskReadonly,
+    admitOwnedPathsForMesh,
+    attestLocalOwnership,
     readDirtyWriteGate,
     dirtyWriteVerdict,
     describeDirtyWriteRefusal,
@@ -269,26 +271,69 @@ function checkSendTaskNodeGates(ctx: MeshContext, node: LocalMeshNodeEntry, args
     // the claim path uses. A direct send names its node, so a dirty WORKTREE is a
     // branch continuation (dispatched, with a notice — buildWorkerDispatchBody) and only
     // a dirty BASE node is refused.
-    if (req.allowStaleNode || isTaskReadonly({ readonly: req.readonly, taskMode })) return null;
-    const dirtyGate = readDirtyWriteGate(node);
-    const dirty = dirtyWriteVerdict(dirtyGate, directDispatchTaskFacts(args, req)) === 'refuse';
-    const maxBehind = resolveAutoFastForwardPolicy(ctx.mesh).maxBehind;
-    const staleBehind = !isMeshNodeFreshEnoughToLaunch(node, { maxBehind });
-    if (!dirty && !staleBehind) return null;
-    const behind = typeof (node as any)?.git?.behind === 'number' ? (node as any).git.behind : undefined;
-    return JSON.stringify({
+    const readonlySend = isTaskReadonly({ readonly: req.readonly, taskMode });
+    if (!req.allowStaleNode && !readonlySend) {
+        const dirtyGate = readDirtyWriteGate(node);
+        const dirty = dirtyWriteVerdict(dirtyGate, directDispatchTaskFacts(args, req)) === 'refuse';
+        const maxBehind = resolveAutoFastForwardPolicy(ctx.mesh).maxBehind;
+        const staleBehind = !isMeshNodeFreshEnoughToLaunch(node, { maxBehind });
+        if (dirty || staleBehind) {
+            const behind = typeof (node as any)?.git?.behind === 'number' ? (node as any).git.behind : undefined;
+            return JSON.stringify({
+                success: false,
+                recoverable: true,
+                code: dirty ? 'dirty_workspace' : 'node_stale_behind_upstream',
+                reason: dirty ? 'dirty_workspace' : 'node_stale_behind_upstream',
+                nodeId: args.node_id,
+                sessionId: args.session_id,
+                taskMode: taskMode || 'unspecified',
+                error: dirty
+                    ? `Refusing a non-readonly direct dispatch: ${describeDirtyWriteRefusal(dirtyGate, `'${args.node_id}'`)} — the uncommitted changes are the user's, not a task's.`
+                    : `Node '${args.node_id}' is behind its upstream${behind !== undefined ? ` (${behind} commit(s), max ${maxBehind ?? 0})` : ''} — refusing a non-readonly direct dispatch against stale code.`,
+                nextAction: `Let the node's auto fast-forward / clean-up run first, retry with a readonly task_mode, or pass allow_stale_node: true to dispatch anyway (e.g. a task whose job IS to fix the dirty/stale tree).`,
+            });
+        }
+    }
+    if (readonlySend) return null;
+    return directSendOwnershipRefusal(ctx, node, args, req);
+}
+
+function directSendOwnershipRefusal(ctx: MeshContext, node: LocalMeshNodeEntry, args: MeshSendTaskArgs, req: SendTaskRequest): string | null {
+    const declared = normalizeOwnedPaths(req.ownedPaths);
+    const refuse = (unknownField: string, resolution: string) => JSON.stringify({
         success: false,
         recoverable: true,
-        code: dirty ? 'dirty_workspace' : 'node_stale_behind_upstream',
-        reason: dirty ? 'dirty_workspace' : 'node_stale_behind_upstream',
+        code: 'ownership_unproven',
+        reason: 'ownership_unproven',
+        unknownField,
         nodeId: args.node_id,
         sessionId: args.session_id,
-        taskMode: taskMode || 'unspecified',
-        error: dirty
-            ? `Refusing a non-readonly direct dispatch: ${describeDirtyWriteRefusal(dirtyGate, `'${args.node_id}'`)} — the uncommitted changes are the user's, not a task's.`
-            : `Node '${args.node_id}' is behind its upstream${behind !== undefined ? ` (${behind} commit(s), max ${maxBehind ?? 0})` : ''} — refusing a non-readonly direct dispatch against stale code.`,
-        nextAction: `Let the node's auto fast-forward / clean-up run first, retry with a readonly task_mode, or pass allow_stale_node: true to dispatch anyway (e.g. a task whose job IS to fix the dirty/stale tree).`,
+        error: resolution,
+        resolution,
     });
+    if (declared.declaration.paths.length === 0) return refuse('ownedPaths', 'ownership_unproven: ownedPaths');
+    const localDaemonId = ctx.localDaemonId || '';
+    if (!node.daemonId || !localDaemonId || !daemonIdsEquivalent(node.daemonId, localDaemonId)) {
+        return refuse('workspace', 'remote target has not attested a workspace on this host');
+    }
+    const workspace = typeof node.workspace === 'string' ? node.workspace : '';
+    const machineId = ctx.localMachineId || '';
+    const repoIdentity = ctx.mesh.repoIdentity || '';
+    let scope;
+    try {
+        scope = attestLocalOwnership({
+            repoIdentity, machineId, nodeId: node.id, workspace, phase: 'source', paths: declared.declaration,
+        });
+    } catch (e: any) {
+        const message = typeof e?.message === 'string' ? e.message : String(e);
+        const forbidden = message.match(/source_phase_path_forbidden:\s*(\S+)/);
+        return refuse(forbidden?.[1] || 'workspace', message);
+    }
+    const admission = admitOwnedPathsForMesh(ctx.mesh.id, { id: 'direct-send', ownedPaths: declared.declaration, ownershipScope: scope, taskMode: req.taskMode, readonly: req.readonly });
+    if (!admission.allowed) {
+        return refuse('ownershipScope', admission.detail || 'an assigned writer has no attested ownershipScope or shares this resource');
+    }
+    return null;
 }
 
 /**

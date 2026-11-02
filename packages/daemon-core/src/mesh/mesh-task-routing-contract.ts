@@ -23,7 +23,7 @@ export function normalizeRoutingPreferences(value: unknown): MeshRoutingPreferen
     return result;
 }
 
-export interface ReviewRoutingContext { workspace: string; machineId: string }
+export interface ReviewRoutingContext { workspace: string; machineId: string; repoIdentity?: string }
 /** Input availability is proven locally; a remote source needs a future verified transfer contract. */
 export function reviewRoutingRefusal(task: Pick<MeshWorkQueueEntry, 'review' | 'readonly' | 'taskMode'> & Partial<Pick<MeshWorkQueueEntry, 'reviewerWorkspace'>>, source: MeshWorkQueueEntry | undefined | null, provider: string | undefined, context: ReviewRoutingContext | undefined, active: readonly MeshWorkQueueEntry[] = [], claimingSessionId?: string): string | undefined {
     if (!task.review) return undefined;

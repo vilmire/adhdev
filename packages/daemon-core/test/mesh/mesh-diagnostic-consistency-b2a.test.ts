@@ -123,6 +123,26 @@ describe('B2a diagnostic consistency', () => {
         expect(view.blockingTasks.map(b => b.taskId)).toEqual([holder.id]);
     });
 
+    it('names an assigned writer that has paths and no ownershipScope', () => {
+        const writer = {
+            id: 'writer-unscoped',
+            message: 'Live writer',
+            status: 'assigned',
+            ownedPaths: { paths: [{ path: 'oss/packages/daemon-core/src/a.ts', subtree: false }] },
+        } as MeshWorkQueueEntry;
+        const candidate = {
+            id: 'candidate-providers',
+            message: 'Providers only',
+            status: 'pending',
+            ownedPaths: { paths: [{ path: 'adhdev-providers/specs/example.md', subtree: false }] },
+        } as MeshWorkQueueEntry;
+        const context = queueHoldContext(candidate, 'owned_paths_conflict', [writer, candidate]);
+        expect(context.blockingTaskIds).toEqual(['writer-unscoped']);
+        expect(context.detail.unknownField).toBe('ownershipScope');
+        expect(context.detail.message).not.toBe('unknown_blocker_no_evidence');
+        expect(context.detail.resolution).toMatch(/completed, failed, or cancelled/);
+    });
+
     it('marks unknown_blocker_no_evidence when owned_paths hold has no knowable blocker identity', () => {
         const mesh = meshId();
         const task = enqueueTask(mesh, 'Orphan held write', {

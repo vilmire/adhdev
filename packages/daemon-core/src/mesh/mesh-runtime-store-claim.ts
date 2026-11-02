@@ -10,7 +10,7 @@ function noteStageReviewRefusal(candidate: MeshWorkQueueEntry, refusal: string |
     if (candidate.origin === 'stage') noteReviewRefusal(candidate.id, refusal);
     return refusal;
 }
-import { comparePhysicalOwnership, currentPhysicalScope } from './mesh-physical-ownership.js';
+import { attestLocalOwnership, comparePhysicalOwnership, currentPhysicalScope, explainPhysicalOverlap } from './mesh-physical-ownership.js';
 import type { PhysicalOwnershipScope } from '@adhdev/mesh-shared';
 import { queueHoldContext, setQueueTaskHold } from './mesh-queue-hold.js';
 /**
@@ -67,18 +67,24 @@ export function readInFlightOwnershipMeshWide(
 export function findTaskOwnedPathsConflicts(
     candidate: OwnershipCandidate,
     inFlightOwnership: readonly ScopedInFlightOwnership[],
+    prospectiveScope?: PhysicalOwnershipScope,
 ) {
     if (isTaskReadonly(candidate)) return [];
     const paths = candidate.ownedPaths ?? unknownWriterPaths;
-    const scope = currentPhysicalScope(candidate.ownershipScope, paths);
+    const scope = prospectiveScope ?? currentPhysicalScope(candidate.ownershipScope, paths);
     return inFlightOwnership.flatMap(other => {
         if (other.taskId === candidate.id) return [];
         const otherScope = currentPhysicalScope(other.ownershipScope, other.paths);
         if (other.ownershipScope && !otherScope) return [{ taskId: other.taskId, overlappingPaths: ['unproven_active_physical_resource'] }];
         const comparison = comparePhysicalOwnership(paths, scope, other.paths, otherScope);
         if (!comparison.physicalConflict) return [];
+        const explained = explainPhysicalOverlap(paths, scope, other.paths, otherScope);
+        const label = explained.kind === 'resource' || explained.kind === 'worktree'
+            ? `${explained.kind}:${explained.path}`
+            : explained.kind === 'missing_scope' ? `missing_scope:${explained.side}` : explained.kind;
         const logical = findOwnershipConflicts(paths, [other]);
-        return logical.length ? logical : [{ taskId: other.taskId, overlappingPaths: ['physical_workspace_or_shared_resource'] }];
+        const base = logical.length ? logical : [{ taskId: other.taskId, overlappingPaths: ['physical_workspace_or_shared_resource'] }];
+        return base.map(conflict => ({ ...conflict, overlappingPaths: [...conflict.overlappingPaths, label] }));
     });
 }
 
@@ -109,6 +115,23 @@ export function evaluateTaskOwnedPathsAdmission(
         conflicts,
         detail: formatOwnedPathsConflictDetail(conflicts),
     };
+}
+
+let meshRuntimeStoreForAdmission: (() => import('./mesh-runtime-store.js').MeshRuntimeStore) | undefined;
+
+/** Called from mesh-runtime-store once the class exists. Keeps this module from value-importing the store. */
+export function registerMeshRuntimeStoreForAdmission(getInstance: () => import('./mesh-runtime-store.js').MeshRuntimeStore): void {
+    meshRuntimeStoreForAdmission = getInstance;
+}
+
+/** Same admission helper auto-launch uses, bound to the process store after modules have loaded. */
+export function admitOwnedPathsForMesh(
+    meshId: string,
+    candidate: OwnershipCandidate | undefined,
+): ReturnType<typeof evaluateTaskOwnedPathsAdmission> {
+    const getInstance = meshRuntimeStoreForAdmission;
+    if (!getInstance) throw new Error('ownership_store_unbound');
+    return evaluateTaskOwnedPathsAdmission(getInstance(), meshId, candidate);
 }
 
 // O(1) claim: transaction ensures only one session claims a pending task
@@ -329,10 +352,49 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
         // node-busy capacity gates above, which stay scoped to assignedRowsForDaemon
         // (one machine's resources).
         const inFlightOwnership = readInFlightOwnershipMeshWide(host, meshId);
-        const ownedPathsConflictFor = (candidate: MeshWorkQueueEntry) =>
-            findTaskOwnedPathsConflicts(candidate, inFlightOwnership);
+        const ownershipProof = new Map<string, { scope: PhysicalOwnershipScope } | { error: string }>();
+        const proofFor = (candidate: MeshWorkQueueEntry): { scope: PhysicalOwnershipScope } | { error: string } | undefined => {
+            const ctx = opts?.physicalContext;
+            if (!ctx?.workspace || !ctx.machineId || isTaskReadonly(candidate)) return undefined;
+            const cached = ownershipProof.get(candidate.id);
+            if (cached) return cached;
+            let result: { scope: PhysicalOwnershipScope } | { error: string };
+            if (!candidate.ownedPaths?.paths.length) result = { error: 'ownership_unproven: ownedPaths' };
+            else {
+                const current = currentPhysicalScope(candidate.ownershipScope, candidate.ownedPaths);
+                if (current) result = { scope: current };
+                else if (candidate.ownershipScope) result = { error: 'ownership_unproven: unproven_active_physical_resource' };
+                else {
+                    try {
+                        const phase = candidate.phase === 'integration' ? 'integration' : 'source';
+                        const attested = attestLocalOwnership({
+                            repoIdentity: ctx.repoIdentity || '',
+                            machineId: ctx.machineId,
+                            nodeId,
+                            workspace: ctx.workspace,
+                            phase,
+                            paths: candidate.ownedPaths,
+                        });
+                        const reproduced = currentPhysicalScope(attested, candidate.ownedPaths);
+                        result = reproduced ? { scope: reproduced } : { error: 'ownership_unproven: unproven_active_physical_resource' };
+                    } catch (e: any) {
+                        result = { error: typeof e?.message === 'string' ? e.message : String(e) };
+                    }
+                }
+            }
+            ownershipProof.set(candidate.id, result);
+            return result;
+        };
+        const ownedPathsConflictFor = (candidate: MeshWorkQueueEntry) => {
+            const proof = proofFor(candidate);
+            return findTaskOwnedPathsConflicts(candidate, inFlightOwnership, proof && 'scope' in proof ? proof.scope : undefined);
+        };
         const ownedPathsAllows = (candidate: MeshWorkQueueEntry): boolean =>
             ownedPathsConflictFor(candidate).length === 0;
+        const ownershipProven = (candidate: MeshWorkQueueEntry): boolean => {
+            const proof = proofFor(candidate);
+            return !proof || !('error' in proof);
+        };
 
         // GIT-GATE (owner-requested follow-up to H1, wiring-unification): the
         // auto-launch SPAWN gate already refuses a dirty or stale-behind node
@@ -474,6 +536,7 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
             { reason: 'convergence_target_is_worktree', test: convergenceAllows },
             { reason: 'target_pin_unmatched', test: targetMatches },
             { reason: 'physical_context_changed', test: physicalContextMatches },
+            { reason: 'ownership_unproven', test: ownershipProven },
             { reason: 'review_independence_required', test: c => reviewRefusal(c) !== 'review_independence_required' && reviewRefusal(c) !== 'review_requires_readonly' },
             { reason: 'review_input_unavailable', test: c => reviewRefusal(c) !== 'review_input_unavailable' },
             { reason: 'review_input_busy', test: c => reviewRefusal(c) !== 'review_input_busy' },
@@ -497,7 +560,19 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
                 // exclusive writers). queueHoldContext must project that set — not re-filter
                 // to status==='assigned' — so hold blockers match the refusal predicate.
                 holdBlockers ??= (host.assignedRowsMeshWide(meshId)).map(row => JSON.parse(row.payload) as MeshWorkQueueEntry);
-                const context = queueHoldContext(candidate, gate.reason, holdBlockers, nodeId);
+                const prospective = gate.reason === 'owned_paths_conflict'
+                    ? (() => { const proof = proofFor(candidate); return proof && 'scope' in proof ? proof.scope : undefined; })()
+                    : undefined;
+                const context = queueHoldContext(candidate, gate.reason, holdBlockers, nodeId, prospective);
+                if (gate.reason === 'ownership_unproven') {
+                    const proof = proofFor(candidate);
+                    const message = proof && 'error' in proof ? proof.error : 'ownership_unproven';
+                    const forbidden = message.match(/source_phase_path_forbidden:\s*(\S+)/);
+                    const escaped = message.match(/ownership_symlink_escape:\s*(\S+)/);
+                    const unknownField = forbidden?.[1] || escaped?.[1] || (/ownedPaths/.test(message) ? 'ownedPaths' : 'workspace');
+                    context.blockingTaskIds = [];
+                    context.detail = { unknownField, resolution: message };
+                }
                 if (gate.reason === 'dependencies_unsatisfied') context.blockingTaskIds = (candidate.dependsOn || []).filter(id => depStatus.get(id) !== 'completed');
                 const previousHold = JSON.stringify(candidate.hold);
                 setQueueTaskHold(candidate, gate.reason, context);
@@ -513,6 +588,10 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
             // task id(s) and path(s) rather than the generic "closest candidate"
             // detail — that is exactly the diagnostic the design doc asks for
             // ("refused ... instead of silently racing it").
+            if (selected.reason === 'ownership_unproven' && selected.deepest) {
+                const proof = proofFor(selected.deepest);
+                return refuse('ownership_unproven', proof && 'error' in proof ? proof.error : 'ownership_unproven', selected.deepest);
+            }
             if (selected.reason === 'owned_paths_conflict' && selected.deepest) {
                 const conflicts = ownedPathsConflictFor(selected.deepest);
                 return refuse('owned_paths_conflict', formatOwnedPathsConflictDetail(conflicts), selected.deepest);
@@ -533,6 +612,14 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
                 selected.deepest);
         }
         const entry = selected.entry;
+        const admittedProof = proofFor(entry);
+        if (admittedProof && 'error' in admittedProof) return refuse('ownership_unproven', admittedProof.error, entry);
+        if (admittedProof && 'scope' in admittedProof) {
+            const reproduced = currentPhysicalScope(admittedProof.scope, entry.ownedPaths!);
+            if (!reproduced) return refuse('ownership_unproven', 'unproven_active_physical_resource', entry);
+            entry.ownershipScope = reproduced;
+            entry.phase = entry.phase === 'integration' ? 'integration' : 'source';
+        }
 
         // GIT-GATE: a readonly candidate bypasses nodeNotDirty/nodeNotStaleBehind above
         // (an N-way readonly diagnosis does not touch the tree), but the operator asked

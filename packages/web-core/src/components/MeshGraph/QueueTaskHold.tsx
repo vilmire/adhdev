@@ -8,11 +8,14 @@ export function QueueTaskHold({ task, nowMs = Date.now() }: { task: RepoMeshQueu
     const ageMinutes = Math.max(0, Math.floor((nowMs - Date.parse(hold.since)) / 60_000)) || 0
     const blockers = hold.blockingTaskIds.map(id => {
         const title = hold.blockingTasks?.find(other => other.taskId === id)?.title
-        return title ? `${title} (${id.slice(0, 8)})` : id.slice(0, 8)
+        return title ? `${title} (${id})` : id
     }).join(', ')
+    const detail = hold.detail as { unknownField?: string; canonicalResource?: string; resolution?: string; message?: string } | undefined
+    const extra = [detail?.unknownField, detail?.canonicalResource, detail?.resolution, detail?.message].filter(Boolean).join(' · ')
     return (
         <div className="text-3xs text-status-warning" title={JSON.stringify(hold.detail)}>
             {t(blockers ? 'mesh.overview.taskHeldBy' : 'mesh.overview.taskHeld', { reason: hold.reason, task: blockers })}
+            {extra ? ` · ${extra}` : ''}
             {' · '}{t('mesh.overview.taskHeldAge', { count: ageMinutes })}
         </div>
     )

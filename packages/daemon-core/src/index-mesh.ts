@@ -126,6 +126,8 @@ export type { MeshFastForwardNodeArgs, MeshFastForwardPlannedStep, MeshFastForwa
 
 // ── Mesh Work Queue (GUPP) ──
 export { enqueueTask, enqueueTaskBatch, recordDirectDispatchTask, getQueue, claimNextTask, updateTaskStatus, __writeTaskStatusForTests, updateSessionTaskStatus, cancelTask, requeueTask, getMeshQueueStats, getMeshQueueRevision, getActiveDirectDispatches, terminalizeSiblingDispatch, cancelDirectDispatchAttempts, recordMeshToolCall, assertNoDependencyCycle, hasPendingDependents, MESH_TASK_PRIORITIES } from './mesh/mesh-work-queue.js';
+export { admitOwnedPathsForMesh } from './mesh/mesh-runtime-store-claim.js';
+export { attestLocalOwnership } from './mesh/mesh-physical-ownership.js';
 // C-W9a: the PURE queue helpers are exported from their leaf modules, so the
 // mcp-server can use them without value-importing the DB-backed queue module
 // (check:boundaries C8 forbids mesh-work-queue / mesh-ledger there).

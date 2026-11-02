@@ -24,6 +24,54 @@ function canonical(p: string): string {
 }
 const sourceForbidden = (p: string) => p === '' || p === 'oss' || /(^|\/)(\.git|vendor|dist|node_modules)(\/|$)/.test(p);
 
+function gitText(cwd: string, args: readonly string[]): string | undefined {
+    try {
+        return execFileSync('git', ['-C', cwd, ...args], { windowsHide: true, encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    } catch { return undefined; }
+}
+
+function nearestExistingDir(target: string): string {
+    let cursor = target;
+    for (;;) {
+        try {
+            const st = lstatSync(cursor);
+            if (st.isSymbolicLink()) {
+                const resolved = realpathSync.native(cursor);
+                return statSync(resolved).isDirectory() ? resolved : path.dirname(resolved);
+            }
+            return st.isDirectory() ? realpathSync.native(cursor) : path.dirname(cursor);
+        } catch (e: any) {
+            if (e.code !== 'ENOENT') throw e;
+            const parent = path.dirname(cursor);
+            if (parent === cursor) return cursor;
+            cursor = parent;
+        }
+    }
+}
+
+function pushResource(resources: PhysicalOwnershipScope['resources'], item: PhysicalOwnershipScope['resources'][number]): void {
+    if (resources.some(existing => existing.path === item.path)) return;
+    resources.push(item);
+}
+
+/** A declared path that enters a nested git checkout fences that checkout's common store. The root common dir stays out of `resources`. */
+function recordNestedGitStores(worktree: string, declaredPath: string, resources: PhysicalOwnershipScope['resources']): void {
+    const resolved = canonical(path.resolve(worktree, declaredPath));
+    const dir = nearestExistingDir(resolved);
+    const topRaw = gitText(dir, ['rev-parse', '--show-toplevel']);
+    if (!topRaw) return;
+    let top: string;
+    try { top = realpathSync.native(topRaw); } catch { return; }
+    if (top === worktree) return;
+    const commonRaw = gitText(top, ['rev-parse', '--git-common-dir']);
+    if (!commonRaw) return;
+    const common = realpathSync.native(path.resolve(top, commonRaw));
+    for (const [name, subtree] of [['refs', true], ['objects', true], ['config', false]] as const) {
+        const resourcePath = canonical(path.join(common, name));
+        pushResource(resources, { path: resourcePath, identity: identity(resourcePath), subtree });
+    }
+}
+
 export function attestLocalOwnership(input: {
     repoIdentity: string; machineId: string; nodeId: string; workspace: string;
     phase: MeshTaskPhase; paths: OwnedPathsDeclaration;
@@ -65,9 +113,10 @@ export function attestLocalOwnership(input: {
         if (!inside(worktree, resolved) || (input.phase === 'source' && sourceForbidden(path.relative(worktree, resolved).split(path.sep).join('/')))) throw new Error(`ownership_symlink_escape: ${entry.path}`);
         if (entry.subtree) inspectSubtree(resolved);
         resources.push({ path: resolved, identity: identity(resolved), subtree: entry.subtree });
+        recordNestedGitStores(worktree, entry.path, resources);
     }
-    // Scoped tests/builds share package outputs and workspace links. Refuse external
-    // aliases rather than asserting that a second pathname proves isolation.
+    // Build links may leave the worktree. Record the resolved inode so admission
+    // can fence a shared store. A failed attest must not leave the row unscoped.
     const buildPaths = ['node_modules', 'oss/node_modules'];
     for (const base of ['packages', 'oss/packages']) {
         try { for (const name of readdirSync(path.join(worktree, base))) {
@@ -79,9 +128,11 @@ export function attestLocalOwnership(input: {
         } } catch { /* no packages in a small repository */ }
     }
     for (const relative of buildPaths) {
-        const resolved = canonical(path.join(worktree, relative));
-        if (!inside(worktree, resolved)) throw new Error(`ownership_build_resource_escape: ${relative}`);
-        resources.push({ path: resolved, identity: identity(resolved), subtree: true });
+        let resolved: string;
+        try { resolved = canonical(path.join(worktree, relative)); } catch { continue; }
+        const resolvedIdentity = identity(resolved);
+        if (!resolvedIdentity) continue;
+        pushResource(resources, { path: resolved, identity: resolvedIdentity, subtree: true });
     }
     return { version: 1, repoIdentity: input.repoIdentity, machineId: input.machineId, nodeId: input.nodeId,
         worktree, worktreeIdentity: identity(worktree)!, gitDir, commonGitDir, gitResources, phase: input.phase, resources, declaration: input.paths.paths };
@@ -96,18 +147,37 @@ export function currentPhysicalScope(scope: PhysicalOwnershipScope | undefined, 
     } catch { return undefined; }
 }
 
+export type PhysicalOverlapExplanation =
+    | { kind: 'missing_scope'; side: 'a' | 'b' }
+    | { kind: 'worktree'; path: string }
+    | { kind: 'resource'; path: string }
+    | { kind: 'integration_repo' }
+    | { kind: 'none' };
+
+function resourcesOverlap(x: PhysicalOwnershipScope['resources'][number], y: PhysicalOwnershipScope['resources'][number]): boolean {
+    return x.path === y.path || (!!x.identity && x.identity === y.identity) || (x.subtree && inside(x.path, y.path)) || (y.subtree && inside(y.path, x.path));
+}
+
+/** First concrete reason comparePhysicalOwnership uses. The two must not drift. */
+export function explainPhysicalOverlap(a: OwnedPathsDeclaration, aScope: PhysicalOwnershipScope | undefined, b: OwnedPathsDeclaration, bScope: PhysicalOwnershipScope | undefined): PhysicalOverlapExplanation {
+    void a; void b;
+    if (!aScope) return { kind: 'missing_scope', side: 'a' };
+    if (!bScope) return { kind: 'missing_scope', side: 'b' };
+    if (aScope.repoIdentity === bScope.repoIdentity && (aScope.phase === 'integration' || bScope.phase === 'integration')) return { kind: 'integration_repo' };
+    if (aScope.machineId !== bScope.machineId) return { kind: 'none' };
+    if ((aScope.phase === 'integration' || bScope.phase === 'integration')
+        && (aScope.commonGitDir === bScope.commonGitDir || Object.values(aScope.gitResources).some(p => Object.values(bScope.gitResources).includes(p)))) return { kind: 'integration_repo' };
+    if (aScope.worktree === bScope.worktree || aScope.worktreeIdentity === bScope.worktreeIdentity || aScope.gitDir === bScope.gitDir) return { kind: 'worktree', path: aScope.worktree };
+    for (const x of aScope.resources) for (const y of bScope.resources) {
+        if (resourcesOverlap(x, y)) return { kind: 'resource', path: x.path === y.path || (x.subtree && inside(x.path, y.path)) ? y.path : x.path };
+    }
+    return { kind: 'none' };
+}
+
 export function comparePhysicalOwnership(a: OwnedPathsDeclaration, aScope: PhysicalOwnershipScope | undefined, b: OwnedPathsDeclaration, bScope: PhysicalOwnershipScope | undefined): { physicalConflict: boolean; logicalOverlap: boolean } {
     const logicalOverlap = findOwnershipConflicts(a, [{ taskId: 'other', paths: b }]).length > 0;
     // Legacy/unknown writers may touch the same workspace, build outputs or common
     // Git resources regardless of their logical declarations. Only two current
     // attestations can prove independence; absence must never bypass a fence.
-    if (!aScope || !bScope) return { physicalConflict: true, logicalOverlap };
-    if (aScope.repoIdentity === bScope.repoIdentity && (aScope.phase === 'integration' || bScope.phase === 'integration')) return { physicalConflict: true, logicalOverlap };
-    if (aScope.machineId !== bScope.machineId) return { physicalConflict: false, logicalOverlap };
-    if ((aScope.phase === 'integration' || bScope.phase === 'integration')
-        && (aScope.commonGitDir === bScope.commonGitDir || Object.values(aScope.gitResources).some(p => Object.values(bScope.gitResources).includes(p)))) return { physicalConflict: true, logicalOverlap };
-    if (aScope.worktree === bScope.worktree || aScope.worktreeIdentity === bScope.worktreeIdentity || aScope.gitDir === bScope.gitDir) return { physicalConflict: true, logicalOverlap };
-    const physicalConflict = aScope.resources.some(x => bScope.resources.some(y =>
-        x.path === y.path || (!!x.identity && x.identity === y.identity) || (x.subtree && inside(x.path, y.path)) || (y.subtree && inside(y.path, x.path))));
-    return { physicalConflict, logicalOverlap };
+    return { physicalConflict: explainPhysicalOverlap(a, aScope, b, bScope).kind !== 'none', logicalOverlap };
 }

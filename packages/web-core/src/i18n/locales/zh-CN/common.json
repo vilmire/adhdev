@@ -19,6 +19,8 @@
         "failed": "失败",
         "idle": "空闲",
         "generating": "工作中",
+        "finalizing": "Finalizing",
+        "stopping": "Stopping",
         "awaitingApproval": "待批准"
     },
     "language": {
@@ -1136,6 +1138,8 @@
                 "sectionRecent": "最近",
                 "sectionHistory": "历史",
                 "generating": "生成中",
+                "finalizing": "Finalizing",
+                "stopping": "Stopping",
                 "approvalNeeded": "需要批准",
                 "choiceNeeded": "需要选择",
                 "stageImplementing": "实现中",
@@ -2116,6 +2120,8 @@
         "openingPanel": "正在打开...",
         "busyNoProgress": "代理没有进展。",
         "busyGenerating": "代理正在生成回复。",
+        "busyFinalizing": "Finalizing. Pending safe settlement is not generating.",
+        "busyStopping": "Stopping. Pending safe settlement is not generating.",
         "busyWaitingApproval": "等待批准",
         "activityToggleLabel": "工具步骤",
         "activityToggleTitle": "显示工具、终端和思考步骤",

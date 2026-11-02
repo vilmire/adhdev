@@ -1,4 +1,5 @@
-import { comparePhysicalOwnership, currentPhysicalScope } from './mesh-physical-ownership.js';
+import { comparePhysicalOwnership, currentPhysicalScope, explainPhysicalOverlap, type PhysicalOverlapExplanation } from './mesh-physical-ownership.js';
+import type { PhysicalOwnershipScope } from '@adhdev/mesh-shared';
 import { findOwnershipConflicts, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import type { MeshWorkQueueEntry } from './mesh-work-queue-types.js';
 import { pendingLaunchReservation } from './mesh-task-routing-contract.js';
@@ -11,6 +12,9 @@ export interface MeshQueueHold {
     detail: {
         message?: string;
         overlappingPaths?: Array<{ taskId: string; ownedPath: string; blockingPath: string }>;
+        unknownField?: string;
+        canonicalResource?: string;
+        resolution?: string;
     };
 }
 
@@ -64,17 +68,22 @@ export function ownedPathsHoldFromConflicts(
     return { blockingTaskIds, detail: { overlappingPaths } };
 }
 
-export function queueHoldContext(task: MeshWorkQueueEntry, reason: string, queue: readonly MeshWorkQueueEntry[], nodeId?: string): Pick<MeshQueueHold, 'blockingTaskIds' | 'detail'> {
+export function queueHoldContext(task: MeshWorkQueueEntry, reason: string, queue: readonly MeshWorkQueueEntry[], nodeId?: string, prospectiveScope?: PhysicalOwnershipScope): Pick<MeshQueueHold, 'blockingTaskIds' | 'detail'> {
     const active = holdActiveWriters(task, queue);
     const overlaps: NonNullable<MeshQueueHold['detail']['overlappingPaths']> = [];
+    let explained: { taskId: string; reason: PhysicalOverlapExplanation } | undefined;
     if (reason === 'owned_paths_conflict' && task.ownedPaths) {
         for (const other of active) {
             const isReadonly = other.readonly || other.taskMode === 'live_debug_readonly';
             const blockingScope = isReadonly ? other.reviewInputScope : other.ownershipScope;
             const blockingPaths = isReadonly && blockingScope ? { paths: blockingScope.declaration } : other.ownedPaths;
             if (!blockingPaths || (isReadonly && !blockingScope)) continue;
-            const physical = comparePhysicalOwnership(task.ownedPaths, currentPhysicalScope(task.ownershipScope, task.ownedPaths), blockingPaths, currentPhysicalScope(blockingScope, blockingPaths));
+            const candidateScope = prospectiveScope ?? currentPhysicalScope(task.ownershipScope, task.ownedPaths);
+            const otherScope = currentPhysicalScope(blockingScope, blockingPaths);
+            const physical = comparePhysicalOwnership(task.ownedPaths, candidateScope, blockingPaths, otherScope);
             if (!physical.physicalConflict) continue;
+            const reasonForPair = explainPhysicalOverlap(task.ownedPaths, candidateScope, blockingPaths, otherScope);
+            if (!explained) explained = { taskId: other.id, reason: reasonForPair };
             if (!physical.logicalOverlap) overlaps.push({ taskId: other.id, ownedPath: 'physical_workspace_or_shared_resource', blockingPath: 'physical_workspace_or_shared_resource' });
             for (const owned of task.ownedPaths.paths) for (const blocking of blockingPaths.paths) {
                 if (findOwnershipConflicts({ paths: [owned] }, [{ taskId: other.id, paths: { paths: [blocking] } }]).length) {
@@ -88,7 +97,15 @@ export function queueHoldContext(task: MeshWorkQueueEntry, reason: string, queue
         if (!blockingTaskIds.length) {
             return { blockingTaskIds: [], detail: { message: UNKNOWN_BLOCKER_NO_EVIDENCE } };
         }
-        return { blockingTaskIds, detail: { overlappingPaths: overlaps } };
+        const detail: MeshQueueHold['detail'] = { overlappingPaths: overlaps };
+        if (explained?.reason.kind === 'missing_scope') {
+            detail.unknownField = 'ownershipScope';
+            detail.resolution = `assigned task ${explained.taskId} has no host ownershipScope; concurrent non-readonly admission stays closed until that task is completed, failed, or cancelled; a pending revise cannot attach a scope while admission fails; do not stop the task to narrow it.`;
+        } else if (explained?.reason.kind === 'resource' || explained?.reason.kind === 'worktree') {
+            detail.canonicalResource = explained.reason.path;
+            detail.resolution = `resolves when task ${explained.taskId} is no longer assigned or its attested resources no longer include this path.`;
+        }
+        return { blockingTaskIds, detail };
     }
     const blockingTaskIds = reason === 'dependencies_unsatisfied'
         ? (task.dependsOn || []).filter(id => !queue.some(other => other.id === id && other.status === 'completed'))

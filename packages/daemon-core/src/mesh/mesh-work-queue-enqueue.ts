@@ -418,6 +418,8 @@ export function recordDirectDispatchTask(
          */
         attemptId?: string;
     },
+    /** Host attestation only. Never copied from the request spread. */
+    attested?: { ownershipScope: import('@adhdev/mesh-shared').PhysicalOwnershipScope; phase: 'source' | 'integration' },
 ): MeshWorkQueueEntry | null {
     // A missing missionId only means "not attributable to a mission" — it must not
     // skip the row or the attempt correlation (see the note above).
@@ -472,6 +474,7 @@ export function recordDirectDispatchTask(
             ...(directInputArtifactIds.length > 0 ? { inputArtifactIds: directInputArtifactIds } : {}),
             ...(!directInheritArtifacts ? { inheritArtifacts: false as const } : {}),
             ...(directOwnedPaths ? { ownedPaths: directOwnedPaths } : {}),
+            ...(attested ? { ownershipScope: attested.ownershipScope, phase: attested.phase } : {}),
             difficulty: taskDifficulty,
             ...(opts.assignedNodeId ? { targetNodeId: opts.assignedNodeId, assignedNodeId: opts.assignedNodeId } : {}),
             ...(opts.assignedSessionId ? { targetSessionId: opts.assignedSessionId, assignedSessionId: opts.assignedSessionId } : {}),

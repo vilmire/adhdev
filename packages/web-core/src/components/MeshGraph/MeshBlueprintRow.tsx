@@ -37,6 +37,8 @@ import type { BlueprintTaskRow } from './useBlueprintGroups'
 /** Status word → dot tone + text tone, per section emphasis. */
 const ROW_DOT: Record<string, { dot: string; pulse?: boolean }> = {
     generating: { dot: 'bg-accent', pulse: true },
+    finalizing: { dot: 'bg-text-muted' },
+    stopping: { dot: 'bg-text-muted' },
     assigned: { dot: 'bg-accent', pulse: true },
     pending: { dot: 'bg-text-muted' },
     blocked: { dot: 'bg-status-warning' },
@@ -137,7 +139,10 @@ export function MeshBlueprintTaskRowView({ row, meshTheme, nowMs, nodeLabel, pin
                 {/* motion-safe: the pulse is a never-ending CSS animation. */}
                 <span className={`h-2 w-2 shrink-0 rounded-full ${dot.dot} ${dot.pulse ? 'motion-safe:animate-pulse' : ''}`} aria-hidden />
                 <span className={`shrink-0 text-3xs font-medium ${statusTone}`}>
-                    {row.statusToken === 'generating' ? t('mesh.blueprint.list.generating') : task.status}
+                    {row.statusToken === 'generating' ? t('mesh.blueprint.list.generating')
+                        : row.statusToken === 'finalizing' ? t('mesh.blueprint.list.finalizing')
+                        : row.statusToken === 'stopping' ? t('mesh.blueprint.list.stopping')
+                        : task.status}
                 </span>
                 <span className="min-w-0 flex-1 truncate text-2xs text-text-primary" title={queueTaskDisplayText(task.message)}>
                     {queueTaskDisplayText(task.message)}

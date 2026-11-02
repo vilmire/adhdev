@@ -19,6 +19,8 @@
         "failed": "Falló",
         "idle": "Inactivo",
         "generating": "Trabajando",
+        "finalizing": "Finalizing",
+        "stopping": "Stopping",
         "awaitingApproval": "Requiere aprobación"
     },
     "language": {
@@ -1139,6 +1141,8 @@
                 "sectionRecent": "Recientes",
                 "sectionHistory": "Historial",
                 "generating": "generando",
+                "finalizing": "Finalizing",
+                "stopping": "Stopping",
                 "approvalNeeded": "requiere aprobación",
                 "choiceNeeded": "requiere elección",
                 "stageImplementing": "implementando",
@@ -2119,6 +2123,8 @@
         "openingPanel": "Abriendo...",
         "busyNoProgress": "El agente no muestra progreso.",
         "busyGenerating": "El agente está generando una respuesta.",
+        "busyFinalizing": "Finalizing. Pending safe settlement is not generating.",
+        "busyStopping": "Stopping. Pending safe settlement is not generating.",
         "busyWaitingApproval": "Esperando aprobación",
         "activityToggleLabel": "Pasos de herramientas",
         "activityToggleTitle": "Mostrar pasos de herramientas, terminal y razonamiento",

@@ -93,9 +93,13 @@ function TaskNodeCard({ data }: NodeProps<BlueprintTaskFlowNode>) {
     const heldText = heldUntil != null
         ? t('mesh.blueprint.graph.heldUntil', { time: formatHoldTime(heldUntil, nowMs) })
         : ''
-    const statusWord = node.generating
-        ? t('mesh.blueprint.list.generating')
-        : heldUntil != null ? t('mesh.blueprint.graph.tone.held') : t(`mesh.blueprint.graph.tone.${node.tone}`)
+    const statusWord = node.settling === 'finalizing'
+        ? t('mesh.blueprint.list.finalizing')
+        : node.settling === 'stopping'
+            ? t('mesh.blueprint.list.stopping')
+            : node.generating
+                ? t('mesh.blueprint.list.generating')
+                : heldUntil != null ? t('mesh.blueprint.graph.tone.held') : t(`mesh.blueprint.graph.tone.${node.tone}`)
     const muted = node.tone === 'completed' || node.tone === 'cancelled'
     const statusTone = node.tone === 'dead' || node.tone === 'failed'
         ? 'text-status-error'
@@ -113,7 +117,7 @@ function TaskNodeCard({ data }: NodeProps<BlueprintTaskFlowNode>) {
             <Handle type="target" position={Position.Left} className={HANDLE_CLASS} />
             <Handle type="source" position={Position.Right} className={HANDLE_CLASS} />
             <div className="flex min-w-0 items-center gap-1.5">
-                <span className={`h-2 w-2 shrink-0 rounded-full ${tone.dot} ${tone.pulse ? 'motion-safe:animate-pulse' : ''}`} aria-hidden />
+                <span className={`h-2 w-2 shrink-0 rounded-full ${tone.dot} ${tone.pulse && !node.settling ? 'motion-safe:animate-pulse' : ''}`} aria-hidden />
                 <span className={`shrink-0 text-4xs font-medium ${statusTone}`}>{statusWord}</span>
                 {(heldText || timeText) && <span data-testid={heldText ? 'bp-graph-held-until' : undefined} title={heldText ? node.notBefore : undefined} className="ml-auto min-w-0 truncate font-mono text-4xs tabular-nums text-text-muted">{heldText || timeText}</span>}
             </div>

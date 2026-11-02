@@ -183,6 +183,8 @@ export function classifySessionStatusBucket(session: MeshGraphSessionDetail): { 
     const canonical = normalizeSessionStatus(raw)
     const normalized = canonical ?? raw.toLowerCase().replace(/[\s-]+/g, '_')
     if (normalized.includes('approval')) return { bucket: 'awaiting_approval', normalized }
+    // 'finalizing' contains the substring 'generating'. Settlement is not live generation.
+    if (normalized === 'finalizing' || normalized === 'stopping') return { bucket: 'other', normalized }
     if (normalized.includes('generating') || normalized.includes('running') || normalized.includes('busy')) return { bucket: 'generating', normalized }
     if (normalized.includes('failed') || normalized === 'error' || normalized.includes('stopped') || normalized.includes('interrupted')) return { bucket: 'failed', normalized }
     if (normalized.includes('idle') || normalized.includes('ready') || normalized.includes('waiting_input')) return { bucket: 'idle', normalized }
@@ -241,6 +243,8 @@ export function sessionStatusText(
             ? t('sessionStatus.stopped')
             : t('sessionStatus.failed')
         default:
+            if (normalized === 'finalizing') return t('sessionStatus.finalizing')
+            if (normalized === 'stopping') return t('sessionStatus.stopping')
             if (!normalized) return t('sessionStatus.unknown')
             if (normalized === 'starting' || normalized === 'pending' || normalized === 'launching') return t('sessionStatus.starting')
             return normalized.replace(/_/g, ' ')

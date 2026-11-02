@@ -163,6 +163,12 @@ export function buildBusyChatInputStatusMessage(
     if (conversation.status === 'generating') {
         return t('chatPane.busyGenerating')
     }
+    if (conversation.status === 'finalizing') {
+        return t('chatPane.busyFinalizing')
+    }
+    if (conversation.status === 'stopping') {
+        return t('chatPane.busyStopping')
+    }
     if (conversation.status === 'waiting_approval' && (!conversation.modalButtons || conversation.modalButtons.length === 0)) {
         return t('chatPane.busyWaitingApproval')
     }

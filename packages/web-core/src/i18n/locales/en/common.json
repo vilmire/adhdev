@@ -19,6 +19,8 @@
         "failed": "Failed",
         "idle": "Idle",
         "generating": "Working",
+        "finalizing": "Finalizing",
+        "stopping": "Stopping",
         "awaitingApproval": "Needs approval"
     },
     "language": {
@@ -1136,6 +1138,8 @@
                 "sectionRecent": "Recent",
                 "sectionHistory": "History",
                 "generating": "generating",
+                "finalizing": "Finalizing",
+                "stopping": "Stopping",
                 "approvalNeeded": "approval needed",
                 "choiceNeeded": "choice needed",
                 "stageImplementing": "implementing",
@@ -2116,6 +2120,8 @@
         "openingPanel": "Opening...",
         "busyNoProgress": "Agent shows no progress.",
         "busyGenerating": "Agent is generating.",
+        "busyFinalizing": "Finalizing. Pending safe settlement is not generating.",
+        "busyStopping": "Stopping. Pending safe settlement is not generating.",
         "busyWaitingApproval": "Waiting for approval",
         "activityToggleLabel": "Tool steps",
         "activityToggleTitle": "Show tool, terminal and thinking steps",

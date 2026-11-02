@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, linkSync } 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { normalizeOwnedPaths } from '@adhdev/mesh-shared';
-import { attestLocalOwnership, comparePhysicalOwnership } from '../../src/mesh/mesh-physical-ownership.js';
+import { attestLocalOwnership, comparePhysicalOwnership, explainPhysicalOverlap } from '../../src/mesh/mesh-physical-ownership.js';
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 function fixture() {
@@ -42,8 +42,44 @@ describe('authenticated physical ownership', () => {
         const { a, b, paths, attest } = fixture();
         rmSync(join(b, 'file.ts')); linkSync(join(a, 'file.ts'), join(b, 'file.ts'));
         expect(comparePhysicalOwnership(paths, attest(a), paths, attest(b)).physicalConflict).toBe(true);
+        mkdirSync(join(a, 'node_modules'));
         symlinkSync(join(a, 'node_modules'), join(b, 'node_modules'));
-        expect(() => attest(b)).toThrow(/escape/);
+        const shared = attest(b);
+        const explanation = explainPhysicalOverlap(paths, attest(a), paths, shared);
+        expect(explanation.kind).toBe('resource');
+        expect(comparePhysicalOwnership(paths, attest(a), paths, shared).physicalConflict).toBe(true);
+    });
+    it('fences a shared submodule store and allows a separate clone of the same gitlink', () => {
+        const { dir } = fixture();
+        const origin = join(dir, 'sub-origin'); mkdirSync(origin);
+        const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, stdio: 'pipe' }).toString().trim();
+        git(origin, 'init', '--initial-branch=main'); writeFileSync(join(origin, 'file.ts'), 'export {};\n');
+        git(origin, 'add', 'file.ts'); git(origin, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Nested');
+        const parent = join(dir, 'parent'); mkdirSync(parent);
+        git(parent, 'init', '--initial-branch=main'); writeFileSync(join(parent, 'root.ts'), 'export {};\n');
+        git(parent, 'add', 'root.ts'); git(parent, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Root');
+        git(parent, '-c', 'protocol.file.allow=always', 'submodule', 'add', '--name', 'nested', origin, 'nested');
+        git(parent, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Add nested');
+        const linked = join(dir, 'linked');
+        git(dir, '-c', 'protocol.file.allow=always', 'clone', '--recurse-submodules', parent, linked);
+        rmSync(join(linked, '.git', 'modules', 'nested'), { recursive: true, force: true });
+        symlinkSync(join(parent, '.git', 'modules', 'nested'), join(linked, '.git', 'modules', 'nested'));
+        const cloned = join(dir, 'cloned');
+        git(dir, '-c', 'protocol.file.allow=always', 'clone', '--recurse-submodules', parent, cloned);
+        const nestedPaths = normalizeOwnedPaths(['nested/file.ts']).declaration;
+        const attestAt = (workspace: string) => attestLocalOwnership({ repoIdentity: 'authenticated-repo', machineId: 'host-machine', nodeId: workspace, workspace, phase: 'source', paths: nestedPaths });
+        const moduleConfigs = (workspace: string) => attestAt(workspace).resources.filter(resource => resource.path.includes('/modules/') && resource.path.endsWith('/config')).map(resource => resource.path);
+        const sharedConfigs = moduleConfigs(parent);
+        const linkedConfigs = moduleConfigs(linked);
+        expect(sharedConfigs.length).toBeGreaterThan(0);
+        const sameStore = sharedConfigs.some(path => linkedConfigs.includes(path));
+        expect(sameStore).toBe(true);
+        expect(comparePhysicalOwnership(nestedPaths, attestAt(parent), nestedPaths, attestAt(linked)).physicalConflict).toBe(sameStore);
+        expect(explainPhysicalOverlap(nestedPaths, attestAt(parent), nestedPaths, attestAt(linked)).kind).toBe('resource');
+        const clonedConfigs = moduleConfigs(cloned);
+        const clonedShares = sharedConfigs.some(path => clonedConfigs.includes(path));
+        expect(clonedShares).toBe(false);
+        expect(comparePhysicalOwnership(nestedPaths, attestAt(parent), nestedPaths, attestAt(cloned)).physicalConflict).toBe(clonedShares);
     });
     it('keeps legacy rows conservative and rejects source gitlinks and generated writes', () => {
         const { a, paths, attest } = fixture();

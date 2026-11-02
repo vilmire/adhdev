@@ -11,6 +11,13 @@ describe('ChatPane busy input status copy', () => {
       .toBe('chatPane.busyGenerating')
   })
 
+  it('names finalizing and stopping instead of generating', () => {
+    expect(buildBusyChatInputStatusMessage({ status: 'finalizing' } as any, t))
+      .toBe('chatPane.busyFinalizing')
+    expect(buildBusyChatInputStatusMessage({ status: 'stopping' } as any, t))
+      .toBe('chatPane.busyStopping')
+  })
+
   it('surfaces no-progress context for no_progress sessions', () => {
     expect(buildBusyChatInputStatusMessage({ status: 'no_progress' } as any, t))
       .toBe('chatPane.busyNoProgress')

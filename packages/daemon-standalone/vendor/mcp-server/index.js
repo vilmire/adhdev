@@ -23867,7 +23867,7 @@ var require_dist3 = __commonJS({
       LIGHT_WARNINGS: () => LIGHT_WARNINGS,
       LIVENESS_RESULTS: () => LIVENESS_RESULTS2,
       MAX_MESH_RECORD_STRING: () => MAX_MESH_RECORD_STRING,
-      MAX_OWNED_PATHS: () => MAX_OWNED_PATHS,
+      MAX_OWNED_PATHS: () => MAX_OWNED_PATHS2,
       MESH_CHUNK_KIND: () => MESH_CHUNK_KIND,
       MESH_CHUNK_PAYLOAD_CHARS: () => MESH_CHUNK_PAYLOAD_CHARS,
       MESH_CHUNK_TTL_MS: () => MESH_CHUNK_TTL_MS,
@@ -24017,7 +24017,7 @@ var require_dist3 = __commonJS({
       compareDashboardWireVersion: () => compareDashboardWireVersion,
       compareSemver: () => compareSemver,
       computeRelayReprobeDelay: () => computeRelayReprobeDelay,
-      daemonIdsEquivalent: () => daemonIdsEquivalent4,
+      daemonIdsEquivalent: () => daemonIdsEquivalent5,
       decodeActiveWorkQueryRequest: () => decodeActiveWorkQueryRequest,
       decodeActiveWorkQueryResponse: () => decodeActiveWorkQueryResponse2,
       decodeDaemonToDashboardP2P: () => decodeDaemonToDashboardP2P,
@@ -24191,7 +24191,7 @@ var require_dist3 = __commonJS({
       joinRepoPath: () => joinRepoPath,
       launchModelSelectionValue: () => launchModelSelectionValue,
       lintChangelogText: () => lintChangelogText,
-      machineCoreFromDaemonId: () => machineCoreFromDaemonId,
+      machineCoreFromDaemonId: () => machineCoreFromDaemonId2,
       makeTypeGuard: () => makeTypeGuard2,
       measureWorstCaseChunkEnvelopeBytes: () => measureWorstCaseChunkEnvelopeBytes,
       meshFrameNeedsChunking: () => meshFrameNeedsChunking,
@@ -24218,7 +24218,7 @@ var require_dist3 = __commonJS({
       normalizeNodeCapabilitySlot: () => normalizeNodeCapabilitySlot2,
       normalizeNodeCapabilitySlots: () => normalizeNodeCapabilitySlots2,
       normalizeOutcomeReason: () => normalizeOutcomeReason,
-      normalizeOwnedPaths: () => normalizeOwnedPaths,
+      normalizeOwnedPaths: () => normalizeOwnedPaths2,
       normalizeReportCommits: () => normalizeReportCommits,
       normalizeSessionStatus: () => normalizeSessionStatus,
       normalizeThinkingLevel: () => normalizeThinkingLevel,
@@ -24617,11 +24617,11 @@ var require_dist3 = __commonJS({
       );
       return !hasMachineEvidence;
     }
-    function machineCoreFromDaemonId(id222) {
+    function machineCoreFromDaemonId2(id222) {
       const trimmed3 = readString2(id222);
       if (!trimmed3) return void 0;
       const lower = trimmed3.toLowerCase();
-      for (const prefix of DAEMON_ID_PREFIXES) {
+      for (const prefix of DAEMON_ID_PREFIXES2) {
         if (lower.startsWith(prefix)) {
           const core2 = trimmed3.slice(prefix.length).trim();
           if (!core2) return void 0;
@@ -24631,14 +24631,14 @@ var require_dist3 = __commonJS({
       return /^mach_/i.test(trimmed3) ? `mach_${trimmed3.slice(5)}` : trimmed3;
     }
     function canonicalDaemonId2(id222) {
-      const core2 = machineCoreFromDaemonId(id222);
+      const core2 = machineCoreFromDaemonId2(id222);
       if (!core2) return void 0;
       if (!/^mach_/i.test(core2)) return core2;
       return `daemon_mach_${core2.slice(5)}`;
     }
-    function daemonIdsEquivalent4(a, b) {
-      const coreA = machineCoreFromDaemonId(a);
-      const coreB = machineCoreFromDaemonId(b);
+    function daemonIdsEquivalent5(a, b) {
+      const coreA = machineCoreFromDaemonId2(a);
+      const coreB = machineCoreFromDaemonId2(b);
       if (!coreA || !coreB) return false;
       return coreA === coreB;
     }
@@ -24653,10 +24653,10 @@ var require_dist3 = __commonJS({
       };
       for (const raw of list5) add(readString2(raw));
       for (const raw of list5) {
-        const core2 = machineCoreFromDaemonId(readString2(raw));
+        const core2 = machineCoreFromDaemonId2(readString2(raw));
         if (!core2 || !core2.startsWith("mach_")) continue;
         add(core2);
-        for (const prefix of DAEMON_ID_PREFIXES) add(`${prefix}${core2}`);
+        for (const prefix of DAEMON_ID_PREFIXES2) add(`${prefix}${core2}`);
       }
       return out;
     }
@@ -26513,10 +26513,10 @@ ${renderWorkerProtocolFooter2(input)}`;
     function isTurnIpcError(value) {
       return isRecord2(value) && hasOnlyKeys22(value, ["code", "detail"]) && isTurnIpcErrorCode2(value.code) && (value.detail === void 0 || typeof value.detail === "string");
     }
-    function toPosix(raw) {
+    function toPosix2(raw) {
       return raw.replace(/\\/g, "/");
     }
-    function normalizeOne(raw, rejected) {
+    function normalizeOne2(raw, rejected) {
       if (typeof raw !== "string") {
         rejected.push({ input: String(raw), reason: "not_a_string" });
         return null;
@@ -26526,7 +26526,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         rejected.push({ input: raw, reason: "empty" });
         return null;
       }
-      let posix5 = toPosix(trimmed3);
+      let posix5 = toPosix2(trimmed3);
       if (posix5.startsWith("/") || /^[a-zA-Z]:\//.test(posix5) || posix5.startsWith("~")) {
         rejected.push({ input: raw, reason: "absolute_path" });
         return null;
@@ -26554,7 +26554,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       return { path: segments.join("/"), subtree };
     }
-    function normalizeOwnedPaths(input) {
+    function normalizeOwnedPaths2(input) {
       const rejected = [];
       if (input === void 0 || input === null) {
         return { declaration: { paths: [] }, rejected };
@@ -26564,7 +26564,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       const byPath = /* @__PURE__ */ new Map();
       for (const raw of input) {
-        const entry = normalizeOne(raw, rejected);
+        const entry = normalizeOne2(raw, rejected);
         if (!entry) continue;
         const existing = byPath.get(entry.path);
         if (!existing) {
@@ -26574,8 +26574,8 @@ ${renderWorkerProtocolFooter2(input)}`;
         }
       }
       const all = [...byPath.values()];
-      const kept = all.slice(0, MAX_OWNED_PATHS);
-      for (const dropped of all.slice(MAX_OWNED_PATHS)) {
+      const kept = all.slice(0, MAX_OWNED_PATHS2);
+      for (const dropped of all.slice(MAX_OWNED_PATHS2)) {
         rejected.push({ input: dropped.path, reason: "over_cap" });
       }
       return { declaration: { paths: kept }, rejected };
@@ -26622,7 +26622,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       const usedDeclarations = /* @__PURE__ */ new Set();
       for (const raw of touched ?? []) {
         const rejectedSink = [];
-        const entry = normalizeOne(raw, rejectedSink);
+        const entry = normalizeOne2(raw, rejectedSink);
         if (!entry) {
           undeclaredTouched.push(raw);
           continue;
@@ -27502,7 +27502,7 @@ ${renderWorkerProtocolFooter2(input)}`;
     var BUILTIN_PROVIDER_PREFERENCE2;
     var QUOTA_RETRY_INFLIGHT_GRACE_MS;
     var QUOTA_BACKFILL_HORIZON_MS2;
-    var DAEMON_ID_PREFIXES;
+    var DAEMON_ID_PREFIXES2;
     var MESH_TASK_DIFFICULTIES2;
     var DEFAULT_DIFFICULTY_BRAINS;
     var CLI_SLOT_RECIPES2;
@@ -27709,7 +27709,7 @@ ${renderWorkerProtocolFooter2(input)}`;
     var isTurnIpcErrorCode2;
     var TURN_IPC_COMMANDS2;
     var isTurnIpcCommand2;
-    var MAX_OWNED_PATHS;
+    var MAX_OWNED_PATHS2;
     var MISSION_ITEM_KINDS;
     var MISSION_ITEM_STATES;
     var COORDINATOR_SETTABLE_ITEM_STATES;
@@ -27801,7 +27801,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         BUILTIN_PROVIDER_PREFERENCE2 = ["claude-cli", "codex-cli", "antigravity-cli"];
         QUOTA_RETRY_INFLIGHT_GRACE_MS = 6e4;
         QUOTA_BACKFILL_HORIZON_MS2 = 60 * 60 * 1e3;
-        DAEMON_ID_PREFIXES = ["daemon_", "standalone_"];
+        DAEMON_ID_PREFIXES2 = ["daemon_", "standalone_"];
         MESH_TASK_DIFFICULTIES2 = ["easy", "medium", "difficult", "freeform"];
         DEFAULT_DIFFICULTY_BRAINS = {};
         CLI_SLOT_RECIPES2 = Object.freeze({
@@ -28891,7 +28891,7 @@ ${renderWorkerProtocolFooter2(input)}`;
           "orphaned_pin_notify"
         ];
         isTurnIpcCommand2 = makeGuard32(TURN_IPC_COMMANDS2);
-        MAX_OWNED_PATHS = 64;
+        MAX_OWNED_PATHS2 = 64;
         MISSION_ITEM_KINDS = ["remaining", "live_check", "decision", "evidence"];
         MISSION_ITEM_STATES = ["open", "done", "failed", "dropped", "moved", "answered", "expired", "withdrawn", "superseded"];
         COORDINATOR_SETTABLE_ITEM_STATES = {
@@ -43059,14 +43059,14 @@ ${error.message || ""}`;
       const localDaemonId = readString2(opts?.localDaemonId);
       const hasForeignDaemonNode = localDaemonId ? nodes.some((n) => {
         const nodeDaemonId = nodeDaemonIdOf(n);
-        return nodeDaemonId ? !daemonIdsEquivalent4(nodeDaemonId, localDaemonId) : false;
+        return nodeDaemonId ? !daemonIdsEquivalent5(nodeDaemonId, localDaemonId) : false;
       }) : false;
       if (role === "host" && !hostDaemonId && !hostNodeId && localDaemonId && !hasForeignDaemonNode) {
         hostDaemonId = localDaemonId;
         hostSynthesized = true;
         const selfNode = nodes.find((n) => {
           const nodeDaemonId = nodeDaemonIdOf(n);
-          return nodeDaemonId ? daemonIdsEquivalent4(nodeDaemonId, localDaemonId) : false;
+          return nodeDaemonId ? daemonIdsEquivalent5(nodeDaemonId, localDaemonId) : false;
         });
         const selfNodeId = readString2(readObject(selfNode)?.id);
         if (selfNodeId) hostNodeId = selfNodeId;
@@ -43866,7 +43866,7 @@ ${error.message || ""}`;
       if (!hostDaemonId || !hostDaemonId.startsWith("daemon_mach_")) return null;
       if (status === "active") {
         if (!activeDaemonId || !activeDaemonId.startsWith("daemon_mach_")) return null;
-        if (daemonIdsEquivalent4(hostDaemonId, activeDaemonId)) return null;
+        if (daemonIdsEquivalent5(hostDaemonId, activeDaemonId)) return null;
       }
       const bindingRevision = typeof rec8.bindingRevision === "number" && Number.isInteger(rec8.bindingRevision) && rec8.bindingRevision >= 1 ? rec8.bindingRevision : null;
       const grantRevision = typeof rec8.grantRevision === "number" && Number.isInteger(rec8.grantRevision) && rec8.grantRevision >= 1 ? rec8.grantRevision : null;
@@ -44020,7 +44020,7 @@ ${error.message || ""}`;
       };
       const pinnedHostDaemonId = typeof mesh.meshHost?.hostDaemonId === "string" ? mesh.meshHost.hostDaemonId.trim() : "";
       const anchorMissing = !(typeof mesh.meshHost?.hostNodeId === "string" && mesh.meshHost.hostNodeId.trim());
-      if (!node.role && anchorMissing && pinnedHostDaemonId && mesh.meshHost?.role !== "member" && node.daemonId && daemonIdsEquivalent4(node.daemonId, pinnedHostDaemonId) && !mesh.nodes.some((n) => n.role === "host")) {
+      if (!node.role && anchorMissing && pinnedHostDaemonId && mesh.meshHost?.role !== "member" && node.daemonId && daemonIdsEquivalent5(node.daemonId, pinnedHostDaemonId) && !mesh.nodes.some((n) => n.role === "host")) {
         node.role = "host";
         mesh.meshHost = { ...mesh.meshHost || createDefaultMeshHostMetadata(), hostNodeId: node.id };
       }
@@ -44844,7 +44844,7 @@ ${error.message || ""}`;
            * orphan holds stay intact: only their owner may resolve or adopt them. */
           holdOwnerScope(ownerDaemonId) {
             if (ownerDaemonId === void 0) return { sql: "", ids: [] };
-            const ids = this.stmt("SELECT DISTINCT owner_daemon_id FROM turn_attempts WHERE terminal_outcome IS NULL").all().map((r) => r.owner_daemon_id).filter((id4) => daemonIdsEquivalent4(id4, ownerDaemonId));
+            const ids = this.stmt("SELECT DISTINCT owner_daemon_id FROM turn_attempts WHERE terminal_outcome IS NULL").all().map((r) => r.owner_daemon_id).filter((id4) => daemonIdsEquivalent5(id4, ownerDaemonId));
             return {
               sql: ` AND attempt_id IN (SELECT attempt_id FROM turn_attempts WHERE terminal_outcome IS NULL
                 AND owner_daemon_id IN (${ids.map(() => "?").join(",") || "NULL"}))`,
@@ -44961,7 +44961,7 @@ ${error.message || ""}`;
                     ORDER BY recorded_at, rowid LIMIT 1`).get(row2.attemptId, row2.recordedAt, row2.recordedAt, raw.scan_id);
                 if (!previous || !next || key6 !== livenessSampleKey(eventFromRow(previous)) || key6 !== livenessSampleKey(eventFromRow(next))) continue;
                 const owner = this.getAttempt(row2.attemptId)?.ownerDaemonId;
-                if (!daemonIdsEquivalent4(owner, ownerDaemonId) || !daemonIdsEquivalent4(row2.observedBy, ownerDaemonId) || row2.recordedAt >= nowMs2 - olderThanMs) continue;
+                if (!daemonIdsEquivalent5(owner, ownerDaemonId) || !daemonIdsEquivalent5(row2.observedBy, ownerDaemonId) || row2.recordedAt >= nowMs2 - olderThanMs) continue;
                 const pointer = JSON.stringify(row2.eventId);
                 const referenced = this.stmt(`SELECT 1 FROM turn_events WHERE event_id != ?
                     AND (substr(event_id, 1, length(?) + 1) = ? || '#' OR instr(payload_json, ?) > 0)
@@ -47802,7 +47802,7 @@ ${error.message || ""}`;
     function meshNodeRuntimeInstanceChanged(prev, next) {
       if (!prev || !next) return false;
       if (prev.daemonBootId && next.daemonBootId && prev.daemonBootId !== next.daemonBootId) return true;
-      if (prev.daemonId && next.daemonId && !daemonIdsEquivalent4(prev.daemonId, next.daemonId)) return true;
+      if (prev.daemonId && next.daemonId && !daemonIdsEquivalent5(prev.daemonId, next.daemonId)) return true;
       const a = prev.daemonBuild;
       const b = next.daemonBuild;
       if (a && b && (a.commit !== b.commit || (a.version ?? null) !== (b.version ?? null) || a.track !== b.track)) return true;
@@ -48158,7 +48158,7 @@ ${error.message || ""}`;
               const fromReplacedProcess = entry.handshakePendingReason === "restart" && !!entry.handshakePendingBootId && runtime2.daemonBootId === entry.handshakePendingBootId && !instanceChanged;
               if (!fromReplacedProcess) clearHandshakePending(entry);
             }
-            const sameDaemon2 = entry.runtime?.daemonId && runtime2.daemonId && daemonIdsEquivalent4(entry.runtime.daemonId, runtime2.daemonId);
+            const sameDaemon2 = entry.runtime?.daemonId && runtime2.daemonId && daemonIdsEquivalent5(entry.runtime.daemonId, runtime2.daemonId);
             if (sameDaemon2 && runtime2.nodeFacts) {
               runtime2.nodeFacts = selectReportedQuotaFacts(entry.runtime?.nodeFacts, runtime2.nodeFacts, this.now());
             }
@@ -48239,8 +48239,8 @@ ${error.message || ""}`;
           /** Whether a held entry's runtime belongs to `daemonId` (roster id or the member's own id). */
           static runtimeBelongsToDaemon(entry, daemonId) {
             if (!daemonId) return false;
-            if (entry.daemonId && daemonIdsEquivalent4(entry.daemonId, daemonId)) return true;
-            return !!entry.runtime?.daemonId && daemonIdsEquivalent4(entry.runtime.daemonId, daemonId);
+            if (entry.daemonId && daemonIdsEquivalent5(entry.daemonId, daemonId)) return true;
+            return !!entry.runtime?.daemonId && daemonIdsEquivalent5(entry.runtime.daemonId, daemonId);
           }
           /** Test/diagnostic helper. */
           size() {
@@ -49239,7 +49239,56 @@ ${error.message || ""}`;
         return path29.join(canonical(parent), path29.basename(p));
       }
     }
-    function attestLocalOwnership(input) {
+    function gitText(cwd, args) {
+      try {
+        return (0, import_node_child_process10.execFileSync)("git", ["-C", cwd, ...args], { windowsHide: true, encoding: "utf8", timeout: 5e3, stdio: ["ignore", "pipe", "pipe"] }).trim();
+      } catch {
+        return void 0;
+      }
+    }
+    function nearestExistingDir(target2) {
+      let cursor = target2;
+      for (; ; ) {
+        try {
+          const st = (0, import_node_fs8.lstatSync)(cursor);
+          if (st.isSymbolicLink()) {
+            const resolved = import_node_fs8.realpathSync.native(cursor);
+            return (0, import_node_fs8.statSync)(resolved).isDirectory() ? resolved : path29.dirname(resolved);
+          }
+          return st.isDirectory() ? import_node_fs8.realpathSync.native(cursor) : path29.dirname(cursor);
+        } catch (e) {
+          if (e.code !== "ENOENT") throw e;
+          const parent = path29.dirname(cursor);
+          if (parent === cursor) return cursor;
+          cursor = parent;
+        }
+      }
+    }
+    function pushResource(resources, item) {
+      if (resources.some((existing) => existing.path === item.path)) return;
+      resources.push(item);
+    }
+    function recordNestedGitStores(worktree, declaredPath, resources) {
+      const resolved = canonical(path29.resolve(worktree, declaredPath));
+      const dir = nearestExistingDir(resolved);
+      const topRaw = gitText(dir, ["rev-parse", "--show-toplevel"]);
+      if (!topRaw) return;
+      let top;
+      try {
+        top = import_node_fs8.realpathSync.native(topRaw);
+      } catch {
+        return;
+      }
+      if (top === worktree) return;
+      const commonRaw = gitText(top, ["rev-parse", "--git-common-dir"]);
+      if (!commonRaw) return;
+      const common2 = import_node_fs8.realpathSync.native(path29.resolve(top, commonRaw));
+      for (const [name, subtree] of [["refs", true], ["objects", true], ["config", false]]) {
+        const resourcePath = canonical(path29.join(common2, name));
+        pushResource(resources, { path: resourcePath, identity: identity2(resourcePath), subtree });
+      }
+    }
+    function attestLocalOwnership2(input) {
       if (!input.repoIdentity || !input.machineId || !input.nodeId || !path29.isAbsolute(input.workspace)) throw new Error("ownership_context_unproven");
       const worktree = import_node_fs8.realpathSync.native(input.workspace);
       const git11 = (...args) => (0, import_node_child_process10.execFileSync)("git", ["-C", worktree, "rev-parse", ...args], { windowsHide: true, encoding: "utf8", timeout: 5e3, stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -49282,6 +49331,7 @@ ${error.message || ""}`;
         if (!inside(worktree, resolved) || input.phase === "source" && sourceForbidden(path29.relative(worktree, resolved).split(path29.sep).join("/"))) throw new Error(`ownership_symlink_escape: ${entry.path}`);
         if (entry.subtree) inspectSubtree(resolved);
         resources.push({ path: resolved, identity: identity2(resolved), subtree: entry.subtree });
+        recordNestedGitStores(worktree, entry.path, resources);
       }
       const buildPaths = ["node_modules", "oss/node_modules"];
       for (const base of ["packages", "oss/packages"]) {
@@ -49301,9 +49351,15 @@ ${error.message || ""}`;
         }
       }
       for (const relative28 of buildPaths) {
-        const resolved = canonical(path29.join(worktree, relative28));
-        if (!inside(worktree, resolved)) throw new Error(`ownership_build_resource_escape: ${relative28}`);
-        resources.push({ path: resolved, identity: identity2(resolved), subtree: true });
+        let resolved;
+        try {
+          resolved = canonical(path29.join(worktree, relative28));
+        } catch {
+          continue;
+        }
+        const resolvedIdentity = identity2(resolved);
+        if (!resolvedIdentity) continue;
+        pushResource(resources, { path: resolved, identity: resolvedIdentity, subtree: true });
       }
       return {
         version: 1,
@@ -49323,21 +49379,32 @@ ${error.message || ""}`;
     function currentPhysicalScope(scope2, paths) {
       if (!scope2 || scope2.version !== 1 || JSON.stringify(paths.paths) !== JSON.stringify(scope2.declaration)) return void 0;
       try {
-        const current5 = attestLocalOwnership({ ...scope2, workspace: scope2.worktree, paths });
+        const current5 = attestLocalOwnership2({ ...scope2, workspace: scope2.worktree, paths });
         return current5.worktreeIdentity === scope2.worktreeIdentity && current5.gitDir === scope2.gitDir && current5.commonGitDir === scope2.commonGitDir ? current5 : void 0;
       } catch {
         return void 0;
       }
     }
+    function resourcesOverlap(x, y) {
+      return x.path === y.path || !!x.identity && x.identity === y.identity || x.subtree && inside(x.path, y.path) || y.subtree && inside(y.path, x.path);
+    }
+    function explainPhysicalOverlap(a, aScope, b, bScope) {
+      void a;
+      void b;
+      if (!aScope) return { kind: "missing_scope", side: "a" };
+      if (!bScope) return { kind: "missing_scope", side: "b" };
+      if (aScope.repoIdentity === bScope.repoIdentity && (aScope.phase === "integration" || bScope.phase === "integration")) return { kind: "integration_repo" };
+      if (aScope.machineId !== bScope.machineId) return { kind: "none" };
+      if ((aScope.phase === "integration" || bScope.phase === "integration") && (aScope.commonGitDir === bScope.commonGitDir || Object.values(aScope.gitResources).some((p) => Object.values(bScope.gitResources).includes(p)))) return { kind: "integration_repo" };
+      if (aScope.worktree === bScope.worktree || aScope.worktreeIdentity === bScope.worktreeIdentity || aScope.gitDir === bScope.gitDir) return { kind: "worktree", path: aScope.worktree };
+      for (const x of aScope.resources) for (const y of bScope.resources) {
+        if (resourcesOverlap(x, y)) return { kind: "resource", path: x.path === y.path || x.subtree && inside(x.path, y.path) ? y.path : x.path };
+      }
+      return { kind: "none" };
+    }
     function comparePhysicalOwnership(a, aScope, b, bScope) {
       const logicalOverlap = findOwnershipConflicts2(a, [{ taskId: "other", paths: b }]).length > 0;
-      if (!aScope || !bScope) return { physicalConflict: true, logicalOverlap };
-      if (aScope.repoIdentity === bScope.repoIdentity && (aScope.phase === "integration" || bScope.phase === "integration")) return { physicalConflict: true, logicalOverlap };
-      if (aScope.machineId !== bScope.machineId) return { physicalConflict: false, logicalOverlap };
-      if ((aScope.phase === "integration" || bScope.phase === "integration") && (aScope.commonGitDir === bScope.commonGitDir || Object.values(aScope.gitResources).some((p) => Object.values(bScope.gitResources).includes(p)))) return { physicalConflict: true, logicalOverlap };
-      if (aScope.worktree === bScope.worktree || aScope.worktreeIdentity === bScope.worktreeIdentity || aScope.gitDir === bScope.gitDir) return { physicalConflict: true, logicalOverlap };
-      const physicalConflict = aScope.resources.some((x) => bScope.resources.some((y) => x.path === y.path || !!x.identity && x.identity === y.identity || x.subtree && inside(x.path, y.path) || y.subtree && inside(y.path, x.path)));
-      return { physicalConflict, logicalOverlap };
+      return { physicalConflict: explainPhysicalOverlap(a, aScope, b, bScope).kind !== "none", logicalOverlap };
     }
     var import_node_child_process10;
     var import_node_fs8;
@@ -49498,17 +49565,22 @@ ${error.message || ""}`;
     function holdActiveWriters(task, queue) {
       return queue.filter((other) => other.id !== task.id && (other.status !== "pending" || pendingLaunchReservation(other)));
     }
-    function queueHoldContext(task, reason, queue, nodeId) {
+    function queueHoldContext(task, reason, queue, nodeId, prospectiveScope) {
       const active = holdActiveWriters(task, queue);
       const overlaps2 = [];
+      let explained;
       if (reason === "owned_paths_conflict" && task.ownedPaths) {
         for (const other of active) {
           const isReadonly = other.readonly || other.taskMode === "live_debug_readonly";
           const blockingScope = isReadonly ? other.reviewInputScope : other.ownershipScope;
           const blockingPaths = isReadonly && blockingScope ? { paths: blockingScope.declaration } : other.ownedPaths;
           if (!blockingPaths || isReadonly && !blockingScope) continue;
-          const physical = comparePhysicalOwnership(task.ownedPaths, currentPhysicalScope(task.ownershipScope, task.ownedPaths), blockingPaths, currentPhysicalScope(blockingScope, blockingPaths));
+          const candidateScope = prospectiveScope ?? currentPhysicalScope(task.ownershipScope, task.ownedPaths);
+          const otherScope = currentPhysicalScope(blockingScope, blockingPaths);
+          const physical = comparePhysicalOwnership(task.ownedPaths, candidateScope, blockingPaths, otherScope);
           if (!physical.physicalConflict) continue;
+          const reasonForPair = explainPhysicalOverlap(task.ownedPaths, candidateScope, blockingPaths, otherScope);
+          if (!explained) explained = { taskId: other.id, reason: reasonForPair };
           if (!physical.logicalOverlap) overlaps2.push({ taskId: other.id, ownedPath: "physical_workspace_or_shared_resource", blockingPath: "physical_workspace_or_shared_resource" });
           for (const owned of task.ownedPaths.paths) for (const blocking of blockingPaths.paths) {
             if (findOwnershipConflicts2({ paths: [owned] }, [{ taskId: other.id, paths: { paths: [blocking] } }]).length) {
@@ -49522,7 +49594,15 @@ ${error.message || ""}`;
         if (!blockingTaskIds2.length) {
           return { blockingTaskIds: [], detail: { message: UNKNOWN_BLOCKER_NO_EVIDENCE } };
         }
-        return { blockingTaskIds: blockingTaskIds2, detail: { overlappingPaths: overlaps2 } };
+        const detail = { overlappingPaths: overlaps2 };
+        if (explained?.reason.kind === "missing_scope") {
+          detail.unknownField = "ownershipScope";
+          detail.resolution = `assigned task ${explained.taskId} has no host ownershipScope; concurrent non-readonly admission stays closed until that task is completed, failed, or cancelled; a pending revise cannot attach a scope while admission fails; do not stop the task to narrow it.`;
+        } else if (explained?.reason.kind === "resource" || explained?.reason.kind === "worktree") {
+          detail.canonicalResource = explained.reason.path;
+          detail.resolution = `resolves when task ${explained.taskId} is no longer assigned or its attested resources no longer include this path.`;
+        }
+        return { blockingTaskIds: blockingTaskIds2, detail };
       }
       const blockingTaskIds = reason === "dependencies_unsatisfied" ? (task.dependsOn || []).filter((id4) => !queue.some((other) => other.id === id4 && other.status === "completed")) : reason === "node_busy_with_active_assignment" || reason === "node_has_active_assignment" ? active.filter((other) => !other.readonly && other.taskMode !== "live_debug_readonly" && nodeId && meshNodeIdMatches7({ id: other.assignedNodeId }, nodeId)).map((other) => other.id) : [];
       return { blockingTaskIds, detail: overlaps2.length ? { overlappingPaths: overlaps2 } : {} };
@@ -55514,7 +55594,7 @@ Next step: ${nextStep}`;
     }
     function isSelf(selfIds, daemonId) {
       if (!daemonId) return false;
-      return selfIds.some((id4) => daemonIdsEquivalent4(id4, daemonId));
+      return selfIds.some((id4) => daemonIdsEquivalent5(id4, daemonId));
     }
     function jsonSafe(value) {
       try {
@@ -66108,7 +66188,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       if (open.state === "stopping" || !opts.force && INJECTION_CLOSED_STATES.has(open.state)) return { kind: "refused", attempt: open, reason: "attempt_open" };
       const ledger = getActiveTurnLedger();
       if (!ledger) return { kind: "refused", attempt: open, reason: "no_ledger" };
-      if (open.ownerDaemonId && !daemonIdsEquivalent4(open.ownerDaemonId, ledger.selfDaemonId)) {
+      if (open.ownerDaemonId && !daemonIdsEquivalent5(open.ownerDaemonId, ledger.selfDaemonId)) {
         return { kind: "refused", attempt: open, reason: "not_owner", detail: `owned by ${open.ownerDaemonId}` };
       }
       const at = Date.now();
@@ -68246,7 +68326,7 @@ ${mergeTreeErr?.stderr || ""}`;
       if (!self) return [];
       return sanitizeMemberWorktreeNodes(nodes.filter((node) => {
         const daemonId = readId2(readOptionalRecord2(node)?.daemonId);
-        return !!daemonId && daemonIdsEquivalent4(daemonId, self);
+        return !!daemonId && daemonIdsEquivalent5(daemonId, self);
       }));
     }
     function isTerminalBootstrapStatus(status) {
@@ -68259,11 +68339,11 @@ ${mergeTreeErr?.stderr || ""}`;
       const self = readId2(args.selfDaemonId);
       const meshNodes = args.meshNodes.map(readOptionalRecord2).filter((node) => !!node);
       for (const node of args.reported) {
-        if (!sender || !owner || !daemonIdsEquivalent4(node.daemonId, sender) || !daemonIdsEquivalent4(node.daemonId, owner)) {
+        if (!sender || !owner || !daemonIdsEquivalent5(node.daemonId, sender) || !daemonIdsEquivalent5(node.daemonId, owner)) {
           plan.rejected.push({ nodeId: node.id, reason: "not_sender_owned" });
           continue;
         }
-        if (self && daemonIdsEquivalent4(node.daemonId, self)) {
+        if (self && daemonIdsEquivalent5(node.daemonId, self)) {
           plan.rejected.push({ nodeId: node.id, reason: "coordinator_owned" });
           continue;
         }
@@ -68286,7 +68366,7 @@ ${mergeTreeErr?.stderr || ""}`;
           plan.rejected.push({ nodeId: node.id, reason: "tombstoned" });
           continue;
         }
-        const workspaceTaken = meshNodes.some((entry) => entry.workspace === node.workspace && typeof entry.daemonId === "string" && daemonIdsEquivalent4(entry.daemonId, node.daemonId));
+        const workspaceTaken = meshNodes.some((entry) => entry.workspace === node.workspace && typeof entry.daemonId === "string" && daemonIdsEquivalent5(entry.daemonId, node.daemonId));
         if (workspaceTaken) {
           plan.rejected.push({ nodeId: node.id, reason: "workspace_conflict" });
           continue;
@@ -68563,7 +68643,7 @@ ${mergeTreeErr?.stderr || ""}`;
             }
             let added = 0;
             for (const target2 of [...persisted, ...derived]) {
-              if (self && daemonIdsEquivalent4(readText(target2?.coordinatorDaemonId), self)) continue;
+              if (self && daemonIdsEquivalent5(readText(target2?.coordinatorDaemonId), self)) continue;
               if (this.selfRegister(target2)) added += 1;
             }
             if (added > 0) {
@@ -68591,7 +68671,7 @@ ${mergeTreeErr?.stderr || ""}`;
             };
             let started = 0;
             for (const [key6, sub] of [...this.subscriptions.entries()]) {
-              if (wanted && !daemonIdsEquivalent4(sub.coordinatorDaemonId, wanted)) continue;
+              if (wanted && !daemonIdsEquivalent5(sub.coordinatorDaemonId, wanted)) continue;
               if (sub.lastForcedPushAt != null && now - sub.lastForcedPushAt < MESH_NODE_STATE_FORCED_PUSH_MIN_INTERVAL_MS) continue;
               sub.lastForcedPushAt = now;
               void this.checkOne(key6, sub, readRuntimeOnce, { force: true }).catch(() => {
@@ -70118,7 +70198,7 @@ ${mergeTreeErr?.stderr || ""}`;
     }
     function liveSessionRecordMatchesMeshNode(record7, meshId, nodeId, nodeWorkspace = "", nodeIsMissingLocalWorktree = false) {
       const recordNodeId = readStringValue(record7?.meta?.meshNodeId);
-      if (!recordNodeId || !daemonIdsEquivalent4(recordNodeId, nodeId)) return false;
+      if (!recordNodeId || !daemonIdsEquivalent5(recordNodeId, nodeId)) return false;
       if (nodeIsMissingLocalWorktree) return false;
       const recordWorkspace = readStringValue(record7?.workspace);
       if (nodeWorkspace && recordWorkspace && !meshWorkspacesEquivalent(recordWorkspace, nodeWorkspace)) return false;
@@ -70150,7 +70230,7 @@ ${mergeTreeErr?.stderr || ""}`;
       const nodeIsMissingLocalWorktree = args.node?.isLocalWorktree === true && !!nodeWorkspace && !fs20.existsSync(nodeWorkspace);
       const matches = args.liveSessionRecords.filter((record7) => {
         const recordNodeId = readStringValue(record7?.meta?.meshNodeId);
-        if (recordNodeId && !daemonIdsEquivalent4(recordNodeId, args.nodeId)) return false;
+        if (recordNodeId && !daemonIdsEquivalent5(recordNodeId, args.nodeId)) return false;
         if (liveSessionRecordMatchesMeshNode(record7, args.meshId, args.nodeId, nodeWorkspace || "", nodeIsMissingLocalWorktree)) return true;
         if (nodeIsMissingLocalWorktree) return false;
         return !!nodeWorkspace && liveSessionRecordMatchesMeshWorkspace(record7, args.meshId, nodeWorkspace);
@@ -70639,12 +70719,12 @@ ${mergeTreeErr?.stderr || ""}`;
         const workspace = readStringValue(node?.workspace);
         const daemonId = readStringValue(node?.daemonId);
         const isSelfNode = Boolean(
-          nodeId && selectedCoordinatorNodeId && daemonIdsEquivalent4(nodeId, selectedCoordinatorNodeId)
+          nodeId && selectedCoordinatorNodeId && daemonIdsEquivalent5(nodeId, selectedCoordinatorNodeId)
         ) || Boolean(
-          daemonId && (daemonIdsEquivalent4(daemonId, args.localMachineId) || daemonIdsEquivalent4(daemonId, args.statusInstanceId))
+          daemonId && (daemonIdsEquivalent5(daemonId, args.localMachineId) || daemonIdsEquivalent5(daemonId, args.statusInstanceId))
         ) || Boolean(args.meshSource !== "local_config" && nodeIndex === 0);
         const isSelfDaemonNode = Boolean(
-          daemonId && (daemonIdsEquivalent4(daemonId, args.localMachineId) || daemonIdsEquivalent4(daemonId, args.statusInstanceId))
+          daemonId && (daemonIdsEquivalent5(daemonId, args.localMachineId) || daemonIdsEquivalent5(daemonId, args.statusInstanceId))
         );
         if ((isSelfNode || isSelfDaemonNode) && isDeadLocalWorktreeNode(node)) {
           return { kind: "dead", nodeId };
@@ -70680,9 +70760,9 @@ ${mergeTreeErr?.stderr || ""}`;
           const nodeId = normalizeMeshNodeId(node) || `node_${nodeIndex}`;
           const daemonId = readStringValue(node?.daemonId);
           const isSelfNode = Boolean(
-            nodeId && selectedCoordinatorNodeId && daemonIdsEquivalent4(nodeId, selectedCoordinatorNodeId)
+            nodeId && selectedCoordinatorNodeId && daemonIdsEquivalent5(nodeId, selectedCoordinatorNodeId)
           ) || Boolean(
-            daemonId && (daemonIdsEquivalent4(daemonId, args.localMachineId) || daemonIdsEquivalent4(daemonId, args.statusInstanceId))
+            daemonId && (daemonIdsEquivalent5(daemonId, args.localMachineId) || daemonIdsEquivalent5(daemonId, args.statusInstanceId))
           );
           return !isSelfNode && daemonId ? { kind: "unavailable", nodeId } : { kind: "skip" };
         })();
@@ -71171,8 +71251,8 @@ ${mergeTreeErr?.stderr || ""}`;
       const hostname6 = readMeshNodeHostname(node);
       const machineName = readMeshNodeDisplayMachineName(node);
       const coordinatorHostname = readStringValue(opts.coordinatorHostname);
-      const machineIdMatches = Boolean(opts.localMachineId && machineId && daemonIdsEquivalent4(opts.localMachineId, machineId));
-      const daemonIdMatches = Boolean(opts.localDaemonId && daemonId && daemonIdsEquivalent4(opts.localDaemonId, daemonId));
+      const machineIdMatches = Boolean(opts.localMachineId && machineId && daemonIdsEquivalent5(opts.localMachineId, machineId));
+      const daemonIdMatches = Boolean(opts.localDaemonId && daemonId && daemonIdsEquivalent5(opts.localDaemonId, daemonId));
       const hostnameMatches = Boolean(
         normalizeMeshHostname(hostname6) && normalizeMeshHostname(coordinatorHostname) && normalizeMeshHostname(hostname6) === normalizeMeshHostname(coordinatorHostname)
       );
@@ -72174,7 +72254,7 @@ ${mergeTreeErr?.stderr || ""}`;
       const record7 = node;
       const declared = readNonEmpty(readMeshNodeDaemonId(record7)) || readNonEmpty(readMeshNodeMachineId(record7));
       if (!declared) return void 0;
-      return machineCoreFromDaemonId(declared);
+      return machineCoreFromDaemonId2(declared);
     }
     function resolveNodeDaemonKey(node, allNodes = []) {
       const direct = directDaemonKey(node);
@@ -72243,10 +72323,10 @@ ${mergeTreeErr?.stderr || ""}`;
       return getQueue(meshId, { status: ["assigned"] }).filter(isTaskReadonly3).length;
     }
     function nodeHasActiveAssignment(meshId, nodeId) {
-      return getQueue(meshId, { status: ["assigned"] }).some((task) => daemonIdsEquivalent4(task.assignedNodeId, nodeId));
+      return getQueue(meshId, { status: ["assigned"] }).some((task) => daemonIdsEquivalent5(task.assignedNodeId, nodeId));
     }
     function nodeHasActiveWriteAssignment(meshId, nodeId) {
-      return getQueue(meshId, { status: ["assigned"] }).some((task) => !isTaskReadonly3(task) && daemonIdsEquivalent4(task.assignedNodeId, nodeId));
+      return getQueue(meshId, { status: ["assigned"] }).some((task) => !isTaskReadonly3(task) && daemonIdsEquivalent5(task.assignedNodeId, nodeId));
     }
     function nodeActiveLoad(meshId, nodeId) {
       return MeshRuntimeStore.getInstance().nodeActiveAssignmentCount(meshId, nodeId);
@@ -72394,7 +72474,7 @@ ${mergeTreeErr?.stderr || ""}`;
     }
     function rowChargedToDaemon(assignedNodeId, nodeId, daemonNodeIds) {
       const scope2 = Array.isArray(daemonNodeIds) && daemonNodeIds.length > 0 ? daemonNodeIds : [nodeId];
-      return scope2.some((candidate) => daemonIdsEquivalent4(assignedNodeId, candidate));
+      return scope2.some((candidate) => daemonIdsEquivalent5(assignedNodeId, candidate));
     }
     function activeProviderAssignedCount(meshId, nodeId, providerType, daemonNodeIds) {
       return getQueue(meshId, { status: [...CAPACITY_OCCUPYING_STATUSES] }).filter((task) => {
@@ -72689,7 +72769,7 @@ ${mergeTreeErr?.stderr || ""}`;
         const al = task.autoLaunch;
         const sid = al ? readText(al.sessionId) : "";
         if (!al || al.status !== "started" && al.status !== "completed" || !sid) continue;
-        if (!daemonIdsEquivalent4(al.nodeId, nodeId)) continue;
+        if (!daemonIdsEquivalent5(al.nodeId, nodeId)) continue;
         const launchedAtMs = Date.parse(al.updatedAt);
         const inBaseWindow = isAutoLaunchWithinAwaitClaimWindow(launchedAtMs, nowMs2);
         const inBackoff = autoLaunchAwaitClaimBackoff.has(`${meshId}::${task.id}`);
@@ -73087,14 +73167,14 @@ ${mergeTreeErr?.stderr || ""}`;
         const liveSettings = inst.settings;
         if (liveSettings && typeof liveSettings === "object") {
           if (readText(liveSettings.meshNodeFor) !== meshId) return false;
-          if (!daemonIdsEquivalent4(readText(liveSettings.meshNodeId) || readText(liveSettings.nodeId), nodeId)) return false;
+          if (!daemonIdsEquivalent5(readText(liveSettings.meshNodeId) || readText(liveSettings.nodeId), nodeId)) return false;
         }
         const state2 = inst.getState();
         const settings2 = state2.settings || {};
         if (readText(settings2.meshNodeFor) !== meshId) return false;
         if (isLightWorkerSession2({ settings: liveSettings }) || isLightWorkerSession2(state2)) return false;
         const instNodeId = readText(settings2.meshNodeId) || readText(settings2.nodeId);
-        if (!daemonIdsEquivalent4(instNodeId, nodeId)) return false;
+        if (!daemonIdsEquivalent5(instNodeId, nodeId)) return false;
         const sessionId = readText(state2.instanceId);
         if (currentSessionId && sessionIdsEquivalent(sessionId, currentSessionId) && isIdleSessionState(state2)) return false;
         return sessionStateLooksActive(state2);
@@ -73113,8 +73193,8 @@ ${mergeTreeErr?.stderr || ""}`;
       const machineId = readText(node?.machineId);
       const appConfig = loadConfig();
       const localMachineId = readText(appConfig.machineId) || readText(appConfig.registeredMachineId);
-      const daemonMatchesLocal = !daemonId || daemonIdsEquivalent4(daemonId, localMachineId);
-      const machineMatchesLocal = !machineId || daemonIdsEquivalent4(machineId, localMachineId);
+      const daemonMatchesLocal = !daemonId || daemonIdsEquivalent5(daemonId, localMachineId);
+      const machineMatchesLocal = !machineId || daemonIdsEquivalent5(machineId, localMachineId);
       if (node?.isLocalWorktree === true) {
         return daemonMatchesLocal && machineMatchesLocal;
       }
@@ -73156,14 +73236,14 @@ ${mergeTreeErr?.stderr || ""}`;
         const liveSettings = inst.settings;
         if (liveSettings && typeof liveSettings === "object") {
           if (readText(liveSettings.meshNodeFor) !== meshId) return false;
-          if (!daemonIdsEquivalent4(readText(liveSettings.meshNodeId) || readText(liveSettings.nodeId), nodeId)) return false;
+          if (!daemonIdsEquivalent5(readText(liveSettings.meshNodeId) || readText(liveSettings.nodeId), nodeId)) return false;
         }
         const state2 = inst.getState();
         const settings2 = state2.settings || {};
         if (readText(settings2.meshNodeFor) !== meshId) return false;
         if (isLightWorkerSession2({ settings: liveSettings }) || isLightWorkerSession2(state2)) return false;
         const instNodeId = readText(settings2.meshNodeId) || readText(settings2.nodeId);
-        if (!daemonIdsEquivalent4(instNodeId, nodeId)) return false;
+        if (!daemonIdsEquivalent5(instNodeId, nodeId)) return false;
         const status = readText(state2.status).toLowerCase();
         if (isTerminalSessionRecordStatus(status)) return false;
         const sessionId = readText(state2.instanceId);
@@ -73179,13 +73259,13 @@ ${mergeTreeErr?.stderr || ""}`;
     function nodeHasLiveSessionPendingClaim(components, meshId, nodeId, task, node) {
       if (inWindowAutoLaunchSessionIdsForNode(meshId, nodeId).some((sid) => !sessionClaimRefusalReleasesSpawnGate(meshId, sid))) return true;
       const busySessionIds = new Set(
-        getQueue(meshId, { status: ["assigned"] }).filter((task2) => daemonIdsEquivalent4(task2.assignedNodeId, nodeId)).map((task2) => readText(task2.assignedSessionId)).filter(Boolean)
+        getQueue(meshId, { status: ["assigned"] }).filter((task2) => daemonIdsEquivalent5(task2.assignedNodeId, nodeId)).map((task2) => readText(task2.assignedSessionId)).filter(Boolean)
       );
       return components.instanceManager.getByCategory("cli").some((inst) => {
         const liveSettings = inst.settings;
         if (liveSettings && typeof liveSettings === "object") {
           if (readText(liveSettings.meshNodeFor) !== meshId) return false;
-          if (!daemonIdsEquivalent4(readText(liveSettings.meshNodeId) || readText(liveSettings.nodeId), nodeId)) return false;
+          if (!daemonIdsEquivalent5(readText(liveSettings.meshNodeId) || readText(liveSettings.nodeId), nodeId)) return false;
         }
         const state2 = inst.getState();
         const settings2 = state2.settings || {};
@@ -73193,7 +73273,7 @@ ${mergeTreeErr?.stderr || ""}`;
         if (isLightWorkerSession2({ settings: liveSettings }) || isLightWorkerSession2(state2)) return false;
         if (readText(settings2.meshCoordinatorFor) === meshId) return false;
         const instNodeId = readText(settings2.meshNodeId) || readText(settings2.nodeId);
-        if (!daemonIdsEquivalent4(instNodeId, nodeId)) return false;
+        if (!daemonIdsEquivalent5(instNodeId, nodeId)) return false;
         const status = readText(state2.status).toLowerCase();
         if (isTerminalSessionRecordStatus(status)) return false;
         const sessionId = readText(state2.instanceId);
@@ -73985,13 +74065,13 @@ ${mergeTreeErr?.stderr || ""}`;
       if (!auth) throw new ContractRefusal("not_enrolled");
       if (auth.status === "requires_owner_recovery") throw new ContractRefusal("authority_requires_recovery");
       if (auth.status === "paused_transfer") throw new ContractRefusal("authority_paused");
-      if (auth.status !== "active" || !daemonIdsEquivalent4(auth.authorityDaemonId, ctx.localDaemonId)) throw new ContractRefusal("not_authorized");
+      if (auth.status !== "active" || !daemonIdsEquivalent5(auth.authorityDaemonId, ctx.localDaemonId)) throw new ContractRefusal("not_authorized");
       return auth;
     }
     function authorityReadable(ctx, namespaceId) {
       if (readContractStoreProtocolVersion(ctx.db) > CONTRACT_PROTOCOL_VERSION) return null;
       const auth = getAuthority(ctx, namespaceId);
-      if (!auth || auth.status !== "active" || !daemonIdsEquivalent4(auth.authorityDaemonId, ctx.localDaemonId)) return null;
+      if (!auth || auth.status !== "active" || !daemonIdsEquivalent5(auth.authorityDaemonId, ctx.localDaemonId)) return null;
       return auth;
     }
     function writeEpoch(ctx, namespaceId, epoch, daemonId, reason) {
@@ -74095,7 +74175,7 @@ ${mergeTreeErr?.stderr || ""}`;
       }
       const epoch = Math.max(auth.authorityEpoch, ctx.fence.read(input.namespaceId) ?? 0) + 1;
       inTxn(ctx, () => {
-        const status = daemonIdsEquivalent4(newDaemonId, ctx.localDaemonId) ? "active" : "transferred_away";
+        const status = daemonIdsEquivalent5(newDaemonId, ctx.localDaemonId) ? "active" : "transferred_away";
         ctx.db.prepare(`UPDATE contract_authorities SET authority_epoch = ?, authority_daemon_id = ?, status = ?, updated_at = ? WHERE namespace_id = ?`).run(epoch, newDaemonId, status, now, input.namespaceId);
         ctx.db.prepare("UPDATE contract_heads SET authority_epoch = ?, updated_at = ? WHERE namespace_id = ?").run(epoch, now, input.namespaceId);
         ctx.db.prepare(`UPDATE contract_grants SET revoked_at = ?, revoke_reason = 'authority_transfer' WHERE namespace_id = ? AND revoked_at IS NULL`).run(now, input.namespaceId);
@@ -74159,7 +74239,7 @@ ${mergeTreeErr?.stderr || ""}`;
         if (!inOverlap) return new ContractRefusal("capability_revoked");
       }
       if (g3.expires_at <= now) return new ContractRefusal("capability_expired");
-      if (!daemonIdsEquivalent4(g3.authority_daemon_id, auth.authorityDaemonId) || g3.authority_epoch !== auth.authorityEpoch || g3.process_incarnation !== auth.processIncarnation) return new ContractRefusal("capability_revoked");
+      if (!daemonIdsEquivalent5(g3.authority_daemon_id, auth.authorityDaemonId) || g3.authority_epoch !== auth.authorityEpoch || g3.process_incarnation !== auth.processIncarnation) return new ContractRefusal("capability_revoked");
       return null;
     }
     function verifyCoordinatorCapability(ctx, secret, req) {
@@ -74850,7 +74930,7 @@ ${mergeTreeErr?.stderr || ""}`;
           throw new ContractRefusal(raw?.status === "requires_owner_recovery" ? "authority_requires_recovery" : raw?.status === "paused_transfer" ? "authority_paused" : "unavailable");
         }
         if (scope2.mode === "strict") {
-          if (input.recipient.daemonId && !daemonIdsEquivalent4(input.recipient.daemonId, auth.authorityDaemonId)) throw new ContractRefusal("strict_participant_unsupported");
+          if (input.recipient.daemonId && !daemonIdsEquivalent5(input.recipient.daemonId, auth.authorityDaemonId)) throw new ContractRefusal("strict_participant_unsupported");
           if (!input.recipientSupportsContractTools) throw new ContractRefusal("strict_participant_unsupported");
         }
         const pinSet = freezePinSet(ctx, scope2);
@@ -76513,7 +76593,7 @@ ${env2.envelopes.join("\n\n")}${tail}`;
       const dependsOn = normalizeDependsOn(opts?.dependsOn);
       const explicitInputArtifactIds = normalizeInputArtifactIds(opts?.inputArtifactIds ?? opts?.input_artifact_ids);
       const inheritArtifacts = isArtifactInheritanceEnabled(opts);
-      const ownedPathsResult = normalizeOwnedPaths(opts?.ownedPaths);
+      const ownedPathsResult = normalizeOwnedPaths2(opts?.ownedPaths);
       const ownedPaths = ownedPathsResult.declaration.paths.length > 0 ? ownedPathsResult.declaration : void 0;
       const priority = normalizeMeshTaskPriority2(opts?.priority);
       const notBefore = resolveNotBefore2(opts?.notBefore);
@@ -76638,7 +76718,7 @@ ${env2.envelopes.join("\n\n")}${tail}`;
         return inserted;
       });
     }
-    function recordDirectDispatchTask(meshId, message, opts) {
+    function recordDirectDispatchTask(meshId, message, opts, attested) {
       const missionId = typeof opts.missionId === "string" ? opts.missionId.trim() : "";
       const taskId = typeof opts.id === "string" ? opts.id.trim() : "";
       if (!taskId) return null;
@@ -76653,7 +76733,7 @@ ${env2.envelopes.join("\n\n")}${tail}`;
         throw new Error(buildMeshTaskModeViolationError2(modeValidation));
       }
       const now = opts.dispatchedAt && opts.dispatchedAt.trim() ? opts.dispatchedAt : (/* @__PURE__ */ new Date()).toISOString();
-      const directOwnedPathsResult = normalizeOwnedPaths(opts.ownedPaths);
+      const directOwnedPathsResult = normalizeOwnedPaths2(opts.ownedPaths);
       const directOwnedPaths = directOwnedPathsResult.declaration.paths.length > 0 ? directOwnedPathsResult.declaration : void 0;
       const explicitDirectInputArtifactIds = normalizeInputArtifactIds(opts.inputArtifactIds ?? opts.input_artifact_ids);
       const directInheritArtifacts = isArtifactInheritanceEnabled(opts);
@@ -76674,6 +76754,7 @@ ${env2.envelopes.join("\n\n")}${tail}`;
           ...directInputArtifactIds.length > 0 ? { inputArtifactIds: directInputArtifactIds } : {},
           ...!directInheritArtifacts ? { inheritArtifacts: false } : {},
           ...directOwnedPaths ? { ownedPaths: directOwnedPaths } : {},
+          ...attested ? { ownershipScope: attested.ownershipScope, phase: attested.phase } : {},
           difficulty: taskDifficulty,
           ...opts.assignedNodeId ? { targetNodeId: opts.assignedNodeId, assignedNodeId: opts.assignedNodeId } : {},
           ...opts.assignedSessionId ? { targetSessionId: opts.assignedSessionId, assignedSessionId: opts.assignedSessionId } : {},
@@ -76950,7 +77031,7 @@ ${env2.envelopes.join("\n\n")}${tail}`;
         const active = MeshRuntimeStore.getInstance().turnStore().findLatestAttemptForTask(meshId, taskId);
         if (active && !active.terminal) {
           const ledger = getActiveTurnLedger();
-          if (ledger && daemonIdsEquivalent4(active.ownerDaemonId, ledger.selfDaemonId)) ledger.observe({
+          if (ledger && daemonIdsEquivalent5(active.ownerDaemonId, ledger.selfDaemonId)) ledger.observe({
             eventId: `queue-cancel:${active.attemptId}:g${active.generation}`,
             kind: "cancel",
             source: "operator",
@@ -79945,7 +80026,7 @@ ${asText(streams.stderr)}
           let ownershipScopeError;
           if (input.ownership) {
             try {
-              ownershipScope = attestLocalOwnership({ ...input.ownership, nodeId: input.ownership.nodeId, workspace: lw, phase: "source", paths: input.ownership.paths });
+              ownershipScope = attestLocalOwnership2({ ...input.ownership, nodeId: input.ownership.nodeId, workspace: lw, phase: "source", paths: input.ownership.paths });
             } catch (e) {
               ownershipScopeError = e?.message || String(e);
             }
@@ -80316,7 +80397,7 @@ ${report}`;
       const machineId = getMachineId();
       if (!nodeId || !workspace || !mesh?.repoIdentity || !machineId) return;
       try {
-        const scope2 = attestLocalOwnership({ repoIdentity: mesh.repoIdentity, machineId, nodeId, workspace, phase: "source", paths: parent.ownedPaths });
+        const scope2 = attestLocalOwnership2({ repoIdentity: mesh.repoIdentity, machineId, nodeId, workspace, phase: "source", paths: parent.ownedPaths });
         withQueueLock(parent.meshId, () => {
           const e = MeshRuntimeStore.getInstance().findQueueEntryById(parent.meshId, parent.id);
           if (!e || e.ownershipScope) return;
@@ -82366,7 +82447,7 @@ ${block3.text}`,
         if (!expected) return true;
         if (identity5.meshId !== expected.meshId || identity5.taskId !== expected.taskId || identity5.attemptId !== expected.attemptId || identity5.sessionId !== expected.sessionId || identity5.nodeId !== expected.nodeId) return false;
         const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(expected.attemptId);
-        return !!attempt && attempt.meshId === expected.meshId && attempt.taskId === expected.taskId && attempt.sessionId === expected.sessionId && attempt.nodeId === expected.nodeId && attempt.generation === expected.generation && daemonIdsEquivalent4(attempt.ownerDaemonId, expected.ownerDaemonId) && opts.isSelfDaemon?.(attempt.ownerDaemonId) === true;
+        return !!attempt && attempt.meshId === expected.meshId && attempt.taskId === expected.taskId && attempt.sessionId === expected.sessionId && attempt.nodeId === expected.nodeId && attempt.generation === expected.generation && daemonIdsEquivalent5(attempt.ownerDaemonId, expected.ownerDaemonId) && opts.isSelfDaemon?.(attempt.ownerDaemonId) === true;
       };
       const live = resolveWorkerIdentity(credential);
       const liveIsNewer = !!live && reportedAt !== void 0 && workerIdentityPostdates(live, reportedAt);
@@ -82446,7 +82527,7 @@ ${block3.text}`,
         });
         const ledger = getActiveTurnLedger();
         const attempt = ledger?.getAttempt(attemptId);
-        if (ledger && attempt && !attempt.terminal && daemonIdsEquivalent4(ledger.selfDaemonId, attempt.ownerDaemonId)) {
+        if (ledger && attempt && !attempt.terminal && daemonIdsEquivalent5(ledger.selfDaemonId, attempt.ownerDaemonId)) {
           ledger.observe({
             eventId: `report_refusal:${attemptId}:g${generation}:${opts.deliveryId ?? nowMs2}`,
             at: nowMs2,
@@ -82922,7 +83003,7 @@ ${block3.text}`,
           owner = void 0;
         }
         if (!owner) return refuse10("node_unresolved", `node ${nodeId} is not on the owner's mesh roster`);
-        if (!daemonIdsEquivalent4(owner, senderDaemonId)) {
+        if (!daemonIdsEquivalent5(owner, senderDaemonId)) {
           return refuse10("sender_not_node_owner", `node ${nodeId} belongs to daemon ${owner}, not the relaying daemon ${senderDaemonId}`);
         }
         return null;
@@ -83156,7 +83237,7 @@ ${block3.text}`,
       }
       const ledger = getActiveTurnLedger();
       const attempt = runtime2.turnStore().getAttempt(identity5.attemptId);
-      if (!attempt || attempt.terminal || attempt.taskId !== identity5.taskId || attempt.meshId !== identity5.meshId || attempt.sessionId !== identity5.sessionId || ledger && !daemonIdsEquivalent4(attempt.ownerDaemonId, ledger.selfDaemonId)) {
+      if (!attempt || attempt.terminal || attempt.taskId !== identity5.taskId || attempt.meshId !== identity5.meshId || attempt.sessionId !== identity5.sessionId || ledger && !daemonIdsEquivalent5(attempt.ownerDaemonId, ledger.selfDaemonId)) {
         return { accepted: false, taskId: identity5.taskId, refusal: "unauthenticated", detail: "progress identity is not the current owner attempt" };
       }
       if (!ledger) return { accepted: false, taskId: identity5.taskId, refusal: "storage_failed", detail: "the owner turn ledger is not ready to consume this progress; retry" };
@@ -83418,7 +83499,7 @@ ${block3.text}`,
     async function queryBridgePeer(dispatch2, peerId, meshId, policy, deliveryClaim) {
       const nonce = (0, import_node_crypto17.randomUUID)();
       const reply2 = unwrapMeshRelayResult(await dispatch2(peerId, BRIDGE_CAPABILITY_COMMAND, { meshId, nonce, ...deliveryClaim ? { deliveryClaim } : {} }), { command: BRIDGE_CAPABILITY_COMMAND, peerDaemonId: peerId });
-      const valid = reply2.success === true && reply2.protocol === BRIDGE_PROTOCOL && reply2.meshId === meshId && reply2.nonce === nonce && reply2.rolloutId === policy.rolloutId && typeof reply2.daemonId === "string" && daemonIdsEquivalent4(reply2.daemonId, peerId) && admitted(policy, reply2);
+      const valid = reply2.success === true && reply2.protocol === BRIDGE_PROTOCOL && reply2.meshId === meshId && reply2.nonce === nonce && reply2.rolloutId === policy.rolloutId && typeof reply2.daemonId === "string" && daemonIdsEquivalent5(reply2.daemonId, peerId) && admitted(policy, reply2);
       return valid ? reply2 : null;
     }
     function row(db3, side, senderId, deliveryId) {
@@ -83458,7 +83539,7 @@ ${block3.text}`,
     }
     async function receiveBridgeDelivery(db3, raw, senderId, self, dispatch2, apply, nowMs2 = Date.now()) {
       const e = decodeBridgeEnvelope(raw);
-      if (!e || !daemonIdsEquivalent4(e.senderDaemonId, senderId) || !daemonIdsEquivalent4(e.ownerDaemonId, self.daemonId)) return { success: false, error: "invalid_worker_bridge_envelope" };
+      if (!e || !daemonIdsEquivalent5(e.senderDaemonId, senderId) || !daemonIdsEquivalent5(e.ownerDaemonId, self.daemonId)) return { success: false, error: "invalid_worker_bridge_envelope" };
       const policy = readBridgePolicy(db3, e.meshId);
       if (!policy || !admitted(policy, self) || !admitted(policy, { daemonId: senderId, commit: e.senderCommit, version: e.senderVersion })) return { success: false, error: "worker_protocol_unsupported" };
       try {
@@ -86411,7 +86492,7 @@ ${includeRefs[0]}`;
     }
     function assertMaintenanceCommandNode(meshIds, nodeId, daemonId) {
       const s2 = readCooperativeMaintenance2();
-      if (s2 && nodeId && !s2.nodeRoster.some((n) => meshIds.includes(n.meshId) && meshNodeIdMatches7(n, nodeId) && daemonIdsEquivalent4(n.daemonId, daemonId || s2.daemonId))) throw new Error("maintenance_unknown_node_or_owner");
+      if (s2 && nodeId && !s2.nodeRoster.some((n) => meshIds.includes(n.meshId) && meshNodeIdMatches7(n, nodeId) && daemonIdsEquivalent5(n.daemonId, daemonId || s2.daemonId))) throw new Error("maintenance_unknown_node_or_owner");
     }
     function assertMaintenanceCommandIdentity(args) {
       const text9 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
@@ -86438,7 +86519,7 @@ ${includeRefs[0]}`;
     }
     function assertMaintenanceNode(meshId, nodeId, daemonId) {
       const s2 = readCooperativeMaintenance2();
-      if (s2 && !s2.nodeRoster.some((n) => n.meshId === meshId && meshNodeIdMatches7(n, nodeId) && daemonIdsEquivalent4(n.daemonId, daemonId || s2.daemonId))) throw new Error("maintenance_unknown_node_or_owner");
+      if (s2 && !s2.nodeRoster.some((n) => n.meshId === meshId && meshNodeIdMatches7(n, nodeId) && daemonIdsEquivalent5(n.daemonId, daemonId || s2.daemonId))) throw new Error("maintenance_unknown_node_or_owner");
     }
     async function withMaintenanceObservation(run4) {
       const state2 = readCooperativeMaintenance2();
@@ -90643,7 +90724,7 @@ ${includeRefs[0]}`;
     function isTaskBoundToWorktree(gate, task) {
       if (!gate.worktreeBranch) return false;
       const target2 = typeof task.targetNodeId === "string" ? task.targetNodeId.trim() : "";
-      if (target2 && gate.nodeId && (daemonIdsEquivalent4(target2, gate.nodeId) || meshNodeIdMatches7({ id: target2 }, gate.nodeId))) {
+      if (target2 && gate.nodeId && (daemonIdsEquivalent5(target2, gate.nodeId) || meshNodeIdMatches7({ id: target2 }, gate.nodeId))) {
         return true;
       }
       const wanted = `worktree=${gate.worktreeBranch}`;
@@ -91120,7 +91201,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       if (opts.turnTerminals !== false) {
         entries2 = withTurnTerminals(meshId, entries2, kinds, { ...sinceMs !== void 0 ? { sinceMs } : {}, ...sqlTail ? { tail: sqlTail } : {} });
       }
-      if (node) entries2 = entries2.filter((e) => e.nodeId && daemonIdsEquivalent4(e.nodeId, node));
+      if (node) entries2 = entries2.filter((e) => e.nodeId && daemonIdsEquivalent5(e.nodeId, node));
       if (opts.tail && opts.tail > 0 && entries2.length > opts.tail) entries2 = entries2.slice(-opts.tail);
       return entries2;
     }
@@ -91267,7 +91348,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         if (!failureCountDone) {
           if (ts2 < recentWindow) {
             failureCountDone = true;
-          } else if (opts.nodeId && !daemonIdsEquivalent4(e.nodeId, opts.nodeId)) {
+          } else if (opts.nodeId && !daemonIdsEquivalent5(e.nodeId, opts.nodeId)) {
           } else if (e.kind === "task_failed") {
             if (!isIntentionalCleanupStopEntry(e)) consecutiveNodeFailures++;
           } else if (e.kind === "task_completed" || e.kind === "task_dispatched") {
@@ -91277,7 +91358,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         if (lastDispatch === null && e.kind === "task_dispatched") {
           if (opts.sessionId && sessionIdsEquivalent(e.sessionId, opts.sessionId)) {
             lastDispatch = e;
-          } else if (!opts.sessionId && opts.nodeId && daemonIdsEquivalent4(e.nodeId, opts.nodeId)) {
+          } else if (!opts.sessionId && opts.nodeId && daemonIdsEquivalent5(e.nodeId, opts.nodeId)) {
             lastDispatch = e;
           }
         }
@@ -92036,9 +92117,9 @@ ${manifest}`;
     }
     function isConfigPathInsideWorkspace(configPath, workspace) {
       if (typeof configPath !== "string" || !configPath) return false;
-      const toPosix2 = (value) => value.replace(/\\/g, "/").replace(/\/+$/, "");
-      const ws = toPosix2(workspace);
-      const target2 = toPosix2(configPath);
+      const toPosix22 = (value) => value.replace(/\\/g, "/").replace(/\/+$/, "");
+      const ws = toPosix22(workspace);
+      const target2 = toPosix22(configPath);
       return !!ws && (target2 === ws || target2.startsWith(`${ws}/`));
     }
     function repoConfigStreakKey(nodeId, workspace) {
@@ -92350,7 +92431,7 @@ ${manifest}`;
           const settings2 = state2.settings || {};
           if (readText(settings2.meshNodeFor) !== meshId) continue;
           const instNodeId = readText(settings2.meshNodeId) || readText(settings2.nodeId);
-          if (!daemonIdsEquivalent4(instNodeId, nodeId)) continue;
+          if (!daemonIdsEquivalent5(instNodeId, nodeId)) continue;
           const status = readText(state2.status).toLowerCase();
           if (isTerminalSessionRecordStatus(status)) continue;
           const sessionId = readText(state2.instanceId);
@@ -93555,7 +93636,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
     });
     function admitLightBaseNode(mesh, selfDaemonId, requestedBaseNodeId) {
       const nodes = (mesh?.nodes ?? []).filter((n) => typeof n?.workspace === "string" && n.workspace.trim());
-      const isLocal2 = (n) => !n.daemonId || !!selfDaemonId && daemonIdsEquivalent4(n.daemonId, selfDaemonId);
+      const isLocal2 = (n) => !n.daemonId || !!selfDaemonId && daemonIdsEquivalent5(n.daemonId, selfDaemonId);
       let node;
       if (requestedBaseNodeId) {
         node = nodes.find((n) => meshNodeIdMatches7(n, requestedBaseNodeId));
@@ -94193,7 +94274,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         capabilityTags: buildMeshNodeCapabilityTags2(node, providerType),
         assignedTranscriptProfile,
         options: {
-          physicalContext: { workspace: lightWorkspaceId && readText(p.claimState?.workspace) || readText(node?.workspace), machineId: getMachineId() ?? "" },
+          physicalContext: { workspace: lightWorkspaceId && readText(p.claimState?.workspace) || readText(node?.workspace), machineId: getMachineId() ?? "", repoIdentity: mesh.repoIdentity },
           ...lightWorkspaceId ? { lightWorkspaceId } : {},
           providerType,
           ...providerMaxParallel !== void 0 ? { providerMaxParallel } : {},
@@ -96872,18 +96953,21 @@ ${continuationNotice}` } : dispatchTask,
         }
       }).filter((v) => v !== null);
     }
-    function findTaskOwnedPathsConflicts(candidate, inFlightOwnership) {
+    function findTaskOwnedPathsConflicts(candidate, inFlightOwnership, prospectiveScope) {
       if (isTaskReadonly3(candidate)) return [];
       const paths = candidate.ownedPaths ?? unknownWriterPaths;
-      const scope2 = currentPhysicalScope(candidate.ownershipScope, paths);
+      const scope2 = prospectiveScope ?? currentPhysicalScope(candidate.ownershipScope, paths);
       return inFlightOwnership.flatMap((other) => {
         if (other.taskId === candidate.id) return [];
         const otherScope = currentPhysicalScope(other.ownershipScope, other.paths);
         if (other.ownershipScope && !otherScope) return [{ taskId: other.taskId, overlappingPaths: ["unproven_active_physical_resource"] }];
         const comparison = comparePhysicalOwnership(paths, scope2, other.paths, otherScope);
         if (!comparison.physicalConflict) return [];
+        const explained = explainPhysicalOverlap(paths, scope2, other.paths, otherScope);
+        const label2 = explained.kind === "resource" || explained.kind === "worktree" ? `${explained.kind}:${explained.path}` : explained.kind === "missing_scope" ? `missing_scope:${explained.side}` : explained.kind;
         const logical = findOwnershipConflicts2(paths, [other]);
-        return logical.length ? logical : [{ taskId: other.taskId, overlappingPaths: ["physical_workspace_or_shared_resource"] }];
+        const base = logical.length ? logical : [{ taskId: other.taskId, overlappingPaths: ["physical_workspace_or_shared_resource"] }];
+        return base.map((conflict) => ({ ...conflict, overlappingPaths: [...conflict.overlappingPaths, label2] }));
       });
     }
     function formatOwnedPathsConflictDetail(conflicts) {
@@ -96901,6 +96985,14 @@ ${continuationNotice}` } : dispatchTask,
         conflicts,
         detail: formatOwnedPathsConflictDetail(conflicts)
       };
+    }
+    function registerMeshRuntimeStoreForAdmission(getInstance) {
+      meshRuntimeStoreForAdmission = getInstance;
+    }
+    function admitOwnedPathsForMesh2(meshId, candidate) {
+      const getInstance = meshRuntimeStoreForAdmission;
+      if (!getInstance) throw new Error("ownership_store_unbound");
+      return evaluateTaskOwnedPathsAdmission(getInstance(), meshId, candidate);
     }
     function claimNextQueueTask(host, meshId, nodeId, sessionId, capabilityTags = [], opts) {
       return host.transaction(() => {
@@ -96999,8 +97091,48 @@ ${continuationNotice}` } : dispatchTask,
           });
         };
         const inFlightOwnership = readInFlightOwnershipMeshWide(host, meshId);
-        const ownedPathsConflictFor = (candidate) => findTaskOwnedPathsConflicts(candidate, inFlightOwnership);
+        const ownershipProof = /* @__PURE__ */ new Map();
+        const proofFor = (candidate) => {
+          const ctx = opts?.physicalContext;
+          if (!ctx?.workspace || !ctx.machineId || isTaskReadonly3(candidate)) return void 0;
+          const cached5 = ownershipProof.get(candidate.id);
+          if (cached5) return cached5;
+          let result;
+          if (!candidate.ownedPaths?.paths.length) result = { error: "ownership_unproven: ownedPaths" };
+          else {
+            const current5 = currentPhysicalScope(candidate.ownershipScope, candidate.ownedPaths);
+            if (current5) result = { scope: current5 };
+            else if (candidate.ownershipScope) result = { error: "ownership_unproven: unproven_active_physical_resource" };
+            else {
+              try {
+                const phase = candidate.phase === "integration" ? "integration" : "source";
+                const attested = attestLocalOwnership2({
+                  repoIdentity: ctx.repoIdentity || "",
+                  machineId: ctx.machineId,
+                  nodeId,
+                  workspace: ctx.workspace,
+                  phase,
+                  paths: candidate.ownedPaths
+                });
+                const reproduced = currentPhysicalScope(attested, candidate.ownedPaths);
+                result = reproduced ? { scope: reproduced } : { error: "ownership_unproven: unproven_active_physical_resource" };
+              } catch (e) {
+                result = { error: typeof e?.message === "string" ? e.message : String(e) };
+              }
+            }
+          }
+          ownershipProof.set(candidate.id, result);
+          return result;
+        };
+        const ownedPathsConflictFor = (candidate) => {
+          const proof = proofFor(candidate);
+          return findTaskOwnedPathsConflicts(candidate, inFlightOwnership, proof && "scope" in proof ? proof.scope : void 0);
+        };
         const ownedPathsAllows = (candidate) => ownedPathsConflictFor(candidate).length === 0;
+        const ownershipProven = (candidate) => {
+          const proof = proofFor(candidate);
+          return !proof || !("error" in proof);
+        };
         const nodeGitGate = opts?.nodeGitGate;
         const nodeDirtyGate = nodeGitGate ? { dirty: nodeGitGate.dirty, worktreeBranch: nodeGitGate.worktreeBranch, nodeId: nodeGitGate.nodeId ?? nodeId } : void 0;
         const nodeNotDirty = (candidate) => {
@@ -97042,7 +97174,7 @@ ${continuationNotice}` } : dispatchTask,
         )) : void 0;
         const targetMatches = (candidate) => {
           if (candidate.targetSessionId && !sessionIdsEquivalent(candidate.targetSessionId, sessionId)) return false;
-          if (candidate.targetNodeId && !daemonIdsEquivalent4(candidate.targetNodeId, nodeId) && !meshNodeIdMatches7({ id: candidate.targetNodeId }, nodeId)) {
+          if (candidate.targetNodeId && !daemonIdsEquivalent5(candidate.targetNodeId, nodeId) && !meshNodeIdMatches7({ id: candidate.targetNodeId }, nodeId)) {
             return false;
           }
           return true;
@@ -97066,6 +97198,7 @@ ${continuationNotice}` } : dispatchTask,
           { reason: "convergence_target_is_worktree", test: convergenceAllows },
           { reason: "target_pin_unmatched", test: targetMatches },
           { reason: "physical_context_changed", test: physicalContextMatches },
+          { reason: "ownership_unproven", test: ownershipProven },
           { reason: "review_independence_required", test: (c) => reviewRefusal(c) !== "review_independence_required" && reviewRefusal(c) !== "review_requires_readonly" },
           { reason: "review_input_unavailable", test: (c) => reviewRefusal(c) !== "review_input_unavailable" },
           { reason: "review_input_busy", test: (c) => reviewRefusal(c) !== "review_input_busy" },
@@ -97086,7 +97219,20 @@ ${continuationNotice}` } : dispatchTask,
           test: (candidate) => {
             if (gate.test(candidate)) return true;
             holdBlockers ??= host.assignedRowsMeshWide(meshId).map((row2) => JSON.parse(row2.payload));
-            const context2 = queueHoldContext(candidate, gate.reason, holdBlockers, nodeId);
+            const prospective = gate.reason === "owned_paths_conflict" ? (() => {
+              const proof = proofFor(candidate);
+              return proof && "scope" in proof ? proof.scope : void 0;
+            })() : void 0;
+            const context2 = queueHoldContext(candidate, gate.reason, holdBlockers, nodeId, prospective);
+            if (gate.reason === "ownership_unproven") {
+              const proof = proofFor(candidate);
+              const message = proof && "error" in proof ? proof.error : "ownership_unproven";
+              const forbidden = message.match(/source_phase_path_forbidden:\s*(\S+)/);
+              const escaped = message.match(/ownership_symlink_escape:\s*(\S+)/);
+              const unknownField = forbidden?.[1] || escaped?.[1] || (/ownedPaths/.test(message) ? "ownedPaths" : "workspace");
+              context2.blockingTaskIds = [];
+              context2.detail = { unknownField, resolution: message };
+            }
             if (gate.reason === "dependencies_unsatisfied") context2.blockingTaskIds = (candidate.dependsOn || []).filter((id4) => depStatus.get(id4) !== "completed");
             const previousHold = JSON.stringify(candidate.hold);
             setQueueTaskHold(candidate, gate.reason, context2);
@@ -97098,6 +97244,10 @@ ${continuationNotice}` } : dispatchTask,
         })));
         if (!selected2.entry) {
           if (!candidates.length) return refuse10("no_pending_candidates");
+          if (selected2.reason === "ownership_unproven" && selected2.deepest) {
+            const proof = proofFor(selected2.deepest);
+            return refuse10("ownership_unproven", proof && "error" in proof ? proof.error : "ownership_unproven", selected2.deepest);
+          }
           if (selected2.reason === "owned_paths_conflict" && selected2.deepest) {
             const conflicts = ownedPathsConflictFor(selected2.deepest);
             return refuse10("owned_paths_conflict", formatOwnedPathsConflictDetail(conflicts), selected2.deepest);
@@ -97116,6 +97266,14 @@ ${continuationNotice}` } : dispatchTask,
           );
         }
         const entry = selected2.entry;
+        const admittedProof = proofFor(entry);
+        if (admittedProof && "error" in admittedProof) return refuse10("ownership_unproven", admittedProof.error, entry);
+        if (admittedProof && "scope" in admittedProof) {
+          const reproduced = currentPhysicalScope(admittedProof.scope, entry.ownedPaths);
+          if (!reproduced) return refuse10("ownership_unproven", "unproven_active_physical_resource", entry);
+          entry.ownershipScope = reproduced;
+          entry.phase = entry.phase === "integration" ? "integration" : "source";
+        }
         if (nodeGitGate && (nodeGitGate.dirty || nodeGitGate.staleBehind) && isTaskReadonly3(entry)) {
           LOG.info("MeshQueue", `Claiming readonly task ${entry.id} for node ${nodeId} despite git gate (${nodeGitGate.dirty ? "dirty_workspace" : ""}${nodeGitGate.dirty && nodeGitGate.staleBehind ? ", " : ""}${nodeGitGate.staleBehind ? `node_stale_behind_upstream${nodeGitGate.behind !== void 0 ? ` behind=${nodeGitGate.behind}` : ""}` : ""}) \u2014 readonly tasks are exempt from the write-gate.`);
         }
@@ -97152,6 +97310,7 @@ ${continuationNotice}` } : dispatchTask,
     }
     var import_node_fs19;
     var unknownWriterPaths;
+    var meshRuntimeStoreForAdmission;
     var init_mesh_runtime_store_claim = __esm2({
       "src/mesh/mesh-runtime-store-claim.ts"() {
         "use strict";
@@ -98163,6 +98322,7 @@ ${continuationNotice}` } : dispatchTask,
             return deleteHandoffNoteTextOlderThan(this.db, cutoffIso);
           }
         };
+        registerMeshRuntimeStoreForAdmission(() => MeshRuntimeStore.getInstance());
       }
     });
     var mesh_operating_notes_exports = {};
@@ -98929,7 +99089,7 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
         import_node_fs20 = require("fs");
         init_dist();
         PROBE_TIMEOUT_MS = 2e4;
-        isLocal = (node, selfDaemonId) => !node.daemonId || !selfDaemonId || daemonIdsEquivalent4(node.daemonId, selfDaemonId);
+        isLocal = (node, selfDaemonId) => !node.daemonId || !selfDaemonId || daemonIdsEquivalent5(node.daemonId, selfDaemonId);
       }
     });
     function parseJson22(text9, fallback) {
@@ -99598,7 +99758,7 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
       let transcriptHandle = null;
       for (let i = ledgerEntries.length - 1; i >= 0; i--) {
         const entry = ledgerEntries[i];
-        if (!daemonIdsEquivalent4(entry.nodeId, nodeId) || !isTerminalLedgerKind(entry.kind)) continue;
+        if (!daemonIdsEquivalent5(entry.nodeId, nodeId) || !isTerminalLedgerKind(entry.kind)) continue;
         const payload = readRecord22(entry.payload) ?? {};
         if (!evidence.available) {
           if (payload.source === "refine_mesh_node_async_job") {
@@ -99644,7 +99804,7 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
     function hasBlockedReviewRefineResult(nodeId, ledgerEntries) {
       for (let i = ledgerEntries.length - 1; i >= 0; i--) {
         const entry = ledgerEntries[i];
-        if (!daemonIdsEquivalent4(entry.nodeId, nodeId) || !isTerminalLedgerKind(entry.kind)) continue;
+        if (!daemonIdsEquivalent5(entry.nodeId, nodeId) || !isTerminalLedgerKind(entry.kind)) continue;
         const payload = readRecord22(entry.payload) ?? {};
         if (payload.source !== "refine_mesh_node_async_job") continue;
         const result = readRecord22(payload.result);
@@ -99676,7 +99836,7 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
         if (!reviewReason) continue;
         const { evidence, transcriptHandle } = resolveNodeEvidence(nodeId, args.ledgerEntries);
         const activeRefineJob = [...refineJobs].reverse().find(
-          (job) => (daemonIdsEquivalent4(job.nodeId, nodeId) || daemonIdsEquivalent4(job.targetNodeId, nodeId)) && (job.status === "accepted" || job.status === "running")
+          (job) => (daemonIdsEquivalent5(job.nodeId, nodeId) || daemonIdsEquivalent5(job.targetNodeId, nodeId)) && (job.status === "accepted" || job.status === "running")
         ) ?? null;
         items.push({
           nodeId,
@@ -101292,7 +101452,7 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
         return decline("no_complete_revision");
       }
       if (!isUsableView(read2.view)) return decline("revision_invalid");
-      if (!daemonIdsEquivalent4(read2.identity.producerDaemonId, ownerDaemonId)) {
+      if (!daemonIdsEquivalent5(read2.identity.producerDaemonId, ownerDaemonId)) {
         return decline("owner_mismatch");
       }
       if (read2.view.sessionId !== rawSessionId) return decline("owner_mismatch");
@@ -102188,7 +102348,7 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
           pushTerminalBucket(taskBuckets, taskId, indexed2);
         } else {
           pushTerminalBucket(sessionBuckets, readString2(entry.sessionId), indexed2);
-          pushTerminalBucket(nodeBuckets, machineCoreFromDaemonId(entry.nodeId), indexed2);
+          pushTerminalBucket(nodeBuckets, machineCoreFromDaemonId2(entry.nodeId), indexed2);
         }
       }
       return {
@@ -102205,7 +102365,7 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
             pushTerminalQuery(taskQueries, directDispatchTaskId(dispatch2), query);
             const sessionId = readString2(dispatch2.sessionId);
             if (dispatch2.sessionId) pushTerminalQuery(sessionQueries, sessionId, query);
-            else pushTerminalQuery(nodeQueries, machineCoreFromDaemonId(dispatch2.nodeId), query);
+            else pushTerminalQuery(nodeQueries, machineCoreFromDaemonId2(dispatch2.nodeId), query);
           }
           const realByDispatch = /* @__PURE__ */ new Map();
           const approvalByDispatch = /* @__PURE__ */ new Map();
@@ -106988,7 +107148,7 @@ ${cleanBody}`;
       if (!coordinatorDaemonId) return "";
       const hosted = listMeshes().filter((mesh) => {
         const host = resolveMeshHostStatus(mesh);
-        return host.role === "host" && (!host.hostDaemonId || daemonIdsEquivalent4(host.hostDaemonId, coordinatorDaemonId));
+        return host.role === "host" && (!host.hostDaemonId || daemonIdsEquivalent5(host.hostDaemonId, coordinatorDaemonId));
       });
       if (hosted.length === 0) return "";
       if (nodeId) {
@@ -107108,7 +107268,7 @@ ${cleanBody}`;
             } catch {
             }
           }
-          if (args.writerStop && daemonId && daemonIdsEquivalent4(daemonId, components.statusInstanceId ?? getMachineId())) {
+          if (args.writerStop && daemonId && daemonIdsEquivalent5(daemonId, components.statusInstanceId ?? getMachineId())) {
             return await components.cliManager.stopCli(stopArgs);
           }
           if (args.writerStop) {
@@ -108343,7 +108503,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       if (!expectedHost || !currentKey) {
         return { ok: false, reason: "missing_expected_host_or_pinned_key" };
       }
-      if (!daemonIdsEquivalent4(rawProof.hostDaemonId, expectedHost)) {
+      if (!daemonIdsEquivalent5(rawProof.hostDaemonId, expectedHost)) {
         return { ok: false, reason: "rotation_host_mismatch" };
       }
       const oldPubKeyObj = parseOriginGrantPublicKeyObject(currentKey);
@@ -108551,7 +108711,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             const matchesMesh = m.id === meshId || mh.hostMeshId === meshId;
             if (!matchesMesh) continue;
             const isPaired = mh.pairing?.status === "paired" || Boolean(mh.pairing?.joinedAt) || Boolean(mh.pairing?.tokenId);
-            const matchesHost = !mh.hostDaemonId || daemonIdsEquivalent4(String(mh.hostDaemonId), hostDaemonId);
+            const matchesHost = !mh.hostDaemonId || daemonIdsEquivalent5(String(mh.hostDaemonId), hostDaemonId);
             if (isPaired && matchesHost) {
               return true;
             }
@@ -108565,7 +108725,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           const parsed = JSON.parse((0, import_fs27.readFileSync)(secretsPath, "utf8"));
           const records = Array.isArray(parsed?.records) ? parsed.records : [];
           for (const rec8 of records) {
-            if (rec8 && typeof rec8 === "object" && rec8.meshId === meshId && rec8.role === "member" && typeof rec8.peerDaemonId === "string" && daemonIdsEquivalent4(rec8.peerDaemonId, hostDaemonId)) {
+            if (rec8 && typeof rec8 === "object" && rec8.meshId === meshId && rec8.role === "member" && typeof rec8.peerDaemonId === "string" && daemonIdsEquivalent5(rec8.peerDaemonId, hostDaemonId)) {
               return true;
             }
           }
@@ -108722,7 +108882,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         if (existing && source2 !== "pairing") {
           return false;
         }
-        const effectivePubKey = pubKey || (existing && existing.source === "pairing" && daemonIdsEquivalent4(existing.hostDaemonId, host) ? existing.originGrantPublicKey : void 0);
+        const effectivePubKey = pubKey || (existing && existing.source === "pairing" && daemonIdsEquivalent5(existing.hostDaemonId, host) ? existing.originGrantPublicKey : void 0);
         const pairingVerified = source2 === "pairing" ? opts?.pairingVerified ?? true : void 0;
         all[mesh] = {
           meshId: mesh,
@@ -108789,7 +108949,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             if (parsed && typeof parsed === "object" && Array.isArray(parsed.records)) {
               let updated = false;
               for (const rec8 of parsed.records) {
-                if (rec8 && typeof rec8 === "object" && rec8.meshId === mesh && typeof rec8.peerDaemonId === "string" && daemonIdsEquivalent4(rec8.peerDaemonId, peer) && rec8.originGrantPublicKey !== pubKey) {
+                if (rec8 && typeof rec8 === "object" && rec8.meshId === mesh && typeof rec8.peerDaemonId === "string" && daemonIdsEquivalent5(rec8.peerDaemonId, peer) && rec8.originGrantPublicKey !== pubKey) {
                   rec8.originGrantPublicKey = pubKey;
                   updated = true;
                 }
@@ -108826,7 +108986,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           if (parsed && typeof parsed === "object" && Array.isArray(parsed.records)) {
             let updated = false;
             for (const rec8 of parsed.records) {
-              if (rec8 && typeof rec8 === "object" && rec8.meshId === mesh && typeof rec8.peerDaemonId === "string" && daemonIdsEquivalent4(rec8.peerDaemonId, peer) && rec8.originGrantPublicKey !== void 0) {
+              if (rec8 && typeof rec8 === "object" && rec8.meshId === mesh && typeof rec8.peerDaemonId === "string" && daemonIdsEquivalent5(rec8.peerDaemonId, peer) && rec8.originGrantPublicKey !== void 0) {
                 delete rec8.originGrantPublicKey;
                 updated = true;
               }
@@ -108842,7 +109002,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         const hostRecordsPath = filePath(configDir);
         const all = readAll(configDir);
         const existing = all[mesh];
-        if (existing && daemonIdsEquivalent4(existing.hostDaemonId, peer) && existing.originGrantPublicKey) {
+        if (existing && daemonIdsEquivalent5(existing.hostDaemonId, peer) && existing.originGrantPublicKey) {
           const { originGrantPublicKey: _removed, ...rest } = existing;
           all[mesh] = rest;
           stageFile(
@@ -108886,7 +109046,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         return fromPeerGrantStore;
       }
       const rec8 = readAll(configDir)[mesh] ?? null;
-      if (rec8 && rec8.source === "pairing" && daemonIdsEquivalent4(rec8.hostDaemonId, peer) && rec8.originGrantPublicKey && isValidOriginGrantPublicKey(rec8.originGrantPublicKey)) {
+      if (rec8 && rec8.source === "pairing" && daemonIdsEquivalent5(rec8.hostDaemonId, peer) && rec8.originGrantPublicKey && isValidOriginGrantPublicKey(rec8.originGrantPublicKey)) {
         return rec8.originGrantPublicKey;
       }
       try {
@@ -108895,7 +109055,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           const parsed = JSON.parse((0, import_fs27.readFileSync)(secretsPath, "utf8"));
           if (parsed && typeof parsed === "object" && Array.isArray(parsed.records)) {
             for (const secretRec of parsed.records) {
-              if (secretRec && typeof secretRec === "object" && secretRec.meshId === mesh && typeof secretRec.peerDaemonId === "string" && daemonIdsEquivalent4(secretRec.peerDaemonId, peer) && typeof secretRec.originGrantPublicKey === "string" && isValidOriginGrantPublicKey(secretRec.originGrantPublicKey)) {
+              if (secretRec && typeof secretRec === "object" && secretRec.meshId === mesh && typeof secretRec.peerDaemonId === "string" && daemonIdsEquivalent5(secretRec.peerDaemonId, peer) && typeof secretRec.originGrantPublicKey === "string" && isValidOriginGrantPublicKey(secretRec.originGrantPublicKey)) {
                 return secretRec.originGrantPublicKey.trim();
               }
             }
@@ -109176,7 +109336,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       const canonical2 = canonicalDaemonId2(peerDaemonId);
       const mesh = typeof meshId === "string" ? meshId.trim() : "";
       if (!canonical2 || !mesh) return null;
-      const found = readRecords(resolvePeerSecretsPath(opts)).find((rec8) => rec8.meshId === mesh && daemonIdsEquivalent4(rec8.peerDaemonId, canonical2));
+      const found = readRecords(resolvePeerSecretsPath(opts)).find((rec8) => rec8.meshId === mesh && daemonIdsEquivalent5(rec8.peerDaemonId, canonical2));
       return found ? { ...found } : null;
     }
     function putPeerSecret(record7, opts = {}) {
@@ -109185,7 +109345,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       }
       const normalized = normalizeRecord(record7);
       const path139 = resolvePeerSecretsPath(opts);
-      const others = readRecords(path139).filter((rec8) => !(rec8.meshId === normalized.meshId && daemonIdsEquivalent4(rec8.peerDaemonId, normalized.peerDaemonId)));
+      const others = readRecords(path139).filter((rec8) => !(rec8.meshId === normalized.meshId && daemonIdsEquivalent5(rec8.peerDaemonId, normalized.peerDaemonId)));
       writeRecords(path139, [...others, normalized]);
       if (!opts.filePath && normalized.originGrantPublicKey && isValidOriginGrantPublicKey(normalized.originGrantPublicKey)) {
         recordAuthenticatedPeerOriginGrantPublicKey(
@@ -109209,9 +109369,9 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       if (!canonical2 || !mesh) return false;
       const path139 = resolvePeerSecretsPath(opts);
       const all = readRecords(path139);
-      const removed = all.find((rec8) => rec8.meshId === mesh && daemonIdsEquivalent4(rec8.peerDaemonId, canonical2));
+      const removed = all.find((rec8) => rec8.meshId === mesh && daemonIdsEquivalent5(rec8.peerDaemonId, canonical2));
       if (!removed) return false;
-      const kept = all.filter((rec8) => !(rec8.meshId === mesh && daemonIdsEquivalent4(rec8.peerDaemonId, canonical2)));
+      const kept = all.filter((rec8) => !(rec8.meshId === mesh && daemonIdsEquivalent5(rec8.peerDaemonId, canonical2)));
       writeRecords(path139, kept);
       if (!opts.filePath) {
         clearAuthenticatedPeerOriginGrantPublicKey(mesh, canonical2, { env: opts.env });
@@ -109291,7 +109451,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return Array.isArray(nodes) ? nodes.filter((n) => !!record3(n)) : [];
     }
     function sameDaemon(a, b) {
-      return !!a && !!b && daemonIdsEquivalent4(a, b);
+      return !!a && !!b && daemonIdsEquivalent5(a, b);
     }
     function meshHostDaemonId(mesh, selfDaemonId) {
       try {
@@ -109883,7 +110043,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             return;
           }
           const resolvedOwner = callerOpts?.owner ?? (deps.ownerFor ? deps.ownerFor(withAttempt.sessionId) : null) ?? void 0;
-          const isRemoteOwner = !!resolvedOwner && (!deps.selfDaemonId || !daemonIdsEquivalent4(resolvedOwner.daemonId, deps.selfDaemonId));
+          const isRemoteOwner = !!resolvedOwner && (!deps.selfDaemonId || !daemonIdsEquivalent5(resolvedOwner.daemonId, deps.selfDaemonId));
           const owner = isRemoteOwner ? resolvedOwner : void 0;
           const envelope = callerOpts?.envelope;
           const opts = owner || envelope ? { ...owner ? { owner } : {}, ...envelope ? { envelope } : {} } : void 0;
@@ -119436,7 +119596,7 @@ ${result.stderr}`, result.code);
                 error: "Local assistant owner binding receipt is missing or corrupt; explicit owner reconciliation is required."
               };
             }
-            if (binding.accountSlot !== ASSISTANT_ACCOUNT_SLOT || !daemonIdsEquivalent4(binding.daemonId, canonicalSelf)) {
+            if (binding.accountSlot !== ASSISTANT_ACCOUNT_SLOT || !daemonIdsEquivalent5(binding.daemonId, canonicalSelf)) {
               return {
                 ok: false,
                 code: "local_owner_binding_mismatch",
@@ -119473,7 +119633,7 @@ ${result.stderr}`, result.code);
               0
             );
             const sameDaemon2 = Boolean(
-              existing && existing.accountSlot === ASSISTANT_ACCOUNT_SLOT && daemonIdsEquivalent4(existing.daemonId, canonicalSelf)
+              existing && existing.accountSlot === ASSISTANT_ACCOUNT_SLOT && daemonIdsEquivalent5(existing.daemonId, canonicalSelf)
             );
             const nextRevision = explicitRevision !== void 0 ? explicitRevision : bump2 ? Math.max(existing?.bindingRevision ?? 0, maxFollowedRevision) + 1 : sameDaemon2 ? existing.bindingRevision : maxFollowedRevision > 0 ? maxFollowedRevision : (existing?.bindingRevision ?? 0) + 1;
             const revisionChanged = !existing || existing.bindingRevision !== nextRevision;
@@ -122040,7 +122200,7 @@ ${body}`;
       for (const record7 of args.hostRecords) {
         const meshId = readText(record7?.meshId);
         const host = readText(record7?.hostDaemonId);
-        if (!meshId || !host || daemonIdsEquivalent4(host, self)) continue;
+        if (!meshId || !host || daemonIdsEquivalent5(host, self)) continue;
         let nodes = [];
         try {
           nodes = args.getMeshNodes(meshId) ?? [];
@@ -122053,7 +122213,7 @@ ${body}`;
           const daemonId = readText(node.daemonId);
           const nodeId = readText(normalizeMeshNodeId(node));
           const workspace = readText(node.workspace);
-          if (!daemonId || !nodeId || !workspace || !daemonIdsEquivalent4(daemonId, self)) continue;
+          if (!daemonId || !nodeId || !workspace || !daemonIdsEquivalent5(daemonId, self)) continue;
           if (!exists(workspace)) continue;
           if (out.some((t) => t.meshId === meshId && meshNodeIdMatches7({ id: t.nodeId }, nodeId))) continue;
           out.push({ coordinatorDaemonId: host, meshId, nodeId, workspace });
@@ -122095,7 +122255,7 @@ ${body}`;
       }
     }
     function ownsANode(mesh, selfDaemonId) {
-      return !!selfDaemonId && nodesOf3(mesh).some((n) => daemonIdsEquivalent4(readText(n.daemonId), selfDaemonId));
+      return !!selfDaemonId && nodesOf3(mesh).some((n) => daemonIdsEquivalent5(readText(n.daemonId), selfDaemonId));
     }
     function collectMemberMeshes(ev) {
       const self = readText(ev.selfDaemonId);
@@ -122125,12 +122285,12 @@ ${body}`;
         if (!recordOf.has(id4) && targets.length === 0 && !(source2 && ownsANode(source2, self))) continue;
         const declared = declaredHost(inline, self) ?? declaredHost(described, self);
         const hostDaemonId = declared?.hostDaemonId || recordOf.get(id4) || readText(targets[0]?.coordinatorDaemonId);
-        if (!hostDaemonId || self && daemonIdsEquivalent4(hostDaemonId, self)) continue;
+        if (!hostDaemonId || self && daemonIdsEquivalent5(hostDaemonId, self)) continue;
         const nodes = nodesOf3(source2).length > 0 ? nodesOf3(source2).map((n) => ({ ...n })) : targets.map((t) => ({ id: t.nodeId, workspace: t.workspace, daemonId: self }));
         for (const t of targets) {
           if (!nodes.some((n) => meshNodeIdMatches7(n, t.nodeId))) nodes.push({ id: t.nodeId, workspace: t.workspace, daemonId: self });
         }
-        const ownWorkspace = readText(nodes.find((n) => daemonIdsEquivalent4(readText(n.daemonId), self))?.workspace);
+        const ownWorkspace = readText(nodes.find((n) => daemonIdsEquivalent5(readText(n.daemonId), self))?.workspace);
         const now = (/* @__PURE__ */ new Date(0)).toISOString();
         out.push({
           id: id4,
@@ -124451,7 +124611,7 @@ ${note2}` : note2 }]
         const resolved = resolveAssistantProject(ref2, config.meshes);
         if (!resolved.ok) return { ok: false, code: resolved.code };
         const host = resolveMeshHostStatus(resolved.mesh, { localDaemonId: ctx.deps.statusInstanceId });
-        if (!ctx.deps.statusInstanceId || !host.canOwnCoordinator || !host.hostDaemonId || !daemonIdsEquivalent4(host.hostDaemonId, ctx.deps.statusInstanceId)) {
+        if (!ctx.deps.statusInstanceId || !host.canOwnCoordinator || !host.hostDaemonId || !daemonIdsEquivalent5(host.hostDaemonId, ctx.deps.statusInstanceId)) {
           return { ok: false, code: "project_not_hosted" };
         }
         const state2 = stateOf(resolved.mesh);
@@ -128165,7 +128325,7 @@ ${detail.join("\n")}` : stripped;
       const attempt = store5.turnStore().findLatestAttemptForTask(meshId, taskId);
       if (!attempt || attempt.terminal) return;
       const ledger = getActiveTurnLedger();
-      if (!ledger || !daemonIdsEquivalent4(attempt.ownerDaemonId, ledger.selfDaemonId)) return;
+      if (!ledger || !daemonIdsEquivalent5(attempt.ownerDaemonId, ledger.selfDaemonId)) return;
       ledger.observe({
         eventId: `queue-stop:${reason}:${attempt.attemptId}:g${attempt.generation}:${Date.now()}`,
         kind: "cancel",
@@ -128237,7 +128397,7 @@ ${detail.join("\n")}` : stripped;
         }
         if (patch.ownedPaths !== void 0) {
           if (!Array.isArray(patch.ownedPaths) || !patch.ownedPaths.length) throw new Error("empty_revision_ownership");
-          const normalized = normalizeOwnedPaths(patch.ownedPaths);
+          const normalized = normalizeOwnedPaths2(patch.ownedPaths);
           if (normalized.rejected.length || !normalized.declaration.paths.length) throw new Error(`invalid_revision_paths: ${JSON.stringify(normalized.rejected)}`);
           next.ownedPaths = normalized.declaration;
         }
@@ -128253,7 +128413,7 @@ ${detail.join("\n")}` : stripped;
         }
         if (next.phase) {
           if (!host.nodeId || !pinnedMeshNodeIdMatches(host.nodeId, before.targetNodeId) || !host.workspace || !next.ownedPaths?.paths.length) throw new Error("local_pinned_physical_context_required");
-          next.ownershipScope = attestLocalOwnership({ ...host, nodeId: host.nodeId, workspace: host.workspace, phase: next.phase, paths: next.ownedPaths });
+          next.ownershipScope = attestLocalOwnership2({ ...host, nodeId: host.nodeId, workspace: host.workspace, phase: next.phase, paths: next.ownedPaths });
         }
         if (patch.dependsOn !== void 0) {
           if (!Array.isArray(patch.dependsOn) || patch.dependsOn.some((id4) => typeof id4 !== "string" || !id4.trim())) throw new Error("invalid_revision_dependencies");
@@ -130708,7 +130868,7 @@ ${hintLines.join("\n")}` : "",
     }
     function daemonIdListIncludes(ids, id4) {
       if (!id4) return false;
-      return ids.some((candidate) => candidate === id4 || daemonIdsEquivalent4(candidate, id4));
+      return ids.some((candidate) => candidate === id4 || daemonIdsEquivalent5(candidate, id4));
     }
     function resolveCoordinatorSelfIds(mesh, drainDaemonIds) {
       const ids = new Set(drainDaemonIds);
@@ -132206,6 +132366,8 @@ ${tail}` : ""
         init_mesh_config();
         init_dist();
         init_config();
+        init_mesh_physical_ownership();
+        init_dist();
         init_mesh_task_revision();
         init_mesh_quota_hold_escalation();
         init_light_land_ipc();
@@ -132451,10 +132613,10 @@ ${tail}` : ""
             const mesh = getMesh(req.meshId);
             const self = ctx.deps.statusInstanceId;
             const host = resolveMeshHostStatus(mesh, { localDaemonId: self });
-            if (!mesh || !self || host.role !== "host" || !host.hostDaemonId || !daemonIdsEquivalent4(host.hostDaemonId, self)) throw new Error("authenticated_mesh_host_required");
+            if (!mesh || !self || host.role !== "host" || !host.hostDaemonId || !daemonIdsEquivalent5(host.hostDaemonId, self)) throw new Error("authenticated_mesh_host_required");
             const task = MeshRuntimeStore.getInstance().findQueueEntryById(req.meshId, req.taskId);
             const node = mesh.nodes?.find((n) => n.id === task?.targetNodeId);
-            const localNode = node && daemonIdsEquivalent4(node.daemonId, self) ? node : void 0;
+            const localNode = node && daemonIdsEquivalent5(node.daemonId, self) ? node : void 0;
             const machineId = getMachineId();
             if (!machineId || !mesh.repoIdentity) throw new Error("authenticated_repo_machine_required");
             if (req.patch.requestQuotaOverride === true) {
@@ -132477,13 +132639,44 @@ ${tail}` : ""
             return failure5(e);
           }
         };
-        directDispatchRecord2 = async (_ctx, args) => {
+        directDispatchRecord2 = async (ctx, args) => {
           const req = decodeDirectDispatchRecordRequest(args);
           if (!req) return badRequest("direct_dispatch_record");
           const response = { taskRecorded: false };
           if (req.task) {
             try {
-              recordDirectDispatchTask(req.meshId, req.message, { ...req.task, id: req.taskId });
+              const task = { ...req.task };
+              delete task.ownershipScope;
+              delete task.phase;
+              delete task.workspace;
+              delete task.machineId;
+              let attested;
+              try {
+                const mesh = getMesh(req.meshId);
+                const self = ctx.deps.statusInstanceId;
+                const machineId = getMachineId();
+                const nodeId = typeof task.assignedNodeId === "string" ? task.assignedNodeId : "";
+                const node = mesh?.nodes?.find((n) => n.id === nodeId);
+                const workspace = typeof node?.workspace === "string" ? node.workspace : "";
+                const repoIdentity = mesh?.repoIdentity || "";
+                const declared = normalizeOwnedPaths2(task.ownedPaths);
+                if (self && machineId && repoIdentity && workspace && node && daemonIdsEquivalent5(node.daemonId, self) && declared.declaration.paths.length > 0) {
+                  attested = {
+                    phase: "source",
+                    ownershipScope: attestLocalOwnership2({
+                      repoIdentity,
+                      machineId,
+                      nodeId,
+                      workspace,
+                      phase: "source",
+                      paths: declared.declaration
+                    })
+                  };
+                }
+              } catch (e) {
+                LOG.warn("MeshStoreIpc", `direct_dispatch_record: ownership attest for ${req.taskId} failed: ${e?.message ?? String(e)}`);
+              }
+              recordDirectDispatchTask(req.meshId, req.message, { ...task, id: req.taskId }, attested);
               response.taskRecorded = true;
             } catch (e) {
               LOG.warn("MeshStoreIpc", `direct_dispatch_record: task row for ${req.taskId} failed: ${e?.message ?? String(e)}`);
@@ -132718,7 +132911,7 @@ ${tail}` : ""
             if (attempt.scope !== "mesh_direct") {
               return failure7("not_direct_attempt", `attempt ${attempt.attemptId} is a ${attempt.scope} attempt; use mesh_queue_cancel for queue tasks`);
             }
-            if (!daemonIdsEquivalent4(attempt.ownerDaemonId, ledger.selfDaemonId)) {
+            if (!daemonIdsEquivalent5(attempt.ownerDaemonId, ledger.selfDaemonId)) {
               return failure7("ledger_not_owner", `attempt ${attempt.attemptId} is owned by another daemon; run the cancel on the owner`);
             }
             const attemptRef = { attemptId: attempt.attemptId, generation: attempt.generation };
@@ -134112,7 +134305,7 @@ ${tail}` : ""
       const meshId = trimStr2(params.meshId);
       const hostDaemonId = trimStr2(params.hostDaemonId);
       if (!meshId || !hostDaemonId) return "";
-      if (params.isSelfHost && params.selfDaemonId && daemonIdsEquivalent4(hostDaemonId, params.selfDaemonId)) {
+      if (params.isSelfHost && params.selfDaemonId && daemonIdsEquivalent5(hostDaemonId, params.selfDaemonId)) {
         return getHostOriginGrantPublicKey(hostDaemonId);
       }
       const fromHostMemory = readAuthenticatedPeerOriginGrantPublicKey(meshId, hostDaemonId);
@@ -134149,8 +134342,8 @@ ${tail}` : ""
       const originDaemonId = canonGrantDaemonId(rawOriginDaemonId);
       const expectedHostDaemonId = canonGrantDaemonId(expected.hostDaemonId);
       const expectedOriginDaemonId = canonGrantDaemonId(expected.originDaemonId);
-      if (meshId !== expected.meshId.trim() || !expectedHostDaemonId || !expectedOriginDaemonId || !daemonIdsEquivalent4(hostDaemonId, expectedHostDaemonId) || hostDaemonId !== expectedHostDaemonId || // canon-ok: both sides canonicalised above; exact match on top of daemonIdsEquivalent binds the signed grant to one spelling
-      !daemonIdsEquivalent4(originDaemonId, expectedOriginDaemonId) || originDaemonId !== expectedOriginDaemonId || // canon-ok: same as above, exact canonical match for the signed grant
+      if (meshId !== expected.meshId.trim() || !expectedHostDaemonId || !expectedOriginDaemonId || !daemonIdsEquivalent5(hostDaemonId, expectedHostDaemonId) || hostDaemonId !== expectedHostDaemonId || // canon-ok: both sides canonicalised above; exact match on top of daemonIdsEquivalent binds the signed grant to one spelling
+      !daemonIdsEquivalent5(originDaemonId, expectedOriginDaemonId) || originDaemonId !== expectedOriginDaemonId || // canon-ok: same as above, exact canonical match for the signed grant
       artifactId !== expected.artifactId.trim() || !sessionIdsEquivalent(requesterSessionId, expected.requesterSessionId.trim())) {
         return { ok: false, reason: "grant_scope_mismatch" };
       }
@@ -134706,7 +134899,7 @@ ${tail}` : ""
         );
         return node ? readMeshNodeDaemonId(node) || trimStr2(node?.daemonId) : void 0;
       };
-      const isSelfDaemon = selfDaemonId ? (d) => daemonIdsEquivalent4(d, selfDaemonId) : void 0;
+      const isSelfDaemon = selfDaemonId ? (d) => daemonIdsEquivalent5(d, selfDaemonId) : void 0;
       const resolvedWorker = resolveForwardedWorkerIdentity(
         {
           meshId: meshIdToVerify,
@@ -135083,7 +135276,7 @@ ${tail}` : ""
         const mesh = resolvedMeshRecord ?? ctx.getCachedInlineMesh?.(meshId);
         if (!mesh) return null;
         const hostDaemonId = trimString3(mesh?.meshHost?.hostDaemonId) || trimString3(mesh?.hostDaemonId);
-        if (!hostDaemonId || daemonIdsEquivalent4(hostDaemonId, selfDaemonId)) return null;
+        if (!hostDaemonId || daemonIdsEquivalent5(hostDaemonId, selfDaemonId)) return null;
         const nodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
         const matchedNode = nodes.find((n) => {
           if (nodeId && (meshNodeIdMatches7(n, nodeId) || trimString3(n?.id) === nodeId || trimString3(n?.nodeId) === nodeId)) {
@@ -135094,7 +135287,7 @@ ${tail}` : ""
         });
         if (!matchedNode) return null;
         const nodeDaemon = readMeshNodeDaemonId(matchedNode) || trimString3(matchedNode?.daemonId);
-        if (nodeDaemon && !daemonIdsEquivalent4(nodeDaemon, selfDaemonId)) return null;
+        if (nodeDaemon && !daemonIdsEquivalent5(nodeDaemon, selfDaemonId)) return null;
         const resolvedNodeId = trimString3(matchedNode?.id) || trimString3(matchedNode?.nodeId) || nodeId;
         const raw = readWorkerAssignmentStamp(ctx, sessionId);
         return {
@@ -135108,7 +135301,7 @@ ${tail}` : ""
       };
       return resolveRemoteWorkerIdentity(credential, {
         readAssignmentStamp: readStamp,
-        isSelfDaemon: (daemonId) => daemonIdsEquivalent4(daemonId, selfDaemonId),
+        isSelfDaemon: (daemonId) => daemonIdsEquivalent5(daemonId, selfDaemonId),
         resolveMeshHostOwner
       });
     }
@@ -135442,7 +135635,7 @@ ${tail}` : ""
             return node ? readMeshNodeDaemonId(node) || trimString3(node?.daemonId) : void 0;
           };
           const selfDaemonId = trimString3(ctx.deps?.statusInstanceId);
-          const isSelfDaemon = selfDaemonId ? (d) => daemonIdsEquivalent4(d, selfDaemonId) : void 0;
+          const isSelfDaemon = selfDaemonId ? (d) => daemonIdsEquivalent5(d, selfDaemonId) : void 0;
           const resolved = resolveForwardedWorkerIdentity(
             {
               meshId,
@@ -135630,7 +135823,7 @@ ${tail}` : ""
             }
             const ownDaemonId = trimString3(ctx.deps?.statusInstanceId);
             const recordOrigin = trimString3(record7.originDaemonId);
-            if (!ownDaemonId || recordOrigin && !daemonIdsEquivalent4(recordOrigin, ownDaemonId)) {
+            if (!ownDaemonId || recordOrigin && !daemonIdsEquivalent5(recordOrigin, ownDaemonId)) {
               return { success: false, code: "artifact_not_found", error: `Artifact not found on origin daemon: ${artifactId} (artifact_not_found)` };
             }
             const reqMeshId = trimString3(args?.meshId);
@@ -135648,16 +135841,16 @@ ${tail}` : ""
             }
             const hostDaemonId = trimString3(meshObj?.meshHost?.hostDaemonId) || trimString3(meshObj?.hostDaemonId);
             const nodes = Array.isArray(meshObj?.nodes) ? meshObj.nodes : [];
-            const isKnownPeer = hostDaemonId && daemonIdsEquivalent4(hostDaemonId, senderDaemonId) || nodes.some((n) => {
+            const isKnownPeer = hostDaemonId && daemonIdsEquivalent5(hostDaemonId, senderDaemonId) || nodes.some((n) => {
               const nd = readMeshNodeDaemonId(n) || trimString3(n?.daemonId);
-              return Boolean(nd && daemonIdsEquivalent4(nd, senderDaemonId));
+              return Boolean(nd && daemonIdsEquivalent5(nd, senderDaemonId));
             });
             if (!isKnownPeer) {
               return { success: false, code: "unauthenticated", error: `Sender daemon "${senderDaemonId}" is not an authorized member of mesh "${meshIdToVerify}"` };
             }
             const selfDaemonId = trimString3(ctx.deps?.statusInstanceId);
-            const isSelfHost = Boolean(hostDaemonId && selfDaemonId && daemonIdsEquivalent4(hostDaemonId, selfDaemonId));
-            const isSenderHost = Boolean(hostDaemonId && daemonIdsEquivalent4(hostDaemonId, senderDaemonId));
+            const isSelfHost = Boolean(hostDaemonId && selfDaemonId && daemonIdsEquivalent5(hostDaemonId, selfDaemonId));
+            const isSenderHost = Boolean(hostDaemonId && daemonIdsEquivalent5(hostDaemonId, senderDaemonId));
             const requesterRole = trimString3(args?.requesterRole);
             if (isSelfHost || !isSenderHost || requesterRole === "worker") {
               const denial = authorizeWorkerOriginFetch({
@@ -136411,7 +136604,7 @@ ${tail}` : ""
         const selfDaemonId = trimString4(ctx.deps?.statusInstanceId);
         const effectiveOriginDaemonId = trimString4(record7.originDaemonId) || (!localRecord && authority.isRemoteWorker ? trimString4(authority.hostDaemonId) : "");
         const isRemoteOrigin = Boolean(
-          !localRecord && authority.isRemoteWorker && effectiveOriginDaemonId || effectiveOriginDaemonId && (!selfDaemonId || !daemonIdsEquivalent4(effectiveOriginDaemonId, selfDaemonId))
+          !localRecord && authority.isRemoteWorker && effectiveOriginDaemonId || effectiveOriginDaemonId && (!selfDaemonId || !daemonIdsEquivalent5(effectiveOriginDaemonId, selfDaemonId))
         );
         if (isRemoteOrigin) {
           return fetchArtifactFromOriginDaemon(
@@ -136731,7 +136924,7 @@ ${tail}` : ""
       const daemonId = readText(node?.daemonId);
       if (daemonId) {
         return Boolean(
-          locality.localMachineId && daemonIdsEquivalent4(daemonId, locality.localMachineId) || locality.localDaemonId && daemonIdsEquivalent4(daemonId, locality.localDaemonId)
+          locality.localMachineId && daemonIdsEquivalent5(daemonId, locality.localMachineId) || locality.localDaemonId && daemonIdsEquivalent5(daemonId, locality.localDaemonId)
         );
       }
       const workspace = readText(node?.workspace);
@@ -136988,7 +137181,7 @@ ${tail}` : ""
       }
       const existingDaemonId = typeof previous.hostDaemonId === "string" ? previous.hostDaemonId.trim() : "";
       if (existingDaemonId && !opts.force) {
-        const sameHost = hostDaemonId ? daemonIdsEquivalent4(existingDaemonId, hostDaemonId) : true;
+        const sameHost = hostDaemonId ? daemonIdsEquivalent5(existingDaemonId, hostDaemonId) : true;
         if (!sameHost) {
           return {
             mesh,
@@ -137020,7 +137213,7 @@ ${tail}` : ""
         ...hostNodeId ? { hostNodeId } : previous.hostNodeId ? { hostNodeId: previous.hostNodeId } : {},
         ...opts.hostAddress?.trim() ? { hostAddress: opts.hostAddress.trim() } : {}
       };
-      const hostNode = hostNodeId ? mesh.nodes.find((n) => n.id === hostNodeId) : effectiveDaemonId ? mesh.nodes.find((n) => n.daemonId && daemonIdsEquivalent4(n.daemonId, effectiveDaemonId)) : void 0;
+      const hostNode = hostNodeId ? mesh.nodes.find((n) => n.id === hostNodeId) : effectiveDaemonId ? mesh.nodes.find((n) => n.daemonId && daemonIdsEquivalent5(n.daemonId, effectiveDaemonId)) : void 0;
       if (hostNode) {
         for (const node of mesh.nodes) {
           if (node.role === "host" && node !== hostNode) node.role = void 0;
@@ -137404,7 +137597,7 @@ ${tail}` : ""
         return skip("evidence_retention_worktree", "Node is marked as an evidence/retention worktree; excluded from automatic removal.");
       }
       const nodeDaemonId = typeof node?.daemonId === "string" ? node.daemonId.trim() : "";
-      if (nodeDaemonId && ctx.localDaemonId && !daemonIdsEquivalent4(nodeDaemonId, ctx.localDaemonId)) {
+      if (nodeDaemonId && ctx.localDaemonId && !daemonIdsEquivalent5(nodeDaemonId, ctx.localDaemonId)) {
         return skip("remote_node", "Worktree is owned by a different daemon; only the owning daemon may retain it.");
       }
       const workspace = typeof node?.workspace === "string" ? node.workspace.trim() : "";
@@ -137415,13 +137608,13 @@ ${tail}` : ""
           return skip("process_cwd_reference", "Worktree path is (or contains) the current process working directory; an open-runtime/cwd reference blocks removal.");
         }
       }
-      const queueHit = ctx.queueEntries.some((entry) => (entry.status === "pending" || entry.status === "assigned") && (daemonIdsEquivalent4(entry.targetNodeId, nodeId) || daemonIdsEquivalent4(entry.assignedNodeId, nodeId)));
-      const directHit = ctx.directDispatches.some((d) => daemonIdsEquivalent4(d.nodeId ?? void 0, nodeId));
+      const queueHit = ctx.queueEntries.some((entry) => (entry.status === "pending" || entry.status === "assigned") && (daemonIdsEquivalent5(entry.targetNodeId, nodeId) || daemonIdsEquivalent5(entry.assignedNodeId, nodeId)));
+      const directHit = ctx.directDispatches.some((d) => daemonIdsEquivalent5(d.nodeId ?? void 0, nodeId));
       if (queueHit || directHit) {
         return skip("queue_reference", "An active/pending/assigned queue task or direct dispatch still references this node.");
       }
       const refineJobs = buildMeshAsyncRefineJobs2({ meshId, ledgerEntries: ctx.ledgerEntries });
-      const inFlight7 = refineJobs.some((job) => (job.status === "accepted" || job.status === "running") && (daemonIdsEquivalent4(job.nodeId, nodeId) || daemonIdsEquivalent4(job.targetNodeId, nodeId)));
+      const inFlight7 = refineJobs.some((job) => (job.status === "accepted" || job.status === "running") && (daemonIdsEquivalent5(job.nodeId, nodeId) || daemonIdsEquivalent5(job.targetNodeId, nodeId)));
       if (inFlight7) {
         return skip("review_inflight", "A Refinery job for this node is still in flight.");
       }
@@ -139284,8 +139477,8 @@ ${tail}` : ""
     function describeRemoteHost(mesh, selfDaemonId, transport, peerHostMeshIds = () => []) {
       const status = resolveMeshHostStatus(mesh, selfDaemonId ? { localDaemonId: selfDaemonId } : void 0);
       const rawHost = str12(status.hostDaemonId);
-      const hostDaemonId = rawHost && !(selfDaemonId && daemonIdsEquivalent4(rawHost, selfDaemonId)) ? rawHost : null;
-      const node = hostDaemonId ? (mesh.nodes ?? []).find((n) => daemonIdsEquivalent4(str12(n.daemonId), hostDaemonId) || !!status.hostNodeId && n.id === status.hostNodeId) : void 0;
+      const hostDaemonId = rawHost && !(selfDaemonId && daemonIdsEquivalent5(rawHost, selfDaemonId)) ? rawHost : null;
+      const node = hostDaemonId ? (mesh.nodes ?? []).find((n) => daemonIdsEquivalent5(str12(n.daemonId), hostDaemonId) || !!status.hostNodeId && n.id === status.hostNodeId) : void 0;
       const label2 = str12(node?.machineNickname) || (hostDaemonId ? shortId(canonicalDaemonId2(hostDaemonId) ?? hostDaemonId) : "unknown host");
       const hostMeshId = resolveHostMeshId(mesh, hostDaemonId, peerHostMeshIds);
       const base = { label: label2, hostDaemonId, hostMeshId };
@@ -139304,7 +139497,7 @@ ${tail}` : ""
     }
     function describeFollowedRemoteHost(entry, selfDaemonId, ownerBindingVerification, transport) {
       const rawHost = str12(entry.hostDaemonId);
-      const hostDaemonId = rawHost && !(selfDaemonId && daemonIdsEquivalent4(rawHost, selfDaemonId)) ? rawHost : null;
+      const hostDaemonId = rawHost && !(selfDaemonId && daemonIdsEquivalent5(rawHost, selfDaemonId)) ? rawHost : null;
       const label2 = str12(entry.hostLabel) || (hostDaemonId ? shortId(canonicalDaemonId2(hostDaemonId) ?? hostDaemonId) : "unknown host");
       const hostMeshId = str12(entry.meshId);
       const verifiedRevision = ownerBindingVerification.ok ? ownerBindingVerification.receipt?.bindingRevision ?? ownerBindingVerification.binding?.bindingRevision : void 0;
@@ -141089,11 +141282,11 @@ ${tail}` : ""
       return `Remote project attachment is disabled on the ${roleLabel} machine ${machineDesc}${stagePart} (\`allowRemoteProjectAttach\` is off). Turn on "Remote project attach" for ${machineDesc} in Dashboard \u2192 Settings, or set \`"allowRemoteProjectAttach": true\` in its daemon \`config.json\` (no restart required). Both source and target machines must have \`allowRemoteProjectAttach\` enabled.`;
     }
     function selected(ctx, args) {
-      if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(str13(args?.targetDaemonId)) || !daemonIdsEquivalent4(args.targetDaemonId, ctx.deps.statusInstanceId)) throw new AttachFailure("WRONG_MACHINE", "target_access", "Address the exact owner-selected canonical daemon.");
+      if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(str13(args?.targetDaemonId)) || !daemonIdsEquivalent5(args.targetDaemonId, ctx.deps.statusInstanceId)) throw new AttachFailure("WRONG_MACHINE", "target_access", "Address the exact owner-selected canonical daemon.");
     }
     function validGrant(grant, selfId, hostId, meshId, identity5, secret) {
       if (!grant || typeof grant !== "object" || typeof secret !== "string" || !secret.trim()) return false;
-      if (!daemonIdsEquivalent4(str13(grant.target), selfId) || !daemonIdsEquivalent4(str13(grant.host), hostId) || grant.meshId !== meshId || grant.identity !== identity5) return false;
+      if (!daemonIdsEquivalent5(str13(grant.target), selfId) || !daemonIdsEquivalent5(str13(grant.host), hostId) || grant.meshId !== meshId || grant.identity !== identity5) return false;
       const now = Date.now();
       if (typeof grant.exp !== "number" || !Number.isFinite(grant.exp) || grant.exp <= now || grant.exp > now + 6e5 || !/^[0-9a-f]{64}$/.test(str13(grant.sig))) return false;
       const key6 = (0, import_node_crypto61.createHash)("sha256").update(secret).digest("hex");
@@ -141106,15 +141299,15 @@ ${grant.exp}`).digest("hex");
     }
     function authorizeHost(ctx, args, identity5) {
       const hostId = str13(args?.hostDaemonId);
-      if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(hostId) || daemonIdsEquivalent4(hostId, ctx.deps.statusInstanceId)) throw new AttachFailure("HOST_NOT_AUTHORIZED", "target_access", "Authorize the project host on the selected daemon before attaching.");
+      if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(hostId) || daemonIdsEquivalent5(hostId, ctx.deps.statusInstanceId)) throw new AttachFailure("HOST_NOT_AUTHORIZED", "target_access", "Authorize the project host on the selected daemon before attaching.");
       const old = readMeshHostRecord(args.meshId);
-      if (old && !daemonIdsEquivalent4(old.hostDaemonId, hostId)) throw new AttachFailure("PROJECT_HOST_CONFLICT", "registration", "Preserve existing membership; resolve the project host conflict locally.");
+      if (old && !daemonIdsEquivalent5(old.hostDaemonId, hostId)) throw new AttachFailure("PROJECT_HOST_CONFLICT", "registration", "Preserve existing membership; resolve the project host conflict locally.");
       const cfg = loadConfig();
       if (args?.grant !== void 0) {
         if (!validGrant(args.grant, str13(ctx.deps.statusInstanceId), hostId, args.meshId, identity5, cfg.machineSecret)) throw new AttachFailure("HOST_NOT_AUTHORIZED", "target_access", "Authorize the project host on the selected daemon before attaching.");
         return old;
       }
-      const allowed = (cfg.allowedRemoteProjectHosts ?? []).some((h) => daemonIdsEquivalent4(h, hostId)) || Boolean(old && daemonIdsEquivalent4(old.hostDaemonId, hostId));
+      const allowed = (cfg.allowedRemoteProjectHosts ?? []).some((h) => daemonIdsEquivalent5(h, hostId)) || Boolean(old && daemonIdsEquivalent5(old.hostDaemonId, hostId));
       if (!allowed) throw new AttachFailure("HOST_NOT_AUTHORIZED", "target_access", "Authorize the project host on the selected daemon before attaching.");
       return old;
     }
@@ -141122,10 +141315,10 @@ ${grant.exp}`).digest("hex");
       const mesh = getMesh(str13(args?.meshId));
       if (!mesh) throw new AttachFailure("PROJECT_NOT_FOUND", "registration", "Use a project registered on the authenticated source daemon.");
       const host = resolveMeshHostStatus(mesh, { localDaemonId: ctx.deps.statusInstanceId });
-      if (!host.canOwnCoordinator || !daemonIdsEquivalent4(host.hostDaemonId, ctx.deps.statusInstanceId)) throw new AttachFailure("PROJECT_HOST_REQUIRED", "registration", "Request attachment through the registered project host.");
+      if (!host.canOwnCoordinator || !daemonIdsEquivalent5(host.hostDaemonId, ctx.deps.statusInstanceId)) throw new AttachFailure("PROJECT_HOST_REQUIRED", "registration", "Request attachment through the registered project host.");
       const remote = githubRemote(mesh.repoRemoteUrl);
       if (!remote || remote.identity !== str13(mesh.repoIdentity).toLowerCase()) throw new AttachFailure("LOCAL_ONLY_PROJECT", "registration", "Register a verified GitHub-backed project first; local-only projects cannot attach across machines.");
-      const self = mesh.nodes.find((n) => daemonIdsEquivalent4(n.daemonId, ctx.deps.statusInstanceId));
+      const self = mesh.nodes.find((n) => daemonIdsEquivalent5(n.daemonId, ctx.deps.statusInstanceId));
       if (!self) throw new AttachFailure("SOURCE_CHECKOUT_REQUIRED", "registration", "The project host needs its registered source checkout for remote identity verification.");
       const origin = githubRemote(await git9(self.workspace, ["remote", "get-url", "origin"]));
       if (origin?.identity !== remote.identity) throw new AttachFailure("REMOTE_IDENTITY_MISMATCH", "registration", "Registered project identity must match the source checkout origin.");
@@ -141223,7 +141416,7 @@ ${grant.exp}`).digest("hex");
             try {
               const { mesh, remote, self, hostSynthesized } = await prepare(ctx, args);
               if (args.identity !== remote.identity || !/^daemon_mach_[a-zA-Z0-9]+$/.test(str13(args.targetDaemonId)) || !str13(args.workspace)) return fail7("ATTACH_SCOPE_MISMATCH", "registration", "Repeat the authenticated attachment flow with the exact project and target.");
-              const existing = mesh.nodes.find((n) => daemonIdsEquivalent4(n.daemonId, args.targetDaemonId) && n.workspace === args.workspace);
+              const existing = mesh.nodes.find((n) => daemonIdsEquivalent5(n.daemonId, args.targetDaemonId) && n.workspace === args.workspace);
               if (existing) return { success: true, nodeId: existing.id, attached: true };
               if (hostSynthesized) {
                 const pin = setMeshHostPin(mesh.id, { hostDaemonId: ctx.deps.statusInstanceId, hostNodeId: self.id });
@@ -141323,10 +141516,10 @@ ${grant.exp}`).digest("hex");
         const node = nodes.find((n) => (text5(n.nodeId) || text5(n.id)) === nodeId) ?? {};
         const route = rec3(rec3(view2.routes)[nodeId]);
         const owner = text5(route.ownerDaemonId) || text5(node.daemonId) || text5(member.daemonId) || (route.route === "local" ? opts.selfDaemonId : "");
-        const ownershipConsistent = [node.daemonId, member.daemonId, route.ownerDaemonId].map(text5).filter(Boolean).every((id4) => daemonIdsEquivalent4(id4, owner));
-        const local = ownershipConsistent && !!owner && daemonIdsEquivalent4(owner, opts.selfDaemonId);
+        const ownershipConsistent = [node.daemonId, member.daemonId, route.ownerDaemonId].map(text5).filter(Boolean).every((id4) => daemonIdsEquivalent5(id4, owner));
+        const local = ownershipConsistent && !!owner && daemonIdsEquivalent5(owner, opts.selfDaemonId);
         const held = rec3(node.heldRuntime);
-        const ownerMatches = ownershipConsistent && !!owner && !!text5(held.daemonId) && daemonIdsEquivalent4(owner, text5(held.daemonId));
+        const ownerMatches = ownershipConsistent && !!owner && !!text5(held.daemonId) && daemonIdsEquivalent5(owner, text5(held.daemonId));
         const source2 = local ? "local" : ownerMatches ? choice(held.source, ["member_push", "coordinator_probe", "none"], "none") : "none";
         const observedAt = local && opts.localStates ? now : ownerMatches ? num(held.observedAt) : null;
         const offline = !local && (route.route === "unreachable" || ["disconnected", "closed", "offline", "unreachable"].includes(text5(rec3(node.connection).state)));
@@ -141353,9 +141546,9 @@ ${grant.exp}`).digest("hex");
         }
         for (const task of tasks.filter((t) => text5(t.nodeId) === nodeId && text5(t.taskId) && text5(t.sessionId))) {
           const sid = text5(task.sessionId);
-          if (!owner || !ownershipConsistent || text5(task.ownerDaemonId) && !daemonIdsEquivalent4(owner, text5(task.ownerDaemonId))) continue;
-          const localState = local ? (opts.localStates ?? []).map(rec3).find((s2) => sessionIdsEquivalent(text5(s2.instanceId), sid) && text5(rec3(s2.settings).meshNodeFor) === opts.meshId && daemonIdsEquivalent4(text5(rec3(s2.settings).meshNodeId), nodeId) && rec3(s2.settings).assistant !== true) : void 0;
-          const remoteState = !local && ownerMatches ? list(held.sessions).find((s2) => sessionIdsEquivalent(text5(s2.id), sid) && text5(rec3(s2.settings).meshNodeFor) === opts.meshId && daemonIdsEquivalent4(text5(rec3(s2.settings).meshNodeId), nodeId)) : void 0;
+          if (!owner || !ownershipConsistent || text5(task.ownerDaemonId) && !daemonIdsEquivalent5(owner, text5(task.ownerDaemonId))) continue;
+          const localState = local ? (opts.localStates ?? []).map(rec3).find((s2) => sessionIdsEquivalent(text5(s2.instanceId), sid) && text5(rec3(s2.settings).meshNodeFor) === opts.meshId && daemonIdsEquivalent5(text5(rec3(s2.settings).meshNodeId), nodeId) && rec3(s2.settings).assistant !== true) : void 0;
+          const remoteState = !local && ownerMatches ? list(held.sessions).find((s2) => sessionIdsEquivalent(text5(s2.id), sid) && text5(rec3(s2.settings).meshNodeFor) === opts.meshId && daemonIdsEquivalent5(text5(rec3(s2.settings).meshNodeId), nodeId)) : void 0;
           const detail = list(node.activeSessionDetails).find((s2) => sessionIdsEquivalent(text5(s2.sessionId), sid));
           const state2 = localState ? detail ?? localState : remoteState ? detail ?? remoteState : void 0;
           const attemptId = text5(task.attemptId) || null;
@@ -142184,7 +142377,7 @@ ${grant.exp}`).digest("hex");
     function meshHostLabel(mesh, selfDaemonId) {
       const host = resolveMeshHostStatus(mesh, { localDaemonId: selfDaemonId });
       const hostId = readText3(host.hostDaemonId);
-      const node = (mesh.nodes ?? []).find((n) => hostId && daemonIdsEquivalent4(readText3(n.daemonId), hostId) || !!host.hostNodeId && n.id === host.hostNodeId);
+      const node = (mesh.nodes ?? []).find((n) => hostId && daemonIdsEquivalent5(readText3(n.daemonId), hostId) || !!host.hostNodeId && n.id === host.hostNodeId);
       return readText3(node?.machineNickname) || (hostId ? shortId2(canonicalDaemonId2(hostId) ?? hostId) : "unknown host");
     }
     function coordinatorState(views) {
@@ -142197,9 +142390,9 @@ ${grant.exp}`).digest("hex");
       const facts = /* @__PURE__ */ new Map();
       if (selfKey) facts.set(selfKey, { daemonId: selfDaemonId || null, nick: selfLabel ?? "", os: process.platform, build: "", self: true });
       const keyOf2 = (raw) => {
-        const self = !raw || !!selfDaemonId && daemonIdsEquivalent4(raw, selfDaemonId);
+        const self = !raw || !!selfDaemonId && daemonIdsEquivalent5(raw, selfDaemonId);
         if (self) return { key: selfKey, self };
-        const existing = [...facts.keys()].find((k) => daemonIdsEquivalent4(k, raw));
+        const existing = [...facts.keys()].find((k) => daemonIdsEquivalent5(k, raw));
         return { key: existing ?? canonicalDaemonId2(raw) ?? raw, self };
       };
       for (const mesh of meshes) {
@@ -145108,7 +145301,7 @@ ${renderAttachmentBlock(committed.refs)}`, attachmentsImported: committed.refs.l
       await ports.refreshMemberMeshes?.();
       const localMeshes = ports.listMeshes();
       const followedList = (ports.followedRemoteProjects?.() ?? []).filter(
-        (e) => !localMeshes.some((m) => m.id === e.meshId && (ports.isHostedHere(m) || daemonIdsEquivalent4(ports.remoteHost(m).hostDaemonId, e.hostDaemonId)))
+        (e) => !localMeshes.some((m) => m.id === e.meshId && (ports.isHostedHere(m) || daemonIdsEquivalent5(ports.remoteHost(m).hostDaemonId, e.hostDaemonId)))
       );
       const candidates = [
         ...localMeshes,
@@ -145202,25 +145395,25 @@ ${renderAttachmentBlock(committed.refs)}`, attachmentsImported: committed.refs.l
     function verifyActiveFollowedRemoteEntry(ports, snapshot, remote, response) {
       const binding = ports.verifyOwnerBinding?.();
       if (binding && !binding.ok) return null;
-      if (!remote.hostDaemonId || !daemonIdsEquivalent4(remote.hostDaemonId, snapshot.hostDaemonId)) return null;
+      if (!remote.hostDaemonId || !daemonIdsEquivalent5(remote.hostDaemonId, snapshot.hostDaemonId)) return null;
       if (remote.hostMeshId && remote.hostMeshId !== snapshot.meshId) return null;
       const currentList = ports.followedRemoteProjects?.();
       const current5 = currentList ? currentList.find((e) => e.key === snapshot.key) : snapshot;
       if (!current5 || current5.state !== "followed") return null;
-      if (!daemonIdsEquivalent4(current5.hostDaemonId, snapshot.hostDaemonId) || current5.meshId !== snapshot.meshId) return null;
+      if (!daemonIdsEquivalent5(current5.hostDaemonId, snapshot.hostDaemonId) || current5.meshId !== snapshot.meshId) return null;
       if (current5.accountSlot !== snapshot.accountSlot) return null;
       if (current5.bindingRevision !== snapshot.bindingRevision || current5.grantRevision !== snapshot.grantRevision) return null;
       if (binding && binding.ok && typeof binding.bindingRevision === "number" && binding.bindingRevision !== current5.bindingRevision) return null;
       if (ports.followedRemoteHost) {
         const currentHost = ports.followedRemoteHost(current5);
         if (currentHost.followerAccess?.localBindingError) return null;
-        if (!currentHost.hostDaemonId || !daemonIdsEquivalent4(currentHost.hostDaemonId, snapshot.hostDaemonId)) return null;
+        if (!currentHost.hostDaemonId || !daemonIdsEquivalent5(currentHost.hostDaemonId, snapshot.hostDaemonId)) return null;
         if (currentHost.hostMeshId && currentHost.hostMeshId !== snapshot.meshId) return null;
       }
       if (response) {
         if (typeof response.bindingRevision === "number" && response.bindingRevision !== snapshot.bindingRevision) return null;
         if (typeof response.grantRevision === "number" && response.grantRevision !== snapshot.grantRevision) return null;
-        if (typeof response.hostDaemonId === "string" && response.hostDaemonId.trim() && !daemonIdsEquivalent4(response.hostDaemonId, snapshot.hostDaemonId)) return null;
+        if (typeof response.hostDaemonId === "string" && response.hostDaemonId.trim() && !daemonIdsEquivalent5(response.hostDaemonId, snapshot.hostDaemonId)) return null;
         if (typeof response.meshId === "string" && response.meshId.trim() && response.meshId.trim() !== snapshot.meshId) return null;
       }
       return current5;
@@ -145472,7 +145665,7 @@ ${renderAttachmentBlock(committed.refs)}`, attachmentsImported: committed.refs.l
       const rawOffset = typeof args.offset === "number" && Number.isFinite(args.offset) ? Math.max(0, Math.floor(args.offset)) : 0;
       const rawLimit = typeof args.limit === "number" && Number.isFinite(args.limit) ? Math.min(Math.max(1, Math.floor(args.limit)), MAX_ARTIFACT_MCP_PAGE_BYTES) : MAX_ARTIFACT_MCP_PAGE_BYTES;
       const self = ports.selfDaemonId();
-      if (record7.originDaemonId && (!self || !daemonIdsEquivalent4(record7.originDaemonId, self))) {
+      if (record7.originDaemonId && (!self || !daemonIdsEquivalent5(record7.originDaemonId, self))) {
         if (!ctx?.deps?.dispatchMeshCommand) {
           return { ok: false, code: "artifact_origin_unreachable", error: `Artifact '${artifactId}' resides on origin daemon '${record7.originDaemonId}' and no P2P mesh transport is available.` };
         }
@@ -145639,7 +145832,7 @@ ${renderAttachmentBlock(committed.refs)}`, attachmentsImported: committed.refs.l
           }
           for (const mesh of meshes) for (const node of mesh.nodes ?? []) {
             const id4 = canonicalDaemonId2(node.daemonId);
-            if (!id4 || daemonIdsEquivalent4(id4, ports.selfDaemonId()) || targets.has(id4)) continue;
+            if (!id4 || daemonIdsEquivalent5(id4, ports.selfDaemonId()) || targets.has(id4)) continue;
             const hostMeshId = ports.isHostedHere(mesh) ? mesh.id : ports.remoteHost(mesh).hostMeshId;
             targets.set(id4, { mesh, remote: { hostDaemonId: id4, hostMeshId, label: id4, reachable: true } });
           }
@@ -145659,8 +145852,8 @@ ${renderAttachmentBlock(committed.refs)}`, attachmentsImported: committed.refs.l
               }
               for (const raw of observed2.slice(0, 64)) {
                 const machine = observedInventoryMachine(raw);
-                if (!machine || !(p.mesh.nodes ?? []).some((n) => daemonIdsEquivalent4(n.daemonId, machine.daemonId)) && !daemonIdsEquivalent4(p.remote.hostDaemonId, machine.daemonId)) continue;
-                const row2 = result.machines.find((m) => daemonIdsEquivalent4(m.daemonId, machine.daemonId));
+                if (!machine || !(p.mesh.nodes ?? []).some((n) => daemonIdsEquivalent5(n.daemonId, machine.daemonId)) && !daemonIdsEquivalent5(p.remote.hostDaemonId, machine.daemonId)) continue;
+                const row2 = result.machines.find((m) => daemonIdsEquivalent5(m.daemonId, machine.daemonId));
                 if (row2 && typeof machine.reportedAt === "number" && (row2.reportedAt === null || machine.reportedAt > row2.reportedAt)) {
                   Object.assign(row2, { reportedAt: machine.reportedAt, freshness: machine.freshness, providers: machine.providers });
                 }
@@ -145673,7 +145866,7 @@ ${renderAttachmentBlock(committed.refs)}`, attachmentsImported: committed.refs.l
           await ports.refreshMemberMeshes?.();
           const meshes = ports.listMeshes();
           const followedActive = (ports.followedRemoteProjects?.() ?? []).filter(
-            (e) => e.state === "followed" && !meshes.some((m) => m.id === e.meshId && (ports.isHostedHere(m) || daemonIdsEquivalent4(ports.remoteHost(m).hostDaemonId, e.hostDaemonId)))
+            (e) => e.state === "followed" && !meshes.some((m) => m.id === e.meshId && (ports.isHostedHere(m) || daemonIdsEquivalent5(ports.remoteHost(m).hostDaemonId, e.hostDaemonId)))
           );
           const allCandidates = [
             ...meshes,
@@ -146873,7 +147066,7 @@ ${committed.block}`;
         meshStatusLine: (meshId) => statusLine.buildMeshStatusLineForNotification(meshId),
         peerHostMeshIds: (hostDaemonId) => {
           try {
-            return secrets.listPeerSecrets().filter((r) => r.role === "member" && daemonIdsEquivalent4(r.peerDaemonId, hostDaemonId)).map((r) => r.meshId);
+            return secrets.listPeerSecrets().filter((r) => r.role === "member" && daemonIdsEquivalent5(r.peerDaemonId, hostDaemonId)).map((r) => r.meshId);
           } catch {
             return [];
           }
@@ -148210,7 +148403,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
     }
     function verifyHostTransferCertificate(cert, view2) {
       if (!cert || typeof cert.signature !== "string" || cert.meshId !== view2.meshId) return { ok: false, code: "certificate_wrong_mesh" };
-      if (!daemonIdsEquivalent4(cert.previousHostDaemonId, view2.pinnedHostDaemonId)) return { ok: false, code: "certificate_wrong_signer" };
+      if (!daemonIdsEquivalent5(cert.previousHostDaemonId, view2.pinnedHostDaemonId)) return { ok: false, code: "certificate_wrong_signer" };
       if (!Number.isSafeInteger(cert.hostEpoch) || cert.hostEpoch <= view2.heldEpoch) return { ok: false, code: "certificate_stale_epoch" };
       const key6 = parseOriginGrantPublicKeyObject(view2.pinnedHostPublicKey);
       if (!key6) return { ok: false, code: "certificate_invalid" };
@@ -148362,9 +148555,9 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
               return ok;
             };
             const view2 = this.d.mesh.read(input.meshId);
-            add("is_host", !!view2 && view2.role === "host" && !view2.handedOff && (!view2.hostDaemonId || daemonIdsEquivalent4(view2.hostDaemonId, this.d.selfDaemonId)), "not_host");
-            add("target_not_self", !daemonIdsEquivalent4(input.targetDaemonId, this.d.selfDaemonId), "target_is_self");
-            add("target_is_member", !!view2?.memberDaemonIds.some((id4) => daemonIdsEquivalent4(id4, input.targetDaemonId)), "target_not_member");
+            add("is_host", !!view2 && view2.role === "host" && !view2.handedOff && (!view2.hostDaemonId || daemonIdsEquivalent5(view2.hostDaemonId, this.d.selfDaemonId)), "not_host");
+            add("target_not_self", !daemonIdsEquivalent5(input.targetDaemonId, this.d.selfDaemonId), "target_is_self");
+            add("target_is_member", !!view2?.memberDaemonIds.some((id4) => daemonIdsEquivalent5(id4, input.targetDaemonId)), "target_not_member");
             const active = this.d.journal.findActive(input.meshId, "source");
             add("no_other_handoff", !active || active.handoffId === opts.allowOwnActive, "handoff_in_progress", active?.handoffId);
             add("target_online", this.d.peerOnline(input.targetDaemonId), "target_offline");
@@ -148514,7 +148707,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           async onAck(ack, senderDaemonId) {
             const rec8 = this.d.journal.get(ack?.handoffId, "source");
             if (!rec8) return { success: false, code: "handoff_unknown" };
-            if (!daemonIdsEquivalent4(rec8.peerDaemonId, senderDaemonId) || !daemonIdsEquivalent4(ack.targetDaemonId, senderDaemonId)) return { success: false, code: "wrong_peer" };
+            if (!daemonIdsEquivalent5(rec8.peerDaemonId, senderDaemonId) || !daemonIdsEquivalent5(ack.targetDaemonId, senderDaemonId)) return { success: false, code: "wrong_peer" };
             if (rec8.phase === "aborted") return { success: false, code: "handoff_aborted" };
             if (rec8.phase === "acked" || rec8.phase === "activating" || rec8.phase === "uncertain" || rec8.phase === "committed") {
               return rec8.manifestDigest === ack.manifestDigest ? { success: true, duplicate: true } : { success: false, code: "ack_mismatch" };
@@ -148746,12 +148939,12 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             return this.d.journal.update(id4, "target", { phase: to, updatedAt: this.d.clock.now(), ...patch });
           }
           requireSource(rec8, sender) {
-            return daemonIdsEquivalent4(rec8.peerDaemonId, sender) ? null : fail10("wrong_peer");
+            return daemonIdsEquivalent5(rec8.peerDaemonId, sender) ? null : fail10("wrong_peer");
           }
           capability(a, sender) {
             const view2 = this.d.mesh.read(a.meshId);
             if (!view2 || view2.role !== "member") return fail10("target_not_member", "this daemon is not a member of the mesh");
-            if (!view2.hostDaemonId || !daemonIdsEquivalent4(view2.hostDaemonId, sender)) return fail10("wrong_peer", "sender is not this member's host");
+            if (!view2.hostDaemonId || !daemonIdsEquivalent5(view2.hostDaemonId, sender)) return fail10("wrong_peer", "sender is not this member's host");
             const active = this.d.journal.findActive(a.meshId, "target");
             if (active && active.handoffId !== a.handoffId) return fail10("handoff_in_progress");
             return {
@@ -148765,9 +148958,9 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           manifest(a, sender) {
             const m = a.manifest;
             if (!m || m.protocol !== HOST_HANDOFF_PROTOCOL || m.handoffId !== a.handoffId || m.meshId !== a.meshId) return fail10("manifest_mismatch");
-            if (!daemonIdsEquivalent4(m.fromDaemonId, sender) || !daemonIdsEquivalent4(m.toDaemonId, this.d.selfDaemonId)) return fail10("wrong_peer");
+            if (!daemonIdsEquivalent5(m.fromDaemonId, sender) || !daemonIdsEquivalent5(m.toDaemonId, this.d.selfDaemonId)) return fail10("wrong_peer");
             const view2 = this.d.mesh.read(a.meshId);
-            if (!view2 || view2.role !== "member" || !view2.hostDaemonId || !daemonIdsEquivalent4(view2.hostDaemonId, sender)) return fail10("wrong_peer");
+            if (!view2 || view2.role !== "member" || !view2.hostDaemonId || !daemonIdsEquivalent5(view2.hostDaemonId, sender)) return fail10("wrong_peer");
             if (m.nextEpoch !== view2.hostEpoch + 1 && m.nextEpoch <= view2.hostEpoch) return fail10("stale_epoch");
             const existing = this.d.journal.get(a.handoffId, "target");
             if (existing) {
@@ -149001,7 +149194,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             mesh.meshHost = next;
             for (const n of mesh.nodes ?? []) {
               const node = n;
-              if (node.daemonId && daemonIdsEquivalent4(node.daemonId, meta2.hostDaemonId)) node.role = "host";
+              if (node.daemonId && daemonIdsEquivalent5(node.daemonId, meta2.hostDaemonId)) node.role = "host";
               else if (node.role === "host") delete node.role;
             }
             mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
@@ -149080,7 +149273,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         async broadcast(meshId, cert, except) {
           const view2 = createLiveMeshPort().read(meshId);
           for (const daemonId of view2?.memberDaemonIds ?? []) {
-            if (except.some((e) => daemonIdsEquivalent4(e, daemonId))) continue;
+            if (except.some((e) => daemonIdsEquivalent5(e, daemonId))) continue;
             try {
               await host.dispatch(daemonId, "mesh_host_handoff_certificate", { meshId, handoffId: cert.handoffId, certificate: cert });
             } catch {
@@ -149216,7 +149409,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         },
         selfNodeId: (meshId) => {
           const mesh = createLiveMeshPort().read(meshId);
-          const node = mesh?.config?.nodes?.find((n) => !!n.daemonId && daemonIdsEquivalent4(n.daemonId, selfDaemonId));
+          const node = mesh?.config?.nodes?.find((n) => !!n.daemonId && daemonIdsEquivalent5(n.daemonId, selfDaemonId));
           return node?.id;
         },
         log: (line) => LOG.info("HostHandoff", line)
@@ -152771,7 +152964,7 @@ ${section3}` : DIGEST_INPUT_TEXT, messageId, forSessionId: sid });
         }
         for (const e of ports.followedRemoteProjects?.() ?? []) {
           if (e.state !== "followed") continue;
-          if (meshes.some((m) => m.id === e.meshId && (ports.isHostedHere(m) || daemonIdsEquivalent4(ports.remoteHost(m).hostDaemonId, e.hostDaemonId)))) continue;
+          if (meshes.some((m) => m.id === e.meshId && (ports.isHostedHere(m) || daemonIdsEquivalent5(ports.remoteHost(m).hostDaemonId, e.hostDaemonId)))) continue;
           out.push(remoteSource(ports, e.key, e.slug || e.name || e.meshId, () => ports.followedRemoteHost(e)));
         }
         return out;
@@ -154424,8 +154617,8 @@ ${defangRelayBody(text9)}`;
     }
     function isSenderOnWorkerRoster(mesh, selfDaemonId, sender) {
       if (!sender) return false;
-      if (selfDaemonId && daemonIdsEquivalent4(sender, selfDaemonId)) return true;
-      return (mesh.nodes ?? []).some((n) => typeof n.daemonId === "string" && daemonIdsEquivalent4(n.daemonId, sender));
+      if (selfDaemonId && daemonIdsEquivalent5(sender, selfDaemonId)) return true;
+      return (mesh.nodes ?? []).some((n) => typeof n.daemonId === "string" && daemonIdsEquivalent5(n.daemonId, sender));
     }
     function hasExplicitFollowerClaim(args) {
       return record5(args.followerAccess) !== void 0 || typeof args.bindingRevision === "number" || typeof args.grantRevision === "number";
@@ -154457,7 +154650,7 @@ ${defangRelayBody(text9)}`;
       const self = ports.selfDaemonId();
       const acl = normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId);
       if (!acl) return { ok: false, result: fail12("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
-      if (self && !daemonIdsEquivalent4(acl.hostDaemonId, self)) {
+      if (self && !daemonIdsEquivalent5(acl.hostDaemonId, self)) {
         return { ok: false, result: fail12("remote_access_denied", `Host daemon identity mismatch for mesh ${meshId}.`) };
       }
       if (acl.status !== "active") {
@@ -154469,7 +154662,7 @@ ${defangRelayBody(text9)}`;
           })
         };
       }
-      if (!sender || !daemonIdsEquivalent4(acl.activeDaemonId, sender)) {
+      if (!sender || !daemonIdsEquivalent5(acl.activeDaemonId, sender)) {
         return { ok: false, result: fail12("remote_access_denied", `Sender is not the active authorized assistant daemon for mesh ${meshId}.`) };
       }
       const followerClaim = record5(args.followerAccess);
@@ -154536,7 +154729,7 @@ ${defangRelayBody(text9)}`;
       const acl = normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId);
       if (!acl) return { ok: false, result: fail12("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
       const self = ports.selfDaemonId();
-      if (!self || !daemonIdsEquivalent4(acl.hostDaemonId, self)) {
+      if (!self || !daemonIdsEquivalent5(acl.hostDaemonId, self)) {
         return { ok: false, result: fail12("remote_access_denied", `assistantRemoteAccess hostDaemonId mismatch for mesh ${meshId}.`) };
       }
       if (acl.status !== "active") {
@@ -154550,7 +154743,7 @@ ${defangRelayBody(text9)}`;
       }
       if (acl.accountSlot !== ASSISTANT_ACCOUNT_SLOT) return { ok: false, result: fail12("remote_access_denied", `Invalid assistant accountSlot '${acl.accountSlot}'.`) };
       const canonSender = canonicalDaemonId2(sender);
-      if (!canonSender || daemonIdsEquivalent4(canonSender, self) || !daemonIdsEquivalent4(acl.activeDaemonId, canonSender)) {
+      if (!canonSender || daemonIdsEquivalent5(canonSender, self) || !daemonIdsEquivalent5(acl.activeDaemonId, canonSender)) {
         return { ok: false, result: fail12("remote_access_denied", `Sender is not the active authorized assistant daemon for mesh ${meshId}.`) };
       }
       const followerClaim = record5(args.followerAccess);
@@ -154559,11 +154752,11 @@ ${defangRelayBody(text9)}`;
       const claimedSlot = str25(followerClaim?.accountSlot) || str25(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
       if (claimedSlot !== acl.accountSlot) return { ok: false, result: fail12("remote_access_denied", `Invalid assistant accountSlot '${claimedSlot}'.`) };
       const claimedActiveDaemonId = str25(followerClaim?.activeDaemonId);
-      if (claimedActiveDaemonId && !daemonIdsEquivalent4(claimedActiveDaemonId, acl.activeDaemonId)) {
+      if (claimedActiveDaemonId && !daemonIdsEquivalent5(claimedActiveDaemonId, acl.activeDaemonId)) {
         return { ok: false, result: fail12("remote_access_denied", `Follower activeDaemonId does not match host grant for mesh ${meshId}.`) };
       }
       const claimedHostDaemonId = str25(followerClaim?.hostDaemonId);
-      if (claimedHostDaemonId && !daemonIdsEquivalent4(claimedHostDaemonId, acl.hostDaemonId)) {
+      if (claimedHostDaemonId && !daemonIdsEquivalent5(claimedHostDaemonId, acl.hostDaemonId)) {
         return { ok: false, result: fail12("remote_access_denied", `Follower hostDaemonId does not match host grant for mesh ${meshId}.`) };
       }
       const claimedBindingRev = typeof args.bindingRevision === "number" ? args.bindingRevision : typeof followerClaim?.bindingRevision === "number" ? followerClaim.bindingRevision : null;
@@ -155084,7 +155277,7 @@ ${defangRelayBody(text9)}`;
               return fail12("project_not_hosted_here", `this daemon does not host mesh ${meshId}`);
             }
             if (op === "send" || op === "note") {
-              const who = sender && self && daemonIdsEquivalent4(sender, self) ? "self" : sender.slice(0, 24) || "unknown";
+              const who = sender && self && daemonIdsEquivalent5(sender, self) ? "self" : sender.slice(0, 24) || "unknown";
               LOG.info("Assistant", `remote ${op} (${isFollower ? "follower" : "roster"}) for mesh ${meshId} from ${who}`);
             }
             return await run3(ports, op, meshId, args, isFollower, sender, ctx);
@@ -155202,12 +155395,12 @@ ${defangRelayBody(text9)}`;
                     const rawActiveDaemonId = str25(args.activeDaemonId);
                     const activeDaemonId = canonicalDaemonId2(rawActiveDaemonId);
                     if (!activeDaemonId || !activeDaemonId.startsWith("daemon_mach_")) return fail12("invalid_active_daemon_id", "activeDaemonId is required and must be a canonical daemon id.");
-                    if (hostDaemonId && daemonIdsEquivalent4(activeDaemonId, hostDaemonId)) return fail12("grant_self_not_allowed", "Cannot grant remote follower access to the host daemon itself.");
+                    if (hostDaemonId && daemonIdsEquivalent5(activeDaemonId, hostDaemonId)) return fail12("grant_self_not_allowed", "Cannot grant remote follower access to the host daemon itself.");
                     const slot = str25(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
                     if (slot !== ASSISTANT_ACCOUNT_SLOT) return fail12("invalid_args", `accountSlot must be '${ASSISTANT_ACCOUNT_SLOT}'`);
                     const bindingRevision = typeof args.bindingRevision === "number" && Number.isInteger(args.bindingRevision) && args.bindingRevision >= 1 ? args.bindingRevision : null;
                     if (bindingRevision === null) return fail12("invalid_args", "bindingRevision must be a positive integer");
-                    if (existing && daemonIdsEquivalent4(existing.activeDaemonId, activeDaemonId) && bindingRevision < existing.bindingRevision) {
+                    if (existing && daemonIdsEquivalent5(existing.activeDaemonId, activeDaemonId) && bindingRevision < existing.bindingRevision) {
                       return fail12("binding_revision_stale", "Requested bindingRevision is older than the host ACL bindingRevision.", { actualBindingRevision: existing.bindingRevision });
                     }
                     const nextGrantRevision2 = baseGrantRevision + 1;
@@ -156715,7 +156908,7 @@ ${defangRelayBody(text9)}`;
         const attempt = resolveAttempt(evidence);
         const ownerDaemonId = attempt ? attempt.ownerDaemonId : opts.owner?.daemonId;
         const ownerMeshId = attempt?.meshId ?? opts.owner?.meshId;
-        if (ownerDaemonId && !daemonIdsEquivalent4(ownerDaemonId, deps.selfDaemonId) && ownerMeshId) {
+        if (ownerDaemonId && !daemonIdsEquivalent5(ownerDaemonId, deps.selfDaemonId) && ownerMeshId) {
           return forward(evidence, { daemonId: ownerDaemonId, meshId: ownerMeshId }, nowMs2, opts);
         }
         let steps;
@@ -157135,7 +157328,7 @@ ${defangRelayBody(text9)}`;
     function selectProbeTargets(input) {
       const { store: store5, selfDaemonId, nowMs: nowMs2, policy } = input;
       const forced = input.forced ?? /* @__PURE__ */ new Set();
-      const open = store5.listOpenAttempts().filter((a) => daemonIdsEquivalent4(a.ownerDaemonId, selfDaemonId));
+      const open = store5.listOpenAttempts().filter((a) => daemonIdsEquivalent5(a.ownerDaemonId, selfDaemonId));
       if (open.length === 0) return [];
       const lastProbe = /* @__PURE__ */ new Map();
       for (const row2 of store5.db.prepare("SELECT attempt_id, last_probe_at FROM turn_attempts WHERE terminal_outcome IS NULL").all()) {
@@ -157169,7 +157362,7 @@ ${defangRelayBody(text9)}`;
       const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, attempt.nodeId));
       if (!node) return { kind: "unknown" };
       const daemonId = readMeshNodeDaemonId(node);
-      if (!daemonId || daemonIdsEquivalent4(daemonId, selfDaemonId)) return { kind: "local" };
+      if (!daemonId || daemonIdsEquivalent5(daemonId, selfDaemonId)) return { kind: "local" };
       const workspace = typeof node.workspace === "string" ? node.workspace : void 0;
       return { kind: "remote", daemonId, ...workspace ? { workspace } : {} };
     }
@@ -157361,7 +157554,7 @@ ${defangRelayBody(text9)}`;
         }
         try {
           const ceilinged = new Set(store5.db.prepare(`SELECT attempt_id FROM turn_holds WHERE status = 'active' AND reason = 'hard_ceiling'`).all().map((r) => r.attempt_id));
-          const missing = store5.listOpenAttempts().filter((a) => a.scope !== "plain" && a.state !== "stopping" && daemonIdsEquivalent4(a.ownerDaemonId, selfDaemonId) && !ceilinged.has(a.attemptId));
+          const missing = store5.listOpenAttempts().filter((a) => a.scope !== "plain" && a.state !== "stopping" && daemonIdsEquivalent5(a.ownerDaemonId, selfDaemonId) && !ceilinged.has(a.attemptId));
           report.missingCeiling = missing.length;
           if (missing.length > 0) {
             warnThrottled("missing_ceiling", missing.length, at, `turn-scheduler: invariant \u2014 ${missing.length} open mesh attempt(s) without a hard_ceiling hold (${missing.slice(0, 5).map((a) => `${a.attemptId} [${a.state}]`).join(", ")}) \u2014 nothing bounds them`);
@@ -157455,7 +157648,7 @@ ${defangRelayBody(text9)}`;
         offBus = deps.bus.on("terminated", (event) => {
           try {
             const attempt = ledger.openAttemptForSession(event.sessionId);
-            if (attempt && daemonIdsEquivalent4(attempt.ownerDaemonId, selfDaemonId)) {
+            if (attempt && daemonIdsEquivalent5(attempt.ownerDaemonId, selfDaemonId)) {
               forced.add(attempt.attemptId);
               wake?.();
             }
@@ -159305,7 +159498,7 @@ ${defangRelayBody(text9)}`;
           if (released) scheduleBacklog();
           return released;
         },
-        isSelfDaemon: (daemonId) => selfDaemonIds().some((id4) => daemonIdsEquivalent4(id4, daemonId)),
+        isSelfDaemon: (daemonId) => selfDaemonIds().some((id4) => daemonIdsEquivalent5(id4, daemonId)),
         replicationPending: (meshId) => {
           if (!rt) return false;
           try {
@@ -160094,6 +160287,7 @@ ${defangRelayBody(text9)}`;
       activateMeshTopicsAtBoot: () => activateMeshTopicsAtBoot,
       activeTranscriptProjectionService: () => activeTranscriptProjectionService,
       addNode: () => addNode,
+      admitOwnedPathsForMesh: () => admitOwnedPathsForMesh2,
       admitRouterCommandUnderNewWorkHold: () => admitRouterCommandUnderNewWorkHold,
       advanceLifecycleSource: () => advanceLifecycleSource,
       announceTopicActivated: () => announceTopicActivated,
@@ -160118,6 +160312,7 @@ ${defangRelayBody(text9)}`;
       attachSessionMcpAuthority: () => attachSessionMcpAuthority,
       attachTrustedOwnerIngressProof: () => attachTrustedOwnerIngressProof,
       attachWorkerArtifactMcpAuthority: () => attachWorkerArtifactMcpAuthority,
+      attestLocalOwnership: () => attestLocalOwnership2,
       baseTopicDefinitions: () => baseTopicDefinitions,
       beginLifecycleSource: () => beginLifecycleSource,
       bindMeshNoticeRuntime: () => bindMeshNoticeRuntime,
@@ -160249,7 +160444,7 @@ ${defangRelayBody(text9)}`;
       createTurnLedger: () => createTurnLedger,
       createTurnScheduler: () => createTurnScheduler,
       createWorktree: () => createWorktree,
-      daemonIdsEquivalent: () => daemonIdsEquivalent4,
+      daemonIdsEquivalent: () => daemonIdsEquivalent5,
       decideDispatchRoute: () => decideDispatchRoute,
       decideNodeRoutes: () => decideNodeRoutes,
       defaultNoticeEventId: () => defaultNoticeEventId,
@@ -160491,7 +160686,7 @@ ${defangRelayBody(text9)}`;
       logCommand: () => logCommand,
       logDiskSpaceStatus: () => logDiskSpaceStatus,
       logMeshCommandEvent: () => logMeshCommandEvent,
-      machineCoreFromDaemonId: () => machineCoreFromDaemonId,
+      machineCoreFromDaemonId: () => machineCoreFromDaemonId2,
       maintenanceDecisionDigest: () => maintenanceDecisionDigest,
       maintenanceHeld: () => maintenanceHeld,
       makeUsage: () => makeUsage,
@@ -162353,6 +162548,8 @@ ${defangRelayBody(text9)}`;
     }
     init_mesh_fast_forward();
     init_mesh_work_queue();
+    init_mesh_runtime_store_claim();
+    init_mesh_physical_ownership();
     init_mesh_task_predicates();
     init_mesh_task_mode_guardrail();
     init_mesh_node_capability_tags();
@@ -164302,7 +164499,7 @@ ${defangRelayBody(text9)}`;
         const host = canon2(hostDaemonId);
         let removed = false;
         for (const link2 of Array.from(this.links.values())) {
-          if (!daemonIdsEquivalent4(link2.hostDaemonId, host)) continue;
+          if (!daemonIdsEquivalent5(link2.hostDaemonId, host)) continue;
           if (meshId !== void 0 && link2.meshId !== meshId) continue;
           this.stopLink(link2, "Mesh host link removed");
           removed = true;
@@ -164615,7 +164812,7 @@ ${defangRelayBody(text9)}`;
       linkForHost(hostDaemonId) {
         let found;
         for (const link2 of this.links.values()) {
-          if (!daemonIdsEquivalent4(link2.hostDaemonId, hostDaemonId)) continue;
+          if (!daemonIdsEquivalent5(link2.hostDaemonId, hostDaemonId)) continue;
           if (!found || link2.ws && !found.ws) found = link2;
         }
         return found;
@@ -165000,7 +165197,7 @@ ${defangRelayBody(text9)}`;
       // ─── Misc ───────────────────────────────────────────────────────────────────
       /** True when `targetDaemonId` is this daemon under any equivalent id form. */
       isSelfDial(targetDaemonId) {
-        return !!this.localDaemonId && daemonIdsEquivalent4(targetDaemonId, this.localDaemonId);
+        return !!this.localDaemonId && daemonIdsEquivalent5(targetDaemonId, this.localDaemonId);
       }
     };
     init_origin_grant_keypair();
@@ -165142,15 +165339,15 @@ ${defangRelayBody(text9)}`;
     function isRemoteMeshNodeForState(node, locality) {
       const daemonId = readText(node?.daemonId);
       if (!daemonId) return false;
-      if (locality.localMachineId && daemonIdsEquivalent4(daemonId, locality.localMachineId)) return false;
-      if (locality.localDaemonId && daemonIdsEquivalent4(daemonId, locality.localDaemonId)) return false;
+      if (locality.localMachineId && daemonIdsEquivalent5(daemonId, locality.localMachineId)) return false;
+      if (locality.localDaemonId && daemonIdsEquivalent5(daemonId, locality.localDaemonId)) return false;
       return !workspaceExistsLocally(readText(node?.workspace));
     }
     function isForeignDaemonMeshNode(node, locality) {
       const daemonId = readText(node?.daemonId);
       if (!daemonId) return false;
-      if (locality.localMachineId && daemonIdsEquivalent4(daemonId, locality.localMachineId)) return false;
-      if (locality.localDaemonId && daemonIdsEquivalent4(daemonId, locality.localDaemonId)) return false;
+      if (locality.localMachineId && daemonIdsEquivalent5(daemonId, locality.localMachineId)) return false;
+      if (locality.localDaemonId && daemonIdsEquivalent5(daemonId, locality.localDaemonId)) return false;
       return true;
     }
     var ECHOED_TRANSIENT_NODE_KEYS = [
@@ -165255,7 +165452,7 @@ ${defangRelayBody(text9)}`;
       for (const node of nodes) {
         if (!node || typeof node !== "object") continue;
         const daemonId = readText(node.daemonId);
-        if (!daemonId || !daemonIdsEquivalent4(daemonId, wanted)) continue;
+        if (!daemonId || !daemonIdsEquivalent5(daemonId, wanted)) continue;
         if (!isForeignDaemonMeshNode(node, args.locality)) continue;
         const nodeId = normalizeMeshNodeId(node) ?? "";
         const workspace = readText(node.workspace);
@@ -165280,7 +165477,7 @@ ${defangRelayBody(text9)}`;
     function heldSessionBelongsToNode(session, meshId, nodeId, isCoordinatorNode) {
       const settings2 = session.settings ?? {};
       const sessionMesh = settings2.meshNodeFor;
-      if (settings2.meshNodeId && (!sessionMesh || sessionMesh === meshId) && (daemonIdsEquivalent4(settings2.meshNodeId, nodeId) || meshNodeIdMatches7({ id: nodeId }, settings2.meshNodeId))) {
+      if (settings2.meshNodeId && (!sessionMesh || sessionMesh === meshId) && (daemonIdsEquivalent5(settings2.meshNodeId, nodeId) || meshNodeIdMatches7({ id: nodeId }, settings2.meshNodeId))) {
         return true;
       }
       return isCoordinatorNode && (settings2.meshCoordinatorFor === meshId || session.coordinator?.meshId === meshId);
@@ -165512,7 +165709,7 @@ ${defangRelayBody(text9)}`;
         if (!meshId) return { success: false, error: "meshId required" };
         const callerDaemonId = readText(args?.callerDaemonId);
         const selfId = readText(ctx.deps.statusInstanceId);
-        if (callerDaemonId && selfId && !daemonIdsEquivalent4(callerDaemonId, selfId)) {
+        if (callerDaemonId && selfId && !daemonIdsEquivalent5(callerDaemonId, selfId)) {
           return { success: false, code: "mesh_status_view_wrong_daemon", error: `This is daemon ${selfId}, not ${callerDaemonId}` };
         }
         const execute = (cmd, cmdArgs) => ctx.execute(cmd, cmdArgs, "ipc", { inProcess: true });
@@ -165548,7 +165745,7 @@ ${defangRelayBody(text9)}`;
         if (!node) return { success: false, code: "mesh_node_unknown", error: `Node ${nodeId} is not on mesh ${meshId}` };
         const callerDaemonId = readText(args?.callerDaemonId);
         const selfId = readText(ctx.deps.statusInstanceId);
-        if (callerDaemonId && selfId && !daemonIdsEquivalent4(callerDaemonId, selfId)) {
+        if (callerDaemonId && selfId && !daemonIdsEquivalent5(callerDaemonId, selfId)) {
           return { success: false, code: "mesh_dispatch_route_wrong_daemon", error: `This is daemon ${selfId}, not ${callerDaemonId}` };
         }
         return { success: true, meshId, nodeId: readText(node.id) || nodeId, ...decideDispatchRoute(node, {
@@ -165571,7 +165768,7 @@ ${defangRelayBody(text9)}`;
         if (!meshId || !nodeId) return { success: false, error: "meshId and nodeId required" };
         const callerDaemonId = readText(args?.callerDaemonId);
         const selfId = readText(ctx.deps.statusInstanceId);
-        if (callerDaemonId && selfId && !daemonIdsEquivalent4(callerDaemonId, selfId)) {
+        if (callerDaemonId && selfId && !daemonIdsEquivalent5(callerDaemonId, selfId)) {
           return { success: false, code: "mesh_status_view_wrong_daemon", error: `This is daemon ${selfId}, not ${callerDaemonId}` };
         }
         const record7 = await ctx.getMeshForCommand(meshId, void 0, { preferInline: true });
@@ -165607,7 +165804,7 @@ ${defangRelayBody(text9)}`;
         if (!meshId) return { success: false, error: "meshId required" };
         const callerDaemonId = readText(args?.callerDaemonId);
         const selfId = readText(ctx.deps.statusInstanceId);
-        if (callerDaemonId && selfId && !daemonIdsEquivalent4(callerDaemonId, selfId)) {
+        if (callerDaemonId && selfId && !daemonIdsEquivalent5(callerDaemonId, selfId)) {
           return { success: false, code: "mesh_node_route_wrong_daemon", error: `This is daemon ${selfId}, not ${callerDaemonId}` };
         }
         const record7 = await ctx.getMeshForCommand(meshId, void 0, { preferInline: true });
@@ -165646,7 +165843,7 @@ ${defangRelayBody(text9)}`;
       }
       if (workspace && exists(workspace)) return { route: "local", ownerDaemonId, reason: "checkout_on_this_machine" };
       if (!self.hasMeshTransport) return { route: "unreachable", ownerDaemonId, reason: "no_mesh_transport" };
-      if (self.localDaemonId && daemonIdsEquivalent4(ownerDaemonId, self.localDaemonId)) return { route: "local", reason: "served_by_this_daemon" };
+      if (self.localDaemonId && daemonIdsEquivalent5(ownerDaemonId, self.localDaemonId)) return { route: "local", reason: "served_by_this_daemon" };
       return { route: "remote", ownerDaemonId, reason: "owned_by_another_daemon" };
     }
     var meshStatusViewSpecs = defineCommandSpecs("high", meshStatusViewHandlers, {
@@ -168696,7 +168893,7 @@ ${marker2}`,
         }
         const selfDaemonId = ctx.deps.statusInstanceId;
         const finishHere = (result) => withRestartTargetDaemon(result, selfDaemonId);
-        const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent4(nodeDaemonId, selfDaemonId);
+        const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent5(nodeDaemonId, selfDaemonId);
         if (isRemote && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args)) {
           const forwarded2 = await dispatchMeshOneshotWithAckRetry(
             () => ctx.deps.dispatchMeshCommand(nodeDaemonId, "restart_daemon_node", withMeshDirectDispatch(args, rosterEvidenceExtra(args, resolvedMesh))),
@@ -168798,7 +168995,7 @@ ${marker2}`,
         if (!text(r.sessionId) || !text(r.providerType) || !text(r.workspace) || !r.meta || !Number.isSafeInteger(r.startedAt) || !r.startedAt || r.startedAt > Date.now() || !Number.isSafeInteger(r.osPid) || r.osPid <= 0 || r.category !== "cli" || r.lifecycle !== "running" || !text(r.meta.providerSessionId)) throw new Error("maintenance_runtime_inventory_incomplete");
         const meshId = text(r.meta.meshNodeFor), nodeId = text(r.meta.meshNodeId);
         const runtimeOwner = text(r.meta.daemonId);
-        if (runtimeOwner && !daemonIdsEquivalent4(runtimeOwner, state2.daemonId)) throw new Error("maintenance_unknown_runtime_owner");
+        if (runtimeOwner && !daemonIdsEquivalent5(runtimeOwner, state2.daemonId)) throw new Error("maintenance_unknown_runtime_owner");
         if ((meshId || nodeId) && !state2.nodeRoster.some((n) => n.meshId === meshId && n.nodeId === nodeId && n.daemonId === state2.daemonId)) throw new Error("maintenance_unknown_runtime_owner");
         const entry = coordinatorInventory.find((e) => e.sessionId === r.sessionId);
         const coordinatorMeshId = text(entry?.meshId);
@@ -169143,7 +169340,7 @@ ${marker2}`,
       };
       let db3 = components.turnLedger?.store.db;
       try {
-        if (!daemonIdsEquivalent4(components.turnLedger?.selfDaemonId, state2.daemonId) || !fs55.realpathSync(db3?.name).startsWith(root + path66.sep)) db3 = void 0;
+        if (!daemonIdsEquivalent5(components.turnLedger?.selfDaemonId, state2.daemonId) || !fs55.realpathSync(db3?.name).startsWith(root + path66.sep)) db3 = void 0;
       } catch {
         db3 = void 0;
       }
@@ -169193,7 +169390,7 @@ ${marker2}`,
       });
       read2(["pendingNotifications"], "turn.deliver/native observer ACK inventory", () => {
         const native = components.meshTurn?.noticeSubmitInventory();
-        if (!native || !daemonIdsEquivalent4(native.daemonId, state2.daemonId) || native.pid !== process.pid || native.bootNonce !== MAINTENANCE_BOOT_NONCE) throw Error("notice_owner_unavailable");
+        if (!native || !daemonIdsEquivalent5(native.daemonId, state2.daemonId) || native.pid !== process.pid || native.bootNonce !== MAINTENANCE_BOOT_NONCE) throw Error("notice_owner_unavailable");
         const claims = sql("SELECT event_id,mesh_id,src_writer,src_seq,session_id,json_extract(payload_json,'$.outcome') AS outcome FROM turn_events WHERE kind='delivered' ORDER BY event_id");
         const missing = claims.filter((r) => ["delivered", "queued", "duplicate"].includes(r.outcome) || !r.outcome).filter((r) => !native.rows.some((n) => n.mesh_id === r.mesh_id && n.writer === r.src_writer && n.seq === r.src_seq && n.session_id === r.session_id && n.daemon_id === state2.daemonId && n.state === "submitted"));
         const previous = channels.pendingNotifications;
@@ -169372,7 +169569,7 @@ ${marker2}`,
       if (!b || !["inspect", "prepare", "commit", "verify-committed", "open", "verify-open", "peer"].includes(b.action)) fail2("maintenance_control_operation_invalid");
       const c = auth.config, a = c.activation?.artifact, prefix = c.activation?.prefix;
       if (c.activation?.protocol !== 1 || !a || !path67.isAbsolute(prefix ?? "") || a.sha256 !== s2.targetSha256 || process.execPath !== c.retainedNode?.path || sha6(fs56.readFileSync(process.execPath)) !== c.retainedNode?.sha256 || fs56.realpathSync(process.argv[1]) !== path67.join(prefix, "dist/cli/index.js") || sha6(fs56.readFileSync(process.argv[1])) !== a.cliSha256 || sha6(fs56.readFileSync(path67.join(prefix, "dist/index.js"))) !== a.executableSha256) fail2("maintenance_control_build_changed");
-      if (!components.turnLedger || !daemonIdsEquivalent4(components.turnLedger.selfDaemonId, s2.daemonId) || !components.cliManager?.deps.verifiedRetainedEndpoint || !components.cliManager.deps.getSessionRegistry?.()) fail2("maintenance_control_runtime_ports_required");
+      if (!components.turnLedger || !daemonIdsEquivalent5(components.turnLedger.selfDaemonId, s2.daemonId) || !components.cliManager?.deps.verifiedRetainedEndpoint || !components.cliManager.deps.getSessionRegistry?.()) fail2("maintenance_control_runtime_ports_required");
       if (b.expectedBoot !== void 0 && b.expectedBoot !== MAINTENANCE_BOOT_NONCE) fail2("maintenance_control_boot_changed");
       if (!equal(b.roster, s2.roster) || !equal(b.nodeRoster, s2.nodeRoster)) fail2("maintenance_control_membership_changed");
       if (["commit", "verify-committed", "open", "verify-open"].includes(b.action) && (!Array.isArray(b.peerPins) || b.peerPins.length !== s2.roster.length - 1 || new Set(b.peerPins.map((p) => p.daemonId)).size !== s2.roster.length - 1 || b.peerPins.some((p) => !b.ready?.some((r) => r.daemonId === p.daemonId && r.bootNonce === p.bootNonce && r.artifactSha256 === p.artifactSha256)))) fail2("maintenance_control_fleet_peer_set_required");
@@ -189782,7 +189979,7 @@ ${output}` : "";
       const r = rec8.requestedBy;
       if (rec8.role !== "source" || !r || r.role !== caller.role || r.sessionId !== caller.sessionId) return false;
       if (!r.viaDaemonId || !caller.viaDaemonId) return !r.viaDaemonId && !caller.viaDaemonId;
-      return daemonIdsEquivalent4(r.viaDaemonId, caller.viaDaemonId);
+      return daemonIdsEquivalent5(r.viaDaemonId, caller.viaDaemonId);
     };
     function agentView(rec8) {
       const files = rec8.selection.entries.filter((e) => e.kind === "file").length;
@@ -189870,12 +190067,12 @@ ${output}` : "";
       if (viaDaemonId) {
         let onRoster = nodes.some((n) => {
           const d = readMeshNodeDaemonId(n);
-          return !!d && daemonIdsEquivalent4(d, viaDaemonId);
+          return !!d && daemonIdsEquivalent5(d, viaDaemonId);
         });
         if (!onRoster) {
           try {
             const st = resolveMeshHostStatus(m, { localDaemonId: machineDaemonId });
-            onRoster = !st.hostSynthesized && !!st.hostDaemonId && daemonIdsEquivalent4(st.hostDaemonId, viaDaemonId);
+            onRoster = !st.hostSynthesized && !!st.hostDaemonId && daemonIdsEquivalent5(st.hostDaemonId, viaDaemonId);
           } catch {
             onRoster = false;
           }
@@ -189889,7 +190086,7 @@ ${output}` : "";
         if (viaDaemonId) return false;
         try {
           const st = resolveMeshHostStatus(m, { localDaemonId: machineDaemonId });
-          anonymousNodesAreOurs = st.role === "host" && !!st.hostDaemonId && daemonIdsEquivalent4(st.hostDaemonId, machineDaemonId);
+          anonymousNodesAreOurs = st.role === "host" && !!st.hostDaemonId && daemonIdsEquivalent5(st.hostDaemonId, machineDaemonId);
         } catch {
           anonymousNodesAreOurs = false;
         }
@@ -189898,7 +190095,7 @@ ${output}` : "";
       const paths = /* @__PURE__ */ new Set();
       for (const n of nodes) {
         const d = readMeshNodeDaemonId(n);
-        if (d ? !daemonIdsEquivalent4(d, machineDaemonId) : !anonymousOurs()) continue;
+        if (d ? !daemonIdsEquivalent5(d, machineDaemonId) : !anonymousOurs()) continue;
         if (typeof n.workspace === "string" && n.workspace.trim()) paths.add(path109.resolve(expandPath(n.workspace)));
       }
       const out = [];
@@ -192339,7 +192536,7 @@ ${output}` : "";
         const ws = this.ports.resolveWorkspace(input.workspaceId);
         if (!ws) return fail3("WORKSPACE_NOT_REGISTERED");
         const self = this.ports.selfDaemonId();
-        if (!input.targetDaemonId || daemonIdsEquivalent4(input.targetDaemonId, self)) return fail3("INVALID_TARGET", "target must be another of your machines");
+        if (!input.targetDaemonId || daemonIdsEquivalent5(input.targetDaemonId, self)) return fail3("INVALID_TARGET", "target must be another of your machines");
         if (!this.ports.isPeerAuthorized(input.targetDaemonId)) return fail3("PEER_UNAUTHORIZED");
         if ([...this.records.values()].filter((r) => !TERMINAL_STATES.has(r.state)).length >= MAX_OPEN_TRANSFERS) return fail3("TOO_MANY_TRANSFERS");
         let finalName;
@@ -192762,7 +192959,7 @@ ${output}` : "";
           if (op === "offer") return this.onOffer(sender, id4, args);
           const rec8 = this.records.get(id4);
           if (!rec8) return fail3("NOT_FOUND");
-          if (!daemonIdsEquivalent4(rec8.peerDaemonId, sender)) return fail3("PEER_UNAUTHORIZED");
+          if (!daemonIdsEquivalent5(rec8.peerDaemonId, sender)) return fail3("PEER_UNAUTHORIZED");
           switch (op) {
             case "approval":
               return this.onPeerApproval(rec8, args);
@@ -192792,7 +192989,7 @@ ${output}` : "";
         if ([...this.records.values()].filter((r) => !TERMINAL_STATES.has(r.state)).length >= MAX_OPEN_TRANSFERS) return fail3("TOO_MANY_TRANSFERS");
         const selection = validateSelectionManifest(args.selection);
         const self = this.ports.selfDaemonId();
-        if (selection.transferId !== id4 || !daemonIdsEquivalent4(selection.sourceDaemonId, sender) || !daemonIdsEquivalent4(selection.targetDaemonId, self)) return fail3("PEER_UNAUTHORIZED");
+        if (selection.transferId !== id4 || !daemonIdsEquivalent5(selection.sourceDaemonId, sender) || !daemonIdsEquivalent5(selection.targetDaemonId, self)) return fail3("PEER_UNAUTHORIZED");
         if (selectionDigest(selection) !== args.selectionDigest) return fail3("APPROVAL_MISMATCH");
         const ws = this.ports.resolveWorkspace(selection.targetWorkspaceId);
         if (!ws) return fail3("WORKSPACE_NOT_REGISTERED");
@@ -193074,7 +193271,7 @@ ${output}` : "";
       if (action2 !== "request" && action2 !== "status" && action2 !== "cancel") return bad2("INVALID_ARGS", "action must be 'request', 'status' or 'cancel'");
       const id4 = str9(args.transferId);
       let peer = str9(args.fromDaemonId) || (id4 ? forwarded.get(fwdKey(caller, id4)) ?? "" : "");
-      if (peer && daemonIdsEquivalent4(peer, engine2.selfId())) peer = "";
+      if (peer && daemonIdsEquivalent5(peer, engine2.selfId())) peer = "";
       if (peer) {
         if (action2 === "request") {
           const request = {};
@@ -193262,7 +193459,7 @@ ${output}` : "";
       const args = stripRouterInternalArgs(raw);
       const engine2 = getProjectTransferEngine();
       const fromRaw = str10(args.fromDaemonId).trim();
-      if (fromRaw && engine2 && !daemonIdsEquivalent4(fromRaw, engine2.selfId()) && !resolveMeshScope(caller.meshId, engine2.selfId(), fromRaw)) {
+      if (fromRaw && engine2 && !daemonIdsEquivalent5(fromRaw, engine2.selfId()) && !resolveMeshScope(caller.meshId, engine2.selfId(), fromRaw)) {
         return { success: false, code: "machine_not_in_project", error: "fromDaemonId must be a machine of this project" };
       }
       const scope2 = engine2 ? resolveMeshScope(caller.meshId, engine2.selfId()) : null;
@@ -193939,7 +194136,7 @@ ${output}` : "";
           nodeDaemonId = typeof node?.daemonId === "string" ? node.daemonId.trim() : void 0;
         }
         const selfDaemonId = ctx.deps.statusInstanceId;
-        const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent4(nodeDaemonId, selfDaemonId);
+        const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent5(nodeDaemonId, selfDaemonId);
         if (isRemote && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args)) {
           let timer = null;
           try {
@@ -194470,7 +194667,7 @@ ${output}` : "";
         if (!runtime(instance) || runtime(instance) !== row2.runtime_json) continue;
         const current5 = instance.getState().settings, before = JSON.parse(row2.snapshot_json);
         const prepared = JSON.parse(row2.prepared_json);
-        if (current5?.assistant || current5?.meshCoordinatorFor || current5?.meshNodeFor !== before.settings.meshNodeFor || current5?.meshNodeId !== before.settings.meshNodeId || typeof current5?.meshCoordinatorDaemonId !== "string" || !daemonIdsEquivalent4(current5.meshCoordinatorDaemonId, before.settings.meshCoordinatorDaemonId) || (current5?.meshActiveDispatchNonce ?? 0) > Math.max(before.settings.meshActiveDispatchNonce ?? 0, prepared.settings.meshActiveDispatchNonce ?? 0) || current5?.meshActiveTaskId && current5.meshActiveTaskId !== before.settings.meshActiveTaskId || current5?.meshActiveAttemptId && current5.meshActiveAttemptId !== before.settings.meshActiveAttemptId || ![before.settings.meshActiveAttemptGeneration ?? 0, prepared.settings.meshActiveAttemptGeneration ?? 0].includes(current5?.meshActiveAttemptGeneration ?? 0)) continue;
+        if (current5?.assistant || current5?.meshCoordinatorFor || current5?.meshNodeFor !== before.settings.meshNodeFor || current5?.meshNodeId !== before.settings.meshNodeId || typeof current5?.meshCoordinatorDaemonId !== "string" || !daemonIdsEquivalent5(current5.meshCoordinatorDaemonId, before.settings.meshCoordinatorDaemonId) || (current5?.meshActiveDispatchNonce ?? 0) > Math.max(before.settings.meshActiveDispatchNonce ?? 0, prepared.settings.meshActiveDispatchNonce ?? 0) || current5?.meshActiveTaskId && current5.meshActiveTaskId !== before.settings.meshActiveTaskId || current5?.meshActiveAttemptId && current5.meshActiveAttemptId !== before.settings.meshActiveAttemptId || ![before.settings.meshActiveAttemptGeneration ?? 0, prepared.settings.meshActiveAttemptGeneration ?? 0].includes(current5?.meshActiveAttemptGeneration ?? 0)) continue;
         if (JSON.stringify(instance.captureMeshAssignment()) !== row2.snapshot_json) instance.restoreMeshAssignment(before);
       }
     }
@@ -194489,7 +194686,7 @@ ${output}` : "";
       recoverHolderAttachRollback(instance);
       const state2 = instance.getState(), s2 = state2.settings;
       if (instance.getAdapter()?.cliType !== args.agentType || op.phase === "prepare" && !liveWorkingStatus(state2)) return refuse10("holder_not_currently_working");
-      if (s2?.assistant || s2?.meshCoordinatorFor || s2?.meshNodeFor !== mc.meshId || !pinnedMeshNodeIdMatches(s2?.meshNodeId, mc.nodeId) || s2?.meshActiveTaskId !== mc.taskId && !(row2 && row2.boot_nonce !== BOOT && !s2?.meshActiveTaskId) || s2?.meshActiveAttemptId !== mc.attemptId || typeof s2?.meshCoordinatorDaemonId !== "string" || !daemonIdsEquivalent4(s2.meshCoordinatorDaemonId, mc.coordinatorDaemonId) || (s2.meshActiveAttemptGeneration ?? 0) > mc.attemptGeneration || (s2.meshActiveDispatchNonce ?? 0) > mc.dispatchNonce) return refuse10("foreign_or_stale_holder");
+      if (s2?.assistant || s2?.meshCoordinatorFor || s2?.meshNodeFor !== mc.meshId || !pinnedMeshNodeIdMatches(s2?.meshNodeId, mc.nodeId) || s2?.meshActiveTaskId !== mc.taskId && !(row2 && row2.boot_nonce !== BOOT && !s2?.meshActiveTaskId) || s2?.meshActiveAttemptId !== mc.attemptId || typeof s2?.meshCoordinatorDaemonId !== "string" || !daemonIdsEquivalent5(s2.meshCoordinatorDaemonId, mc.coordinatorDaemonId) || (s2.meshActiveAttemptGeneration ?? 0) > mc.attemptGeneration || (s2.meshActiveDispatchNonce ?? 0) > mc.dispatchNonce) return refuse10("foreign_or_stale_holder");
       const current5 = () => {
         const v = instance.getState().settings;
         return v?.meshActiveTaskId === mc.taskId && v?.meshActiveAttemptId === mc.attemptId && (v?.meshActiveAttemptGeneration ?? 0) === mc.attemptGeneration && v?.meshActiveDispatchNonce === mc.dispatchNonce;
@@ -194599,17 +194796,17 @@ ${output}` : "";
     }
     function selfDaemonPredicate(ctx) {
       const selfDaemonId = readNonEmpty3(ctx?.deps?.statusInstanceId);
-      return selfDaemonId ? (daemonId) => daemonIdsEquivalent4(daemonId, selfDaemonId) : void 0;
+      return selfDaemonId ? (daemonId) => daemonIdsEquivalent5(daemonId, selfDaemonId) : void 0;
     }
     async function resolveRemoteWorker(ctx, args) {
       const selfDaemonId = readNonEmpty3(ctx?.deps?.statusInstanceId);
       if (!selfDaemonId) return null;
       const prepared = validatePreparedDelivery(MeshRuntimeStore.getInstance().db, args ?? {});
-      if (prepared && !daemonIdsEquivalent4(prepared.ownerDaemonId, selfDaemonId)) return prepared;
+      if (prepared && !daemonIdsEquivalent5(prepared.ownerDaemonId, selfDaemonId)) return prepared;
       const { resolveRemoteWorkerIdentity: resolveRemoteWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report_forwarded(), worker_report_forwarded_exports));
       return resolveRemoteWorkerIdentity2({ bind: args?.bind }, {
         readAssignmentStamp: assignmentStampReader(ctx),
-        isSelfDaemon: (daemonId) => daemonIdsEquivalent4(daemonId, selfDaemonId)
+        isSelfDaemon: (daemonId) => daemonIdsEquivalent5(daemonId, selfDaemonId)
       });
     }
     async function ownerRosterNodeDaemonLookup(ctx, meshId) {
@@ -194685,7 +194882,7 @@ ${output}` : "";
             return { ...answer2, ...owner.receipt ? { receipt: owner.receipt } : { receiptPending: true }, ...owner.error === "worker_protocol_unsupported" || owner.error === "forward_failed" ? { provenanceError: owner.error } : {} };
           }
         }
-        if (prepared && daemonIdsEquivalent4(prepared.ownerDaemonId, ctx.deps.statusInstanceId ?? "")) {
+        if (prepared && daemonIdsEquivalent5(prepared.ownerDaemonId, ctx.deps.statusInstanceId ?? "")) {
           const db3 = MeshRuntimeStore.getInstance().db, self = bridgeIdentity(ctx.deps.statusInstanceId ?? "", ctx.deps.statusVersion);
           const handled = commitLocalBridgeDelivery(db3, {
             protocol: 1,
@@ -194697,7 +194894,7 @@ ${output}` : "";
             payload: { fields: safeRefusalFields2(fields), summaryLength }
           }, () => {
             const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(prepared.attemptId);
-            if (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId || attempt.meshId !== prepared.meshId || attempt.taskId !== prepared.taskId || attempt.nodeId !== prepared.nodeId || !daemonIdsEquivalent4(attempt.ownerDaemonId, prepared.ownerDaemonId) || !daemonIdsEquivalent4(attempt.ownerDaemonId, self.daemonId)) return { success: false, error: "stale_report" };
+            if (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId || attempt.meshId !== prepared.meshId || attempt.taskId !== prepared.taskId || attempt.nodeId !== prepared.nodeId || !daemonIdsEquivalent5(attempt.ownerDaemonId, prepared.ownerDaemonId) || !daemonIdsEquivalent5(attempt.ownerDaemonId, self.daemonId)) return { success: false, error: "stale_report" };
             const receipt2 = recordRefusedWorkerReportForIdentity2(
               { token: "", ...prepared },
               { fields, summaryLength },
@@ -194791,7 +194988,7 @@ ${output}` : "";
           payload: content
         };
         const saved = typeof payload.deliveryId === "string" ? findBridgeMemberDelivery(db3, self.daemonId, payload.deliveryId) : null;
-        if (saved && (saved.sessionId !== remote.sessionId || saved.meshId !== remote.meshId || saved.taskId !== remote.taskId || saved.attemptId !== remote.attemptId || saved.generation !== remote.generation || saved.nodeId !== remote.nodeId || !daemonIdsEquivalent4(saved.ownerDaemonId, remote.ownerDaemonId) || saved.kind !== kind || saved.reportedAtMs !== payload.reportedAtMs || stableBridgeJson(saved.payload) !== stableBridgeJson(content))) return { success: false, error: "worker_delivery_identity_conflict" };
+        if (saved && (saved.sessionId !== remote.sessionId || saved.meshId !== remote.meshId || saved.taskId !== remote.taskId || saved.attemptId !== remote.attemptId || saved.generation !== remote.generation || saved.nodeId !== remote.nodeId || !daemonIdsEquivalent5(saved.ownerDaemonId, remote.ownerDaemonId) || saved.kind !== kind || saved.reportedAtMs !== payload.reportedAtMs || stableBridgeJson(saved.payload) !== stableBridgeJson(content))) return { success: false, error: "worker_delivery_identity_conflict" };
         try {
           return await sendBridgeDelivery(db3, saved ?? envelope, dispatch2);
         } catch {
@@ -194981,7 +195178,7 @@ ${output}` : "";
           }
           const apply = () => {
             const attempt = prepared ? MeshRuntimeStore.getInstance().turnStore().getAttempt(prepared.attemptId) : null;
-            if (prepared && (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId || attempt.meshId !== prepared.meshId || attempt.taskId !== prepared.taskId || attempt.nodeId !== prepared.nodeId || !daemonIdsEquivalent4(attempt.ownerDaemonId, prepared.ownerDaemonId) || !isSelfDaemon || !isSelfDaemon(attempt.ownerDaemonId))) {
+            if (prepared && (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId || attempt.meshId !== prepared.meshId || attempt.taskId !== prepared.taskId || attempt.nodeId !== prepared.nodeId || !daemonIdsEquivalent5(attempt.ownerDaemonId, prepared.ownerDaemonId) || !isSelfDaemon || !isSelfDaemon(attempt.ownerDaemonId))) {
               return { success: false, error: "stale_report" };
             }
             return toReportResponse(acceptWorkerCompletionReport2(credential, report, { isSelfDaemon, reportedAtMs, preparedIdentity: prepared ?? void 0 }));
@@ -195109,7 +195306,7 @@ ${output}` : "";
               const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(prepared.attemptId);
               if (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId) return { success: false, error: "stale_report" };
               if (attempt.terminal || MeshRuntimeStore.getInstance().turnStore().findLatestAttemptForTask(prepared.meshId, prepared.taskId)?.attemptId !== prepared.attemptId) return { success: false, error: "stale_report" };
-              if (!daemonIdsEquivalent4(attempt.ownerDaemonId, self.daemonId) || attempt.meshId !== prepared.meshId || attempt.taskId !== prepared.taskId || attempt.nodeId !== prepared.nodeId) return { success: false, error: "unauthenticated" };
+              if (!daemonIdsEquivalent5(attempt.ownerDaemonId, self.daemonId) || attempt.meshId !== prepared.meshId || attempt.taskId !== prepared.taskId || attempt.nodeId !== prepared.nodeId) return { success: false, error: "unauthenticated" };
               if (Date.now() - prepared.reportedAtMs > BRIDGE_MAX_AGE_MS || prepared.reportedAtMs > Date.now() + 6e4) return { success: false, error: "stale_report" };
               return toProgressResponse(acceptWorkerProgressUpdateForIdentity2({ token: "", ...prepared }, note2, { deliveryId }));
             });
@@ -195190,7 +195387,7 @@ ${output}` : "";
     }
     function applyEnvelope(ctx, e, nodeOwner) {
       const sender = { senderDaemonId: readMeshSender({ _meshSenderDaemonId: e.senderDaemonId }), nodeDaemonId: nodeOwner };
-      const isSelfDaemon = (value) => daemonIdsEquivalent4(value, ctx.deps.statusInstanceId ?? "");
+      const isSelfDaemon = (value) => daemonIdsEquivalent5(value, ctx.deps.statusInstanceId ?? "");
       const resolved = resolveForwardedWorkerIdentity(e, sender, Date.now(), isSelfDaemon);
       if ("refused" in resolved) return { success: false, error: "unauthenticated", detail: resolved.refused };
       const proven = "live" in resolved ? resolved.live : resolved.late;
@@ -195257,17 +195454,17 @@ ${output}` : "";
         const policy = readBridgePolicy(MeshRuntimeStore.getInstance().db, args?.meshId);
         if (typeof args?.nonce !== "string" || args.nonce.length < 8 || !policy || policy.ownerDaemonId !== args?.expectedHostDaemonId || !policy.roster || !Array.isArray(args?.peerBuilds) || !ctx.deps.dispatchMeshCommand) return { success: false, error: "bridge_verification_manifest_required" };
         if (args.peerBuilds.some((peer) => !peer || typeof peer.daemonId !== "string" || typeof peer.bootId !== "string" || !peer.bootId)) return { success: false, error: "bridge_peer_manifest_mismatch" };
-        if (args.peerBuilds.some((peer, index) => args.peerBuilds.some((prior, other) => other < index && daemonIdsEquivalent4(peer.daemonId, prior.daemonId)))) return { success: false, error: "bridge_peer_manifest_mismatch" };
+        if (args.peerBuilds.some((peer, index) => args.peerBuilds.some((prior, other) => other < index && daemonIdsEquivalent5(peer.daemonId, prior.daemonId)))) return { success: false, error: "bridge_peer_manifest_mismatch" };
         const native = (await ctx.getMeshForCommand?.(args.meshId, void 0, { preferInline: true }))?.mesh;
-        if (native?.meshHost?.hostDaemonId && !daemonIdsEquivalent4(native.meshHost.hostDaemonId, policy.ownerDaemonId)) return { success: false, error: "bridge_coordinator_identity_mismatch" };
+        if (native?.meshHost?.hostDaemonId && !daemonIdsEquivalent5(native.meshHost.hostDaemonId, policy.ownerDaemonId)) return { success: false, error: "bridge_coordinator_identity_mismatch" };
         for (const expected of args.peerBuilds) {
-          if (typeof expected.bootId !== "string" || !expected.bootId || !policy.roster.some((node) => daemonIdsEquivalent4(node.daemonId, expected.daemonId)) || !policy.builds.some((build2) => build2.commit === expected.commit && build2.version === expected.version)) return { success: false, error: "bridge_peer_manifest_mismatch" };
+          if (typeof expected.bootId !== "string" || !expected.bootId || !policy.roster.some((node) => daemonIdsEquivalent5(node.daemonId, expected.daemonId)) || !policy.builds.some((build2) => build2.commit === expected.commit && build2.version === expected.version)) return { success: false, error: "bridge_peer_manifest_mismatch" };
           const capability = await queryBridgePeer(ctx.deps.dispatchMeshCommand, expected.daemonId, policy.meshId, policy);
           if (!capability || capability.commit !== expected.commit || capability.version !== expected.version || capability.frozen !== true) return { success: false, error: "bridge_peer_reconnect_unconfirmed" };
           const raw = await ctx.deps.dispatchMeshCommand(expected.daemonId, "get_status_metadata", {});
           const peer = unwrapMeshRelayResult(raw, { command: "get_status_metadata", peerDaemonId: expected.daemonId });
           const status = peer.status, build = peer.daemonBuild;
-          if (expected.bootId && peer.bootId !== expected.bootId || peer.success !== true || !daemonIdsEquivalent4(String(status?.instanceId ?? ""), expected.daemonId) || build?.commit !== expected.commit || status?.version !== expected.version) return { success: false, error: "bridge_peer_identity_unconfirmed" };
+          if (expected.bootId && peer.bootId !== expected.bootId || peer.success !== true || !daemonIdsEquivalent5(String(status?.instanceId ?? ""), expected.daemonId) || build?.commit !== expected.commit || status?.version !== expected.version) return { success: false, error: "bridge_peer_identity_unconfirmed" };
         }
         return { success: true, nonce: args.nonce, p2p: args.peerBuilds.length > 0, coordinator: true, verifiedPeers: args.peerBuilds.map((peer) => peer.daemonId) };
       },
@@ -196045,7 +196242,7 @@ ${output}` : "";
         sessionSettings: { ...patch }
       };
       const selfDaemonId = readText(ctx.deps.statusInstanceId);
-      if (selfDaemonId && daemonIdsEquivalent4(coordinatorDaemonId, selfDaemonId)) {
+      if (selfDaemonId && daemonIdsEquivalent5(coordinatorDaemonId, selfDaemonId)) {
         const refreshLocal = ctx.deps.updateLocalMeshOwnedSession;
         if (refreshLocal) {
           try {
@@ -196330,8 +196527,8 @@ ${output}` : "";
       requireProof(node !== parent && !meshNodeIdMatches7(parent, node.id), "source_parent_cycle");
       requireProof(node.isLocalWorktree === true && !parent.isLocalWorktree && !parent.clonedFromNodeId, "source_parent_cycle_or_not_base");
       for (const item of [node, parent]) {
-        requireProof(typeof item.daemonId === "string" && daemonIdsEquivalent4(item.daemonId, daemonId), "source_parent_remote_owner");
-        if (item.machineId) requireProof(daemonIdsEquivalent4(item.machineId, daemonId), "source_parent_remote_owner");
+        requireProof(typeof item.daemonId === "string" && daemonIdsEquivalent5(item.daemonId, daemonId), "source_parent_remote_owner");
+        if (item.machineId) requireProof(daemonIdsEquivalent5(item.machineId, daemonId), "source_parent_remote_owner");
       }
       const workspace = canonicalWorkspace(node);
       const base = canonicalWorkspace(parent);
@@ -196362,7 +196559,7 @@ ${output}` : "";
           const mesh = config?.meshes.find((m) => m.id === meshId);
           requireProof(mesh, "source_parent_durable_mesh_required");
           const host = resolveMeshHostStatus(mesh, { localDaemonId: ctx.deps.statusInstanceId });
-          requireProof(host.canOwnCoordinator && host.canOwnQueue && host.hostDaemonId && daemonIdsEquivalent4(host.hostDaemonId, ctx.deps.statusInstanceId), "source_parent_host_ownership_changed");
+          requireProof(host.canOwnCoordinator && host.canOwnQueue && host.hostDaemonId && daemonIdsEquivalent5(host.hostDaemonId, ctx.deps.statusInstanceId), "source_parent_host_ownership_changed");
           const node = mesh.nodes.find((n) => n.id === nodeId);
           const parent = mesh.nodes.find((n) => n.id === parentNodeId);
           requireProof(node && parent, "source_parent_node_not_found");
@@ -196371,9 +196568,9 @@ ${output}` : "";
           requireProof(current5 === expectedOldParentId || alreadyAttached && node.sourceParentReattachment?.previousParentId === expectedOldParentId, "source_parent_cas_conflict");
           const cached5 = ctx.getCachedInlineMesh(meshId);
           const cachedNode = cached5?.nodes?.find((n) => meshNodeIdMatches7(n, node.id));
-          requireProof(!cached5 || cachedNode && cachedNode.clonedFromNodeId === current5 && cachedNode.workspace === node.workspace && cachedNode.isLocalWorktree === node.isLocalWorktree && (cachedNode.repoRoot || cachedNode.workspace) === (node.repoRoot || node.workspace) && daemonIdsEquivalent4(cachedNode.daemonId, node.daemonId), "source_parent_cache_conflict");
+          requireProof(!cached5 || cachedNode && cachedNode.clonedFromNodeId === current5 && cachedNode.workspace === node.workspace && cachedNode.isLocalWorktree === node.isLocalWorktree && (cachedNode.repoRoot || cachedNode.workspace) === (node.repoRoot || node.workspace) && daemonIdsEquivalent5(cachedNode.daemonId, node.daemonId), "source_parent_cache_conflict");
           const cachedParent = cached5?.nodes?.find((n) => meshNodeIdMatches7(n, parent.id));
-          requireProof(!cached5 || cachedParent && cachedParent.workspace === parent.workspace && (cachedParent.repoRoot || cachedParent.workspace) === (parent.repoRoot || parent.workspace) && daemonIdsEquivalent4(cachedParent.daemonId, parent.daemonId) && cachedParent.isLocalWorktree === parent.isLocalWorktree && cachedParent.clonedFromNodeId === parent.clonedFromNodeId, "source_parent_cache_conflict");
+          requireProof(!cached5 || cachedParent && cachedParent.workspace === parent.workspace && (cachedParent.repoRoot || cachedParent.workspace) === (parent.repoRoot || parent.workspace) && daemonIdsEquivalent5(cachedParent.daemonId, parent.daemonId) && cachedParent.isLocalWorktree === parent.isLocalWorktree && cachedParent.clonedFromNodeId === parent.clonedFromNodeId, "source_parent_cache_conflict");
           validateLink(mesh, node, parent, ctx.deps.statusInstanceId || "");
           requireProof(alreadyAttached || !mesh.nodes.some((n) => n.id === current5), "source_parent_existing_binding");
           requireProof(!router.runningRefineBatchJobs.has(meshId) && ![...router.runningRefineJobs.keys()].some((k) => k.startsWith(`${meshId}:`)) && router.refineBaseLeases.size === 0, "source_parent_refinery_active");
@@ -196421,7 +196618,7 @@ ${output}` : "";
       }
       const selfDaemonId = readStringValue(evidence.selfDaemonId);
       const ownerDaemonId = readStringValue(configNode?.daemonId);
-      if (configNode && selfDaemonId && ownerDaemonId && daemonIdsEquivalent4(ownerDaemonId, selfDaemonId) && isDeadLocalWorktreeNode(configNode)) {
+      if (configNode && selfDaemonId && ownerDaemonId && daemonIdsEquivalent5(ownerDaemonId, selfDaemonId) && isDeadLocalWorktreeNode(configNode)) {
         return "cleanup_candidate";
       }
       return void 0;
@@ -196494,7 +196691,7 @@ ${output}` : "";
           return "";
         }
       })();
-      const isCoordinatorBaseNode = !!selfDaemonId && (daemonIdsEquivalent4(nodeDaemonId, selfDaemonId) || daemonIdsEquivalent4(nodeMachineId, selfDaemonId)) || !!selfMachineId && (daemonIdsEquivalent4(nodeDaemonId, selfMachineId) || daemonIdsEquivalent4(nodeMachineId, selfMachineId));
+      const isCoordinatorBaseNode = !!selfDaemonId && (daemonIdsEquivalent5(nodeDaemonId, selfDaemonId) || daemonIdsEquivalent5(nodeMachineId, selfDaemonId)) || !!selfMachineId && (daemonIdsEquivalent5(nodeDaemonId, selfMachineId) || daemonIdsEquivalent5(nodeMachineId, selfMachineId));
       if (!isCoordinatorBaseNode) return null;
       return {
         success: false,
@@ -196506,7 +196703,7 @@ ${output}` : "";
     }
     function remoteWorktreeOwner(ctx, node, args) {
       const nodeDaemonId = typeof node.daemonId === "string" ? node.daemonId.trim() : void 0;
-      return nodeDaemonId && !daemonIdsEquivalent4(nodeDaemonId, ctx.deps.statusInstanceId) && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args) ? nodeDaemonId : void 0;
+      return nodeDaemonId && !daemonIdsEquivalent5(nodeDaemonId, ctx.deps.statusInstanceId) && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args) ? nodeDaemonId : void 0;
     }
     async function removeNodeWorktree(ctx, p) {
       const { mesh, node, nodeId, args } = p;
@@ -197219,7 +197416,7 @@ ${output}` : "";
             }
             if (!sourceNode2) return { ready: false, done: { success: false, error: `Source node '${sourceNodeId}' not found in mesh` } };
             const sourceDaemonId = typeof sourceNode2.daemonId === "string" ? sourceNode2.daemonId.trim() : void 0;
-            if (sourceDaemonId && !daemonIdsEquivalent4(sourceDaemonId, ctx.deps.statusInstanceId) && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args)) {
+            if (sourceDaemonId && !daemonIdsEquivalent5(sourceDaemonId, ctx.deps.statusInstanceId) && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args)) {
               return { ready: false, forward: { mesh: mesh2, sourceDaemonId } };
             }
             const identity6 = {
@@ -197538,7 +197735,7 @@ ${output}` : "";
           if (!node) return { success: false, error: `Node '${nodeId}' not found in mesh` };
           if (!node.isLocalWorktree) return { success: false, error: "Node is not a local worktree node" };
           const nodeDaemonId = typeof node.daemonId === "string" ? node.daemonId.trim() : void 0;
-          if (nodeDaemonId && !daemonIdsEquivalent4(nodeDaemonId, ctx.deps.statusInstanceId) && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args)) {
+          if (nodeDaemonId && !daemonIdsEquivalent5(nodeDaemonId, ctx.deps.statusInstanceId) && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args)) {
             const forwarded2 = await ctx.deps.dispatchMeshCommand(nodeDaemonId, "retry_mesh_node_bootstrap", withMeshDirectDispatch(args, rosterEvidenceExtra(args, mesh)));
             return unwrapMeshRelayResult(forwarded2, { command: "retry_mesh_node_bootstrap", peerDaemonId: nodeDaemonId });
           }
@@ -197706,7 +197903,7 @@ ${output}` : "";
           const { setMeshHostPin: setMeshHostPin2 } = await Promise.resolve().then(() => (init_mesh_config_host_pairing(), mesh_config_host_pairing_exports));
           if (args?.force === true) {
             const pinned = resolveMeshHostStatus(getMesh2(meshId));
-            const moves = !!pinned.hostDaemonId && !!hostDaemonId && !daemonIdsEquivalent4(pinned.hostDaemonId, hostDaemonId);
+            const moves = !!pinned.hostDaemonId && !!hostDaemonId && !daemonIdsEquivalent5(pinned.hostDaemonId, hostDaemonId);
             if (moves) {
               const { MeshRuntimeStore: MeshRuntimeStore2 } = await Promise.resolve().then(() => (init_mesh_runtime_store(), mesh_runtime_store_exports));
               const { meshHasHostData: meshHasHostData2 } = await Promise.resolve().then(() => (init_snapshot_import(), snapshot_import_exports));
@@ -198612,7 +198809,7 @@ ${output}` : "";
             nodeDaemonId = typeof node?.daemonId === "string" ? node.daemonId.trim() : void 0;
           }
           const selfDaemonId = ctx.deps.statusInstanceId;
-          const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent4(nodeDaemonId, selfDaemonId);
+          const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent5(nodeDaemonId, selfDaemonId);
           if (isRemote && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args)) {
             const forwarded2 = await ctx.deps.dispatchMeshCommand(nodeDaemonId, "fast_forward_mesh_node", withMeshDirectDispatch(args, { workspace, ...rosterEvidenceExtra(args, resolvedMesh) }));
             return unwrapMeshRelayResult(forwarded2, { command: "fast_forward_mesh_node", peerDaemonId: nodeDaemonId });
@@ -198661,7 +198858,7 @@ ${output}` : "";
           const forwardNode = meshRecordForForward?.mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
           const nodeDaemonId = typeof forwardNode?.daemonId === "string" ? forwardNode.daemonId.trim() : void 0;
           const selfDaemonId = ctx.deps.statusInstanceId;
-          const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent4(nodeDaemonId, selfDaemonId);
+          const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent5(nodeDaemonId, selfDaemonId);
           if (isRemote && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args)) {
             const callerCoordinatorDaemonId = typeof args?.coordinatorDaemonId === "string" && args.coordinatorDaemonId.trim() ? args.coordinatorDaemonId.trim() : void 0;
             const forwarded2 = await ctx.deps.dispatchMeshCommand(nodeDaemonId, "refine_mesh_node", withMeshDirectDispatch(args, {
@@ -200334,7 +200531,7 @@ ${ptyResult.output.slice(-2e3)}`);
             const isSelfNode = Boolean(
               nodeId && inlineCoordinatorNodeId && nodeId === inlineCoordinatorNodeId
             ) || Boolean(
-              daemonId && (daemonIdsEquivalent4(daemonId, localMachineId) || daemonIdsEquivalent4(daemonId, ctx.deps.statusInstanceId))
+              daemonId && (daemonIdsEquivalent5(daemonId, localMachineId) || daemonIdsEquivalent5(daemonId, ctx.deps.statusInstanceId))
             ) || Boolean(meshRecord2?.inline && nodeIndex === 0) || sparseConfiguredCoordinatorNode;
             if ((isSelfNode || node.isLocalWorktree === true) && localMachineNickname && !readStringValue(node.machineNickname, node.machine_nickname)) {
               node.machineNickname = localMachineNickname;
@@ -200810,7 +201007,7 @@ ${ptyResult.output.slice(-2e3)}`);
             if (!sibling || sibling === resolved.node || meshNodeIdMatches7(sibling, nodeId)) continue;
             const siblingDaemonId = readMeshNodeDaemonId(sibling) ?? "";
             const siblingId = readText(sibling.id);
-            if (!ownerDaemonId || !siblingId || !siblingDaemonId || !daemonIdsEquivalent4(siblingDaemonId, ownerDaemonId)) continue;
+            if (!ownerDaemonId || !siblingId || !siblingDaemonId || !daemonIdsEquivalent5(siblingDaemonId, ownerDaemonId)) continue;
             const siblingRecorded = ctx.meshNodeGitState.recordRuntimeObservation({
               meshId,
               nodeId: siblingId,
@@ -200836,7 +201033,7 @@ ${ptyResult.output.slice(-2e3)}`);
               if (!sibling || sibling === resolved.node || meshNodeIdMatches7(sibling, nodeId)) continue;
               const siblingDaemonId = readMeshNodeDaemonId(sibling) ?? "";
               const siblingId = readText(sibling.id);
-              if (!siblingId || !siblingDaemonId || !daemonIdsEquivalent4(siblingDaemonId, ownerDaemonId)) continue;
+              if (!siblingId || !siblingDaemonId || !daemonIdsEquivalent5(siblingDaemonId, ownerDaemonId)) continue;
               ctx.meshNodeGitState.confirmRuntime(meshId, siblingId, runtimeSignature, runtimeObservedAt);
             }
           }
@@ -200889,7 +201086,7 @@ ${ptyResult.output.slice(-2e3)}`);
         if (!workspace) return { success: false, error: `Node ${nodeId} has no workspace` };
         const nodeDaemonId = readMeshNodeDaemonId(resolved.node) ?? "";
         const selfDaemonId = ctx.deps.statusInstanceId ?? "";
-        const isRemote = !!nodeDaemonId && !(selfDaemonId && daemonIdsEquivalent4(nodeDaemonId, selfDaemonId)) && !fs116.existsSync(workspace);
+        const isRemote = !!nodeDaemonId && !(selfDaemonId && daemonIdsEquivalent5(nodeDaemonId, selfDaemonId)) && !fs116.existsSync(workspace);
         if (!isRemote) return ctx.execute("git_log", { workspace, limit }, "internal", { inProcess: true });
         if (!ctx.deps.dispatchMeshCommand) return { success: false, error: "Remote node is not reachable from this daemon" };
         let timer = null;
@@ -202094,7 +202291,7 @@ ${lines.join("\n")}
             error: "hostDaemonId, meshId, and positive integer grantRevision are required."
           };
         }
-        if (daemonIdsEquivalent4(hostDaemonId, selfDaemonId)) {
+        if (daemonIdsEquivalent5(hostDaemonId, selfDaemonId)) {
           return {
             success: false,
             code: "remote_host_is_self",
@@ -202275,9 +202472,9 @@ ${lines.join("\n")}
       const scope2 = engine2 ? meshScopeFromEntry(p.mesh, engine2.selfId()) : null;
       const fromRaw = pick("from_daemon_id", "fromDaemonId");
       const fromD = typeof fromRaw === "string" ? fromRaw.trim() : "";
-      if (fromD && engine2 && !daemonIdsEquivalent4(fromD, engine2.selfId()) && !(p.mesh.nodes ?? []).some((n) => {
+      if (fromD && engine2 && !daemonIdsEquivalent5(fromD, engine2.selfId()) && !(p.mesh.nodes ?? []).some((n) => {
         const d = readMeshNodeDaemonId(n);
-        return !!d && daemonIdsEquivalent4(d, fromD);
+        return !!d && daemonIdsEquivalent5(d, fromD);
       })) {
         return fail8("machine_not_in_project", "from_daemon_id must be a machine of this project");
       }
@@ -205601,7 +205798,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const liveMeshNodeIds = Array.isArray(args.liveMeshNodeIds) ? args.liveMeshNodeIds.map((id4) => typeof id4 === "string" ? id4.trim() : "").filter(Boolean) : [];
       const isNodeStillLive = (candidateNodeId) => {
         if (!candidateNodeId) return false;
-        return liveMeshNodeIds.some((liveId) => liveId === candidateNodeId || meshNodeIdMatches7({ id: liveId }, candidateNodeId) || daemonIdsEquivalent4(liveId, candidateNodeId));
+        return liveMeshNodeIds.some((liveId) => liveId === candidateNodeId || meshNodeIdMatches7({ id: liveId }, candidateNodeId) || daemonIdsEquivalent5(liveId, candidateNodeId));
       };
       const reclaimedOrphanSessionIds = [];
       const sessions = await self.deps.sessionHostControl.listSessions();
@@ -205950,7 +206147,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         const nodes = Array.isArray(cached5?.snapshot?.nodes) ? cached5.snapshot.nodes : [];
         const servesPeer = nodes.some((node) => {
           const nodeDaemonId = readStringValue(node?.daemonId);
-          return !!nodeDaemonId && daemonIdsEquivalent4(nodeDaemonId, wanted);
+          return !!nodeDaemonId && daemonIdsEquivalent5(nodeDaemonId, wanted);
         });
         if (servesPeer) meshIds.push(meshId);
       }
@@ -205970,7 +206167,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           if (!collectMeshNodeHostedSessionIds(node).has(trimmed3)) continue;
           const nodeDaemonId = readMeshNodeDaemonId(readObjectRecord(node));
           if (!nodeDaemonId) continue;
-          if (selfDaemonId && daemonIdsEquivalent4(nodeDaemonId, selfDaemonId)) return void 0;
+          if (selfDaemonId && daemonIdsEquivalent5(nodeDaemonId, selfDaemonId)) return void 0;
           return nodeDaemonId;
         }
       }
@@ -205979,7 +206176,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           const rosterNode = candidates.find((node) => meshNodeIdMatches7(node, match.nodeId));
           const nodeDaemonId = (rosterNode ? readMeshNodeDaemonId(readObjectRecord(rosterNode)) : void 0) ?? match.daemonId ?? void 0;
           if (!nodeDaemonId) continue;
-          if (selfDaemonId && daemonIdsEquivalent4(nodeDaemonId, selfDaemonId)) return void 0;
+          if (selfDaemonId && daemonIdsEquivalent5(nodeDaemonId, selfDaemonId)) return void 0;
           return nodeDaemonId;
         }
       }
@@ -205988,7 +206185,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           if (!meshNodeIdMatches7(node, nodeHint)) continue;
           const nodeDaemonId = readMeshNodeDaemonId(readObjectRecord(node));
           if (!nodeDaemonId) continue;
-          if (selfDaemonId && daemonIdsEquivalent4(nodeDaemonId, selfDaemonId)) return void 0;
+          if (selfDaemonId && daemonIdsEquivalent5(nodeDaemonId, selfDaemonId)) return void 0;
           return nodeDaemonId;
         }
       }
@@ -207307,7 +207504,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const hostDaemonId = canonicalDaemonId2(readTrimmed2(hostDaemonIdRaw));
       if (!memberDaemonId) return { skipped: "member_daemon_id_missing" };
       if (!hostDaemonId) return { skipped: "host_daemon_id_unknown" };
-      if (daemonIdsEquivalent4(memberDaemonId, hostDaemonId)) return { skipped: "member_is_host" };
+      if (daemonIdsEquivalent5(memberDaemonId, hostDaemonId)) return { skipped: "member_is_host" };
       const secret = mintPeerSecret();
       putPeerSecret({ meshId, peerDaemonId: memberDaemonId, role: "host", secret, createdAt: (/* @__PURE__ */ new Date()).toISOString() });
       LOG.info("MeshPairing", `issued peer secret mesh=${meshId} member=${maskDaemonId(memberDaemonId)}`);
@@ -207513,7 +207710,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           const hostMeshId = typeof args?.hostMeshId === "string" && args.hostMeshId.trim() ? args.hostMeshId.trim() : meshId;
           const explicitHostDaemonId = typeof args?.hostDaemonId === "string" && args.hostDaemonId.trim() ? args.hostDaemonId.trim() : "";
           const hostDaemonId = explicitHostDaemonId || meshHost.hostDaemonId;
-          const dispatchTarget = hostDaemonId && !daemonIdsEquivalent4(hostDaemonId, readTrimmed2(ctx.deps.statusInstanceId)) ? hostDaemonId : "";
+          const dispatchTarget = hostDaemonId && !daemonIdsEquivalent5(hostDaemonId, readTrimmed2(ctx.deps.statusInstanceId)) ? hostDaemonId : "";
           const useDispatch = !!ctx.deps.dispatchMeshCommand && !!dispatchTarget && (!!explicitHostDaemonId || !meshHost.hostAddress);
           let hostResult;
           let transport;
@@ -210705,7 +210902,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const instance = host.deps.getInstanceManager()?.getInstance(request.sessionId);
       const matches = () => {
         const s2 = instance?.getState().settings;
-        return host.adapters.get(request.sessionId) === adapter && adapter?.cliType === request.providerType && s2?.assistant !== true && !s2?.meshCoordinatorFor && s2?.meshNodeFor === request.meshId && s2?.meshActiveTaskId === request.taskId && s2?.meshActiveAttemptId === request.attemptId && (s2?.meshActiveAttemptGeneration ?? 0) === request.generation && (s2?.meshActiveDispatchNonce ?? 0) === (request.dispatchNonce ?? 0) && (!request.nodeId || pinnedMeshNodeIdMatches(s2?.meshNodeId, request.nodeId)) && typeof s2?.meshCoordinatorDaemonId === "string" && daemonIdsEquivalent4(s2.meshCoordinatorDaemonId, request.ownerDaemonId);
+        return host.adapters.get(request.sessionId) === adapter && adapter?.cliType === request.providerType && s2?.assistant !== true && !s2?.meshCoordinatorFor && s2?.meshNodeFor === request.meshId && s2?.meshActiveTaskId === request.taskId && s2?.meshActiveAttemptId === request.attemptId && (s2?.meshActiveAttemptGeneration ?? 0) === request.generation && (s2?.meshActiveDispatchNonce ?? 0) === (request.dispatchNonce ?? 0) && (!request.nodeId || pinnedMeshNodeIdMatches(s2?.meshNodeId, request.nodeId)) && typeof s2?.meshCoordinatorDaemonId === "string" && daemonIdsEquivalent5(s2.meshCoordinatorDaemonId, request.ownerDaemonId);
       };
       if (!adapter || !instance || !matches()) return pending("foreign_or_unbound_writer");
       const meta2 = adapter.getRuntimeMetadata?.();
@@ -235295,7 +235492,7 @@ ${notice.notice}${supersededHint}`;
         if (this.options.expectedSessionId !== void 0 && commit2.sessionId !== this.options.expectedSessionId) {
           return "session_mismatch";
         }
-        if (this.options.expectedOwnerDaemonId !== void 0 && !daemonIdsEquivalent4(commit2.producerDaemonId, this.options.expectedOwnerDaemonId)) {
+        if (this.options.expectedOwnerDaemonId !== void 0 && !daemonIdsEquivalent5(commit2.producerDaemonId, this.options.expectedOwnerDaemonId)) {
           return "owner_mismatch";
         }
         return null;
@@ -237936,6 +238133,26 @@ function defaultProviderPriorityFromNodeFacts(facts) {
   return orderProvidersByBuiltinPreference(detected.length ? detected : enabled);
 }
 var QUOTA_BACKFILL_HORIZON_MS = 60 * 60 * 1e3;
+var DAEMON_ID_PREFIXES = ["daemon_", "standalone_"];
+function machineCoreFromDaemonId(id2) {
+  const trimmed = readString(id2);
+  if (!trimmed) return void 0;
+  const lower = trimmed.toLowerCase();
+  for (const prefix of DAEMON_ID_PREFIXES) {
+    if (lower.startsWith(prefix)) {
+      const core2 = trimmed.slice(prefix.length).trim();
+      if (!core2) return void 0;
+      return /^mach_/i.test(core2) ? `mach_${core2.slice(5)}` : core2;
+    }
+  }
+  return /^mach_/i.test(trimmed) ? `mach_${trimmed.slice(5)}` : trimmed;
+}
+function daemonIdsEquivalent(a, b) {
+  const coreA = machineCoreFromDaemonId(a);
+  const coreB = machineCoreFromDaemonId(b);
+  if (!coreA || !coreB) return false;
+  return coreA === coreB;
+}
 function truncateDiffText(text, maxLines) {
   const lines = text.split("\n");
   const truncated = lines.length > maxLines;
@@ -239401,6 +239618,74 @@ var TURN_IPC_COMMANDS = [
   "orphaned_pin_notify"
 ];
 var isTurnIpcCommand = makeGuard3(TURN_IPC_COMMANDS);
+var MAX_OWNED_PATHS = 64;
+function toPosix(raw) {
+  return raw.replace(/\\/g, "/");
+}
+function normalizeOne(raw, rejected) {
+  if (typeof raw !== "string") {
+    rejected.push({ input: String(raw), reason: "not_a_string" });
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    rejected.push({ input: raw, reason: "empty" });
+    return null;
+  }
+  let posix = toPosix(trimmed);
+  if (posix.startsWith("/") || /^[a-zA-Z]:\//.test(posix) || posix.startsWith("~")) {
+    rejected.push({ input: raw, reason: "absolute_path" });
+    return null;
+  }
+  posix = posix.replace(/^\.\/+/, "");
+  const segments = posix.split("/").filter(Boolean);
+  if (segments.some((seg) => seg === "..")) {
+    rejected.push({ input: raw, reason: "parent_traversal" });
+    return null;
+  }
+  if (segments.length === 0) {
+    rejected.push({ input: raw, reason: "empty" });
+    return null;
+  }
+  let subtree = false;
+  if (segments[segments.length - 1] === "**") {
+    subtree = true;
+    segments.pop();
+    if (segments.length === 0) {
+    }
+  }
+  if (segments.some((seg) => seg.includes("*") || seg.includes("?"))) {
+    rejected.push({ input: raw, reason: "unsupported_glob" });
+    return null;
+  }
+  return { path: segments.join("/"), subtree };
+}
+function normalizeOwnedPaths(input) {
+  const rejected = [];
+  if (input === void 0 || input === null) {
+    return { declaration: { paths: [] }, rejected };
+  }
+  if (!Array.isArray(input)) {
+    return { declaration: { paths: [] }, rejected: [{ input: String(input), reason: "not_an_array" }] };
+  }
+  const byPath = /* @__PURE__ */ new Map();
+  for (const raw of input) {
+    const entry = normalizeOne(raw, rejected);
+    if (!entry) continue;
+    const existing = byPath.get(entry.path);
+    if (!existing) {
+      byPath.set(entry.path, entry);
+    } else if (entry.subtree && !existing.subtree) {
+      byPath.set(entry.path, entry);
+    }
+  }
+  const all = [...byPath.values()];
+  const kept = all.slice(0, MAX_OWNED_PATHS);
+  for (const dropped of all.slice(MAX_OWNED_PATHS)) {
+    rejected.push({ input: dropped.path, reason: "over_cap" });
+  }
+  return { declaration: { paths: kept }, rejected };
+}
 function entryContains(base, path3) {
   if (path3 === base.path) return true;
   if (base.subtree && (base.path === "" || path3.startsWith(`${base.path}/`))) return true;
@@ -248572,24 +248857,71 @@ function checkSendTaskNodeGates(ctx, node, args, req) {
       nextAction: `Dispatch the convergence task to the base node for this mesh, or run the deterministic fast-forward convergence path (mesh_fast_forward_node / mesh_refine_node) instead of mesh_send_task.`
     });
   }
-  if (req.allowStaleNode || (0, import_daemon_core24.isTaskReadonly)({ readonly: req.readonly, taskMode })) return null;
-  const dirtyGate = (0, import_daemon_core24.readDirtyWriteGate)(node);
-  const dirty = (0, import_daemon_core24.dirtyWriteVerdict)(dirtyGate, directDispatchTaskFacts(args, req)) === "refuse";
-  const maxBehind = (0, import_daemon_core24.resolveAutoFastForwardPolicy)(ctx.mesh).maxBehind;
-  const staleBehind = !(0, import_daemon_core24.isMeshNodeFreshEnoughToLaunch)(node, { maxBehind });
-  if (!dirty && !staleBehind) return null;
-  const behind = typeof node?.git?.behind === "number" ? node.git.behind : void 0;
-  return JSON.stringify({
+  const readonlySend = (0, import_daemon_core24.isTaskReadonly)({ readonly: req.readonly, taskMode });
+  if (!req.allowStaleNode && !readonlySend) {
+    const dirtyGate = (0, import_daemon_core24.readDirtyWriteGate)(node);
+    const dirty = (0, import_daemon_core24.dirtyWriteVerdict)(dirtyGate, directDispatchTaskFacts(args, req)) === "refuse";
+    const maxBehind = (0, import_daemon_core24.resolveAutoFastForwardPolicy)(ctx.mesh).maxBehind;
+    const staleBehind = !(0, import_daemon_core24.isMeshNodeFreshEnoughToLaunch)(node, { maxBehind });
+    if (dirty || staleBehind) {
+      const behind = typeof node?.git?.behind === "number" ? node.git.behind : void 0;
+      return JSON.stringify({
+        success: false,
+        recoverable: true,
+        code: dirty ? "dirty_workspace" : "node_stale_behind_upstream",
+        reason: dirty ? "dirty_workspace" : "node_stale_behind_upstream",
+        nodeId: args.node_id,
+        sessionId: args.session_id,
+        taskMode: taskMode || "unspecified",
+        error: dirty ? `Refusing a non-readonly direct dispatch: ${(0, import_daemon_core24.describeDirtyWriteRefusal)(dirtyGate, `'${args.node_id}'`)} \u2014 the uncommitted changes are the user's, not a task's.` : `Node '${args.node_id}' is behind its upstream${behind !== void 0 ? ` (${behind} commit(s), max ${maxBehind ?? 0})` : ""} \u2014 refusing a non-readonly direct dispatch against stale code.`,
+        nextAction: `Let the node's auto fast-forward / clean-up run first, retry with a readonly task_mode, or pass allow_stale_node: true to dispatch anyway (e.g. a task whose job IS to fix the dirty/stale tree).`
+      });
+    }
+  }
+  if (readonlySend) return null;
+  return directSendOwnershipRefusal(ctx, node, args, req);
+}
+function directSendOwnershipRefusal(ctx, node, args, req) {
+  const declared = normalizeOwnedPaths(req.ownedPaths);
+  const refuse = (unknownField, resolution) => JSON.stringify({
     success: false,
     recoverable: true,
-    code: dirty ? "dirty_workspace" : "node_stale_behind_upstream",
-    reason: dirty ? "dirty_workspace" : "node_stale_behind_upstream",
+    code: "ownership_unproven",
+    reason: "ownership_unproven",
+    unknownField,
     nodeId: args.node_id,
     sessionId: args.session_id,
-    taskMode: taskMode || "unspecified",
-    error: dirty ? `Refusing a non-readonly direct dispatch: ${(0, import_daemon_core24.describeDirtyWriteRefusal)(dirtyGate, `'${args.node_id}'`)} \u2014 the uncommitted changes are the user's, not a task's.` : `Node '${args.node_id}' is behind its upstream${behind !== void 0 ? ` (${behind} commit(s), max ${maxBehind ?? 0})` : ""} \u2014 refusing a non-readonly direct dispatch against stale code.`,
-    nextAction: `Let the node's auto fast-forward / clean-up run first, retry with a readonly task_mode, or pass allow_stale_node: true to dispatch anyway (e.g. a task whose job IS to fix the dirty/stale tree).`
+    error: resolution,
+    resolution
   });
+  if (declared.declaration.paths.length === 0) return refuse("ownedPaths", "ownership_unproven: ownedPaths");
+  const localDaemonId = ctx.localDaemonId || "";
+  if (!node.daemonId || !localDaemonId || !daemonIdsEquivalent(node.daemonId, localDaemonId)) {
+    return refuse("workspace", "remote target has not attested a workspace on this host");
+  }
+  const workspace = typeof node.workspace === "string" ? node.workspace : "";
+  const machineId = ctx.localMachineId || "";
+  const repoIdentity = ctx.mesh.repoIdentity || "";
+  let scope;
+  try {
+    scope = (0, import_daemon_core24.attestLocalOwnership)({
+      repoIdentity,
+      machineId,
+      nodeId: node.id,
+      workspace,
+      phase: "source",
+      paths: declared.declaration
+    });
+  } catch (e) {
+    const message = typeof e?.message === "string" ? e.message : String(e);
+    const forbidden = message.match(/source_phase_path_forbidden:\s*(\S+)/);
+    return refuse(forbidden?.[1] || "workspace", message);
+  }
+  const admission = (0, import_daemon_core24.admitOwnedPathsForMesh)(ctx.mesh.id, { id: "direct-send", ownedPaths: declared.declaration, ownershipScope: scope, taskMode: req.taskMode, readonly: req.readonly });
+  if (!admission.allowed) {
+    return refuse("ownershipScope", admission.detail || "an assigned writer has no attested ownershipScope or shares this resource");
+  }
+  return null;
 }
 function refuseNonWorkerSession(args, taskMode, session, unmanagedExtra = {}) {
   if (isMeshCoordinatorSessionRecord(session)) {

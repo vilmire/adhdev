@@ -19,6 +19,8 @@
         "failed": "失敗",
         "idle": "待機中",
         "generating": "作業中",
+        "finalizing": "Finalizing",
+        "stopping": "Stopping",
         "awaitingApproval": "承認待ち"
     },
     "language": {
@@ -1136,6 +1138,8 @@
                 "sectionRecent": "最近",
                 "sectionHistory": "履歴",
                 "generating": "生成中",
+                "finalizing": "Finalizing",
+                "stopping": "Stopping",
                 "approvalNeeded": "承認待ち",
                 "choiceNeeded": "選択待ち",
                 "stageImplementing": "実装中",
@@ -2116,6 +2120,8 @@
         "openingPanel": "オープン中...",
         "busyNoProgress": "エージェントに進捗がありません。",
         "busyGenerating": "エージェントが応答を生成中です。",
+        "busyFinalizing": "Finalizing. Pending safe settlement is not generating.",
+        "busyStopping": "Stopping. Pending safe settlement is not generating.",
         "busyWaitingApproval": "承認待ち",
         "activityToggleLabel": "ツールの手順",
         "activityToggleTitle": "ツール・ターミナル・思考の手順を表示",

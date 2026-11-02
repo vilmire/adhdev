@@ -316,7 +316,7 @@ function buildClaimOptions(p: {
         capabilityTags: buildMeshNodeCapabilityTags(node, providerType),
         assignedTranscriptProfile,
         options: {
-            physicalContext: { workspace: (lightWorkspaceId && readText(p.claimState?.workspace)) || readText(node?.workspace), machineId: getMachineId() ?? '' },
+            physicalContext: { workspace: (lightWorkspaceId && readText(p.claimState?.workspace)) || readText(node?.workspace), machineId: getMachineId() ?? '', repoIdentity: mesh.repoIdentity },
             ...(lightWorkspaceId ? { lightWorkspaceId } : {}),
             providerType,
             ...(providerMaxParallel !== undefined ? { providerMaxParallel } : {}),

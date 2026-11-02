@@ -48,6 +48,10 @@ export type MeshClaimRefusalReason =
     /** The row is pinned to a different node/session than the one claiming. */
     | 'target_pin_unmatched'
     | 'physical_context_changed'
+    /** Host workspace and machine are present, but this non-readonly candidate has no
+     *  attested ownership (missing paths, a forbidden declaration, or a workspace that
+     *  is not a git toplevel). Distinct from owned_paths_conflict: nothing was assigned. */
+    | 'ownership_unproven'
     | 'review_independence_required'
     | 'review_input_unavailable'
     | 'review_input_busy'
@@ -64,8 +68,9 @@ export type MeshClaimRefusalReason =
     /** H1 (path ownership, wiring-unification Phase H — docs/design/2026-09-23-wiring-
      *  unification.md §7c): a `code_change` candidate's declared `owned_paths` overlaps
      *  another in-flight (`assigned`) task's declared `owned_paths`, MESH-WIDE (any
-     *  node/daemon). Opt-in — a candidate or in-flight task with no declaration never
-     *  triggers this. */
+     *  node/daemon). A missing declaration or a missing host scope still fences
+     *  (`unknownWriterPaths` / missing scope). `ownership_unproven` is the separate
+     *  gate for a candidate that cannot be attested. */
     | 'owned_paths_conflict'
     /** GIT-GATE (owner-requested follow-up to H1): a write (non-readonly) candidate
      *  cannot be claimed by a node whose git telemetry proves its working tree dirty

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { existsSync, unlinkSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
@@ -35,6 +37,15 @@ function cleanupMesh(meshId: string): void {
     }
 }
 
+function realGitWorkspace(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'gitgate-repo-'));
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: dir, stdio: 'pipe' });
+    writeFileSync(join(dir, 'file.ts'), 'export {};\n');
+    execFileSync('git', ['add', 'file.ts'], { cwd: dir, stdio: 'pipe' });
+    execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'Fixture'], { cwd: dir, stdio: 'pipe' });
+    return dir;
+}
+
 function createLocalCtx(meshId: string, opts: {
     git?: Record<string, unknown>;
     autoFastForward?: Record<string, unknown>;
@@ -44,6 +55,8 @@ function createLocalCtx(meshId: string, opts: {
     policy?: Record<string, unknown>;
     /** Answer `agent_command` with a successful delivery. */
     acceptDelivery?: boolean;
+    /** Real checkout used when the send must attest ownership. */
+    workspace?: string;
 }) {
     const session = {
         id: SESSION,
@@ -57,7 +70,7 @@ function createLocalCtx(meshId: string, opts: {
         coordinator: {},
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
         nodes: [{
-            id: NODE, workspace: '/tmp/local-repo', repoRoot: '/tmp/local-repo',
+            id: NODE, workspace: opts.workspace ?? '/tmp/local-repo', repoRoot: opts.workspace ?? '/tmp/local-repo',
             daemonId: COORDINATOR, machineId: 'machine-coordinator', userOverrides: {},
             policy: { providerPriority: ['claude-cli'] }, sessions: [session],
             ...(opts.git ? { git: opts.git } : {}),
@@ -192,10 +205,11 @@ test('allow_stale_node:true bypasses the refusal on a dirty node', async () => {
 test('dirty WORKTREE node → dispatched as a branch continuation with the commit notice; no checkpoint', async () => {
     const meshId = `mesh-gitgate-wt-${randomUUID().slice(0, 8)}`;
     cleanupMesh(meshId);
-    const h = createLocalCtx(meshId, { git: { dirty: true, modified: 2, untracked: 1 }, worktreeBranch: 'feat/a', acceptDelivery: true });
+    const workspace = realGitWorkspace();
+    const h = createLocalCtx(meshId, { git: { dirty: true, modified: 2, untracked: 1 }, worktreeBranch: 'feat/a', acceptDelivery: true, workspace });
     try {
         await withLedger(async () => {
-            const res = await send(h.ctx);
+            const res = await send(h.ctx, { owned_paths: ['file.ts'] });
             assert.equal(res.success, true, JSON.stringify(res));
             assert.match(String(res.dirtyWorkspaceNotice), /Branch feat\/a has 3 uncommitted change/);
             const delivery = h.localCommands.find(c => c.command === 'agent_command');
@@ -205,18 +219,39 @@ test('dirty WORKTREE node → dispatched as a branch continuation with the commi
         });
     } finally {
         cleanupMesh(meshId);
+        rmSync(workspace, { recursive: true, force: true });
     }
 });
 
 test('clean WORKTREE node → no continuation notice', async () => {
     const meshId = `mesh-gitgate-wt-clean-${randomUUID().slice(0, 8)}`;
     cleanupMesh(meshId);
-    const h = createLocalCtx(meshId, { worktreeBranch: 'feat/a', acceptDelivery: true });
+    const workspace = realGitWorkspace();
+    const h = createLocalCtx(meshId, { worktreeBranch: 'feat/a', acceptDelivery: true, workspace });
+    try {
+        await withLedger(async () => {
+            const res = await send(h.ctx, { owned_paths: ['file.ts'] });
+            assert.equal(res.success, true, JSON.stringify(res));
+            assert.equal(res.dirtyWorkspaceNotice, undefined);
+        });
+    } finally {
+        cleanupMesh(meshId);
+        rmSync(workspace, { recursive: true, force: true });
+    }
+});
+
+test('non-readonly local send with no owned paths is ownership_unproven and records nothing', async () => {
+    const meshId = `mesh-gitgate-unproven-${randomUUID().slice(0, 8)}`;
+    cleanupMesh(meshId);
+    const h = createLocalCtx(meshId, { acceptDelivery: true });
     try {
         await withLedger(async () => {
             const res = await send(h.ctx);
-            assert.equal(res.success, true, JSON.stringify(res));
-            assert.equal(res.dirtyWorkspaceNotice, undefined);
+            assert.equal(res.success, false, JSON.stringify(res));
+            assert.equal(res.code, 'ownership_unproven');
+            assert.equal(res.unknownField, 'ownedPaths');
+            assert.equal(getQueue(meshId).length, 0);
+            assert.equal(h.localCommands.some(command => command.command === 'record_local' || command.command === 'agent_command'), false);
         });
     } finally {
         cleanupMesh(meshId);

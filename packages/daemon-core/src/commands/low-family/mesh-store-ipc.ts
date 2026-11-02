@@ -4,6 +4,8 @@ import { assertNotStageChild } from '../../mesh/stage-guards.js';
 import { getMesh } from '../../config/mesh-config.js';
 import { decodeQueueReviseRequest, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { getMachineId } from '../../config/config.js';
+import { attestLocalOwnership } from '../../mesh/mesh-physical-ownership.js';
+import { normalizeOwnedPaths } from '@adhdev/mesh-shared';
 import { revisePendingTask } from '../../mesh/mesh-task-revision.js';
 import { requestQuotaOverrideDecision } from '../../mesh/mesh-quota-hold-escalation.js';
 import { lightLandIpcHandlers } from './light-land-ipc.js';
@@ -484,14 +486,40 @@ const queueRevise: LowFamilyHandler = async (ctx, args: unknown) => {
 
 // ─── direct_dispatch_record ─────────────────────────────────────────────────
 
-const directDispatchRecord: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) => {
+const directDispatchRecord: LowFamilyHandler = async (ctx: LowFamilyContext, args: any) => {
     const req = decodeDirectDispatchRecordRequest(args);
     if (!req) return badRequest('direct_dispatch_record');
     const response: DirectDispatchRecordResponse = { taskRecorded: false };
     // Best-effort: the dispatch already happened; its bookkeeping must never fail it.
     if (req.task) {
         try {
-            recordDirectDispatchTask(req.meshId, req.message, { ...(req.task as any), id: req.taskId });
+            const task = { ...(req.task as Record<string, unknown>) };
+            delete task.ownershipScope;
+            delete task.phase;
+            delete task.workspace;
+            delete task.machineId;
+            let attested: { ownershipScope: import('@adhdev/mesh-shared').PhysicalOwnershipScope; phase: 'source' } | undefined;
+            try {
+                const mesh = getMesh(req.meshId);
+                const self = ctx.deps.statusInstanceId;
+                const machineId = getMachineId();
+                const nodeId = typeof task.assignedNodeId === 'string' ? task.assignedNodeId : '';
+                const node = mesh?.nodes?.find((n: { id?: string }) => n.id === nodeId);
+                const workspace = typeof node?.workspace === 'string' ? node.workspace : '';
+                const repoIdentity = mesh?.repoIdentity || '';
+                const declared = normalizeOwnedPaths(task.ownedPaths);
+                if (self && machineId && repoIdentity && workspace && node && daemonIdsEquivalent(node.daemonId, self) && declared.declaration.paths.length > 0) {
+                    attested = {
+                        phase: 'source',
+                        ownershipScope: attestLocalOwnership({
+                            repoIdentity, machineId, nodeId, workspace, phase: 'source', paths: declared.declaration,
+                        }),
+                    };
+                }
+            } catch (e: any) {
+                LOG.warn('MeshStoreIpc', `direct_dispatch_record: ownership attest for ${req.taskId} failed: ${e?.message ?? String(e)}`);
+            }
+            recordDirectDispatchTask(req.meshId, req.message, { ...task, id: req.taskId } as any, attested);
             response.taskRecorded = true;
         } catch (e: any) {
             LOG.warn('MeshStoreIpc', `direct_dispatch_record: task row for ${req.taskId} failed: ${e?.message ?? String(e)}`);

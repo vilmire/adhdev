@@ -39,6 +39,8 @@ export interface BlueprintGraphTaskNode {
     rawStatus: string
     /** Claiming session is live-generating (assigned only). */
     generating: boolean
+    /** Pending safe settlement. Display this instead of generating. */
+    settling?: 'finalizing' | 'stopping'
     provider?: string
     assignedNodeId?: string
     missionId?: string
@@ -180,6 +182,7 @@ export function buildBlueprintGraphModel(
             tone: queueStatusTone(task.status),
             rawStatus: task.status,
             generating: Boolean(activity?.generating),
+            ...(activity?.settling ? { settling: activity.settling } : {}),
             ...(task.assignedProviderType || task.autoLaunch?.providerType ? { provider: task.assignedProviderType || task.autoLaunch?.providerType } : {}),
             ...(task.assignedNodeId ? { assignedNodeId: task.assignedNodeId } : {}),
             ...(typeof task.missionId === 'string' && task.missionId ? { missionId: task.missionId } : {}),
