@@ -45,7 +45,7 @@ function configDirMismatchFailure(planPayload: any): Record<string, unknown> | n
     try { own = configDirIdentity(); } catch {
         return { success: false, code: 'mesh_config_identity_unverified', error: 'Could not read this MCP process\'s own config-dir identity, so the mesh write cannot be checked against the daemon. Refusing to write.', action: `Fix the MCP config dir (ADHDEV_CONFIG_DIR), or set ${ALLOW_CONFIG_MISMATCH_ENV}=1 for a deliberate cross-config setup.` };
     }
-    if (own === daemonIdentity) return null;
+    if (own === daemonIdentity) return null; // canon-ok: config-dir digests, not machine/daemon identities
     return {
         success: false,
         code: 'mesh_config_dir_mismatch',
