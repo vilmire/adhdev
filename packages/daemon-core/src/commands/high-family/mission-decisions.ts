@@ -49,6 +49,9 @@ import { computeDecisionMetrics } from '../../mesh/mesh-mission-decision-metrics
 import { createCoordinatorDecisionSender, deliverDecisionAnswer } from '../../mesh/mesh-mission-decision-delivery.js';
 import { hostedMeshes } from '../../mesh/mesh-housekeeping-tick.js';
 import { LOG } from '../../logging/logger.js';
+import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
+import { taskIdFromQuotaOverrideKey } from '../../mesh/mesh-quota-override.js';
+import { triggerMeshQueue } from '../../mesh/mesh-queue-trigger.js';
 
 export const MISSION_DECISION_ANSWER = 'mission_decision_answer';
 export const MISSION_DECISIONS_LIST = 'mission_decisions_list';
@@ -136,6 +139,10 @@ export async function answerAndDeliver(
     const result = answerMissionDecision(req, actor);
     if (!result.ok) {
         return { success: false, code: result.code, error: result.error, ...(result.validOptions ? { validOptions: result.validOptions } : {}) };
+    }
+    // A quota-override answer changes what the queue may start: re-run it now instead of waiting for the next tick.
+    if (result.action !== 'unchanged' && taskIdFromQuotaOverrideKey(MeshRuntimeStore.getInstance().missionItems().getItem(meshId, itemId)?.dedupeKey)) {
+        try { void triggerMeshQueue(ctx.components(), meshId).catch(e => LOG.warn('MeshQueue', `quota override reschedule: ${String(e)}`)); } catch { /* the next tick retries */ }
     }
     let deliveryState: string | undefined = result.delivery?.state;
     if (result.delivery) {

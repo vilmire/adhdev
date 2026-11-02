@@ -288,6 +288,7 @@ describe('Codex stale rollout reading — provenance makes exhaustion gateable',
                     window: 'weekly',
                     remainingPercent: 0,
                     thresholdPercent: 80,
+                    resetsAt: expect.any(Number), // the blocking window's own reset, surfaced to the owner decision
                 },
             }])
         expect(rankProvidersByQuotaGate(exhausted, ['codex-cli'], POLICY, NOW).clear)

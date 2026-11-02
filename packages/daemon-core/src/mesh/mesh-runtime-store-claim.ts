@@ -146,6 +146,8 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
              *  the return contract (`MeshWorkQueueEntry | null`) is unchanged, so every
              *  existing caller that omits it behaves exactly as before. */
             outRefusal?: MeshClaimRefusal;
+            /** The claiming session's provider is quota-gated and only owner-overridden rows (`quotaGateOverride`) may be pulled. */
+            onlyQuotaOverridden?: boolean;
         }): MeshWorkQueueEntry | null {
     return host.transaction(() => {
         if (bridgeDispatchFrozen(host.db, meshId) || sessionIsStopping(host.db, sessionId)) return null;
@@ -278,7 +280,8 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
                 WHERE mesh_id = ? AND status = 'pending' AND target_node_id IS NULL AND target_session_id IS NULL
                 ORDER BY created_at ASC
             `, meshId),
-        ].filter(candidate => lightClaimAllows(candidate, sessionId, opts?.lightWorkspaceId));
+        ].filter(candidate => lightClaimAllows(candidate, sessionId, opts?.lightWorkspaceId))
+            .filter(candidate => !opts?.onlyQuotaOverridden || candidate.quotaGateOverride?.by === 'owner');
 
         // M1: a task with unmet dependencies is not claimable.
         // Resolve dependency statuses in one query over the union of referenced ids.

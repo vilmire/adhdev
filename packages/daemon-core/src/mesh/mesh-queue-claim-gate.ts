@@ -1,5 +1,6 @@
 import type { ProviderLoader } from '../providers/provider-loader.js';
 import { evaluateProviderQuotaGate } from './mesh-quota-routing.js';
+import { hasQuotaOverride, providerPinOf, quotaBlockOverridable } from './mesh-quota-override.js';
 import { quotaFactsContextForLiveRouting } from './mesh-quota-sources.js';
 import { clearQuotaClaimBlockState, logQuotaClaimBlockTransition, type QuotaClaimDrainTrace } from './mesh-queue-observability.js';
 import { getQueue } from './mesh-work-queue.js';
@@ -22,6 +23,20 @@ export function providerPinOverrideCandidateTaskId(meshId: string, providerType:
         }
     }
     return undefined;
+}
+
+/**
+ * OWNER OVERRIDE: a pending task the owner explicitly waived the quota reserve for
+ * (`quotaGateOverride`, mesh-quota-override.ts) that this provider could run. One task only: the caller
+ * restricts the claim to such rows (`onlyQuotaOverridden`), so the session cannot pull any other task
+ * through the lifted gate.
+ */
+export function quotaOverrideCandidateTaskId(meshId: string, providerType: string): string | undefined {
+    return getQueue(meshId, { status: ['pending'] }).find(task => {
+        if (!hasQuotaOverride(task)) return false;
+        const pin = providerPinOf(task);
+        return !pin || pin === providerType;
+    })?.id;
 }
 
 /**
@@ -56,6 +71,8 @@ export function evaluateQuotaClaimGateForAssignment(args: {
     mesh: any;
     providerLoader: ProviderLoader;
     quotaClaimTrace?: QuotaClaimDrainTrace;
+    /** Set true when the claim may proceed ONLY for owner-overridden rows (see quotaOverrideCandidateTaskId). */
+    quotaOverrideOnly?: { on: boolean };
 }): boolean {
     const { meshId, nodeId, sessionId, providerType, model, trigger, node, mesh, providerLoader, quotaClaimTrace } = args;
     const pinCandidateTaskId = providerPinOverrideCandidateTaskId(meshId, providerType);
@@ -79,6 +96,12 @@ export function evaluateQuotaClaimGateForAssignment(args: {
         };
         if (isPinOverride) {
             logQuotaClaimBlockTransition(meshId, observation, 'overridden_by_pin');
+            return false;
+        }
+        const ownerOverrideTaskId = args.quotaOverrideOnly && quotaBlockOverridable(quotaClaimBlock) ? quotaOverrideCandidateTaskId(meshId, providerType) : undefined;
+        if (ownerOverrideTaskId) {
+            args.quotaOverrideOnly!.on = true;
+            logQuotaClaimBlockTransition(meshId, { ...observation, context: { ...observation.context, candidateTaskId: ownerOverrideTaskId } }, 'overridden_by_owner');
             return false;
         }
         logQuotaClaimBlockTransition(meshId, observation, 'blocked');

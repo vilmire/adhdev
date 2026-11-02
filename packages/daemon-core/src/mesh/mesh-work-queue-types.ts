@@ -310,6 +310,12 @@ export interface MeshWorkQueueEntry {
     hold?: import('./mesh-queue-hold.js').MeshQueueHold;
     /** Durable once-per-hold notice marker, independent of updatedAt. */
     holdNoticeId?: string;
+    /**
+     * One-task, owner-granted waiver of the provider-quota RESERVE gate (never of a provider's own
+     * exhaustion). Written only by applyQuotaOverrideAnswer after the owner answers the matching
+     * decision; coordinators and assistants can only request it (mesh-quota-override.ts).
+     */
+    quotaGateOverride?: { by: 'owner'; at: string; decisionId: string };
     /** Last automatic queue session spin-up attempt, for mesh_view_queue/debug visibility. */
     autoLaunch?: {
         status: 'skipped' | 'started' | 'failed' | 'completed';

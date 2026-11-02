@@ -574,7 +574,8 @@ export function tryAssignQueueTask(
     if (!gateModel) {
         try { gateModel = readSessionModel(claiming.claimState); } catch { /* best-effort */ }
     }
-    if (evaluateQuotaClaimGateForAssignment({ meshId, nodeId, sessionId, providerType, model: gateModel, trigger, node, mesh, providerLoader: components.providerLoader, quotaClaimTrace })) {
+    const quotaOverrideOnly = { on: false };
+    if (evaluateQuotaClaimGateForAssignment({ meshId, nodeId, sessionId, providerType, model: gateModel, trigger, node, mesh, providerLoader: components.providerLoader, quotaClaimTrace, quotaOverrideOnly })) {
         return false;
     }
     if (isClaimGatedByWorktreeBootstrap(components, meshId, nodeId, sessionId, node)) return false;
@@ -595,7 +596,7 @@ export function tryAssignQueueTask(
     // A6-SILENT-REFUSAL: collect WHICH gate refused so the `!task` exit below stops being
     // the silent funnel that made a permanently-stuck task look like an idle queue.
     const claimRefusal: MeshClaimRefusal = {};
-    const task = claimNextTask(meshId, nodeId, sessionId, claim.capabilityTags, { ...claim.options, outRefusal: claimRefusal });
+    const task = claimNextTask(meshId, nodeId, sessionId, claim.capabilityTags, { ...claim.options, ...(quotaOverrideOnly.on ? { onlyQuotaOverridden: true } : {}), outRefusal: claimRefusal });
     if (!task) {
         const refusalReason = claimRefusal.reason || 'no_pending_candidates';
         // ORPHAN-SPAWN-DEADLOCK: the auto-launch spawn gate reads this (see mesh-claim-refusal.ts).

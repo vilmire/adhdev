@@ -14,6 +14,8 @@ import { resolveDispatchMessage } from '../../src/mesh/worker-handoff-dispatch.j
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { enqueueTask, getQueueEntryById, __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.js';
 import { revisePendingTask } from '../../src/mesh/mesh-task-revision.js';
+import { recordQueueTaskHold } from '../../src/mesh/mesh-queue-hold-store.js';
+import { hasQuotaOverride } from '../../src/mesh/mesh-quota-override.js';
 const meshId = 'revision-mesh';
 const claim = { providerType: 'codex-cli', assignedModel: 'gpt-5.4', allowedTaskDifficulties: ['medium', 'difficult'] as const };
 let worktree: string;
@@ -106,6 +108,24 @@ describe('supported host revision API and source phase', () => {
         state.mesh.meshHost.hostDaemonId = 'daemon-host';
         expect(await meshStoreIpcHandlers.queue_revise(ctx(), request(original.id, { patch: { phase: 'source', workspace: worktree, machineId: 'spoof' } }))).toMatchObject({ success: false });
         expect(getQueueEntryById(meshId, original.id)).toEqual(original);
+        expect(state.trigger).not.toHaveBeenCalled();
+    });
+    it('requestQuotaOverride only raises the owner decision: no grant, no revision, no edit, and a combined patch is refused', async () => {
+        const original = enqueueTask(meshId, 'Quota held', { difficulty: 'medium', requiredTags: ['provider=claude-cli'] });
+        state.mesh = { id: meshId, repoIdentity: 'repo', meshHost: { role: 'host', hostDaemonId: 'daemon-host' }, nodes: [] };
+        const ask = (patch: Record<string, unknown>) => meshStoreIpcHandlers.queue_revise(ctx(), request(original.id, { patch })) as Promise<any>;
+        expect(await ask({ requestQuotaOverride: true })).toMatchObject({ success: false, code: 'not_quota_held' });
+        recordQueueTaskHold(meshId, original.id, 'all_providers_quota_gated: claude-cli: provider_quota_weekly_low');
+        const before = getQueueEntryById(meshId, original.id)!;
+        const asked = await ask({ requestQuotaOverride: true });
+        expect(asked).toMatchObject({ success: true, quotaOverrideRequested: { alreadyAsked: false, options: ['Wait for reset', 'Run anyway'] } });
+        const after = getQueueEntryById(meshId, original.id)!;
+        expect(hasQuotaOverride(after)).toBe(false);
+        expect(after.revision).toBe(before.revision);
+        expect(after.message).toBe('Quota held');
+        expect(await ask({ requestQuotaOverride: true })).toMatchObject({ success: true, quotaOverrideRequested: { alreadyAsked: true } });
+        expect(await ask({ requestQuotaOverride: true, message: 'sneaky' })).toMatchObject({ success: false });
+        expect(await ask({ requestQuotaOverride: false })).toMatchObject({ success: false });
         expect(state.trigger).not.toHaveBeenCalled();
     });
     it('resolves physical context from registered local host and immediately reschedules once', async () => {

@@ -1,9 +1,11 @@
 import { settleQueueWriter, WRITER_UNKNOWN_ERROR } from '../../mesh/mesh-queue-retirement.js';
+import { writerCancelRefusalHint } from '../../mesh/mesh-writer-stop-diagnostics.js';
 import { assertNotStageChild } from '../../mesh/stage-guards.js';
 import { getMesh } from '../../config/mesh-config.js';
 import { decodeQueueReviseRequest, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { getMachineId } from '../../config/config.js';
 import { revisePendingTask } from '../../mesh/mesh-task-revision.js';
+import { requestQuotaOverrideDecision } from '../../mesh/mesh-quota-hold-escalation.js';
 import { lightLandIpcHandlers } from './light-land-ipc.js';
 import { admitLightBaseNode } from '../../mesh/light-task-admission.js';
 import { triggerMeshQueue } from '../../mesh/mesh-queue-assignment.js';
@@ -423,7 +425,7 @@ const queueCancel: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) 
         const role = await ownQueueRole(_ctx, req.meshId);
         if (role?.role === 'host') await settleQueueWriter(req.meshId, req.taskId, 'operator_cancel');
         const task = cancelTask(req.meshId, req.taskId, withOwnRole({ ...(req.reason !== undefined ? { reason: req.reason } : {}) }, role));
-        if (task && task.status !== 'cancelled') return { success: false, code: 'writer_checkpoint_pending', error: WRITER_UNKNOWN_ERROR, task: queueWire(task) };
+        if (task && task.status !== 'cancelled') return { success: false, code: 'writer_checkpoint_pending', error: WRITER_UNKNOWN_ERROR + writerCancelRefusalHint(task), task: queueWire(task) };
         const response: QueueCancelResponse = { task: queueWire(task), before: queueWire(before) };
         return { success: true, ...response };
     } catch (e) {
@@ -463,7 +465,14 @@ const queueRevise: LowFamilyHandler = async (ctx, args: unknown) => {
         const localNode = node && daemonIdsEquivalent(node.daemonId, self) ? node : undefined;
         const machineId = getMachineId();
         if (!machineId || !mesh.repoIdentity) throw new Error('authenticated_repo_machine_required');
-        const edited = revisePendingTask(req.meshId, req.taskId, req.expectedRevision, req.patch, {
+        // A request for the owner's quota override only RAISES the owner decision; it edits nothing and
+        // can never grant (mesh-quota-hold-escalation.ts).
+        if (req.patch.requestQuotaOverride === true) {
+            const asked = await requestQuotaOverrideDecision(ctx.components(), req.meshId, req.taskId, mesh);
+            if (!asked.ok) return { success: false, code: asked.code, error: asked.error };
+            return { success: true, task: queueWire(MeshRuntimeStore.getInstance().findQueueEntryById(req.meshId, req.taskId)), quotaOverrideRequested: { decisionId: asked.itemId, alreadyAsked: asked.deduped, options: asked.options } };
+        }
+        const edited = revisePendingTask(req.meshId, req.taskId, req.expectedRevision, req.patch as Parameters<typeof revisePendingTask>[3], {
             actor: self, repoIdentity: mesh.repoIdentity, machineId,
             ...(localNode ? { nodeId: localNode.id, workspace: localNode.workspace } : {}),
         });

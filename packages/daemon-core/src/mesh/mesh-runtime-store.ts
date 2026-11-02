@@ -738,6 +738,7 @@ export class MeshRuntimeStore {
              *  the return contract (`MeshWorkQueueEntry | null`) is unchanged, so every
              *  existing caller that omits it behaves exactly as before. */
             outRefusal?: MeshClaimRefusal;
+            onlyQuotaOverridden?: boolean;
         }): MeshWorkQueueEntry | null { return claimNextQueueTask(this, meshId, nodeId, sessionId, capabilityTags, opts); }
 
     getQueueStatsByStatus(meshId: string): { status: string; count: number }[] {

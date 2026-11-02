@@ -93,6 +93,29 @@ describe('To do drawer', () => {
         expect(state.answer).toHaveBeenLastCalledWith(expect.objectContaining({ itemId: 'mi_1', text: 'something else' }))
     })
 
+    it('quota-override decision: Wait (recommended), Run anyway and Use another provider render as options; the card answers by option id', () => {
+        const state = makeState({ decisions: [dec({
+            itemId: 'mi_quota', source: 'daemon', allowFreeText: false,
+            question: 'Task c285ffa7 waits on claude-cli quota (4% left). Run it anyway?',
+            context: 'Blocked by: claude-cli weekly quota is 4% left. Quota resets about 2026-11-03 09:00Z UTC.',
+            options: [
+                { id: 'a', label: 'Wait for reset', detail: 'The task keeps waiting and starts by itself.' },
+                { id: 'b', label: 'Run anyway', detail: 'Ignores the quota reserve for this one task only.' },
+                { id: 'c', label: 'Use another provider', detail: 'Drops the provider pin for this task.' },
+            ],
+            recommended: 'a',
+        })] })
+        mount(state)
+        const labels = [...document.body.querySelectorAll('[data-testid="needs-you-decision-card"] [role="group"] button')].map(b => b.textContent ?? '')
+        expect(labels).toHaveLength(3)
+        expect(labels[0]).toContain('Wait for reset')
+        expect(labels[0]).toContain('Recommended')
+        expect(labels[1]).not.toContain('Recommended')
+        expect(document.body.querySelector('input.input')).toBeNull() // no free text: the owner must pick an option
+        click(buttonByText('Run anyway'))
+        expect(state.answer).toHaveBeenCalledWith(expect.objectContaining({ itemId: 'mi_quota', optionId: 'b' }))
+    })
+
     it('answered card: shows answer + delivery state, Undo sends undo, >10 min shows "may already be in progress"', () => {
         const old: NeedsYouAnswered = {
             daemonId: 'd1', meshId: 'm1', missionId: 'ms1', itemId: 'mi_9', question: 'Old question?',

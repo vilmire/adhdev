@@ -28,7 +28,7 @@ export interface QuotaClaimDrainTrace {
     clear: number;
 }
 
-type QuotaClaimGatePhase = 'blocked' | 'cleared' | 'overridden_by_pin';
+type QuotaClaimGatePhase = 'blocked' | 'cleared' | 'overridden_by_pin' | 'overridden_by_owner';
 
 // Claim reconciliation runs every few seconds. Keep the existing per-candidate gate
 // diagnostic, but emit it only when that candidate's gate verdict changes instead of
@@ -71,8 +71,8 @@ export function logQuotaClaimBlockTransition(
 
     const overrideNote = phase === 'overridden_by_pin'
         ? ' (provider pinned by requiredTags — gate overridden to honor the pin)'
-        : '';
-    LOG.info('MeshQueue', `QUOTA GATE: ${phase === 'overridden_by_pin' ? 'allowing' : 'deferring'} queue claim for node ${observation.nodeId} (${observation.sessionId}): ${quotaClaimBlockDescription(observation.providerType, observation.block)}${overrideNote}${phase === 'blocked' ? ' — trying remaining provider candidates; the task stays pending only if none can claim' : ''}`);
+        : phase === 'overridden_by_owner' ? ' (owner waived the quota reserve for one task)' : '';
+    LOG.info('MeshQueue', `QUOTA GATE: ${phase === 'overridden_by_pin' || phase === 'overridden_by_owner' ? 'allowing' : 'deferring'} queue claim for node ${observation.nodeId} (${observation.sessionId}): ${quotaClaimBlockDescription(observation.providerType, observation.block)}${overrideNote}${phase === 'blocked' ? ' — trying remaining provider candidates; the task stays pending only if none can claim' : ''}`);
     // QUOTA-CLAIM-GATE-LEDGER: record only the transition INTO a phase (or a changed block
     // reason/window while already in that phase), never a steady-state repeat — mirrors the log
     // fingerprint above exactly so the ledger and the log agree on what counts as "new".

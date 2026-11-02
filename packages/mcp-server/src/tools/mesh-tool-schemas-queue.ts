@@ -258,6 +258,7 @@ export const MESH_QUEUE_REVISE_TOOL = {
                     review: { type: 'object', additionalProperties: false, required: ['sourceTaskId', 'differentProvider'], properties: {
                         sourceTaskId: { type: 'string' }, differentProvider: { const: true },
                     } },
+                    requestQuotaOverride: { const: true, description: 'Alone: ask the OWNER to let this quota-held task run despite the quota reserve (raises an owner decision; you cannot grant it).' },
                 },
             },
         },

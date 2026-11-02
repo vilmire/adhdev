@@ -235,6 +235,9 @@ export function handleDifficultyFloorSkip(args: {
             nodeId: args.nodeId,
         });
     }
+    // A quota wait is paged by notifyHeldQueueTasks (mesh:queue_held, quota wording, 3 min); this pager's
+    // "no slot meets the difficulty floor" text would be wrong for it.
+    if (args.reason.startsWith(ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON)) return;
     const waitStartedAt = Date.parse(previousTask?.autoLaunch?.updatedAt || new Date().toISOString());
     const waitedMs = Number.isFinite(waitStartedAt) ? Date.now() - waitStartedAt : 0;
     const reportKey = `${args.meshId}:${args.taskId}`;

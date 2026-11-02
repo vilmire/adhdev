@@ -254,7 +254,9 @@ describe('resolveUsableProvider — quota gate inside the selection loop', () =>
         expect(drainPendingMeshCoordinatorEvents(MESH_ID, 'test-machine')).toHaveLength(0);
     });
 
-    it('applies the same bounded report to an all-provider quota wait', () => {
+    it('does not send the difficulty-floor pager for an all-provider quota wait (the queue hold notice owns it)', () => {
+        // Before 2026-11-01 a quota wait was paged here after 10 min with "no slot meets its difficulty floor"
+        // wording, and the 3-min queue-hold notice skipped it entirely (mesh-queue-hold-quota.test.ts).
         vi.useFakeTimers();
         vi.setSystemTime(new Date('2026-08-17T00:00:00.000Z'));
         __replaceMeshQueueForTests(MESH_ID, [{
@@ -267,10 +269,7 @@ describe('resolveUsableProvider — quota gate inside the selection loop', () =>
         vi.advanceTimersByTime(DIFFICULTY_FLOOR_REPORT_AFTER_MS);
         __markAutoLaunchForTests(MESH_ID, 'quota-timeout-task', { status: 'skipped', reason, nodeId: NODE_ID });
 
-        const [event] = drainPendingMeshCoordinatorEvents(MESH_ID, 'test-machine') as any[];
-        expect(event?.metadataEvent).toEqual(expect.objectContaining({
-            taskId: 'quota-timeout-task', reason: 'task_difficulty_floor_timeout', difficulty: 'difficult',
-        }));
+        expect(drainPendingMeshCoordinatorEvents(MESH_ID, 'test-machine')).toHaveLength(0);
     });
 
     it('reports a capacity stall once after ten minutes and does not page on the first skip', () => {

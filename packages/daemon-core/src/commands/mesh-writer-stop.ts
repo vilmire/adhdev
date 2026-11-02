@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { noteWriterStopPending } from '../mesh/mesh-writer-stop-diagnostics.js';
 import { pinnedMeshNodeIdMatches } from '../mesh/mesh-pinned-node-identity.js';
 /** Exact mesh stop. An RPC acknowledgement or disappearing adapter is never
  * quiescence. Keep owner authority unless the captured native tree is gone. */
@@ -52,7 +53,7 @@ export async function stopExactMeshWriter(
     request: CancelDispatchRequest,
     ports: WriterStopPorts = testPorts ?? nativeWriterStopPorts,
 ): Promise<{ success: boolean; [key: string]: unknown }> {
-    const pending = (reason: string) => ({ success: false, code: 'writer_checkpoint_pending', reason });
+    const pending = (reason: string) => { noteWriterStopPending(request.sessionId, reason); return { success: false, code: 'writer_checkpoint_pending', reason }; };
     if (typeof request.stopRequestId !== 'string' || !request.stopRequestId || request.stopRequestId.length > 512
         || !request.providerType || !request.ownerDaemonId || !request.meshId || !request.taskId) return pending('missing_identity');
     const live = host.deps.getInstanceManager()?.getInstance(request.sessionId)?.getState().settings;

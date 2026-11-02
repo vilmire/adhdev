@@ -154,6 +154,11 @@ export const PROVIDER_QUOTA_GROUP_EXHAUSTED_SKIP_REASON = 'provider_quota_group_
 
 export const ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON = 'all_providers_quota_gated';
 
+function resetsAtOf(window: { resetsAt?: number | null } | null | undefined): { resetsAt?: number } {
+    const at = Number(window?.resetsAt);
+    return Number.isFinite(at) && at > 0 ? { resetsAt: at } : {};
+}
+
 export interface ProviderQuotaGateBlock {
     reason: string;
     /** 'unknown' when the block comes from an explicit exhaustion signal that
@@ -161,6 +166,8 @@ export interface ProviderQuotaGateBlock {
     window: QuotaRankingAxis | 'unknown';
     remainingPercent: number;
     thresholdPercent: number;
+    /** Reset stamp (reporter-clock epoch ms) of the blocking window, when it carried one. */
+    resetsAt?: number;
     /** Model group the block was judged for (antigravity-cli: 'gemini' |
      *  'claude-gpt'); absent for provider-wide blocks. */
     group?: string;
@@ -507,6 +514,7 @@ export function evaluateProviderQuotaGate(
             window: 'session',
             remainingPercent: session,
             thresholdPercent: reserve.routingSessionMinPercent,
+            ...resetsAtOf(sessionWindow),
         };
     }
     const weekly = remainingPercent(weeklyWindow);
@@ -517,6 +525,7 @@ export function evaluateProviderQuotaGate(
             window: 'weekly',
             remainingPercent: weekly,
             thresholdPercent: reserve.routingLongMinPercent,
+            ...resetsAtOf(weeklyWindow),
         };
     }
     const monthly = remainingPercent(monthlyWindow);
@@ -529,6 +538,7 @@ export function evaluateProviderQuotaGate(
             window: 'monthly',
             remainingPercent: monthly,
             thresholdPercent: reserve.routingLongMinPercent,
+            ...resetsAtOf(monthlyWindow),
         };
     }
     return null;

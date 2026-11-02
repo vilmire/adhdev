@@ -308,6 +308,8 @@ export interface QueueRequeueRequest {
 
 export interface QueueRequeueResponse {
     task: QueueEntryWire | null
+    /** queue_revise {requestQuotaOverride}: the owner decision that was raised (or already open). Never a grant. */
+    quotaOverrideRequested?: { decisionId: string; alreadyAsked: boolean; options: string[] }
 }
 
 function isQueueRequeueRequest(value: unknown): value is QueueRequeueRequest {
@@ -321,7 +323,8 @@ export function decodeQueueRequeueRequest(value: unknown): QueueRequeueRequest |
 }
 
 function isQueueRequeueResponse(value: unknown): value is QueueRequeueResponse {
-    return isRecord(value) && hasOnlyKeys(value, ['task']) && (value.task === null || isQueueEntryWire(value.task))
+    return isRecord(value) && hasOnlyKeys(value, ['task', 'quotaOverrideRequested']) && (value.task === null || isQueueEntryWire(value.task))
+        && (value.quotaOverrideRequested === undefined || (isRecord(value.quotaOverrideRequested) && typeof value.quotaOverrideRequested.decisionId === 'string'))
 }
 
 export function decodeQueueRequeueResponse(value: unknown): QueueRequeueResponse | null {
@@ -501,7 +504,7 @@ export interface QueueReviseRequest {
     meshId: string
     taskId: string
     expectedRevision: number
-    patch: { message?: string; ownedPaths?: string[]; phase?: 'source' | 'integration'; dependsOn?: string[]; routingPreferences?: import('./task-source-phase').MeshRoutingPreferences; review?: import('./task-source-phase').MeshReviewConstraint }
+    patch: { message?: string; ownedPaths?: string[]; phase?: 'source' | 'integration'; dependsOn?: string[]; routingPreferences?: import('./task-source-phase').MeshRoutingPreferences; review?: import('./task-source-phase').MeshReviewConstraint; requestQuotaOverride?: true }
 }
 export type QueueReviseResponse = QueueRequeueResponse
 export function decodeQueueReviseRequest(value: unknown): QueueReviseRequest | null {
@@ -509,8 +512,9 @@ export function decodeQueueReviseRequest(value: unknown): QueueReviseRequest | n
         || value.v !== TURN_IPC_PROTOCOL_VERSION || !isEvidenceIdentifier(value.meshId) || !isEvidenceIdentifier(value.taskId)
         || !Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 0
         || !isRecord(value.patch) || !Object.keys(value.patch).length
-        || !hasOnlyKeys(value.patch, ['message', 'ownedPaths', 'phase', 'dependsOn', 'routingPreferences', 'review'])) return null
+        || !hasOnlyKeys(value.patch, ['message', 'ownedPaths', 'phase', 'dependsOn', 'routingPreferences', 'review', 'requestQuotaOverride'])) return null
     const p = value.patch
+    if (p.requestQuotaOverride !== undefined && (p.requestQuotaOverride !== true || Object.keys(p).length !== 1)) return null
     if (p.message !== undefined && (typeof p.message !== 'string' || !p.message.trim())) return null
     if (p.phase !== undefined && p.phase !== 'source' && p.phase !== 'integration') return null
     for (const key of ['ownedPaths', 'dependsOn']) {

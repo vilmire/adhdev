@@ -26,11 +26,13 @@ import {
     type MissionDecisionAnswer,
     type MissionDecisionDelivery,
 } from '@adhdev/mesh-shared';
+import { LOG } from '../logging/logger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import type { MissionEventType, MissionItemRecord } from './mesh-mission-items-store.js';
 import { getMeshMission, getMeshMissions } from './mesh-missions.js';
 import { notifyMissionChanged } from './mesh-mission-change-notifier.js';
 import { applyOwnerConfirmationAnswer } from './mesh-mission-owner-confirm.js';
+import { applyQuotaOverrideAnswer, quotaOverrideAnswerGuard } from './mesh-quota-override.js';
 import { notifyDecisionPush } from './mesh-mission-decision-push-notifier.js';
 import { notifyDecisionAnswered } from './mesh-mission-decision-answer-notifier.js';
 
@@ -168,6 +170,9 @@ export function answerMissionDecision(
         if (rawText && !optionId && !d.allowFreeText && d.options.length > 0) {
             return fail('free_text_not_allowed', 'this decision only accepts one of its options', { validOptions: d.options.map(o => o.id) });
         }
+        // A quota override is granted by the owner from the dashboard/CLI only (mesh-quota-override.ts).
+        const quotaRefusal = quotaOverrideAnswerGuard(item.dedupeKey, actor.via, optionId || undefined);
+        if (quotaRefusal) return fail(quotaRefusal.code, quotaRefusal.error);
         const interpretedFrom = typeof req.interpretedFrom === 'string' ? req.interpretedFrom.trim() : '';
         if (actor.via === 'assistant' && !interpretedFrom) {
             return fail('interpreted_from_required', 'an assistant answer must carry the owner\'s words (interpretedFrom)');
@@ -216,6 +221,7 @@ export function answerMissionDecision(
     if (result.ok && result.action !== 'unchanged') {
         // "Reopen" on a coordinator's owner_abandoned confirmation reopens the mission (acceptance 11).
         if (result.action !== 'undone') applyOwnerConfirmationAnswer(req.meshId, req.itemId);
+        try { applyQuotaOverrideAnswer(req.meshId, req.itemId); } catch (e: any) { LOG.warn('MissionDecision', `quota override sync for ${req.itemId} failed: ${e?.message || e}`); }
         notifyMissionChanged(req.meshId);
         notifyDecisionAnswered({
             meshId: req.meshId, missionId: result.missionId, itemId: result.itemId, action: result.action, revision: result.revision,

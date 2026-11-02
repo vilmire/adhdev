@@ -5,6 +5,7 @@ import { queueHoldContext, queueTaskHoldView, setQueueTaskHold, QUEUE_HOLD_NOTIC
 import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 import { isDifficultyFloorWaitReason } from './mesh-difficulty-floor.js';
 import { getMachineId } from '../config/config.js';
+import { isQuotaGateHoldReason, quotaHoldCoordinatorMessage, readQuotaGateEvidence } from './mesh-quota-override.js';
 
 function persistHold(store: MeshRuntimeStore, task: MeshWorkQueueEntry): void {
     store.db.prepare("UPDATE mesh_queue SET payload = ? WHERE mesh_id = ? AND id = ? AND status = 'pending'").run(JSON.stringify(task), task.meshId, task.id);
@@ -57,13 +58,17 @@ export function notifyHeldQueueTasks(meshId: string, now = Date.now()): void {
         // 3 min would duplicate that notice for the same stuck task. The hold itself
         // stays recorded for status/dashboard visibility — only the page is skipped.
         // 'difficulty_floor_unmet' is the claim path's literal for the same condition.
-        if (isDifficultyFloorWaitReason(view.reason) || view.reason === 'difficulty_floor_unmet') continue;
+        // A quota hold shares the floor-wait family for the auto-launch clock, but its pager used the
+        // difficulty-floor wording and never fired at 3 min — it is paged here, with quota wording.
+        if ((isDifficultyFloorWaitReason(view.reason) && !isQuotaGateHoldReason(view.reason)) || view.reason === 'difficulty_floor_unmet') continue;
         store.transaction(() => {
             const task = store.findQueueEntryById(meshId, snapshot.id);
             if (!task || task.status !== 'pending' || task.holdNoticeId || JSON.stringify(task.hold) !== JSON.stringify(snapshot.hold)) return;
             const eventId = `queue-hold:${meshId}:${task.id}:${view.since}:${view.reason}:${blockerDigest(view.blockingTaskIds)}`;
             const blockers = view.blockingTasks.map(b => `${b.taskId} (${b.title})`).join(', ');
-            const coordinatorMessage = `[System] Queue task ${task.id} has been held for ${Math.floor(view.ageMs / 60_000)} min: ${view.reason}${blockers ? ` by ${blockers}` : ''}. ${JSON.stringify(view.detail)}`;
+            const coordinatorMessage = isQuotaGateHoldReason(view.reason)
+                ? quotaHoldCoordinatorMessage(task, view.reason, view.ageMs, readQuotaGateEvidence(meshId, task.id))
+                : `[System] Queue task ${task.id} has been held for ${Math.floor(view.ageMs / 60_000)} min: ${view.reason}${blockers ? ` by ${blockers}` : ''}. ${JSON.stringify(view.detail)}`;
             if (notifyMeshCoordinator({
                 event: 'mesh:queue_held', meshId, eventId, nodeLabel: meshId,
                 coordinatorMessage, queuedAt: now,

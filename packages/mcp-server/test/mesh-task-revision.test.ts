@@ -26,3 +26,16 @@ test('revision wire rejects context spoofing, force, invalid status and bad revi
     for (const value of [ { ...valid, force: true }, { ...valid, expectedRevision: -1 }, { ...valid, expectedRevision: 1.5 },
         { ...valid, patch: { phase: 'assigned' } }, { ...valid, patch: { workspace: '/spoof' } }, { ...valid, patch: { ownershipScope: {} } } ]) assert.equal(decodeQueueReviseRequest(value), null);
 });
+test('requestQuotaOverride is a lone patch key that asks the owner and is passed back, never combined with edits', async () => {
+    const valid = { v: TURN_IPC_PROTOCOL_VERSION, meshId: 'mesh', taskId: 'task', expectedRevision: 0, patch: { requestQuotaOverride: true } };
+    assert.ok(decodeQueueReviseRequest(valid));
+    for (const patch of [{ requestQuotaOverride: false }, { requestQuotaOverride: 'yes' }, { requestQuotaOverride: true, message: 'edit' }]) {
+        assert.equal(decodeQueueReviseRequest({ ...valid, patch }), null);
+    }
+    const ctx = { mesh: { id: 'mesh' }, transport: { command: async () => ({ success: true, task: { id: 'task', status: 'pending', revision: 0 },
+        quotaOverrideRequested: { decisionId: 'mi_1', alreadyAsked: false, options: ['Wait for reset', 'Run anyway'] } }) } } as any;
+    const result = JSON.parse(await meshQueueRevise(ctx, { task_id: 'task', expected_revision: 0, patch: { requestQuotaOverride: true } }));
+    assert.equal(result.success, true);
+    assert.equal(result.quotaOverrideRequested.decisionId, 'mi_1');
+    assert.equal(result.task.revision, 0);
+});

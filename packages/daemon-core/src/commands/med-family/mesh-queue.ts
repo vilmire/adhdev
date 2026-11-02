@@ -1,4 +1,5 @@
 import { settleQueueWriter, WRITER_UNKNOWN_ERROR } from '../../mesh/mesh-queue-retirement.js';
+import { writerCancelRefusalHint } from '../../mesh/mesh-writer-stop-diagnostics.js';
 import { assertNotStageChild } from '../../mesh/stage-guards.js';
 import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
 import { projectWorkerOutcomeViews } from '../../mesh/mesh-worker-outcome-view.js';
@@ -129,7 +130,7 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
             const task = cancelTask(meshId, taskId, { reason });
             if (!task) return { success: false, error: `Queue task '${taskId}' not found` };
             if (task.status !== 'cancelled') return { success: false, code: 'writer_checkpoint_pending',
-                error: WRITER_UNKNOWN_ERROR, task: summarizeQueueEntryInputForView(task) };
+                error: WRITER_UNKNOWN_ERROR + writerCancelRefusalHint(task), task: summarizeQueueEntryInputForView(task) };
             // CANCEL-STICKY-TERMINAL (authoritative cancel): stop the worker that was bound to the
             // now-cancelled task. cancelTask already cleared the queue's assignment fields (so the
             // reclaim watchdog no longer sees it as a live assignment), but a still-running worker

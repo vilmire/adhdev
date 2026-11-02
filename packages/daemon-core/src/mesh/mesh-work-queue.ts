@@ -207,6 +207,8 @@ export function claimNextTask(
         /** A6-SILENT-REFUSAL: optional sink naming WHICH gate refused when this returns
          *  null. Diagnostic only — omitting it preserves the exact prior behavior. */
         outRefusal?: MeshClaimRefusal;
+        /** Quota-gated session: only owner-overridden rows (`quotaGateOverride`) may be pulled. */
+        onlyQuotaOverridden?: boolean;
     },
 ): MeshWorkQueueEntry | null {
     return MeshRuntimeStore.getInstance().claimNextQueueTask(meshId, nodeId, sessionId, capabilityTags, opts);

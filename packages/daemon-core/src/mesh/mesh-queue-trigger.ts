@@ -1,4 +1,6 @@
 import { notifyHeldQueueTasks } from './mesh-queue-hold-store.js';
+import { notifyStuckAssignedWorkers } from './mesh-stuck-approval-notify.js';
+import { escalateQuotaHeldTasks } from './mesh-quota-hold-escalation.js';
 import { buildNewWorkHeldRefusal, evaluateNewWorkHold, NEW_WORK_HELD_CODE } from '../maintenance/new-work-hold.js';
 // triggerMeshQueue — one drain pass over a mesh's queue: claim for every idle
 // session (local + remote), then the auto-launch scan, reporting before/after
@@ -412,6 +414,8 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
         : undefined;
 
     notifyHeldQueueTasks(meshId);
+    try { notifyStuckAssignedWorkers(components, meshId); } catch (e: any) { LOG.debug('MeshQueue', `stuck-approval scan failed: ${e?.message || e}`); }
+    void escalateQuotaHeldTasks(components, meshId, mesh).catch(e => LOG.warn('MeshQueue', `quota-hold escalation failed for mesh ${meshId}: ${e?.message || e}`));
     return {
         success: true,
         meshId,

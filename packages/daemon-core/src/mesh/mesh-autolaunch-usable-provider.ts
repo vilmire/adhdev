@@ -8,7 +8,8 @@ import { ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON, type ProviderQuotaGateBlock } fr
 import { recordLastQuotaRanking, quotaSpreadBonusByProvider, quotaTargetsFromSlots } from './mesh-quota-ranking-records.js';
 import type { QuotaFactsContext } from './mesh-quota-sources.js';
 import type { QuotaFallbackCandidate } from './mesh-quota-fallback.js';
-import { nodeSatisfiesRequiredTags, buildMeshNodeCapabilityTags } from './mesh-work-queue.js';
+import { nodeSatisfiesRequiredTags, buildMeshNodeCapabilityTags, getQueueEntryById } from './mesh-work-queue.js';
+import { hasQuotaOverride, noteQuotaGateEvidence, clearQuotaGateEvidence } from './mesh-quota-override.js';
 import { orderSlotsForProviderSelection, type FitnessTask } from './mesh-scheduling-fitness.js';
 import { selectProviderWithDiagnostics, selectionRationaleFrom, type ResolvedProviderSelection } from './mesh-routing-decision.js';
 import { slotProviderUnusableReason } from './mesh-slot-provider-usability.js';
@@ -137,7 +138,9 @@ export async function resolveUsableProvider(
     // ranks at the same weight as a fresh one instead of becoming progressively
     // less selectable. ALL-gated is reported under its own
     // reason so a quota WAIT is never conflated with a slot config error.
+    const overrideQuotaGate = !!(meshId && taskId) && hasQuotaOverride(getQueueEntryById(meshId, taskId));
     const selection = selectProviderWithDiagnostics({
+        overrideQuotaGate,
         node, nodeId, meshId, task: task!, taskId, quotaRouting, quotaFactsContext,
         quotaBonusByProvider, difficultyFloorRequired, usableSlots: preferEligible(usableSlots, task?.routingPreferences?.providers, s => s.providerType), preScoreExclusions,
     });
@@ -154,8 +157,10 @@ export async function resolveUsableProvider(
             clear: riskSnapshot,
             gated: ranked.gated.map(g => ({ providerType: g.providerType, reason: g.block.reason })), ...(taskId ? { taskId } : {}),
         });
+        if (meshId && taskId) noteQuotaGateEvidence(meshId, taskId, ranked.gated);
         return { reason: `${ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON}: ${detail}`, preScoreExclusions };
     }
+    if (meshId && taskId) clearQuotaGateEvidence(meshId, taskId);
     const selectedWinner = winner!;
     LOG.debug('MeshQueue', `QUOTA RANK: node ${nodeId} clear=[${riskSnapshot.map(s => `${s.providerType}:${s.risk?.toFixed(1) ?? '?'}`).join(',')}] gated=[${ranked.gated.map(g => `${g.providerType}:${g.block.reason}`).join(',')}] winner=${selectedWinner.providerType}`);
     recordLastQuotaRanking(nodeId, {

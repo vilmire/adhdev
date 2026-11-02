@@ -1,6 +1,7 @@
 import type { NodeCapabilitySlot } from '@adhdev/mesh-shared';
 import type { RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import { LOG } from '../logging/logger.js';
+import { quotaBlockOverridable } from './mesh-quota-override.js';
 import { rankProvidersByQuotaGate, evaluateProviderQuotaGate, PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON, type ProviderQuotaGateBlock, type ProviderQuotaRankingEvidence } from './mesh-quota-routing.js';
 import { buildQuotaRankingRationale, quotaRiskSnapshotForCandidates, quotaSpreadBonusByProvider, quotaSpreadBonusDiagnosticsByProvider, type ProviderQuotaBonusDiagnostic, type ProviderQuotaRiskSnapshot, type QuotaRankingRationale } from './mesh-quota-ranking-records.js';
 import { type QuotaFactsContext } from './mesh-quota-sources.js';
@@ -245,7 +246,13 @@ export function buildProviderSelectionDiagnostics(args: {
         ...args.ranked.clear.map(providerType => ({ providerType, ...(riskByProvider.get(providerType)?.risk !== undefined ? { quotaRisk: riskByProvider.get(providerType)!.risk } : {}) })),
         ...args.ranked.gated.map(entry => ({ providerType: entry.providerType, ...(riskByProvider.get(entry.providerType)?.risk !== undefined ? { quotaRisk: riskByProvider.get(entry.providerType)!.risk } : {}), gated: true })),
     ];
-    if (args.taskId) {
+    if (args.taskId && shouldLogRoutingDecision(args.taskId, args.nodeId, {
+        winner: args.ranked.clear[0] ?? null,
+        order: args.ranked.clear,
+        gated: args.ranked.gated.map(entry => `${entry.providerType}:${entry.block.reason}`),
+        candidates: scoreDetails.map(c => `${c.providerType}/${c.model ?? ''}/${c.capacityAvailable}`),
+        excluded: (args.preScoreExclusions ?? []).map(e => `${e.providerType}:${e.reason}`),
+    })) {
         LOG.info('MeshQueue', `ROUTING DECISION taskId=${args.taskId} nodeId=${args.nodeId} candidates=${JSON.stringify(scoreDetails)} quotaOrder=${JSON.stringify(quotaOrder)} winner=${args.ranked.clear[0] ?? 'none'} preScoreExclusions=${JSON.stringify(args.preScoreExclusions ?? [])}`);
     }
     const bonusDiagnostics = args.task && args.unbounded
@@ -381,6 +388,27 @@ interface ProviderSelectionCoreResult {
  * Callers provide usable slots; production still owns CLI detection, while the
  * read-only preview uses the configured/facts-admitted slot snapshot.
  */
+/**
+ * A held task is re-evaluated by the 4 s reconcile loop with an identical outcome; logging the full
+ * ROUTING DECISION line every time buried the log. Log when the outcome (winner, clear order, gated set,
+ * candidates, exclusions — never the drifting risk numbers) changes; repeats are dropped.
+ */
+const lastRoutingDecisionLogged = new Map<string, string>();
+function shouldLogRoutingDecision(taskId: string, nodeId: string, outcome: unknown): boolean {
+    // Only a HELD outcome (no winner) repeats unchanged; a decision that picks a provider is a real dispatch input and always logs.
+    if ((outcome as { winner: string | null }).winner) { lastRoutingDecisionLogged.delete(`${taskId}:${nodeId}`); return true; }
+    const key = `${taskId}:${nodeId}`;
+    const fingerprint = JSON.stringify(outcome);
+    if (lastRoutingDecisionLogged.get(key) === fingerprint) return false;
+    if (lastRoutingDecisionLogged.size >= 1000) {
+        const oldest = lastRoutingDecisionLogged.keys().next().value;
+        if (oldest !== undefined) lastRoutingDecisionLogged.delete(oldest);
+    }
+    lastRoutingDecisionLogged.set(key, fingerprint);
+    return true;
+}
+export function resetRoutingDecisionLogForTests(): void { lastRoutingDecisionLogged.clear(); }
+
 export function selectProviderWithDiagnostics(args: {
     node: any;
     nodeId: string;
@@ -399,6 +427,8 @@ export function selectProviderWithDiagnostics(args: {
     now?: number;
     meshNodes?: readonly unknown[];
     forReadonlyTask?: boolean;
+    /** Owner-granted one-task waiver of the quota RESERVE gate (mesh-quota-override.ts); never lifts a provider's own hard limit. */
+    overrideQuotaGate?: boolean;
 }): ProviderSelectionCoreResult {
     let candidateSlots = args.usableSlots;
     if (args.difficultyFloorRequired) {
@@ -451,7 +481,7 @@ export function selectProviderWithDiagnostics(args: {
         }
     }
     const candidates: ProviderSlotCandidate[] = [...byProvider.values()];
-    const ranked = rankProvidersByQuotaGate(
+    let ranked = rankProvidersByQuotaGate(
         args.node,
         candidates.map(candidate => candidate.providerType),
         args.quotaRouting,
@@ -462,6 +492,12 @@ export function selectProviderWithDiagnostics(args: {
             { model: candidate.slot.model },
         ])),
     );
+    if (args.overrideQuotaGate && ranked.gated.length) {
+        // The owner waived the reserve for this task: reserve-gated providers join the clear set behind the
+        // ones that were already clear; a provider at its own hard limit stays gated.
+        const waived = ranked.gated.filter(g => quotaBlockOverridable(g.block));
+        if (waived.length) ranked = { ...ranked, clear: [...ranked.clear, ...waived.map(g => g.providerType)], gated: ranked.gated.filter(g => !waived.includes(g)) };
+    }
     const winner = ranked.clear.length
         ? candidates.find(candidate => candidate.providerType === ranked.clear[0]) ?? candidates[0]
         : undefined;
