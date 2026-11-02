@@ -65,7 +65,7 @@ import { scheduleBackgroundDirectReconcile } from './mesh-status-background.js';
 // §8 unit 6 ("mesh_read_chat remote display cutover") — the FIRST hop of the
 // fixed `replica → live P2P read_chat → cached summary` order.
 import { readTranscriptReplicaForDisplay } from './mesh-transcript-replica-read.js';
-import { normalizeNodeCapabilitySlots, readString } from '@adhdev/mesh-shared';
+import { normalizeNodeCapabilitySlots, readString, isLightWorkerSession } from '@adhdev/mesh-shared';
 // QUOTA GATE for the manual launch path. Same judgement module the auto-launch /
 // queue-drain path uses (daemon-core resolveUsableProvider) — deliberately shared
 // rather than reimplemented, so the two dispatch paths can never disagree about
@@ -790,6 +790,8 @@ async function findReusableWorkerSession(ctx: MeshContext, node: LocalMeshNodeEn
         const existing = probe.sessions.find(session => {
             if (isTerminalSessionRecord(session)) return false;
             if (!isMeshOwnedDelegateSession(session, ctx.mesh.id, nodeId)) return false;
+            // A light-task worker serves one scratch workspace and can never claim other work: not the node's worker.
+            if (isLightWorkerSession(session)) return false;
             if (providerType) {
                 const sessionProviderType = resolveSessionProviderType(session);
                 if (sessionProviderType && sessionProviderType !== providerType) return false;

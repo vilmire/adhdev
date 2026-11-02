@@ -24129,6 +24129,7 @@ var require_dist3 = __commonJS({
       isInputEnvelopeWire: () => isInputEnvelopeWire,
       isLaunchDefaultRole: () => isLaunchDefaultRole,
       isLaunchDefaultSource: () => isLaunchDefaultSource,
+      isLightWorkerSession: () => isLightWorkerSession2,
       isMeshDeliveryMode: () => isMeshDeliveryMode2,
       isMeshIndexQueryResponse: () => isMeshIndexQueryResponse,
       isMeshMissionStatusValue: () => isMeshMissionStatusValue3,
@@ -27238,6 +27239,12 @@ ${renderWorkerProtocolFooter2(input)}`;
     }
     function reviewIndependenceOf(review) {
       return review.independence ?? "different_provider";
+    }
+    function isLightWorkerSession2(session) {
+      const s2 = session;
+      if (!s2 || typeof s2 !== "object") return false;
+      const has = (o) => !!o && typeof o === "object" && typeof o.lightWorkspaceId === "string" && o.lightWorkspaceId.trim() !== "";
+      return has(s2.settings) || has(s2.launchRecord?.settings) || has(s2);
     }
     function computeRelayReprobeDelay(failures, random, timing = {}) {
       const base = timing.baseDelayMs ?? RELAY_REPROBE_BASE_DELAY_MS;
@@ -72329,6 +72336,7 @@ ${mergeTreeErr?.stderr || ""}`;
         }
         const settings2 = state2?.settings || {};
         if (isProtectedNonAutoLaunchSession(state2, settings2)) continue;
+        if (isLightWorkerSession2({ settings: liveSettings }) || isLightWorkerSession2(state2)) continue;
         if (readText(settings2.meshNodeFor) !== meshId) continue;
         const originTaskId = readText(settings2.autoLaunchedForQueueTaskId);
         if (!originTaskId) continue;
@@ -72435,6 +72443,7 @@ ${mergeTreeErr?.stderr || ""}`;
             if (!sid || !sessionIdsEquivalent(sid, sessionId)) return false;
             const settings2 = state2?.settings || {};
             if (isProtectedNonAutoLaunchSession(state2, settings2)) return false;
+            if (isLightWorkerSession2(state2)) return false;
             const sessionMeshId = readText(settings2.meshNodeFor);
             if (sessionMeshId && sessionMeshId !== meshId) return false;
             return isIdleSessionState(state2) && !sessionHasActiveAssignment(meshId, sid);
@@ -72898,6 +72907,7 @@ ${mergeTreeErr?.stderr || ""}`;
         const state2 = inst.getState();
         const settings2 = state2.settings || {};
         if (readText(settings2.meshNodeFor) !== meshId) return false;
+        if (isLightWorkerSession2({ settings: liveSettings }) || isLightWorkerSession2(state2)) return false;
         const instNodeId = readText(settings2.meshNodeId) || readText(settings2.nodeId);
         if (!daemonIdsEquivalent4(instNodeId, nodeId)) return false;
         const sessionId = readText(state2.instanceId);
@@ -72966,6 +72976,7 @@ ${mergeTreeErr?.stderr || ""}`;
         const state2 = inst.getState();
         const settings2 = state2.settings || {};
         if (readText(settings2.meshNodeFor) !== meshId) return false;
+        if (isLightWorkerSession2({ settings: liveSettings }) || isLightWorkerSession2(state2)) return false;
         const instNodeId = readText(settings2.meshNodeId) || readText(settings2.nodeId);
         if (!daemonIdsEquivalent4(instNodeId, nodeId)) return false;
         const status = readText(state2.status).toLowerCase();
@@ -72994,6 +73005,7 @@ ${mergeTreeErr?.stderr || ""}`;
         const state2 = inst.getState();
         const settings2 = state2.settings || {};
         if (readText(settings2.meshNodeFor) !== meshId) return false;
+        if (isLightWorkerSession2({ settings: liveSettings }) || isLightWorkerSession2(state2)) return false;
         if (readText(settings2.meshCoordinatorFor) === meshId) return false;
         const instNodeId = readText(settings2.meshNodeId) || readText(settings2.nodeId);
         if (!daemonIdsEquivalent4(instNodeId, nodeId)) return false;
@@ -80386,11 +80398,28 @@ ${report}`;
         init_light_git();
       }
     });
+    function setLightSessionStopper(fn) {
+      lightSessionStopper = fn;
+    }
+    async function stopLightWorkerSession(meshId, taskId) {
+      try {
+        const task = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
+        const sessionId = task?.light ? task.targetSessionId || task.assignedSessionId : void 0;
+        if (!sessionId || !lightSessionStopper) return false;
+        await lightSessionStopper({ meshId, taskId, sessionId });
+        return true;
+      } catch (e) {
+        LOG.warn("LightTask", `could not stop the light session of ${taskId}: ${e?.message || e}`);
+        return false;
+      }
+    }
     function captureLightResultInBackground(meshId, taskId, report) {
       void (async () => {
+        let isLight = false;
         try {
           const task = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
           if (!task?.light || !task.lightWorkspaceId) return;
+          isLight = true;
           await Promise.race([
             captureLightTaskResult({ meshId, taskId, report }),
             new Promise((_, reject) => setTimeout(() => reject(new Error("light_capture_timeout")), LIGHT_CAPTURE_TIMEOUT_MS).unref?.())
@@ -80401,6 +80430,8 @@ ${report}`;
             recordResult(meshId, taskId, { landing: "blocked", blockedReason: "light_lineage_unproven", blockedDetail: `capture failed: ${e?.message || e}` }, void 0);
           } catch {
           }
+        } finally {
+          if (isLight) await stopLightWorkerSession(meshId, taskId);
         }
       })();
     }
@@ -80627,6 +80658,7 @@ ${report}`;
     var LIGHT_CAPTURE_TIMEOUT_MS;
     var DEP_FILES;
     var DEP_SECTIONS;
+    var lightSessionStopper;
     var init_light_task_result = __esm2({
       "src/mesh/light-task-result.ts"() {
         "use strict";
@@ -80649,6 +80681,7 @@ ${report}`;
         LIGHT_CAPTURE_TIMEOUT_MS = 6e4;
         DEP_FILES = /* @__PURE__ */ new Set(["package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", ".npmrc"]);
         DEP_SECTIONS = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies", "bundleDependencies", "bundledDependencies", "overrides", "resolutions", "workspaces"];
+        lightSessionStopper = null;
       }
     });
     function setMissionChangeListener(fn) {
@@ -157882,6 +157915,11 @@ ${defangRelayBody(text8)}`;
       setStageArtifactRegistrar((input) => {
         return registerSessionArtifact(MeshRuntimeStore.getInstance().db, input).record.artifactId;
       });
+      setLightSessionStopper(async ({ meshId, sessionId }) => {
+        const result = await components.router.cleanupMeshSessions({ meshId, nodeId: "", node: void 0, mode: "stop", sessionIds: [sessionId], source: "mesh_cleanup_sessions" });
+        const stopped = Array.isArray(result.stoppedSessionIds) ? result.stoppedSessionIds : [];
+        if (!result.success && !stopped.length) throw new Error(String(result.error || "light_session_stop_failed"));
+      });
       const index = new MeshTopicIndex(store5.db);
       setActiveTurnLedgerForIpc(ledger, {
         index,
@@ -157981,6 +158019,7 @@ ${defangRelayBody(text8)}`;
           setActiveTurnLedgerForIpc(null);
           bindMeshNoticeRuntime(null);
           setStageArtifactRegistrar(null);
+          setLightSessionStopper(null);
         }
       };
     }
@@ -158266,6 +158305,7 @@ ${defangRelayBody(text8)}`;
         init_notice_submit_inventory();
         init_artifact_store();
         init_stage_ports_default();
+        init_light_task_result();
         init_cooperative_gate();
         init_mesh_termination_bridge();
         init_mesh_signal_bridge();
@@ -236674,6 +236714,12 @@ var MISSION_LIMITS = {
   /** items_add / items_update entries honoured per call (extra entries are reported, not applied). */
   itemsPerCall: 50
 };
+function isLightWorkerSession(session) {
+  const s = session;
+  if (!s || typeof s !== "object") return false;
+  const has = (o) => !!o && typeof o === "object" && typeof o.lightWorkspaceId === "string" && o.lightWorkspaceId.trim() !== "";
+  return has(s.settings) || has(s.launchRecord?.settings) || has(s);
+}
 var RELAY_REPROBE_MAX_DELAY_MS = 5 * 6e4;
 var REVIEW_VERDICTS = ["approve", "approve_with_nits", "changes_requested", "reject_approach"];
 var FINDING_SEVERITIES = ["blocking", "major", "minor", "nit"];
@@ -246975,6 +247021,7 @@ async function findReusableWorkerSession(ctx, node, nodeId, providerType, profil
     const existing = probe.sessions.find((session) => {
       if (isTerminalSessionRecord(session)) return false;
       if (!isMeshOwnedDelegateSession(session, ctx.mesh.id, nodeId)) return false;
+      if (isLightWorkerSession(session)) return false;
       if (providerType) {
         const sessionProviderType = resolveSessionProviderType(session);
         if (sessionProviderType && sessionProviderType !== providerType) return false;

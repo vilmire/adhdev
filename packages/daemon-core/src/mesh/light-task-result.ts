@@ -32,12 +32,37 @@ const DEP_SECTIONS = ['dependencies', 'devDependencies', 'peerDependencies', 'op
 
 export interface LightReportInput { outcome: string; testsRun?: LightTestRun[] }
 
+/**
+ * Ends the light worker's session once its task is terminal and the result is captured. Installed at boot with the
+ * daemon's operator session-stop path (`cleanupMeshSessions` mode 'stop', which records an intentional stop). The
+ * workspace stays — it holds the branch until land/discard; only the session ends.
+ */
+export type LightSessionStopper = (input: { meshId: string; taskId: string; sessionId: string }) => Promise<void>;
+let lightSessionStopper: LightSessionStopper | null = null;
+export function setLightSessionStopper(fn: LightSessionStopper | null): void { lightSessionStopper = fn; }
+
+/** Best-effort: a failed stop leaves the session to the idle reaper (it can never claim other work anyway). */
+export async function stopLightWorkerSession(meshId: string, taskId: string): Promise<boolean> {
+    try {
+        const task = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
+        const sessionId = task?.light ? (task.targetSessionId || task.assignedSessionId) : undefined;
+        if (!sessionId || !lightSessionStopper) return false;
+        await lightSessionStopper({ meshId, taskId, sessionId });
+        return true;
+    } catch (e: any) {
+        LOG.warn('LightTask', `could not stop the light session of ${taskId}: ${e?.message || e}`);
+        return false;
+    }
+}
+
 /** Fire-and-forget hook called by the worker-report accept path (one line there). */
 export function captureLightResultInBackground(meshId: string, taskId: string, report: LightReportInput): void {
     void (async () => {
+        let isLight = false;
         try {
             const task = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
             if (!task?.light || !task.lightWorkspaceId) return;
+            isLight = true;
             await Promise.race([
                 captureLightTaskResult({ meshId, taskId, report }),
                 new Promise<never>((_, reject) => setTimeout(() => reject(new Error('light_capture_timeout')), LIGHT_CAPTURE_TIMEOUT_MS).unref?.()),
@@ -45,6 +70,9 @@ export function captureLightResultInBackground(meshId: string, taskId: string, r
         } catch (e: any) {
             LOG.warn('LightTask', `result capture for ${taskId} failed: ${e?.message || e}`);
             try { recordResult(meshId, taskId, { landing: 'blocked', blockedReason: 'light_lineage_unproven', blockedDetail: `capture failed: ${e?.message || e}` }, undefined); } catch { /* best-effort */ }
+        } finally {
+            // Terminal (completed/blocked/failed) and captured: the session has nothing left to do.
+            if (isLight) await stopLightWorkerSession(meshId, taskId);
         }
     })();
 }

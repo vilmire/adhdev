@@ -101,3 +101,16 @@ export interface LightLandRequest {
     partial?: boolean
     approvedPublishShas?: string[]
 }
+
+/**
+ * True when a session record/state (or a bare settings object) belongs to a light-task worker, i.e.
+ * it was launched with `settings.lightWorkspaceId`. A light session is bound to ONE task's scratch
+ * workspace and, by the central claim rule, can never claim any other row — so it is never "the
+ * node's worker" for duplicate-launch guards, auto-launch gating or concurrency counts.
+ */
+export function isLightWorkerSession(session: unknown): boolean {
+    const s = session as any
+    if (!s || typeof s !== 'object') return false
+    const has = (o: any): boolean => !!o && typeof o === 'object' && typeof o.lightWorkspaceId === 'string' && o.lightWorkspaceId.trim() !== ''
+    return has(s.settings) || has(s.launchRecord?.settings) || has(s)
+}

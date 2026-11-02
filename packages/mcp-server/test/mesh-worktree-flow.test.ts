@@ -801,6 +801,69 @@ test('mesh_launch_session returns the existing mesh-owned worker session instead
   assert.deepEqual(calls.map(call => call.command), ['get_status_metadata']);
 });
 
+test('mesh_launch_session duplicate guard ignores a live light-task worker session and launches (LIGHT-TASK)', async () => {
+  // A light worker (settings.lightWorkspaceId) is pinned to one scratch workspace and can never
+  // claim another row, so it is not "the node's worker": the guard must not hand it back.
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
+    if (command === 'trigger_mesh_queue') return { success: true, trigger: { success: true, claimed: true } };
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (daemonId, command, args = {}) => {
+    calls.push({ daemonId, command, args });
+    if (command === 'get_status_metadata') {
+      return {
+        success: true,
+        result: {
+          success: true,
+          status: {
+            sessions: [{
+              id: 'session-light',
+              providerType: 'hermes-cli',
+              status: 'idle',
+              settings: {
+                meshNodeFor: 'mesh-dup-guard-light',
+                meshNodeId: 'node-dup',
+                meshCoordinatorDaemonId: 'daemon-coordinator',
+                launchedByCoordinator: true,
+                lightWorkspaceId: 'lw_example',
+              },
+            }],
+          },
+        },
+      };
+    }
+    if (command === 'launch_cli') return { success: true, sessionId: 'session-normal' };
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+  const ctx = {
+    localDaemonId: 'daemon-coordinator',
+    mesh: {
+      id: 'mesh-dup-guard-light',
+      name: 'Dup Guard Light Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{ id: 'node-dup', workspace: '/repo-dup', repoRoot: '/repo-dup', daemonId: 'daemon-worker', userOverrides: {}, policy: { canPush: true } }],
+    },
+    transport,
+  };
+  holdMemberStatusOnCoordinator(ctx.transport, ctx.mesh, (ctx as any).localDaemonId);
+
+  const launch = JSON.parse(await meshLaunchSession(ctx as any, { node_id: 'node-dup', type: 'hermes-cli' }));
+
+  assert.notEqual(launch.duplicate, true);
+  assert.notEqual(launch.sessionId, 'session-light');
+  assert.ok(calls.some(call => call.command === 'launch_cli'), 'a normal worker must be launched');
+});
+
 test('mesh_launch_session force=true launches an additional session even when a mesh-owned worker session already exists', async () => {
   // A deliberate second concurrent provider/session is a legitimate request — force bypasses the
   // duplicate guard. Status is not probed; launch_cli fires.

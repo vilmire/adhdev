@@ -31,7 +31,7 @@ import { isHeldRuntimeLive } from './mesh-node-git-refresher.js';
 import { loadConfig } from '../config/config.js';
 import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, getQueue } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
-import { daemonIdsEquivalent, sessionIdsEquivalent, isBusyStatus, isIdleSessionState, isTerminalSessionRecordStatus as isTerminalSessionStatus, readText } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, sessionIdsEquivalent, isBusyStatus, isIdleSessionState, isTerminalSessionRecordStatus as isTerminalSessionStatus, readText, isLightWorkerSession } from '@adhdev/mesh-shared';
 import { isMeshNodeHealthLaunchable, resolveEffectiveMeshNodeHealth } from './mesh-node-identity.js';
 import { shouldDeferDispatchForBootstrap } from './worktree-bootstrap-config.js';
 import { inWindowAutoLaunchSessionIdsForNode } from './mesh-autolaunch-integrity.js';
@@ -90,6 +90,8 @@ export function nodeHasActiveMeshWork(components: DaemonComponents, meshId: stri
         const state = inst.getState();
         const settings = state.settings as Record<string, unknown> || {};
         if (readText(settings.meshNodeFor) !== meshId) return false;
+        // A light-task session serves exactly one scratch workspace; it is not one of the node's workers.
+        if (isLightWorkerSession({ settings: liveSettings }) || isLightWorkerSession(state)) return false;
         const instNodeId = readText(settings.meshNodeId) || readText(settings.nodeId);
         // Match under canonical machine-core form, NOT a raw `!==`: a session's stamped
         // meshNodeId and the candidate nodeId can carry interchangeable daemon-id forms
@@ -253,6 +255,8 @@ export function liveSessionCountForNode(components: DaemonComponents, meshId: st
         const state = inst.getState();
         const settings = state.settings as Record<string, unknown> || {};
         if (readText(settings.meshNodeFor) !== meshId) return false;
+        // A light-task session serves exactly one scratch workspace; it is not one of the node's workers.
+        if (isLightWorkerSession({ settings: liveSettings }) || isLightWorkerSession(state)) return false;
         const instNodeId = readText(settings.meshNodeId) || readText(settings.nodeId);
         // Canonical-form match (see nodeHasActiveMeshWork): a daemon-id form skew between
         // the session's stamped nodeId and the candidate nodeId must not undercount this
@@ -331,6 +335,8 @@ export function nodeHasLiveSessionPendingClaim(components: DaemonComponents, mes
         const state = inst.getState();
         const settings = state.settings as Record<string, unknown> || {};
         if (readText(settings.meshNodeFor) !== meshId) return false;
+        // A light-task session can never claim another row (light-claim-rule.ts): not a pending claimer.
+        if (isLightWorkerSession({ settings: liveSettings }) || isLightWorkerSession(state)) return false;
         // DISPATCH-DEADLOCK-COORD-SESSION-SLOT: a coordinator session for THIS mesh
         // (meshCoordinatorFor === meshId) is never a pending-claim worker — the idle→claim
         // drain (drainMeshQueue, isIdleSessionState + worker role) never picks it up, because

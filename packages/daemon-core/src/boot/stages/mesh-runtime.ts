@@ -1,6 +1,7 @@
 import {createNoticeSubmitInventory} from '../../mesh/turn-ledger/notice-submit-inventory.js';
 import { registerSessionArtifact } from '../../artifacts/artifact-store.js';
 import { setStageArtifactRegistrar } from '../../mesh/stage-ports-default.js';
+import { setLightSessionStopper } from '../../mesh/light-task-result.js';
 import { maintenanceHeld, withMaintenanceAdmission } from '../../maintenance/cooperative-gate.js';
 /**
  * S7 bootMeshRuntime — assemble `DaemonComponents`, attach the mesh bus
@@ -410,6 +411,13 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
         return registerSessionArtifact(MeshRuntimeStore.getInstance().db as never, input).record.artifactId;
     });
 
+    // Light tasks: end the worker session once its task is terminal and captured (the workspace stays until land/discard).
+    setLightSessionStopper(async ({ meshId, sessionId }) => {
+        const result = await components.router.cleanupMeshSessions({ meshId, nodeId: '', node: undefined, mode: 'stop', sessionIds: [sessionId], source: 'mesh_cleanup_sessions' });
+        const stopped = Array.isArray(result.stoppedSessionIds) ? result.stoppedSessionIds as string[] : [];
+        if (!result.success && !stopped.length) throw new Error(String(result.error || 'light_session_stop_failed'));
+    });
+
     // 4. The turn cursors.
     const index = new MeshTopicIndex(store.db);
     // The MCP turn IPC (turn_observe / turn_query / mesh_index_query …) reads
@@ -500,6 +508,7 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
             setActiveTurnLedgerForIpc(null);
             bindMeshNoticeRuntime(null);
             setStageArtifactRegistrar(null);
+            setLightSessionStopper(null);
         },
     };
 }

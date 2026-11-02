@@ -72,7 +72,8 @@ function cleanup(meshId: string) {
 
 
 import { execFileSync } from 'child_process'
-import { captureLightTaskResult } from '../../src/mesh/light-task-result.js'
+import { captureLightTaskResult, captureLightResultInBackground, setLightSessionStopper } from '../../src/mesh/light-task-result.js'
+import { getLightWorkspace } from '../../src/mesh/mesh-light-workspace-store.js'
 import { setStageArtifactRegistrar } from '../../src/mesh/stage-ports-default.js'
 import { registerSessionArtifact } from '../../src/artifacts/artifact-store.js'
 import { setLightWorkspaceFingerprint } from '../../src/mesh/mesh-light-workspace-store.js'
@@ -134,6 +135,32 @@ describe('LIGHT-TASK result capture (real git)', () => {
     expect(resultOf(store, row.id).lightResult?.landing).toBe('ready')
     const art = store.db.prepare('SELECT producer_role AS r, kind FROM session_artifacts WHERE task_id = ?').all(row.id) as any[]
     expect(art.every(a => a.r === 'pipeline' && a.kind === 'diff')).toBe(true)
+  })
+
+  it('stops the light worker session once the result is captured, and keeps the workspace row', async () => {
+    const stopped: Array<{ meshId: string; taskId: string; sessionId: string }> = []
+    setLightSessionStopper(async (input) => { stopped.push(input) })
+    try {
+      const { row, ws, store } = await setup()
+      commitIn(ws.path, 'src.txt', 'line1\nCHANGED\nline3\n')
+      captureLightResultInBackground(meshId, row.id, { outcome: 'completed' })
+      await vi.waitFor(() => expect(stopped).toHaveLength(1), { timeout: 20_000 })
+      expect(stopped[0]).toEqual({ meshId, taskId: row.id, sessionId: `sess_${row.id}` })
+      // captured before the stop, workspace (and its branch) untouched
+      expect(resultOf(store, row.id).lightResult?.landing).toBe('ready')
+      expect(getLightWorkspace(store.db, ws.workspaceId)?.state).toBe('result_ready')
+      expect(fs.existsSync(ws.path)).toBe(true)
+    } finally { setLightSessionStopper(null) }
+  })
+
+  it('a stopper failure never breaks the captured result', async () => {
+    setLightSessionStopper(async () => { throw new Error('host_unavailable') })
+    try {
+      const { row, ws, store } = await setup()
+      commitIn(ws.path, 'src.txt', 'line1\nCHANGED\nline3\n')
+      captureLightResultInBackground(meshId, row.id, { outcome: 'completed' })
+      await vi.waitFor(() => expect(resultOf(store, row.id).lightResult?.landing).toBe('ready'), { timeout: 20_000 })
+    } finally { setLightSessionStopper(null) }
   })
 
   it('uncommitted changes block the result and keep the diff as an artifact; the task row becomes blocked', async () => {

@@ -36,7 +36,7 @@ import { findLocalCliInstance } from './cli-instance-lookup.js';
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import { getMachineId } from '../config/config.js';
 import { LOG } from '../logging/logger.js';
-import { canonicalDaemonId, daemonIdsEquivalent, isIdleSessionState, sessionIdsEquivalent, readText } from '@adhdev/mesh-shared';
+import { canonicalDaemonId, daemonIdsEquivalent, isIdleSessionState, sessionIdsEquivalent, readText, isLightWorkerSession } from '@adhdev/mesh-shared';
 import { getQueue, getQueueEntryById, meshTaskNotBeforeReady } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
@@ -245,6 +245,8 @@ export function sweepAutoLaunchOrphanSessions(
         try { state = inst.getState(); } catch { continue; }
         const settings = (state?.settings as Record<string, unknown>) || {};
         if (isProtectedNonAutoLaunchSession(state, settings)) continue;
+        // A light-task session is pinned to one task's workspace: never reported as an orphaned node worker.
+        if (isLightWorkerSession({ settings: liveSettings }) || isLightWorkerSession(state)) continue;
         if (readText(settings.meshNodeFor) !== meshId) continue;
         const originTaskId = readText(settings.autoLaunchedForQueueTaskId);
         if (!originTaskId) continue;
@@ -435,6 +437,7 @@ export function localSessionAppearsLive(components: DaemonComponents, meshId: st
                 if (!sid || !sessionIdsEquivalent(sid, sessionId)) return false;
                 const settings = (state?.settings as Record<string, unknown>) || {};
                 if (isProtectedNonAutoLaunchSession(state, settings)) return false;
+                if (isLightWorkerSession(state)) return false; // never a free worker of the node
                 const sessionMeshId = readText(settings.meshNodeFor);
                 if (sessionMeshId && sessionMeshId !== meshId) return false;
                 return isIdleSessionState(state) && !sessionHasActiveAssignment(meshId, sid);
