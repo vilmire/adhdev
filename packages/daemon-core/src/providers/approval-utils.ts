@@ -26,7 +26,7 @@ export function normalizeApprovalLabel(value: string): string {
 
 export function isNegativeApprovalLabel(value: string): boolean {
     const label = normalizeApprovalLabel(value);
-    return /^(no|deny|reject|cancel|skip|exit|stop)\b/.test(label)
+    return /^(no|never|deny|reject|cancel|skip|exit|stop)\b/.test(label)
         || /\bwithout\b/.test(label)
         || /\bdo not\b/.test(label);
 }

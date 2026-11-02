@@ -32,6 +32,9 @@ const UNNUMBERED_CHOICE_LINE_RE = /^\s*(?:[┃│|]\s*)?(?:[❯›➜>→]\s*)?(
 
 const MODAL_FOOTER_LINE_RE = /enter to submit|press\s+enter\s+to\s+(?:continue|confirm|submit|select)\b|Press enter to confirm or esc to cancel|Enter to confirm\s*[·•|]\s*Esc to cancel|Esc to cancel\b|escape to cancel\b|press\s+esc(?:ape)?\b|Enter to select\b|(?:↑|↓|up|down)[\s/]+(?:↑|↓)?\s*to navigate\b|↑\/↓\s*(?:Navigate|select)\b|\d+\/\d+:select\b|Space to select\b|Tab to amend\b|ctrl\+e to explain\b/i;
 
+/** Footer that lets a modal stay live while the cursor is parked elsewhere (grok: `1/5:select  │ …`). */
+const DETACHED_CURSOR_FOOTER_RE = /^\s*\d+\/\d+:select\b/;
+
 function matchNumberedChoiceIndex(line: string): number | null {
     const m = NUMBERED_CHOICE_LINE_RE.exec(line);
     if (!m) return null;
@@ -253,7 +256,16 @@ export function resolveLiveModalSlice(
             return empty;
         }
         if (effectiveCursorRow < interactiveStartRow || effectiveCursorRow > modalEndRow + 1) {
-            return empty;
+            // DETACHED CURSOR: grok keeps repainting its `◆ Running … [stop]` spinner above the
+            // permission block and parks the cursor on that row, never on the block. A block that
+            // ends the screen on a `N/M:select` footer (live chrome that transcript text quoting a
+            // prompt can never be followed by) is still the live modal. The cursor must lie ABOVE the
+            // block: a cursor below it, or a quoted block with anything after its footer, stays rejected.
+            const detached = effectiveCursorRow < interactiveStartRow
+                && lastChoiceBlock !== undefined
+                && choiceEndRow === lastChoiceBlock.endRow
+                && DETACHED_CURSOR_FOOTER_RE.test(lines[lastNonBlankRow]);
+            if (!detached) return empty;
         }
     }
 

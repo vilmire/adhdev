@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
 import { ManualAttendanceTracker } from '../../src/providers/manual-attendance.js'
 import {
+  isNegativeApprovalLabel,
   isPersistentApprovalGrantLabel,
   modalAllowsAutoApproval,
   pickAutoApprovalButton,
@@ -179,6 +180,20 @@ describe('maybeAutoApproveStatus — least privilege end to end', () => {
       type: 'provider_setup', modalKey: 'modal:c', runtimeDirectory: '/repo-wt/x', displayedDirectory: '/repo',
     }, 'Do you trust the contents of this directory?'))
     expect(h.resolves).toEqual([])
+  })
+
+  it('never auto-picks a "Never allow" denial, even when it is the only candidate left', () => {
+    const grok = [
+      "Yes, and don't ask again for anything (always-approve mode)",
+      'Always allow: (Adhdev-mesh) Git Status',
+      'Yes',
+      'No, reject (type to add feedback)',
+      'Never allow: (Adhdev-mesh) Git Status',
+    ]
+    expect(pickLeastPrivilegeApprovalButton(grok)).toEqual({ index: 2, label: 'Yes' })
+    expect(isNegativeApprovalLabel('Never allow: (Adhdev-mesh) Git Status')).toBe(true)
+    // No plain Yes on screen: leave it for the owner rather than pressing the denial.
+    expect(pickLeastPrivilegeApprovalButton([grok[0], grok[1], grok[3], grok[4]]).index).toBe(-1)
   })
 
   it('formats the audit line without a mesh task as "-"', () => {
