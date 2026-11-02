@@ -43,6 +43,7 @@ import {
     isBusyChatStatus,
     isTerminalChatStatusEvent,
 } from './chat-status-classification'
+import { buildHistoryTimeCursor, historyRowDedupeKey } from './history-time-cursor'
 
 export { isTerminalChatStatusEvent }
 
@@ -70,12 +71,21 @@ export interface SessionChatHistoryPageRequest {
     offset: number
     excludeRecentCount: number
     /**
-     * (SEAM) Identity of the OLDEST message in the live window — the boundary
-     * history must page strictly older than. Empty string when that message
-     * carries no identity the daemon's history resolver understands (keyed
-     * bubbles carry only `messageId`); the daemon then uses `excludeRecentCount`.
+     * (SEAM) The boundary history must page strictly older than. Preferred form is a
+     * time cursor (`ts:<receivedAt>:<role>:<hash>`, see `history-time-cursor.ts`)
+     * anchored to the OLDEST row already shown (the oldest loaded/spilled row, else the
+     * oldest live bubble). Empty string when that row has no timestamp; the daemon then
+     * uses `excludeRecentCount`/`offset`. `offset`/`excludeRecentCount` are always the
+     * count-path values so a daemon that predates the cursor still pages correctly.
      */
     excludeFromIdentity: string
+}
+
+/** What the history loader hands back; `boundaryKind: 'time'` is the daemon acknowledging the cursor. */
+export interface SessionChatHistoryPageResult {
+    messages?: DashboardMessage[]
+    hasMore?: boolean
+    boundaryKind?: string
 }
 
 /**
@@ -229,6 +239,12 @@ export class SessionChatController {
     /** Status of the last applied view — the lane's own claim about the session. */
     private lastViewStatus: string | null = null
     private lastTerminalBaseRequestAt = 0
+    /** The user has paged at least once - the history lane's `hasMore` owns the affordance. */
+    private pagedOnce = false
+    /** Rows that scrolled off the live window into `historyMessages`; counted by the count path. */
+    private spilledCount = 0
+    /** 'count' once a page came back without the daemon acknowledging the time cursor. */
+    private pagingMode: 'cursor' | 'count' = 'cursor'
 
     constructor(options: SessionChatControllerOptions) {
         this.sendData = options.sendData
@@ -258,6 +274,7 @@ export class SessionChatController {
     clearLiveSnapshot(): void {
         this.historyGeneration += 1
         this.loadHistoryPromise = null
+        this.resetPaging()
         this.snapshot = {
             ...buildEmptySnapshot(),
             hasLiveSnapshot: true,
@@ -283,6 +300,7 @@ export class SessionChatController {
             // still in flight) from the prior conversation on this runtime.
             this.historyGeneration += 1
             this.loadHistoryPromise = null
+            this.resetPaging()
             this.snapshot = buildEmptySnapshot()
         }
         if (nextHistory) this.historySessionId = nextHistory
@@ -291,21 +309,69 @@ export class SessionChatController {
         const current = this.snapshot
         // Once the user paged history, the history lane's own `hasMore` owns the
         // affordance; before that, the view's coverage does.
-        const hasMoreHistory = current.historyOffset > 0 ? current.hasMoreHistory : mapped.omittedBefore
+        const hasMoreHistory = this.pagedOnce ? current.hasMoreHistory : mapped.omittedBefore
+        // The live window is the newest N bubbles, so a new message pushes the oldest one out of
+        // it. Keep what scrolls off (it is in neither the live set nor any loaded page) so that
+        // the next "Load earlier" page can anchor to it instead of leaving a hole.
+        const spilled = this.collectSpilled(current, mapped.messages)
         if (
-            current.hasLiveSnapshot
+            spilled.length === 0
+            && current.hasLiveSnapshot
             && sameMessageObjects(current.liveMessages, mapped.messages)
             && current.omittedBefore === mapped.omittedBefore
             && current.hasMoreHistory === hasMoreHistory
         ) return
+        let historyMessages = current.historyMessages
+        if (spilled.length > 0) {
+            this.spilledCount += spilled.length
+            const merged = [...historyMessages, ...spilled]
+            historyMessages = merged.length > DEFAULT_MAX_RETAINED_HISTORY_MESSAGES
+                ? merged.slice(merged.length - DEFAULT_MAX_RETAINED_HISTORY_MESSAGES)
+                : merged
+        }
         this.snapshot = {
             ...current,
             liveMessages: mapped.messages,
+            historyMessages,
             hasLiveSnapshot: true,
             omittedBefore: mapped.omittedBefore,
             hasMoreHistory,
         }
         this.emit()
+    }
+
+    private resetPaging(): void {
+        this.pagedOnce = false
+        this.spilledCount = 0
+        this.pagingMode = 'cursor'
+    }
+
+    /**
+     * Leading live bubbles that the next view no longer holds while it still holds the one
+     * after them (continuity proves it is an eviction from the front, not a replaced view).
+     */
+    private collectSpilled(current: SessionChatSnapshot, next: readonly DashboardMessage[]): DashboardMessage[] {
+        const prev = current.liveMessages
+        if (!current.hasLiveSnapshot || prev.length === 0 || next.length === 0) return []
+        const idOf = (message: DashboardMessage) => message.messageId || message.id || ''
+        const nextIds = new Set<string>()
+        for (const message of next) {
+            const id = idOf(message)
+            if (id) nextIds.add(id)
+        }
+        let evicted = 0
+        while (evicted < prev.length && !nextIds.has(idOf(prev[evicted]!))) evicted += 1
+        if (evicted === 0 || evicted >= prev.length) return []
+        const shown = new Set<string>()
+        for (const message of current.historyMessages) {
+            const key = historyRowDedupeKey(message)
+            if (key) shown.add(key)
+        }
+        return prev.slice(0, evicted).filter((message) => {
+            if (!idOf(message)) return false
+            const key = historyRowDedupeKey(message)
+            return !key || !shown.has(key)
+        })
     }
 
     subscribe(listener: (snapshot: SessionChatSnapshot) => void): () => void {
@@ -352,7 +418,7 @@ export class SessionChatController {
      * Load one page of history OLDER than the live window — an explicit user
      * action ("Load older messages"), served by the daemon's `chat_history`.
      */
-    async loadHistoryPage(loader: (request: SessionChatHistoryPageRequest) => Promise<{ messages?: DashboardMessage[]; hasMore?: boolean }>): Promise<void> {
+    async loadHistoryPage(loader: (request: SessionChatHistoryPageRequest) => Promise<SessionChatHistoryPageResult>): Promise<void> {
         if (this.loadHistoryPromise) return this.loadHistoryPromise
         this.snapshot = { ...this.snapshot, historyError: null }
         this.emit()
@@ -360,24 +426,53 @@ export class SessionChatController {
         const run = (async () => {
             try {
                 const hadLiveSnapshot = this.snapshot.hasLiveSnapshot
-                const excludeRecentCount = hadLiveSnapshot
+                // Count-path values (also what a daemon without the cursor reads): the rows the
+                // pane shows from the live window plus those that scrolled off it.
+                const excludeRecentCount = (hadLiveSnapshot
                     ? this.snapshot.liveMessages.length
-                    : Math.max(this.snapshot.liveMessages.length, this.fallbackRecentCount)
+                    : Math.max(this.snapshot.liveMessages.length, this.fallbackRecentCount)) + this.spilledCount
+                // Anchor to the oldest row already shown - an identity/time boundary that does not
+                // move when messages arrive between pages.
+                const anchor = this.snapshot.historyMessages[0] ?? this.snapshot.liveMessages[0]
+                const cursor = hadLiveSnapshot && this.pagingMode === 'cursor' ? buildHistoryTimeCursor(anchor) : ''
+                const usedCursor = cursor !== ''
                 const result = await loader({
-                    offset: this.snapshot.historyOffset,
+                    offset: usedCursor ? 0 : this.snapshot.historyOffset,
                     excludeRecentCount,
-                    excludeFromIdentity: buildHistoryBoundaryIdentity(this.snapshot.liveMessages[0]),
+                    excludeFromIdentity: usedCursor ? cursor : buildHistoryBoundaryIdentity(this.snapshot.liveMessages[0]),
                 })
                 if (generation !== this.historyGeneration) return
-                const nextMessages = Array.isArray(result.messages) ? result.messages : []
+                if (usedCursor && result.boundaryKind !== 'time') {
+                    // The daemon did not honour the cursor and answered by count (mixed-version
+                    // fleet): page by count from here on. `historyOffset` is still 0 on this
+                    // first page, so the count it used (offset 0) and the next one line up.
+                    this.pagingMode = 'count'
+                }
+                const rawMessages = Array.isArray(result.messages) ? result.messages : []
+                // Rows may be reachable from more than one place (the cursor's tie rows, a
+                // tool bubble whose stored form differs): never show one twice.
+                const shown = new Set<string>()
+                for (const message of [...this.snapshot.liveMessages, ...this.snapshot.historyMessages]) {
+                    const key = historyRowDedupeKey(message)
+                    if (key) shown.add(key)
+                }
+                const nextMessages = rawMessages.filter((message) => {
+                    const key = historyRowDedupeKey(message)
+                    if (!key) return true
+                    if (shown.has(key)) return false
+                    shown.add(key)
+                    return true
+                })
                 const mergedHistory = [...nextMessages, ...this.snapshot.historyMessages]
                 const cappedHistory = mergedHistory.length > DEFAULT_MAX_RETAINED_HISTORY_MESSAGES
                     ? mergedHistory.slice(mergedHistory.length - DEFAULT_MAX_RETAINED_HISTORY_MESSAGES)
                     : mergedHistory
+                this.pagedOnce = true
                 this.snapshot = {
                     ...this.snapshot,
                     historyMessages: cappedHistory,
-                    historyOffset: this.snapshot.historyOffset + nextMessages.length,
+                    // Rows the daemon returned (not the deduped subset): the count path's offset.
+                    historyOffset: this.snapshot.historyOffset + rawMessages.length,
                     hasMoreHistory: result.hasMore === true,
                     historyError: null,
                 }

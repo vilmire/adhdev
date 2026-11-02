@@ -156,7 +156,14 @@ export interface TranscriptReadChatPayload {
     activeModal: { message: string; buttons: string[] } | null;
     activeInteractivePrompt: { message: string; options: string[] } | null;
     messages: Record<string, unknown>[];
+    /**
+     * The replica window's bubble count (`coverage.totalMessageCount`). It is the WHOLE chat only
+     * when `omittedBefore` is false; otherwise older messages exist beyond the window and this is
+     * a lower bound - see `totalMessagesIsLowerBound`.
+     */
     totalMessages: number;
+    /** True when `totalMessages` counts only the retained window (`omittedBefore`). */
+    totalMessagesIsLowerBound: boolean;
     turn?: Record<string, unknown>;
     messageSource?: Record<string, unknown>;
     transcriptProvenance?: Record<string, unknown>;
@@ -206,6 +213,7 @@ export function mapTranscriptViewToReadChatPayload(
             : null,
         messages: snapshot.messages.filter((message) => !isActivityWireMessage(message)).map(mapTranscriptMessage),
         totalMessages: snapshot.coverage.totalMessageCount,
+        totalMessagesIsLowerBound: options.omittedBefore === true,
         // Absent turn projection stays absent — `read_chat` omits the key on the
         // provider-FSM fallback and `slimTurnPresentation` returns null for it,
         // so a fabricated empty `turn` would break that contract.

@@ -1,3 +1,4 @@
+import { buildReplicaWindowNote, replicaCoversRequestedTail } from './mesh-read-chat-window.js';
 import { withProviderPinWarning } from './mesh-provider-pin-advisory.js';
 import type { NodeCapabilitySlot, ProviderApprovalTarget } from '@adhdev/mesh-shared';
 // Mesh tool implementations — session domain.
@@ -259,6 +260,11 @@ export async function meshReadChat(
     // the answer: the live read is. It is kept only for when that read cannot reach
     // the node — a last verified view, flagged stale, beats the cached summary.
     let staleReplicaPayload: Record<string, any> | null = null;
+    // A fresh replica that holds fewer messages than this read asked for AND does not reach
+    // the start of the chat (its window is the newest bubbles only). The live read is the
+    // answer; this is kept only for when that read cannot reach the node, and is then
+    // returned with an explicit `truncated` note instead of passing the window off as all.
+    let truncatedReplicaPayload: Record<string, any> | null = null;
     let providerSessionWarning: Record<string, unknown> = {};
     // An EXPLICIT provider_session_id asks for one provider conversation. The replica is
     // keyed by (owner daemon, runtime session) and always holds that session's CURRENT
@@ -282,6 +288,9 @@ export async function meshReadChat(
         } else if (replica.payload && replica.payload.stale === true) {
             staleReplicaPayload = replica.payload;
             replicaFallbackReason = 'stale_active_session';
+        } else if (replica.payload && !replicaCoversRequestedTail(replica.payload, args)) {
+            truncatedReplicaPayload = replica.payload;
+            replicaFallbackReason = 'replica_window_too_small';
         } else if (replica.payload) {
             return withPending(renderMeshReadChatPayload(replica.payload, args));
         } else {
@@ -307,6 +316,7 @@ export async function meshReadChat(
         // summary. See buildMeshReadChatCacheFallback.
         if (isLocalNode || !isP2pRelayTransportFailure(e)) throw e;
         if (staleReplicaPayload) return withPending(renderMeshReadChatPayload(staleReplicaPayload, args));
+        if (truncatedReplicaPayload) return withPending(renderMeshReadChatPayload(truncatedReplicaPayload, args, { liveReadUnavailable: true }));
         return withPending(await buildMeshReadChatCacheFallback(ctx, args, node, e));
     }
     return withPending(renderMeshReadChatPayload({ ...(unwrapCommandPayload(result) as Record<string, any>), ...providerSessionWarning }, args, {
@@ -338,7 +348,7 @@ function attachPendingCoordinatorEvents(rendered: string, events: any[]): string
 function renderMeshReadChatPayload(
     source: Record<string, any>,
     args: { node_id: string; session_id: string; tail?: number; compact?: boolean },
-    opts: { fallbackReason?: string | null } = {},
+    opts: { fallbackReason?: string | null; liveReadUnavailable?: boolean } = {},
 ): string {
     const payload = annotateRapidReadChatAdvisory(source, {
         key: `mesh:${args.node_id}:${args.session_id}`,
@@ -350,6 +360,7 @@ function renderMeshReadChatPayload(
     // and declined — absent on a local node (never attempted) and on a
     // replica-sourced payload (which carries `transcriptReadSource: 'replica'`
     // from the adapter instead).
+    const windowNote = buildReplicaWindowNote(payload, args, opts.liveReadUnavailable === true);
     const sourceTelemetry = opts.fallbackReason
         ? { transcriptReadSource: 'legacy_read_chat', transcriptFallbackReason: opts.fallbackReason }
         : {};
@@ -374,6 +385,7 @@ function renderMeshReadChatPayload(
                     ? { omittedBefore: payload.omittedBefore === true, stale: payload.stale === true }
                     : {}),
                 ...sourceTelemetry,
+                ...windowNote,
                 ...(payload.providerSessionWarning ? { providerSessionWarning: payload.providerSessionWarning } : {}),
                 ...(payload.pollingAdvisory ? { pollingAdvisory: payload.pollingAdvisory } : {}),
             },
@@ -389,7 +401,7 @@ function renderMeshReadChatPayload(
     const tailed = tail !== undefined && messages && messages.length > tail
         ? { messages: messages.slice(-tail), tailOmittedMessageCount: messages.length - tail }
         : {};
-    return JSON.stringify({ ...payload, ...tailed, ...sourceTelemetry }, null, 2);
+    return JSON.stringify({ ...payload, ...tailed, ...sourceTelemetry, ...windowNote }, null, 2);
 }
 
 export async function meshReadDebug(

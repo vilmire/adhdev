@@ -147,6 +147,74 @@ export function buildHistoryMessageIdentity(message: HistoryMessage): string {
     return '';
 }
 
+/**
+ * (PAGING-CURSOR) Stable time cursor for "load earlier".
+ *
+ * Wire form `ts:<receivedAt>:<role>:<hash8>` rides in the existing
+ * `excludeFromIdentity` string, so every layer that already threads that
+ * argument (command, native reader, bounded-tail cache key, native page cache)
+ * carries it unchanged, and an older daemon - which does not know the `ts:`
+ * scheme - resolves it to "not found" and falls back to the count path.
+ *
+ * It names a position in TIME, not in a count taken against a history length
+ * that moves under the caller: the caller anchors it to the oldest row it
+ * already shows, so messages arriving between pages cannot shift the boundary.
+ * An exact `(receivedAt, role, content hash)` match is preferred; when no row
+ * matches exactly (the anchor is an activity row the prose-only filter dropped,
+ * its stored content differs, or it is not in history yet) the boundary is the
+ * first row at or after `receivedAt`. Content-free apart from a 32-bit hash.
+ */
+export const HISTORY_TIME_CURSOR_PREFIX = 'ts:';
+
+/** FNV-1a (32-bit) over whitespace-normalized content - kept byte-identical in web-core. */
+export function hashHistoryCursorContent(content: string): string {
+    const text = String(content || '').replace(/\s+/g, ' ').trim();
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < text.length; i += 1) {
+        hash ^= text.charCodeAt(i);
+        hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return hash.toString(16).padStart(8, '0');
+}
+
+export function buildHistoryTimeCursor(message: { receivedAt?: number; role?: string; content?: string }): string {
+    const at = Number(message.receivedAt);
+    if (!Number.isFinite(at) || at <= 0) return '';
+    return `${HISTORY_TIME_CURSOR_PREFIX}${Math.floor(at)}:${message.role || ''}:${hashHistoryCursorContent(message.content || '')}`;
+}
+
+export function parseHistoryTimeCursor(cursor: string | undefined): { receivedAt: number; role: string; hash: string } | null {
+    if (!cursor || !cursor.startsWith(HISTORY_TIME_CURSOR_PREFIX)) return null;
+    const parts = cursor.slice(HISTORY_TIME_CURSOR_PREFIX.length).split(':');
+    if (parts.length !== 3) return null;
+    const receivedAt = Number(parts[0]);
+    if (!Number.isFinite(receivedAt) || receivedAt <= 0) return null;
+    return { receivedAt, role: parts[1]!, hash: parts[2]! };
+}
+
+/**
+ * Index of the first row of `rows` (sorted by receivedAt) that must NOT be
+ * paged - everything before it is strictly older than the cursor. -1 when the
+ * cursor is malformed (caller falls back to the count).
+ */
+export function resolveTimeCursorIndex(rows: ReadonlyArray<{ receivedAt?: number; role?: string; content?: string }>, cursor: string | undefined): number {
+    const parsed = parseHistoryTimeCursor(cursor);
+    if (!parsed) return -1;
+    for (let i = rows.length - 1; i >= 0; i -= 1) {
+        const row = rows[i]!;
+        if (Math.floor(Number(row.receivedAt)) === parsed.receivedAt && (row.role || '') === parsed.role
+            && hashHistoryCursorContent(row.content || '') === parsed.hash) return i;
+    }
+    let low = 0;
+    let high = rows.length;
+    while (low < high) {
+        const mid = (low + high) >>> 1;
+        if (Number(rows[mid]!.receivedAt) < parsed.receivedAt) low = mid + 1;
+        else high = mid;
+    }
+    return low;
+}
+
 export function pageHistoryRecords(
     agentType: string,
     records: HistoryMessage[],
@@ -156,7 +224,7 @@ export function pageHistoryRecords(
     historyBehavior?: ProviderHistoryBehavior,
     excludeFromIdentity?: string,
     excludeActivity: boolean = false,
-): { messages: HistoryMessage[]; hasMore: boolean; boundaryResolved?: boolean; boundaryDigest?: string } {
+): { messages: HistoryMessage[]; hasMore: boolean; boundaryResolved?: boolean; boundaryDigest?: string; boundaryKind?: 'time' } {
     // chat_history's prose-only default (mirrors read_chat's `includeActivity`
     // opt-in contract). Applied BEFORE dedup/collapse/paging so offset/limit/
     // identity-cursor arithmetic operates in the same message space the caller
@@ -179,9 +247,12 @@ export function pageHistoryRecords(
     // immune to the N-bubbles -> M-records shrink that the count arithmetic
     // below gets wrong. Falls back to the count when the cursor is absent or
     // unresolvable — see findCollapsedIndexByIdentity.
-    const cursorIndex = excludeFromIdentity
-        ? findCollapsedIndexByIdentity(collapsed, excludeFromIdentity)
-        : -1;
+    const timeCursor = parseHistoryTimeCursor(excludeFromIdentity) !== null;
+    const cursorIndex = !excludeFromIdentity
+        ? -1
+        : timeCursor
+            ? resolveTimeCursorIndex(collapsed, excludeFromIdentity)
+            : findCollapsedIndexByIdentity(collapsed, excludeFromIdentity);
     const boundedExclude = cursorIndex >= 0
         ? collapsed.length - cursorIndex
         : Math.min(normalizePaginationNumber(excludeRecentCount, 0, 0), collapsed.length);
@@ -190,7 +261,10 @@ export function pageHistoryRecords(
     const sliced = collapsed.slice(startInclusive, endExclusive);
     return { messages: sliced, hasMore: startInclusive > 0,
         ...(excludeFromIdentity ? { boundaryResolved: cursorIndex >= 0,
-            ...(cursorIndex >= 0 ? { boundaryDigest: historyBoundaryDigest(collapsed[cursorIndex]!) } : {}) } : {}),
+            // A resolved time cursor is acknowledged explicitly: a daemon that predates it answers
+            // with the count and never sets this, which is how the caller tells the two apart.
+            ...(timeCursor && cursorIndex >= 0 ? { boundaryKind: 'time' as const } : {}),
+            ...(cursorIndex >= 0 && cursorIndex < collapsed.length ? { boundaryDigest: historyBoundaryDigest(collapsed[cursorIndex]!) } : {}) } : {}),
     };
 }
 

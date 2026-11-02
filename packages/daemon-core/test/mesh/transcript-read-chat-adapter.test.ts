@@ -278,6 +278,11 @@ describe('mapTranscriptViewToReadChatPayload — required-field injection', () =
         expect(() => mapTranscriptViewToReadChatPayload(inject('messages', base), opts)).toThrow();
     });
 
+    it('totalMessages is flagged a lower bound exactly when the replica omits older history', () => {
+        expect(mapTranscriptViewToReadChatPayload(base, { omittedBefore: true, stale: false }).totalMessagesIsLowerBound).toBe(true);
+        expect(mapTranscriptViewToReadChatPayload(base, { omittedBefore: false, stale: false }).totalMessagesIsLowerBound).toBe(false);
+    });
+
     it('coverage: present → totalMessages is the untailed count; removed → the mapper throws', () => {
         expect(mapTranscriptViewToReadChatPayload(base, opts).totalMessages).toBe(4);
         expect(() => mapTranscriptViewToReadChatPayload(inject('coverage', base), opts)).toThrow();

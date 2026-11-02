@@ -98,11 +98,13 @@ export function useSessionChatController(
                 ...(readChatActivityVisiblePreference() ? { includeActivity: true } : {}),
             })
             const result = raw && typeof raw === 'object' && 'result' in (raw as Record<string, unknown>)
-                ? (raw as { result?: { messages?: DashboardMessage[]; hasMore?: boolean } }).result || {}
-                : (raw as { messages?: DashboardMessage[]; hasMore?: boolean } | undefined) || {}
+                ? (raw as { result?: { messages?: DashboardMessage[]; hasMore?: boolean; boundaryKind?: string } }).result || {}
+                : (raw as { messages?: DashboardMessage[]; hasMore?: boolean; boundaryKind?: string } | undefined) || {}
             return {
                 messages: Array.isArray(result.messages) ? result.messages : [],
                 hasMore: result.hasMore === true,
+                // The daemon's acknowledgement that it paged by the time cursor, not the count.
+                ...(typeof result.boundaryKind === 'string' ? { boundaryKind: result.boundaryKind } : {}),
             }
         })
     }, [activeConv.agentType, controller, daemonId, historySessionId, sendCommand, sessionId])

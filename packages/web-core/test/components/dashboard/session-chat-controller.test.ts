@@ -189,7 +189,8 @@ describe('older history ("Load older messages")', () => {
     }))
     const loader = vi.fn().mockResolvedValue({ messages: [{ role: 'user', content: 'older' }], hasMore: false })
     await c.loadHistoryPage(loader)
-    expect(loader).toHaveBeenCalledWith({ offset: 0, excludeRecentCount: 2, excludeFromIdentity: '' })
+    // Anchored to the oldest live bubble by a time cursor; the count-path values ride along for older daemons.
+    expect(loader).toHaveBeenCalledWith({ offset: 0, excludeRecentCount: 2, excludeFromIdentity: expect.stringMatching(/^ts:1:assistant:[0-9a-f]{8}$/) })
     const snapshot = c.getSnapshot()
     expect(snapshot.historyMessages.map((m) => m.content)).toEqual(['older'])
     expect(snapshot.historyOffset).toBe(1)

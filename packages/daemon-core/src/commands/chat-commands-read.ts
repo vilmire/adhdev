@@ -8,6 +8,7 @@
 import type { CommandResult, CommandHelpers } from './handler.js';
 import { type ProviderModule } from '../providers/contracts.js';
 import { isNativeSourceCanonicalHistory, readProviderChatHistory, readProviderChatHistoryAsync, hasAsyncProviderHistoryReader } from '../config/provider-native-history.js';
+import { parseHistoryTimeCursor, resolveTimeCursorIndex } from '../config/chat-history-tail.js';
 import { LOG } from '../logging/logger.js';
 import type { ChatMessage } from '../types.js';
 import { isActivityChatMessage, normalizeChatMessages } from '../providers/chat-message-normalization.js';
@@ -72,10 +73,12 @@ function readSafeSessionPtyHistoryPage(args: {
     provider?: ProviderModule;
     sessionWorkspace?: string;
     excludeRecentCount: number;
+    /** (PAGING-CURSOR) time cursor, preferred over the count - see `resolveTimeCursorIndex`. */
+    excludeFromIdentity?: string;
     offset: number;
     limit: number;
     excludeActivity?: boolean; // chat_history's prose-only default — same contract as the native page
-}): { messages: ChatMessage[]; hasMore: boolean } | null {
+}): { messages: ChatMessage[]; hasMore: boolean; boundaryResolved?: boolean; boundaryKind?: 'time' } | null {
     const adapter = getTargetedCliAdapter(args.h, args.readArgs, args.provider?.type);
     if (!adapter || typeof adapter.getScriptParsedStatus !== 'function') return null;
     const targetSessionId = effectiveReadSessionId(args.h, args.readArgs?.targetSessionId);
@@ -105,9 +108,17 @@ function readSafeSessionPtyHistoryPage(args: {
         ? collapsedPtyMessages.filter((message) => !isActivityChatMessage(message))
         : collapsedPtyMessages;
     if (ptyMessages.length === 0) return null;
-    const end = Math.max(0, ptyMessages.length - args.excludeRecentCount - args.offset);
+    // Time cursor only when every row carries a timestamp it can be ordered by; otherwise the
+    // count below applies and the reply carries no acknowledgement.
+    const timeCursorUsable = parseHistoryTimeCursor(args.excludeFromIdentity) !== null
+        && ptyMessages.every((message, i) => typeof message.receivedAt === 'number' && message.receivedAt > 0
+            && (i === 0 || message.receivedAt >= (ptyMessages[i - 1]!.receivedAt as number)));
+    const cursorIndex = timeCursorUsable ? resolveTimeCursorIndex(ptyMessages as any, args.excludeFromIdentity) : -1;
+    const exclude = cursorIndex >= 0 ? ptyMessages.length - cursorIndex : args.excludeRecentCount;
+    const end = Math.max(0, ptyMessages.length - exclude - args.offset);
     const start = Math.max(0, end - args.limit);
-    return { messages: ptyMessages.slice(start, end), hasMore: start > 0 };
+    return { messages: ptyMessages.slice(start, end), hasMore: start > 0,
+        ...(cursorIndex >= 0 ? { boundaryResolved: true, boundaryKind: 'time' as const } : {}) };
 }
 
 // (A2.2) isNativeHistoryFreshEnough removed. The v1 freshness comparison
@@ -274,6 +285,7 @@ async function readChatHistoryPage(h: CommandHelpers, args: any, targetWorkspace
                     provider,
                     sessionWorkspace: workspace,
                     excludeRecentCount,
+                    excludeFromIdentity,
                     offset: offset || 0,
                     limit: limit || 30,
                     excludeActivity: !includeActivity,
@@ -283,6 +295,7 @@ async function readChatHistoryPage(h: CommandHelpers, args: any, targetWorkspace
                         success: true,
                         messages: ptyPage.messages,
                         hasMore: ptyPage.hasMore,
+                        ...(ptyPage.boundaryKind ? { boundaryResolved: true, boundaryKind: ptyPage.boundaryKind } : {}),
                         source: 'pty-parser',
                         agent: agentStr,
                     };

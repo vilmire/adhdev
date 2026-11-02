@@ -14,11 +14,14 @@ import * as path from 'path';
 import { buildRuntimeSystemChatMessage } from '../providers/chat-message-normalization.js';
 import { carryBubbleIdentity } from '../providers/cli-provider-history-dedup.js';
 import type { ProviderHistoryBehavior } from '../providers/contracts.js';
+import { isActivityChatMessage } from '../providers/chat-message-normalization.js';
 import { getHistoryDir, listHistoryFiles } from './chat-history-files.js';
 import { savedHistorySessionCache, buildSavedHistoryFileSignatureMap, buildSavedHistoryCacheSignature, invalidatePersistedSavedHistoryIndex, updateSavedHistoryIndexForSessionStart, updateSavedHistoryIndexForAppendedMessages } from './saved-history-index.js';
-import { readBoundedTailCache, writeBoundedTailCache, pageHistoryRecords, BOUNDED_TAIL_SLACK, isBoundedTailRequest, readBoundedTailRecords } from './chat-history-tail.js';
+import { readBoundedTailCache, writeBoundedTailCache, pageHistoryRecords, BOUNDED_TAIL_SLACK, isBoundedTailRequest, readBoundedTailRecords, parseHistoryTimeCursor } from './chat-history-tail.js';
 import { cleanupHistoryContent, buildHistoryMessageHash, buildHistoryMessageSignature, dedupeAdjacentHistoryMessages, collapseReplayAssistantTurns, sanitizeHistoryMessage, type HistoryMessage } from './chat-history-messages.js';
 const RETAIN_DAYS = 30;
+/** Ceiling for widening the bounded-tail read to reach a deep time cursor; past it the whole history is read. */
+const BOUNDED_TAIL_CURSOR_MAX_WINDOW = 200_000;
 
 export class ChatHistoryWriter {
 /** Last seen message count per agent (deduplication) */
@@ -477,7 +480,7 @@ export function readChatHistory(
     historyBehavior?: ProviderHistoryBehavior,
     excludeFromIdentity?: string,
     excludeActivity: boolean = false,
-): { messages: HistoryMessage[]; hasMore: boolean } {
+): { messages: HistoryMessage[]; hasMore: boolean; boundaryResolved?: boolean; boundaryDigest?: string; boundaryKind?: 'time' } {
     try {
         const sanitized = agentType.replace(/[^a-zA-Z0-9_-]/g, '_');
         const dir = path.join(getHistoryDir(), sanitized);
@@ -502,13 +505,24 @@ export function readChatHistory(
             const numericOffset = Math.max(0, Number(offset));
             const numericExclude = Math.max(0, Number(excludeRecentCount));
             const needed = numericLimit + numericOffset + numericExclude + Math.max(BOUNDED_TAIL_SLACK, numericLimit);
-            const { records, readAllFiles } = readBoundedTailRecords(agentType, dir, files, needed);
+            let { records, readAllFiles } = readBoundedTailRecords(agentType, dir, files, needed);
+            // A time cursor can sit arbitrarily deep, so widen the window until a page's worth
+            // of rows older than it is in hand (or the whole conversation has been read).
+            const timeCursor = parseHistoryTimeCursor(excludeFromIdentity);
+            if (timeCursor) {
+                let window = needed;
+                const olderThanCursor = (rows: HistoryMessage[]) => rows.reduce((n, row) => n + (row.receivedAt < timeCursor.receivedAt && !(excludeActivity && isActivityChatMessage(row as any)) ? 1 : 0), 0);
+                while (!readAllFiles && window < BOUNDED_TAIL_CURSOR_MAX_WINDOW && olderThanCursor(records) < numericLimit + numericOffset + Math.max(BOUNDED_TAIL_SLACK, numericLimit)) {
+                    window *= 2;
+                    ({ records, readAllFiles } = readBoundedTailRecords(agentType, dir, files, window));
+                }
+            }
             const result = pageHistoryRecords(agentType, records, offset, limit, excludeRecentCount, historyBehavior, excludeFromIdentity, excludeActivity);
             // If we read every file, the conversation is fully represented in the
             // window and pageHistoryRecords' hasMore is authoritative. If we
             // stopped early there are older messages we never read, so hasMore
             // must stay true regardless of the in-window slice position.
-            const boundedResult = readAllFiles ? result : { messages: result.messages, hasMore: true };
+            const boundedResult = readAllFiles ? result : { ...result, hasMore: true };
             writeBoundedTailCache(cacheKey, signature, boundedResult);
             return boundedResult;
         }

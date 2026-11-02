@@ -18,6 +18,7 @@ vi.mock('../../src/config/provider-native-history.js', async (importOriginal) =>
   },
 }))
 
+import { buildHistoryTimeCursor } from '../../src/config/chat-history-tail.js'
 import { __resetProviderSessionPinsForTest, handleChatHistory } from '../../src/commands/chat-commands.js'
 
 const WORKSPACE = '/tmp/adhdev-project'
@@ -125,6 +126,29 @@ describe('handleChatHistory safe PTY fallback (Load older zero-bubble fix)', () 
       'pty row 8',
     ])
     expect(result.hasMore).toBe(true)
+  })
+
+  it('pages the PTY fallback by the time cursor when given (rows arriving meanwhile do not move it)', async () => {
+    mocks.readProviderChatHistory.mockReturnValue({ messages: [], hasMore: false, source: 'provider-native', providerSessionId: 'provider-history-1' })
+    const rows = ptyMessages(10)
+    const cursor = buildHistoryTimeCursor(rows[6]!)
+    // Three newer rows arrive after the browser took its anchor: the count (2) would now be stale.
+    const adapter = createAdapter({ messages: ptyMessages(13) })
+    const result = await handleChatHistory(createHelpers(adapter) as any, {
+      agentType: 'codex-cli', targetSessionId: 'session-1', historySessionId: 'provider-history-1',
+      workspace: WORKSPACE, offset: 0, limit: 4, excludeRecentCount: 4, excludeFromIdentity: cursor,
+    })
+    expect((result as any).source).toBe('pty-parser')
+    expect((result as any).boundaryKind).toBe('time')
+    expect((result.messages as any[]).map(m => m.content)).toEqual(['pty row 3', 'pty row 4', 'pty row 5', 'pty row 6'])
+    // A daemon-side timestamp-less transcript keeps the count and does not claim the cursor.
+    const bare = createAdapter({ messages: ptyMessages(10).map(({ receivedAt, ...rest }) => rest) })
+    const counted = await handleChatHistory(createHelpers(bare) as any, {
+      agentType: 'codex-cli', targetSessionId: 'session-1', historySessionId: 'provider-history-1',
+      workspace: WORKSPACE, offset: 0, limit: 4, excludeRecentCount: 2, excludeFromIdentity: cursor,
+    })
+    expect((counted as any).boundaryKind).toBeUndefined()
+    expect((counted.messages as any[]).map(m => m.content)).toEqual(['pty row 5', 'pty row 6', 'pty row 7', 'pty row 8'])
   })
 
   it('recovers a safely attributed PTY page when the exact native history read is unsafely mapped', async () => {
