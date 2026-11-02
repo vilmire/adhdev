@@ -1,7 +1,6 @@
 import type { TurnAttempt } from './types.js';
 import type { TurnProbeRead } from './probe.js';
 import { turnStartBoundary } from './probe.js';
-import { notifyMeshCoordinator } from './deliver.js';
 
 // Two complete generating/idle cycles in five minutes, spanning at least 30s:
 // one idle edge or a quick repaint burst is not enough to page a coordinator.
@@ -30,17 +29,41 @@ export interface WorkerSessionHealthEvent {
     source: 'probe' | 'status' | 'monitor:no_progress';
 }
 
-/** Advisory session signals; never change node health, task ownership or retry policy. */
+/** One advisory signal currently held for an open attempt (the `quietWorkerSignals` entry of mesh_status). */
+export interface QuietWorkerSignal {
+    signal: WorkerSessionHealthSignal;
+    taskId?: string;
+    nodeId?: string;
+    sessionId: string;
+    attemptId: string;
+    generation: number;
+    /** When the monitor first raised it. */
+    since: number;
+    /** Seconds without observed progress, when the signal measures it (stalled). */
+    quietSec?: number;
+}
+const QUIET_SIGNAL_LIST_MAX = 12;
+
+/**
+ * Advisory session signals; never change node health, task ownership or retry policy.
+ *
+ * Quiet by construction (2026-11-02): a signal is STATE the coordinator can read in
+ * `mesh_status` (`quietWorkerSignals`), never a message typed into its PTY. The one stall that
+ * wakes a coordinator is the reducer's `no_progress` notice (policy.stallWakeMs, once per
+ * attempt, durable across restarts); this monitor used to page a second time for the same stall
+ * ("Worker session … stalled") from in-memory state that a daemon restart forgot.
+ * `emit` stays injectable for tests and observers.
+ */
 export function createWorkerSessionHealthMonitor(
-    emit: (owner: WorkerSessionHealthOwner, event: WorkerSessionHealthEvent) => void = notifyWorkerSessionHealth,
+    emit: (owner: WorkerSessionHealthOwner, event: WorkerSessionHealthEvent) => void = () => {},
 ) {
-    type State = { status: string; statusAt?: number; lastAt: number; edges: WorkerSessionTransition[]; failures: number; lastStallAt?: number; active: Set<WorkerSessionHealthSignal> };
+    type State = { status: string; statusAt?: number; lastAt: number; edges: WorkerSessionTransition[]; failures: number; lastStallAt?: number; active: Set<WorkerSessionHealthSignal>; owner?: WorkerSessionHealthOwner; since: Map<WorkerSessionHealthSignal, { at: number; quietMs: number }> };
     const states = new Map<string, State>();
     function stateFor(owner: WorkerSessionHealthOwner): State {
         const key = JSON.stringify([owner.meshId, owner.taskId, owner.sessionId, owner.attemptId, owner.generation]);
         let state = states.get(key);
         if (!state) {
-            state = { status: '', lastAt: 0, edges: [], failures: 0, active: new Set() };
+            state = { status: '', lastAt: 0, edges: [], failures: 0, active: new Set(), since: new Map() };
             states.set(key, state);
             if (states.size > 500) states.delete(states.keys().next().value!);
         }
@@ -68,7 +91,11 @@ export function createWorkerSessionHealthMonitor(
     function publish(owner: WorkerSessionHealthOwner, state: State, signals: Set<WorkerSessionHealthSignal>, at: number, quietMs: number, source: WorkerSessionHealthEvent['source']): void {
         if (state.edges.length >= WORKER_FLAP_TRANSITIONS
             && state.edges[state.edges.length - 1].at - state.edges[0].at >= WORKER_FLAP_MIN_SPAN_MS) signals.add('flapping');
+        state.owner = owner;
+        for (const signal of [...state.since.keys()]) if (!signals.has(signal)) state.since.delete(signal);
         for (const signal of signals) {
+            if (!state.since.has(signal)) state.since.set(signal, { at, quietMs });
+            else if (signal === 'stalled') state.since.get(signal)!.quietMs = quietMs;
             if (!state.active.has(signal)) emit(owner, {
                 signal, attemptId: owner.attemptId, generation: owner.generation, sessionId: owner.sessionId,
                 ...(owner.taskId ? { taskId: owner.taskId } : {}), ...(owner.nodeId ? { nodeId: owner.nodeId } : {}),
@@ -129,6 +156,22 @@ export function createWorkerSessionHealthMonitor(
                 && !read.transcript?.finalSummary && quietMs >= stallMs) signals.add('stalled');
             publish(attempt, state, signals, now, quietMs, 'probe');
         },
+        /** Signals currently held for open attempts of `meshId` (bounded, oldest first). */
+        quiet(meshId: string, isOpen: (attemptId: string) => boolean = () => true): QuietWorkerSignal[] {
+            const out: QuietWorkerSignal[] = [];
+            for (const state of states.values()) {
+                const o = state.owner;
+                if (!o || o.meshId !== meshId || state.since.size === 0 || !isOpen(o.attemptId)) continue;
+                for (const [signal, info] of state.since) {
+                    out.push({
+                        signal, sessionId: o.sessionId, attemptId: o.attemptId, generation: o.generation, since: info.at,
+                        ...(o.taskId ? { taskId: o.taskId } : {}), ...(o.nodeId ? { nodeId: o.nodeId } : {}),
+                        ...(signal === 'stalled' ? { quietSec: Math.round(info.quietMs / 1000) } : {}),
+                    });
+                }
+            }
+            return out.sort((a, b) => a.since - b.since).slice(0, QUIET_SIGNAL_LIST_MAX);
+        },
     };
 }
 
@@ -139,22 +182,4 @@ export function workerSessionHealthFor(components: object): WorkerSessionHealthM
     let monitor = monitors.get(components);
     if (!monitor) { monitor = createWorkerSessionHealthMonitor(); monitors.set(components, monitor); }
     return monitor;
-}
-
-function notifyWorkerSessionHealth(owner: WorkerSessionHealthOwner, event: WorkerSessionHealthEvent): void {
-    const trail = event.transitionHistory.map((edge) => `${edge.from}→${edge.to}@${new Date(edge.at).toISOString()}`).join(', ');
-    const coordinatorMessage = `[System] Worker session ${event.sessionId} on node ${owner.nodeId || 'unknown'} is ${event.signal} while holding task ${owner.taskId || owner.attemptId} at ${new Date(event.at).toISOString()}. `
-        + (event.signal === 'stalled' ? `No observed progress for ${Math.round(event.quietMs / 1000)}s. ` : '')
-        + `Consecutive transcript read failures: ${event.readFailureStreak}; generating/idle transitions in 5m: ${event.transitions}. `
-        + (trail ? `Observed transitions: ${trail}. ` : '')
-        + 'This is an advisory session signal; inspect the worker transcript and task history. It does not establish a failure or its cause.';
-    notifyMeshCoordinator({
-        event: 'mesh:dispatch_blocked', meshId: owner.meshId!, nodeLabel: owner.nodeId || event.sessionId,
-        ...(owner.nodeId ? { nodeId: owner.nodeId } : {}),
-        eventId: `worker_session_health:${owner.meshId}:${owner.taskId}:${event.sessionId}:${event.attemptId}:g${event.generation}:${event.signal}:${event.at}`,
-        metadataEvent: { ...event, source: 'worker_session_health', observationSource: event.source, coordinatorMessage },
-        coordinatorMessage, queuedAt: event.at,
-        ...(owner.coordinator?.daemonId ? { targetCoordinatorDaemonId: owner.coordinator.daemonId } : {}),
-        ...(owner.coordinator?.sessionId ? { targetCoordinatorSessionId: owner.coordinator.sessionId } : {}),
-    });
 }

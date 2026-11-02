@@ -70,4 +70,20 @@ describe('get_pending_mesh_events for a client without a coordinator session', (
         expect(res.events.map((e: any) => e.eventId)).toEqual(['n1']);
         expect(f.reads[0]).toMatchObject({ ack: true, surfacedSessionId: 'coord-1' });
     });
+
+    it('every answer carries the quiet notice counters and worker signals — as state, never as events', async () => {
+        const f = fakeRuntime(true);
+        const stats = { since: 1, wakes: 4, delivered: { completed: 5 }, suppressed: { 'no_progress:attempt_terminal': 2 }, coalesced: 1 };
+        const quiet = [{ signal: 'stalled' as const, sessionId: 's1', attemptId: 'a1', generation: 0, since: 2, quietSec: 300 }];
+        bindMeshNoticeRuntime({ ...f.runtime, noticeStats: () => stats, quietWorkerSignals: () => quiet });
+        const cursorOwned: any = await handler({} as any, { meshId: 'm1', coordinatorDaemonId: 'daemon-A' });
+        expect(cursorOwned).toMatchObject({ deliveredByCursor: true, noticeStats: stats, quietWorkerSignals: quiet });
+        const own: any = await handler({} as any, { meshId: 'm1', coordinatorDaemonId: 'daemon-A', selfCoordinatorInboxRead: true });
+        expect(own).toMatchObject({ noticeStats: stats, quietWorkerSignals: quiet });
+        // An empty mesh adds no fields.
+        bindMeshNoticeRuntime({ ...f.runtime, noticeStats: () => null, quietWorkerSignals: () => [] });
+        const none: any = await handler({} as any, { meshId: 'm1', coordinatorDaemonId: 'daemon-A', selfCoordinatorInboxRead: true });
+        expect('noticeStats' in none).toBe(false);
+        expect('quietWorkerSignals' in none).toBe(false);
+    });
 });

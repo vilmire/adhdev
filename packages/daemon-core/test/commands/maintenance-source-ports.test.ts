@@ -10,6 +10,7 @@ import {SessionHostClient} from '@adhdev/session-host-core';
 import {MeshRuntimeStore} from '../../src/mesh/mesh-runtime-store.js';
 import {createTurnLedger} from '../../src/mesh/turn-ledger/ledger.js';
 import {createTurnDeliverHandler,createDeliverEdgeWaiter} from '../../src/mesh/turn-ledger/deliver.js';
+import {DEFAULT_TURN_POLICY} from '../../src/mesh/turn-ledger/policy.js';
 import {createNoticeSubmitInventory} from '../../src/mesh/turn-ledger/notice-submit-inventory.js';
 import {createSessionInputService} from '../../src/sessions/session-input-service.js';
 import {beginLifecycleSource,advanceLifecycleSource,claimLifecycleHelper,collectLifecycleSource,lifecycleProcessIdentity} from '../../src/maintenance/lifecycle-source-inventory.js';
@@ -26,7 +27,7 @@ function noticeHarness(mode:'queued'|'delayed'|'missing'='queued',seq=1){
  const input=createSessionInputService({resolveSession:()=>target});
  const row=ledger.notifyMeshEvent({meshId:'mesh',event:'notice',eventId:`notice-${seq}`,payload:{coordinatorMessage:'PRIVATE-NOTICE'},targetDaemonId:'self'});
  const entry={meshId:'mesh',writer:'writer',seq,kind:'turn.notify',own:true,payload:{eventId:row.eventId,targetDaemonId:'self',notify:'mesh_event',at:Date.now()}};
- const handler=createTurnDeliverHandler({ledger,selfDaemonIds:()=>['self'],port:input,submitInventory:metadata,coordinators:()=>[{sessionId:'coord',idle:true,modalParked:false}],waiter:createDeliverEdgeWaiter({now:Date.now})});
+ const handler=createTurnDeliverHandler({ledger,selfDaemonIds:()=>['self'],port:input,submitInventory:metadata,coordinators:()=>[{sessionId:'coord',idle:true,modalParked:false}],waiter:createDeliverEdgeWaiter({now:Date.now}),policy:{...DEFAULT_TURN_POLICY,coalesceWindowMs:0}});
  return {ledger,metadata,run:()=>handler(entry,new AbortController().signal),ack:(s:'started'|'submitted'|'uncertain')=>observe(s),release:(v:any)=>release(v)};
 }
 it('real turn.deliver + input funnel retain queued intent until exact native ACK; no bodies exported',async()=>{

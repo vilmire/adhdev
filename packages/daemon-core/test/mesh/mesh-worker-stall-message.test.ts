@@ -22,7 +22,8 @@ describe('buildMeshSystemMessage — monitor:no_progress worker stall', () => {
     expect(msg).toContain('PTY output unchanged')
     expect(msg).toContain('185s')
     expect(msg).toContain('observed status: idle')
-    expect(msg.toLowerCase()).toContain('informational')
+    expect(msg.toLowerCase()).toContain('one stall notice per attempt')
+    expect(msg).toContain('mesh_read_chat')
     // Must NOT claim the worker is generating — this fires status-agnostically.
     expect(msg).not.toContain('still reported as generating')
   })

@@ -3,7 +3,7 @@ import { RelayAuditFailureLog } from './relay-audit-failure-log.js';
 import { captureFailureReason, normalizeCaptureReport } from './capture-failure.js';
 import { RelayDeliveryPolicy, unavailableReportNotice } from './relay-delivery-policy.js';
 import { RelayNudgeGate } from './relay-nudge.js';
-import { realClock, type AssistantPulledEvent, type Batch, type Item, type Part, type RelayClock, type RenderedReportPage } from './assistant-relay-types.js';
+import { realClock, type AssistantPulledEvent, type AssistantRelayPorts, type Batch, type Item, type MeshWorkCounts, type Part, type RelayClock, type RemoteProjectSnapshot, type RenderedReportPage } from './assistant-relay-types.js';
 import { RelayGapTracker, receiptKey, gapGroup, buildReadableReplyGap } from './relay-gap-tracker.js';
 import { reportBodyId, type ReportContinuation } from './report-continuation.js';
 import { createHash } from 'node:crypto';
@@ -33,18 +33,17 @@ import { formatReplyClock, type AttemptReportSnapshot, type AuditedCoordinatorRe
  * existing SendPolicy and never falls back to another mode.
  */
 
-import { SESSION_STATUS_CLASS, type SendPolicy, type SubmitOutcome, type TurnOutcome } from '@adhdev/mesh-shared';
+import { SESSION_STATUS_CLASS, type SubmitOutcome, type TurnOutcome } from '@adhdev/mesh-shared';
 import type { EventOf } from '../sessions/lifecycle-events.js';
 import type { Unsubscribe } from '../sessions/lifecycle-bus.js';
-import type { AssistantInputLog } from './assistant-input-log.js';
 import type { AssistantInputSource } from './store-guards.js';
 import { ATTEMPT_BODY_MAX_ROWS, ATTEMPT_BODY_TOTAL_BYTES,
-    RELAY_COVERAGE_TTL_MS, RELAY_COVERAGE_MAX_REPLIES, MISSED_REPORT_WINDOW_MS, type RenderedAttemptCoverage, type AssistantRelayStore } from './assistant-relay-store.js';
+    RELAY_COVERAGE_TTL_MS, RELAY_COVERAGE_MAX_REPLIES, MISSED_REPORT_WINDOW_MS, type RenderedAttemptCoverage } from './assistant-relay-store.js';
 import { busyInputModeToSendPolicy, type BusyInputMode } from './assistant-registry.js';
 import { countTerminalSubmits, TERMINAL_SUBMITS_PER_WRITE_CAP } from './assistant-human-input.js';
 import {
     RELAY_BACKLOG_FOLD_AFTER_MS, RELAY_BODY_MAX_CHARS, RELAY_DELIVERY_MAX_CHARS, RELAY_IDLE_CLOSE_GRACE_MS, RELAY_MAX_WAIT_MS, RELAY_NATIVE_RETRY_MS, RELAY_NATIVE_WAIT_MS, RELAY_CAPTURE_PROBE_MS, RELAY_MAX_AUTO_PAGES, RELAY_PROGRESS_AFTER_MS, RELAY_QUIET_MS,
-    RELAY_STALL_AFTER_MS, buildApprovalSignal, extractAttentionDetail, buildCoordinatorEndedSignal, buildFoldedBacklogLine, buildProgressSignal,
+    RELAY_STALL_AFTER_MS, RELAY_INLINE_MAX_CHARS, RELAY_QUIET_LINE_TTL_MS, buildApprovalSignal, extractAttentionDetail, buildCoordinatorEndedSignal, buildFoldedBacklogLine, buildProgressSignal,
     buildMissedReportsLine, buildRelayEnvelope, buildRestartNote, buildStallSignal, buildUnreachableRelay, codePoints, relayMessageId,
     shouldAddRestartNote,
     type RestartContext,
@@ -62,76 +61,7 @@ const replyHash = (text: string) => createHash('sha256').update(text.replace(/\r
 const coverageKey = (sessionId: string, attemptId: string | null, at: number, text: string) =>
     JSON.stringify([sessionId, attemptId, at, replyHash(text)]);
 
-export interface MeshWorkCounts { activeMissions: number; pending: number; assigned: number }
-
-/**
- * A remote-hosted project's state as its host's poll answered (content-free;
- * assistant/assistant-remote-relay.ts). Its turns arrive through
- * `onRemoteCommitted`, the host's ledger having committed them.
- */
-export interface RemoteProjectSnapshot {
-    /** A plain attempt is open on the host's coordinator (it is working). */
-    open: boolean;
-    /** The coordinator is parked on an approval or a choice. */
-    modal: boolean;
-    work: MeshWorkCounts | null;
-    /** The host's content-free `[Mesh]` line. */
-    statusLine: string | null;
-}
-
-export interface AssistantRelayPorts {
-    /** e.g. `bus.on(ASSISTANT_RELAY_BUS_KINDS, h, { name: 'assistant.relay' })`. */
-    subscribe(handler: (event: AssistantRelayBusEvent) => void): Unsubscribe;
-    /** `meshCoordinatorFor` of a live session, or null. */
-    coordinatorMeshOf(sessionId: string): string | null;
-    /** Project slug; null when the mesh no longer exists. */
-    projectSlug(meshId: string): string | null;
-    /** Session-only diagnostic projection. Never evidence for an exact attempt capture. */
-    readCoordinatorTail(sessionId: string): Promise<string | null>;
-    /**
-     * Existing evidence only; exact attempt/session/mesh, never the newest tail
-     * and never `readCoordinatorTail`. A string is a legacy exact body
-     * (`final_native`). A snapshot without `completeness: 'final_native'`
-     * (old remote hosts) is unverified.
-     */
-    rehydrateAttemptReport?(meshId: string, sessionId: string, attemptId: string): Promise<AttemptReportSnapshot | string | null>;
-    /** Native finals since `sinceMs` for the missing-relay detector. */
-    auditCoordinatorReplies?(sinceMs: number): Promise<readonly AuditedCoordinatorReply[] & { complete?: boolean }>;
-    /** Recheck the exact project_read cursor before waking the assistant. */
-    canReadCoordinatorReply?(reply: AuditedCoordinatorReply): Promise<boolean>;
-    readCoordinatorReference?(meshId: string, sessionId: string): Promise<ReportContinuation | null>;
-    /** Local metric bump for one uncovered native final. */
-    onRelayGap?(klass: 'no_attempt' | 'inside_attempt' | 'restart_closed', at: number): void;
-    /** Content-free `[Mesh]` line (`buildMeshStatusLineForNotification`). */
-    meshStatusLine?(meshId: string): string | null;
-    meshWork(meshId: string): MeshWorkCounts | null;
-    /** Registry: does an assistant entry exist at all (trigger condition 3)? */
-    hasAssistant(): boolean;
-    /** Registry: the bound assistant session, or null. */
-    assistantSessionId(): string | null;
-    /** Live: the assistant will take input now (ready status, no modal). */
-    isAssistantReady(sessionId: string): boolean;
-    /**
-     * Driver FIFO membership (`SessionInputService.isParked`). Lets a parked
-     * human input be logged exactly when the drain writes it. Absent → the
-     * oldest parked human input is logged on each assistant turn start.
-     */
-    isParked?(sessionId: string, messageId: string): Promise<boolean>;
-    /** The existing submit funnel (`send_chat` / SessionInputService), `origin` set by the adapter. */
-    submit(sessionId: string, input: { text: string; messageId: string; policy: SendPolicy }): Promise<SubmitOutcome>;
-    inputLog: AssistantInputLog;
-    store: AssistantRelayStore;
-    /** Delivery hook (registry `markFirstRelay`, metrics). */
-    onRelayDelivered?(meshIds: readonly string[], at: number): void;
-    /** An idle review input (§4.10.7) reached the assistant (review history, `review_turns`). */
-    onReviewDelivered?(sessionId: string, messageId: string, at: number): void;
-    /** Native submit confirmation only; MCP pulls need their own receipt acknowledgement. */
-    onInputsSubmitted?(sessionId: string, messageIds: readonly string[], at: number): void;
-    clock?: RelayClock;
-    /** Short notices before a full relay push (relay-nudge.ts); 0 pushes at once. */
-    maxNudgeAttempts?: number;
-    nudgeBackoffMs?: number;
-}
+export type { MeshWorkCounts, RemoteProjectSnapshot, AssistantRelayPorts } from './assistant-relay-types.js';
 
 /**
  * A followed project with no request and no report for this long stops being
@@ -941,7 +871,10 @@ export class AssistantRelay {
     // ── delivery ────────────────────────────────────────────────────────────
 
     private pushLine(source: AssistantInputSource, text: string, meshId?: string): void {
-        this.queue.push({ kind: 'line', source, text, messageId: `signal:${source}:${meshId ?? '-'}:${this.clock.now()}:${++this.seq}`, ...(meshId ? { meshId } : {}) });
+        // "Still working" carries nothing the owner can act on: it waits for a real update to ride along.
+        const quiet = source === 'progress';
+        this.queue.push({ kind: 'line', source, text, messageId: `signal:${source}:${meshId ?? '-'}:${this.clock.now()}:${++this.seq}`, ...(meshId ? { meshId } : {}),
+            ...(quiet ? { quiet: true, queuedAt: this.clock.now() } : {}) });
         this.kick();
     }
 
@@ -963,12 +896,19 @@ export class AssistantRelay {
         const sid = this.ports.assistantSessionId();
         if (!sid || this.pendingHuman.length || !this.ports.isAssistantReady(sid)) return;
         const lifecycle = this.lifecycle;
-        const { taken, parts } = await this.takeParts(this.clock.now(), sid);
+        const { taken, parts } = await this.takeParts(this.clock.now(), sid, true);
         // Stopped, or a concurrent pull already claimed these items.
         const canceled = () => lifecycle !== this.lifecycle || !taken.every((i) => this.queue.includes(i));
         if (canceled()) return;
         if (!parts.length) {
             this.queue = this.queue.filter((i) => !taken.includes(i));
+            return;
+        }
+        if (parts.every((p) => p.quiet)) {
+            // Only capture-miss notices (a coordinator turn whose report could not be read): not news.
+            // Settle them without a turn — they stay counted as missed reports (project_status) and
+            // keep their late-capture recovery, which delivers the real report if it turns up.
+            this.commitTaken(taken, parts, sid, false, true);
             return;
         }
         const messageId = parts.length === 1 ? parts[0]!.messageId : `${parts[0]!.messageId}+${parts.length - 1}`;
@@ -980,6 +920,15 @@ export class AssistantRelay {
         const text = [...parts.map((p) => p.text), ...(gap ? [gap] : [])].join('\n\n');
         if (taken.some((i) => i.kind === 'relay') || (text.includes('\n') && parts.some((p) => p.source === 'relay'))) {
             const projects = parts.flatMap((p) => p.meshId ? [this.ports.projectSlug(p.meshId) ?? p.meshId] : []);
+            // A small update goes in the wake message itself: the nudge would cost a turn plus a pull
+            // call to fetch what fits here. Quiet parts (pings, capture misses) never justify a nudge.
+            if (codePoints(text) <= RELAY_INLINE_MAX_CHARS) {
+                const inline = await this.ports.submit(sid, { text, messageId, policy: { mode: 'queue' } });
+                if (inline.kind === 'refused') return;
+                this.commitTaken(taken, parts, sid, inline.kind === 'delivered' || (inline.kind === 'duplicate' && !!this.ports.isParked && !await this.ports.isParked(sid, messageId)));
+                if (gap) this.rememberGaps(sid, missed);
+                return;
+            }
             const decision = await this.nudge.decide({ count: parts.length + (gap ? 1 : 0), projects },
                 (notice, attempt) => this.ports.submit(sid, { text: notice, messageId: `nudge:${messageId}:${attempt}`, policy: { mode: 'queue' } }), canceled);
             if (decision !== 'push' || canceled()) return;
@@ -1023,14 +972,19 @@ export class AssistantRelay {
     }
 
     /** Render the head of the queue into parts within the delivery budget (no side effects). */
-    private async takeParts(now: number, sid: string | null): Promise<{ taken: Item[]; parts: Part[] }> {
+    private async takeParts(now: number, sid: string | null, push = false): Promise<{ taken: Item[]; parts: Part[] }> {
         const taken: Item[] = [];
         const parts: Part[] = [];
+        const quietLines: Array<Item & { kind: 'line' }> = [];
         const folded = new Map<string, number>();
         let size = 0;
         for (const item of this.queue) {
             if (item.kind === 'line' && item.forSessionId && item.forSessionId !== sid) {
                 taken.push(item); // pinned to a session that is no longer bound: drop, never deliver
+                continue;
+            }
+            if (push && item.kind === 'line' && item.quiet) {
+                quietLines.push(item);
                 continue;
             }
             if (item.kind === 'line' && item.source === 'review') {
@@ -1079,6 +1033,14 @@ export class AssistantRelay {
             if (!gap || (item.kind === 'line' && !item.gapReplies?.some(r => !gap!.replies.includes(r)))) taken.push(item);
             size += cost;
         }
+        // Quiet pings ride along with a real update; alone they wait (and expire) instead of waking anyone.
+        const waking = parts.some((p) => !p.quiet);
+        for (const item of quietLines) {
+            if (waking) {
+                parts.push({ text: item.text, source: item.source, messageId: item.messageId, quiet: true, ...(item.meshId ? { meshId: item.meshId } : {}) });
+                taken.push(item);
+            } else if (item.queuedAt !== undefined && now - item.queuedAt > RELAY_QUIET_LINE_TTL_MS) taken.push(item);
+        }
         for (const [meshId, count] of folded) {
             const text = buildFoldedBacklogLine(this.ports.projectSlug(meshId) ?? meshId, count);
             parts.push({ text, source: 'relay', messageId: `fold:${meshId}:${now}`, meshId });
@@ -1087,7 +1049,7 @@ export class AssistantRelay {
     }
 
     /** The taken items reached the assistant: dequeue, log, mark rows delivered, reset signals. */
-    private commitTaken(taken: Item[], parts: Part[], sid: string | null, submitted = false): void {
+    private commitTaken(taken: Item[], parts: Part[], sid: string | null, submitted = false, silent = false): void {
         const at = this.clock.now();
         // An announced reply is notified exactly once; replies still unreadable stay queued and unmarked.
         const emptied = new Set<Item>();
@@ -1098,8 +1060,8 @@ export class AssistantRelay {
             if (!gap.item.gapReplies?.length) emptied.add(gap.item);
         }
         this.queue = this.queue.filter((i) => !taken.includes(i) && !emptied.has(i));
-        if (sid) for (const p of parts) this.ports.inputLog.append(sid, p.source, { at, messageId: p.messageId });
-        if (sid) for (const p of parts) if (p.source === 'review') this.ports.onReviewDelivered?.(sid, p.messageId, at);
+        if (sid && !silent) for (const p of parts) this.ports.inputLog.append(sid, p.source, { at, messageId: p.messageId });
+        if (sid && !silent) for (const p of parts) if (p.source === 'review') this.ports.onReviewDelivered?.(sid, p.messageId, at);
         const relayItems = taken.filter((i): i is Item & { kind: 'relay' } => i.kind === 'relay');
         // Settle a report only after its last bounded page was sent. Earlier
         // pages stay pending with a durable cursor; folded backlog never claims
@@ -1133,7 +1095,7 @@ export class AssistantRelay {
         for (const id of settled) settleLateCapture(this.ports.store, id, at, {
             surfacedMissing: surfaced.has(id) && !this.hasCapturedBody(id), committedAt: this.restoredAttempts.get(id)?.committedAt,
             rendered: rendered.includes(id), reason: this.attemptMeta.get(id)?.reason });
-        this.ports.store.markDelivered(settled, at, [...rendered, ...settled.filter(id => surfaced.has(id))], coverage);
+        this.ports.store.markDelivered(settled, at, silent ? [...rendered] : [...rendered, ...settled.filter(id => surfaced.has(id))], coverage);
         if (relayItems.length) this.loadDeliveredCoverage(at);
         for (const id of settled) {
             this.attemptBodyCapture.delete(id); this.attemptBodies.delete(id); this.attemptMeta.delete(id); this.attemptBodyAt.delete(id); this.restoredAttempts.delete(id);
@@ -1247,7 +1209,7 @@ export class AssistantRelay {
         let cursor: ReportContinuation | null = null;
         try { cursor = await this.bounded(this.ports.readCoordinatorReference?.(item.meshId, session) ?? Promise.resolve(null), 2_000, null); } catch { /* absence is reported explicitly */ }
         return { source: 'relay', meshId: item.meshId,
-            messageId: `gap:unavailable:${receiptKey(item.meshId, item.attemptIds)}`, surfaced: [...item.attemptIds],
+            messageId: `gap:unavailable:${receiptKey(item.meshId, item.attemptIds)}`, surfaced: [...item.attemptIds], quiet: true,
             text: `[ADHDev capture status] ${JSON.stringify(item.attemptIds.map(id => ({ attemptId: id, sourceComplete: false, reason: captureFailureReason(this.attemptMeta.get(id)?.reason) })))}\n` + unavailableReportNotice(item.attemptIds.length, this.ports.projectSlug(item.meshId) ?? item.meshId, cursor, { attemptId, coordinatorSessionId: session }) };
     }
 

@@ -309,6 +309,8 @@ export async function meshStatus(outerCtx: MeshContext, args: { includeStaleDire
     // The drain's bookkeeping lands on the caller's context.
     outerCtx.noticeDrainCount = ctx.noticeDrainCount;
     outerCtx.lastNoticeReplication = ctx.lastNoticeReplication;
+    outerCtx.lastNoticeStats = ctx.lastNoticeStats;
+    outerCtx.lastQuietWorkerSignals = ctx.lastQuietWorkerSignals;
 
     // Serialized WITHOUT indentation, deliberately.
     //

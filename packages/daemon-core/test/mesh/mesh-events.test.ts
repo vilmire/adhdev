@@ -71,6 +71,7 @@ import { awaitInFlightAutoLaunches } from '../../src/mesh/mesh-queue-trigger.js'
 // C-W3: coordinator notices are turn.notify rows; the helper captures them.
 import { drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, __clearMeshPendingEventsForTests } from '../helpers/pending-notices.js'
 import { isWeakCompletionMetadata } from '../../src/mesh/mesh-events-utils.js'
+import { workerSessionHealthFor } from '../../src/mesh/turn-ledger/worker-session-health.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, claimNextTask, enqueueTask, getQueue, getActiveDirectDispatches, recordTaskAutoLaunch, requeueTaskForLedgerReclaim } from '../../src/mesh/mesh-work-queue.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { seedMeshAttempt } from '../helpers/turn-attempt-seed.js'
@@ -2282,7 +2283,7 @@ describe('worker session deterioration coordinator consumer', () => {
       expect(drainPendingMeshCoordinatorEvents(meshId)).toHaveLength(0);
     } finally { f.stop(); cleanupMeshFiles(meshId); }
   });
-  it('watchdog no_progress reaches pending coordinator notices before any terminal report', () => {
+  it('watchdog no_progress is held as quiet state (mesh_status), never a coordinator notice', () => {
     const f = fixture();
     try {
       const at = Date.now();
@@ -2290,26 +2291,21 @@ describe('worker session deterioration coordinator consumer', () => {
         meshWorkerStall: true, stalledMs: 360_000, observedStatus: 'generating' });
       f.emit({ event: 'monitor:no_progress', instanceId: 'runtime-session-1', taskId: 'task-still-running', timestamp: at + 1,
         meshWorkerStall: true, stalledMs: 360_001, observedStatus: 'generating' });
-      const notices = drainPendingMeshCoordinatorEvents(meshId);
-      expect(notices).toHaveLength(1);
-      expect(notices[0].metadataEvent).toMatchObject({ source: 'worker_session_health', observationSource: 'monitor:no_progress', signal: 'stalled',
-        taskId: 'task-still-running', sessionId: 'runtime-session-1', nodeId: 'node_child_1', attemptId: 'attempt-running', generation: 2, at, quietMs: 360_000 });
-      expect(notices[0].coordinatorMessage).toContain('advisory');
+      expect(drainPendingMeshCoordinatorEvents(meshId)).toHaveLength(0);
+      expect(workerSessionHealthFor(f.components).quiet(meshId)).toEqual([expect.objectContaining({ signal: 'stalled', since: at,
+        taskId: 'task-still-running', sessionId: 'runtime-session-1', nodeId: 'node_child_1', attemptId: 'attempt-running', generation: 2, quietSec: 360 })]);
       expect(getQueue(meshId)[0]).toMatchObject({ id: 'task-still-running', status: 'assigned', message: 'original task instruction', assignedSessionId: 'runtime-session-1' });
     } finally { f.stop(); cleanupMeshFiles(meshId); }
   });
-  it('raw FSM edges preserve a repeated generating/idle cycle with identity and timestamps', () => {
+  it('raw FSM edges preserve a repeated generating/idle cycle as quiet flapping state with identity and timestamps', () => {
     const f = fixture();
     try {
       const at = Date.now();
       for (let i = 0; i < 4; i++) f.components.bus.emit({ kind: 'status', sessionId: 'runtime-session-1', at: at + i * 15_000,
         providerType: 'cursor-cli', prev: i % 2 ? 'idle' : 'generating', next: i % 2 ? 'generating' : 'idle', cause: 'fsm_state' });
-      const notices = drainPendingMeshCoordinatorEvents(meshId);
-      expect(notices).toHaveLength(1);
-      expect(notices[0].metadataEvent).toMatchObject({ signal: 'flapping', taskId: 'task-still-running', sessionId: 'runtime-session-1',
-        nodeId: 'node_child_1', attemptId: 'attempt-running', generation: 2, transitions: 4,
-        transitionHistory: Array.from({ length: 4 }, (_, i) => ({ from: i % 2 ? 'idle' : 'generating', to: i % 2 ? 'generating' : 'idle', at: at + i * 15_000 })) });
-      expect(notices[0].coordinatorMessage).toContain(new Date(at + 45_000).toISOString());
+      expect(drainPendingMeshCoordinatorEvents(meshId)).toHaveLength(0);
+      expect(workerSessionHealthFor(f.components).quiet(meshId)).toEqual([expect.objectContaining({ signal: 'flapping', taskId: 'task-still-running',
+        sessionId: 'runtime-session-1', nodeId: 'node_child_1', attemptId: 'attempt-running', generation: 2, since: at + 45_000 })]);
       expect(getQueue(meshId)[0]).toMatchObject({ id: 'task-still-running', status: 'assigned', assignedSessionId: 'runtime-session-1' });
     } finally { f.stop(); cleanupMeshFiles(meshId); }
   });
@@ -2334,8 +2330,8 @@ describe('worker session deterioration coordinator consumer', () => {
         targetSessionId: 'runtime-session-1', taskId: 'task-still-running', attemptRef: { attemptId: 'attempt-running', generation: 2 },
         timestamp: at, stalledMs: 360_000, observedStatus: 'generating' });
       expect(result.success).toBe(true);
-      const notices = drainPendingMeshCoordinatorEvents(meshId);
-      expect(notices[0].metadataEvent).toMatchObject({ taskId: 'task-still-running', sessionId: 'runtime-session-1', at, quietMs: 360_000, generation: 2 });
+      expect(drainPendingMeshCoordinatorEvents(meshId)).toHaveLength(0);
+      expect(workerSessionHealthFor(f.components).quiet(meshId)[0]).toMatchObject({ signal: 'stalled', taskId: 'task-still-running', sessionId: 'runtime-session-1', since: at, quietSec: 360, generation: 2 });
     } finally { f.stop(); cleanupMeshFiles(meshId); }
   });
 });

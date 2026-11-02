@@ -72,6 +72,13 @@ export interface MeshContext {
      */
     lastNoticeReplication?: 'pending';
     /**
+     * The daemon's per-mesh notice counters from the most recent inbox read (wakes spent, notices
+     * delivered/suppressed by kind and reason, coalesced). Surfaced by mesh_status as `noticeStats`.
+     */
+    lastNoticeStats?: Record<string, unknown>;
+    /** Advisory worker-session signals (stalled/flapping/deteriorating) held as quiet state; mesh_status `quietWorkerSignals`. */
+    lastQuietWorkerSignals?: Array<Record<string, unknown>>;
+    /**
      * Number of inbox reads (drainCoordinatorPendingEvents) made through this
      * context. The mesh-mode CallTool post-processor compares it before/after a
      * tool runs so a tool that already drained is not drained a second time in
@@ -761,6 +768,10 @@ export function applyPendingMeshEvents(ctx: MeshContext, raw: any): any[] {
     const payload = unwrapCommandPayload(raw);
     const replication = payload?.replication ?? raw?.replication;
     ctx.lastNoticeReplication = replication === 'pending' ? 'pending' : undefined;
+    const noticeStats = payload?.noticeStats ?? raw?.noticeStats;
+    const quietSignals = payload?.quietWorkerSignals ?? raw?.quietWorkerSignals;
+    ctx.lastNoticeStats = noticeStats && typeof noticeStats === 'object' && !Array.isArray(noticeStats) ? noticeStats as Record<string, unknown> : undefined;
+    ctx.lastQuietWorkerSignals = Array.isArray(quietSignals) && quietSignals.length > 0 ? quietSignals.slice(0, 12) : undefined;
     const events = normalizePendingMeshCoordinatorEvents(raw).filter(matchesCurrentMesh);
     for (const event of events) {
         rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: buildMeshForwardPayloadFromPendingEvent(event) });

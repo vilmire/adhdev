@@ -58,3 +58,18 @@ test('a replication-pending marker is kept for mesh_status; a failed read is non
   const failing = ctxWith(() => { throw new Error('ipc down'); });
   assert.deepEqual(await drainCoordinatorPendingEvents(failing.ctx), []);
 });
+
+test('notice counters and quiet worker signals ride the inbox answer into mesh_status state, and clear when absent', async () => {
+  const noticeStats = { since: 1, wakes: 2, delivered: { completed: 3 }, suppressed: { 'completed:duplicate_wake': 1 }, coalesced: 1 };
+  const quietWorkerSignals = [{ signal: 'stalled', taskId: 't1', sessionId: 's1', attemptId: 'a1', generation: 0, since: 5, quietSec: 200 }];
+  const first = ctxWith(() => ({ success: true, events: [], noticeStats, quietWorkerSignals }));
+  await drainCoordinatorPendingEvents(first.ctx);
+  assert.deepEqual(first.ctx.lastNoticeStats, noticeStats);
+  assert.deepEqual(first.ctx.lastQuietWorkerSignals, quietWorkerSignals);
+
+  const second = ctxWith(() => ({ success: true, events: [] }));
+  second.ctx.lastNoticeStats = noticeStats;
+  await drainCoordinatorPendingEvents(second.ctx);
+  assert.equal(second.ctx.lastNoticeStats, undefined);
+  assert.equal(second.ctx.lastQuietWorkerSignals, undefined);
+});

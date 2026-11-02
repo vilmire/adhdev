@@ -738,6 +738,12 @@ try {
     if (ctx.lastNoticeReplication === 'pending') {
         response.replication = 'pending';
     }
+
+    // Coordinator-turn budget: how many wakes the notice path spent for this mesh, what it
+    // delivered/suppressed (by kind and reason) and how many notices rode inside another's
+    // message — plus workers carrying an advisory signal that deliberately did NOT wake anyone.
+    if (ctx.lastNoticeStats) response.noticeStats = ctx.lastNoticeStats;
+    if (ctx.lastQuietWorkerSignals) response.quietWorkerSignals = ctx.lastQuietWorkerSignals;
 } catch {
     // Non-fatal: pending events are best-effort.
 }

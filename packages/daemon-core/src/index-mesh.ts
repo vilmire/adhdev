@@ -243,7 +243,8 @@ export {
   type TurnDeliverDeps,
 } from './mesh/turn-ledger/deliver.js';
 export { routeNotice, type CoordinatorSessionView, type NoticeRoute } from './mesh/turn-ledger/routing.js';
-export { evaluateNotifySuppression, type NotifySuppression } from './mesh/turn-ledger/suppression.js';
+export { evaluateNotifySuppression, noticeWakeKey, type NotifySuppression } from './mesh/turn-ledger/suppression.js';
+export { createNoticeStats, type NoticeStats, type NoticeStatsSnapshot } from './mesh/turn-ledger/notice-stats.js';
 export {
   MeshTopicIndex,
   MESH_INDEX_CONSUMER,

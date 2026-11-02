@@ -791,6 +791,8 @@ function newAttempt(ev: TurnEvidence, fields: Partial<TurnAttempt> & Pick<TurnAt
     };
 }
 
+/** A provider still showing one of these is working or waiting on a human: its silence is not a stall to page about. */
+const STALL_BUSY_STATUSES: ReadonlySet<string> = new Set(['generating', 'starting', 'waiting_approval', 'waiting_choice']);
 const TERMINAL_NOTIFY_KINDS: readonly NotifyKind[] = ['completed', 'blocked', 'failed', 'cancelled', 'stopped'];
 
 /** The terminal a genuine g−1 completion commits when R27a adopts it. */
@@ -1108,8 +1110,20 @@ function applyTemplate(template: EffectTemplate, draft: Draft): void {
                 attempt.candidateNotifiedGeneration = attempt.generation;
             }
             if (template.when === 'no_progress_due') {
-                const last = attempt.lastNoProgressNoticeAt;
-                if (last !== null && nowMs - last < draft.ctx.policy.livenessDeadlineMs) return;
+                // A stall is informational until it needs action (2026-11-02): below the wake
+                // threshold, or while the provider still shows a busy status, it is recorded and
+                // surfaced as quiet state only. Past it, ONE notice per attempt (the stamp
+                // survives restarts) — a worker the coordinator was already told about is never
+                // paged again for the same attempt.
+                if (attempt.lastNoProgressNoticeAt !== null) {
+                    draft.effects.push({ kind: 'record', note: 'stall_notice_already_sent' });
+                    return;
+                }
+                const stalled = ev as TurnEvidenceOf<'no_progress'>;
+                if (stalled.stalledMs < draft.ctx.policy.stallWakeMs || STALL_BUSY_STATUSES.has(stalled.observedStatus)) {
+                    draft.effects.push({ kind: 'record', note: 'stall_quiet' });
+                    return;
+                }
                 ACTIONS.stamp_no_progress_notice(draft);
             }
             const kind: NotifyKind = template.notify === 'from_modal' ? (ev as TurnEvidenceOf<'suspension'>).modal : template.notify;

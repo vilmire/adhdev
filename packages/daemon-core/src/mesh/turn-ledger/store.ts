@@ -540,6 +540,18 @@ export class TurnStore {
             .get(deliveryClaimId(meshId, writer, seq), legacyDeliveryClaimId(writer, seq), meshId);
     }
 
+    /**
+     * True when a delivery claim that reached a coordinator (typed, queued or surfaced to an MCP
+     * read) already carries `wakeKey` since `sinceMs`. Uses the (mesh, kind, time) index and an
+     * exact substring test on the claim's small JSON payload. Suppressed/empty/refused claims never
+     * store the key, so only a real wake counts.
+     */
+    hasWakeKey(meshId: string, wakeKey: string, sinceMs: number): boolean {
+        const needle = `"wakeKey":${JSON.stringify(wakeKey)}`;
+        return !!this.stmt(`SELECT 1 FROM turn_events WHERE mesh_id = ? AND kind = 'delivered' AND at_ms >= ?
+            AND instr(payload_json, ?) > 0 LIMIT 1`).get(meshId, sinceMs, needle);
+    }
+
     hasEvent(eventId: string): boolean {
         return !!this.stmt('SELECT 1 FROM turn_events WHERE event_id = ?').get(eventId);
     }

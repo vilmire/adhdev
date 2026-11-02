@@ -55,6 +55,15 @@ export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
         if (!meshId || !runtime) {
             return { success: true, events: [], hasLiveCliCoordinator: false, source: 'turn.notify', ...(runtime ? {} : { unavailable: 'turn ledger not booted' }) };
         }
+        // Quiet state, never a message: how many coordinator turns the notice path spent (and
+        // saved) and which workers carry an advisory signal. Attached to every answer below.
+        const quietState = (): Record<string, unknown> => {
+            let stats: ReturnType<NonNullable<typeof runtime.noticeStats>> = null;
+            let quiet: ReturnType<NonNullable<typeof runtime.quietWorkerSignals>> = [];
+            try { stats = runtime.noticeStats?.(meshId) ?? null; } catch { /* diagnostics only */ }
+            try { quiet = runtime.quietWorkerSignals?.(meshId) ?? []; } catch { /* diagnostics only */ }
+            return { ...(stats ? { noticeStats: stats } : {}), ...(quiet.length ? { quietWorkerSignals: quiet } : {}) };
+        };
         const selfCoordinatorInboxRead = args?.selfCoordinatorInboxRead === true;
         const coordinatorDaemonId = typeof args?.coordinatorDaemonId === 'string' && args.coordinatorDaemonId.trim()
             ? args.coordinatorDaemonId.trim()
@@ -68,6 +77,7 @@ export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
                 hasLiveCliCoordinator,
                 source: 'turn.notify',
                 ...(addressedElsewhere ? { replicatedNotAddressed: true } : { deliveredByCursor: true }),
+                ...quietState(),
             };
         }
         const ack = args?.ack !== false;
@@ -84,6 +94,7 @@ export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
             surfacedForSelfCoordinator: true,
             source: 'turn.notify',
             ...(runtime.replicationPending(meshId) ? { replication: 'pending' as const } : {}),
+            ...quietState(),
         };
     },
 

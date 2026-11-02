@@ -6,6 +6,7 @@ import {SessionHostClient} from '@adhdev/session-host-core';
 import {MeshRuntimeStore} from '../../src/mesh/mesh-runtime-store.js';
 import {createTurnLedger} from '../../src/mesh/turn-ledger/ledger.js';
 import {createTurnDeliverHandler,createDeliverEdgeWaiter} from '../../src/mesh/turn-ledger/deliver.js';
+import {DEFAULT_TURN_POLICY} from '../../src/mesh/turn-ledger/policy.js';
 import {createNoticeSubmitInventory} from '../../src/mesh/turn-ledger/notice-submit-inventory.js';
 import {createSessionInputService} from '../../src/sessions/session-input-service.js';
 import {resetProcessInstanceContextForTests} from '../../src/config/instance-context.js';
@@ -22,7 +23,7 @@ it('concurrent actual handlers A/B: only original A sends and owns its native AC
  const input=createSessionInputService({resolveSession:async session=>{resolved.push(session);if(session==='A')return new Promise<typeof a>(r=>resolveA=r);return b;}});
  const {eventId}=ledger.notifyMeshEvent({meshId:'mesh',event:'notice',eventId:'concurrent-notice',payload:{coordinatorMessage:'PRIVATE-NOTICE'},targetDaemonId:'self'});
  const entry={meshId:'mesh',writer:'writer',seq:1,kind:'turn.notify',own:true,payload:{eventId,targetDaemonId:'self',notify:'mesh_event',at:Date.now()}};
- const handler=(sessionId:string)=>createTurnDeliverHandler({ledger,selfDaemonIds:()=>['self'],port:input,submitInventory:metadata,coordinators:()=>[{sessionId,idle:true,modalParked:false}],waiter:createDeliverEdgeWaiter({now:Date.now})});
+ const handler=(sessionId:string)=>createTurnDeliverHandler({ledger,selfDaemonIds:()=>['self'],port:input,submitInventory:metadata,coordinators:()=>[{sessionId,idle:true,modalParked:false}],waiter:createDeliverEdgeWaiter({now:Date.now}),policy:{...DEFAULT_TURN_POLICY,coalesceWindowMs:0}});
  const first=handler('A')(entry,new AbortController().signal);await tick();
  const duplicate=handler('B')(entry,new AbortController().signal);await tick();expect(metadata.inventory().pending).toHaveLength(2);expect(resolved).toEqual(['A']);resolveA(a);
  expect((await first).outcome).toBe('queued');expect((await duplicate).outcome).toBe('duplicate');expect(a.writes).toHaveLength(1);expect(b.writes).toHaveLength(0);expect(b.ack).toBeUndefined();

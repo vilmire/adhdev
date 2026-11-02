@@ -27,8 +27,25 @@ export interface TurnPolicy {
     livenessDeadlineMs: number;
     /** Delivered-no-turn deadline (was DELIVERED_NO_TURN_DEADLINE). */
     noTurnDeadlineMs: number;
-    /** Worker stall notice (was MESH_WORKER_STALL_IDLE_THRESHOLD; turn-active threshold = 2×). */
+    /**
+     * Worker stall OBSERVATION threshold (was MESH_WORKER_STALL_IDLE_THRESHOLD; turn-active
+     * threshold = 2×). A stall at this age is informational: it is recorded as quiet state
+     * (`quietWorkerSignals` in mesh_status) and never typed into a coordinator.
+     */
     stallNoticeMs: number;
+    /**
+     * Worker stall WAKE threshold. A stall wakes the coordinator only when the worker has shown
+     * neither output nor transcript progress for this long, is not reporting a busy status, and
+     * has not been announced before for this attempt. 2026-11-02: a worker writing one long
+     * answer was paged at 3 minutes and the coordinator spent a whole turn deciding to ignore it.
+     */
+    stallWakeMs: number;
+    /**
+     * Notice coalescing window: informational notices (progress, stall, health, mesh events) wait
+     * up to this long so notices arriving close together become ONE coordinator turn. Terminal,
+     * blocked, failed and decision notices are never held; they sweep up whatever is pending.
+     */
+    coalesceWindowMs: number;
     /** Hard ceiling (was QUEUE_HOLD_HARD_DEADLINE / ACKED_HOLD_HARD_CEILING). */
     hardCeilingMs: number;
     /**
@@ -86,6 +103,8 @@ export const DEFAULT_TURN_POLICY: Readonly<TurnPolicy> = Object.freeze({
     livenessDeadlineMs: 480_000,
     noTurnDeadlineMs: 900_000,
     stallNoticeMs: 180_000,
+    stallWakeMs: 900_000,
+    coalesceWindowMs: 30_000,
     hardCeilingMs: 5_400_000,
     stoppingUnreachableMaxMs: 24 * 3_600_000,
     awaitReportMs: 600_000,
@@ -167,6 +186,8 @@ export const TURN_POLICY_ENV_BINDINGS: readonly EnvBinding[] = [
       aliases: [{ name: 'MESH_INFLIGHT_ACKED_DEATH_DEADLINE_MS', min: 0, max: HOUR }] },
     { field: 'noTurnDeadlineMs', canonical: 'ADHDEV_TURN_NO_TURN_DEADLINE_MS', min: 0, max: 6 * HOUR, aliases: [] },
     { field: 'stallNoticeMs', canonical: 'ADHDEV_TURN_STALL_NOTICE_MS', min: 0, max: HOUR, aliases: [] },
+    { field: 'stallWakeMs', canonical: 'ADHDEV_TURN_STALL_WAKE_MS', min: 0, max: 6 * HOUR, aliases: [] },
+    { field: 'coalesceWindowMs', canonical: 'ADHDEV_TURN_COALESCE_WINDOW_MS', min: 0, max: 10 * 60_000, aliases: [] },
     { field: 'hardCeilingMs', canonical: 'ADHDEV_TURN_HARD_CEILING_MS', min: 0, max: 24 * HOUR,
       aliases: [{ name: 'MESH_INFLIGHT_ACKED_HOLD_HARD_CEILING_MS', min: 0, max: 24 * HOUR }] },
     { field: 'stoppingUnreachableMaxMs', canonical: 'ADHDEV_STOPPING_UNREACHABLE_MAX_MS', min: 0, max: 30 * 24 * HOUR, aliases: [] },

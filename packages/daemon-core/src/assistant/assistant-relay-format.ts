@@ -59,6 +59,14 @@ export const RELAY_DELIVERY_MAX_CHARS = 12_000;
  * attempt's backoff the relay is pushed in full as before.
  */
 export const RELAY_NUDGE_MAX_CHARS = 160;
+/**
+ * A relay this small is pushed with its content instead of nudged: the nudge costs the
+ * assistant a turn plus a pull call to fetch something the wake message could have carried.
+ * Larger deliveries keep the nudge so a big report never lands in the composer unasked.
+ */
+export const RELAY_INLINE_MAX_CHARS = 2_000;
+/** A quiet ping ("still working") that nothing real ever rode along with is dropped after this long. */
+export const RELAY_QUIET_LINE_TTL_MS = 2 * 60 * 60_000;
 export const RELAY_NUDGE_BACKOFF_MS = 15_000;
 export const RELAY_NUDGE_BACKOFF_MAX_MS = 60_000;
 export const RELAY_NUDGE_MAX_ATTEMPTS = 3;

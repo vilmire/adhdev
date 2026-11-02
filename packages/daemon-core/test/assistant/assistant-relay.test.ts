@@ -27,6 +27,7 @@ import {
     RELAY_CAPTURE_BACKOFF_MS,
     RELAY_NATIVE_GRACE_MS,
     RELAY_QUIET_MS,
+    RELAY_QUIET_LINE_TTL_MS,
     buildRelayEnvelope,
     compactRelayBody,
     shouldAddRestartNote,
@@ -650,8 +651,16 @@ describe('signals', () => {
         h.clock.advance(10 * MIN);
         h.relay.tick();
         await settle(h);
-        expect(h.submits.map((s) => s.text)).toEqual(['[project blog] still working after 30 min without a result (assigned 1).']);
-        expect(h.log.sources(ASSISTANT)).toEqual(['progress']);
+        // "Still working" is not news: alone it never wakes the assistant ...
+        expect(h.submits).toEqual([]);
+        expect(h.log.sources(ASSISTANT)).toEqual([]);
+        // ... but it rides along with the next real update.
+        h.emit(turn('committed', COORD, 1, h.clock.now()));
+        h.clock.advance(RELAY_QUIET_MS);
+        await settle(h);
+        expect(h.submits).toHaveLength(1);
+        expect(h.submits[0]!.text).toContain('[project blog] still working after 30 min without a result (assigned 1).');
+        expect(h.log.sources(ASSISTANT)).toContain('progress');
 
         const s = harness();
         s.relay.openThread(MESH);
@@ -665,6 +674,23 @@ describe('signals', () => {
         expect(s.submits).toHaveLength(1);
         expect(s.submits[0]!.text).toMatch(/^\[project blog\] no progress for 30 min: 3 pending, 0 assigned, 2 active missions/);
         expect(s.log.sources(ASSISTANT)).toEqual(['stall']);
+    });
+
+    it('a "still working" ping that no real update ever joins is dropped after its TTL, never typed alone', async () => {
+        const h = harness();
+        h.relay.openThread(MESH);
+        h.emit(turn('started', COORD, 1, h.clock.now()));
+        h.clock.advance(31 * MIN);
+        h.relay.tick();
+        await settle(h);
+        expect((h.relay as any).queue.filter((i: any) => i.quiet)).toHaveLength(1);
+        expect(h.submits).toEqual([]);
+        h.clock.advance(RELAY_QUIET_LINE_TTL_MS + MIN);
+        h.relay.tick();
+        h.state.ready = false; h.state.ready = true; h.relay.tick();
+        await settle(h);
+        expect(h.submits).toEqual([]);
+        expect((h.relay as any).queue.filter((i: any) => i.quiet)).toHaveLength(0);
     });
 
     it('a daemon restart does not re-send the stall notice for the same quiet stretch', async () => {
@@ -842,8 +868,8 @@ it('refuses session-only tails when no exact reader is available', async () => {
     expect(h.submits).toHaveLength(0);
     expect(h.store.listUndelivered()).toHaveLength(1);
     h.clock.advance(RELAY_NATIVE_GRACE_MS + RELAY_NATIVE_WAIT_MS); h.relay.tick(); await settle(h);
-    expect(h.submits[0].text).toContain('native transcript unavailable');
-    expect(h.submits[0].text).not.toContain('newest session tail');
+    // A capture miss is settled and counted, never typed into the assistant: no wake, no session-tail leak.
+    expect(h.submits).toHaveLength(0);
     expect(h.store.listUndelivered()).toHaveLength(0); h.relay.stop();
 });
 
@@ -853,9 +879,9 @@ async function deliverMissingNotice(h: Harness, reason = 'original_native_bubble
     h.emit(turn('committed', COORD, 1, h.clock.now()));
     await micro(); h.clock.advance(RELAY_NATIVE_WAIT_MS); await micro();
     h.clock.advance(RELAY_NATIVE_GRACE_MS + RELAY_QUIET_MS); h.relay.tick(); await micro(); await settle(h);
-    expect(h.submits).toHaveLength(1);
-    expect(h.submits[0].text).toContain('"sourceComplete":false');
-    expect(h.submits[0].text).toContain(reason === 'private/path/secret' ? 'capture_failed' : reason);
+    // A capture miss does not wake the assistant (2026-11-02): it is settled quietly, stays counted as a
+    // missed report for project_status, and keeps its late-capture recovery.
+    expect(h.submits).toHaveLength(0);
     expect(h.store.listUndelivered()).toHaveLength(0);
 }
 
@@ -867,10 +893,10 @@ it('repairs a verified same-attempt final after the uncertainty notice, once', a
     };
     h.clock.advance(MIN); h.relay.tick(); await micro(); await settle(h);
     expect(calls).toEqual(['plain:coord_blog:e1']);
-    expect(h.submits).toHaveLength(2); expect(h.submits[1].text).toContain('Late verified original final.');
-    expect(h.submits[1].text).toContain('"complete":true');
+    expect(h.submits).toHaveLength(1); expect(h.submits[0].text).toContain('Late verified original final.');
+    expect(h.submits[0].text).toContain('"complete":true');
     h.clock.advance(10 * MIN); h.relay.tick(); await micro(); await settle(h);
-    expect(h.submits).toHaveLength(2); expect(calls).toHaveLength(1); h.relay.stop();
+    expect(h.submits).toHaveLength(1); expect(calls).toHaveLength(1); h.relay.stop();
 });
 
 it('retains bounded late-repair eligibility across relay restart and refuses unverified text', async () => {
@@ -889,7 +915,7 @@ it.each(['original_terminal_evidence_unavailable', 'private/path/secret'])('sani
     (h.relay as any).ports.rehydrateAttemptReport = read;
     h.clock.advance(reason === 'original_terminal_evidence_unavailable' ? MIN : 24 * 60 * MIN);
     h.relay.tick(); await micro(); await settle(h);
-    expect(read).not.toHaveBeenCalled(); expect(h.submits).toHaveLength(1); expect(h.submits[0].text).not.toContain('private/path/secret'); h.relay.stop();
+    expect(read).not.toHaveBeenCalled(); expect(h.submits).toHaveLength(0); h.relay.stop();
 });
 
 for (const kind of ['memory', 'sqlite']) it(`${kind} restores probe-24 atomic recovery and delivers its pinned report once after cold restart`, async () => {

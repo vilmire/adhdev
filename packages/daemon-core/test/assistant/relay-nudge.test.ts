@@ -2,22 +2,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AssistantRelay } from '../../src/assistant/assistant-relay.js';
 import { AssistantInputLog } from '../../src/assistant/assistant-input-log.js';
 import { InMemoryAssistantRelayStore } from '../../src/assistant/assistant-relay-store.js';
-import { buildRelayNudge, RELAY_NUDGE_MAX_CHARS, RELAY_NUDGE_BACKOFF_MS } from '../../src/assistant/assistant-relay-format.js';
+import { buildRelayNudge, RELAY_NUDGE_MAX_CHARS, RELAY_NUDGE_BACKOFF_MS, RELAY_INLINE_MAX_CHARS } from '../../src/assistant/assistant-relay-format.js';
 import { ASSISTANT_FIXED_RULES } from '../../src/assistant/assistant-prompt.js';
 
 const NOW = Date.parse('2026-10-27T06:00:00Z');
-const BODY = 'Merged the fix and the full coordinator report body lives here.';
+// Longer than RELAY_INLINE_MAX_CHARS: small relays are pushed inline (see 'T9'), only a big one is nudged.
+const BODY = `Merged the fix and the full coordinator report body lives here. ${'Detail line of a long report. '.repeat(90)}`;
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(NOW); });
 afterEach(() => vi.useRealTimers());
 
 type Submitted = { sid: string; text: string; messageId: string };
-function harness(opts: { maxNudgeAttempts?: number; refuse?: (input: Submitted) => boolean } = {}) {
+function harness(opts: { maxNudgeAttempts?: number; refuse?: (input: Submitted) => boolean; body?: string } = {}) {
     let handler: (event: any) => void = () => {};
     const submitted: Submitted[] = [];
     const store = new InMemoryAssistantRelayStore();
     const relay = new AssistantRelay({
         subscribe: h => { handler = h; return () => {}; }, coordinatorMeshOf: () => 'mesh', projectSlug: () => 'web-app',
-        readCoordinatorTail: async () => null, rehydrateAttemptReport: async () => ({ body: BODY, completeness: 'final_native' as const }),
+        readCoordinatorTail: async () => null, rehydrateAttemptReport: async () => ({ body: opts.body ?? BODY, completeness: 'final_native' as const }),
         meshWork: () => null, hasAssistant: () => true, assistantSessionId: () => 'asst', isAssistantReady: () => true,
         submit: async (sid, input) => {
             const entry = { sid, text: input.text, messageId: input.messageId };
@@ -101,6 +102,21 @@ describe('assistant notice pull: a short nudge instead of the full relay push', 
         await h.commit();
         expect(nudges(h.submitted)).toEqual([]);
         expect(full(h.submitted)[0].text).toContain(BODY);
+        h.relay.stop();
+    });
+
+    it('T9 a small update is pushed with its content in ONE wake — no nudge turn, no pull call', async () => {
+        const small = 'Merged the fix; tests are green.';
+        expect(small.length).toBeLessThan(RELAY_INLINE_MAX_CHARS);
+        const h = harness({ body: small });
+        await h.commit();
+        expect(nudges(h.submitted)).toEqual([]);
+        expect(full(h.submitted)).toHaveLength(1);
+        expect(full(h.submitted)[0].text).toContain(small);
+        expect(h.store.listUndelivered()).toEqual([]);
+        // Nothing is left to nudge about later.
+        await vi.advanceTimersByTimeAsync(10 * 60_000);
+        expect(h.submitted).toHaveLength(1);
         h.relay.stop();
     });
 

@@ -180,7 +180,7 @@ export interface TurnLedger {
     /** Attempt-less coordinator notice (`turn.notify{notify:'mesh_event'}`); replaces the legacy pending-events outbox insert. */
     notifyMeshEvent(notice: MeshEventNotice): { eventId: string; inserted: boolean };
     /** `turn.deliver` exactly-once claim: inserts the mesh-scoped deliveryClaimId row; false = already delivered. */
-    claimDelivery(input: { writer: string; seq: number; meshId?: string | null; sessionId: string; outcome?: string }): boolean;
+    claimDelivery(input: { writer: string; seq: number; meshId?: string | null; sessionId: string; outcome?: string; wakeKey?: string }): boolean;
     isTerminal(attemptId: string): boolean | null;
     getAttempt(attemptId: string): TurnAttempt | null;
     openAttemptForSession(sessionId: string): TurnAttempt | null;
@@ -656,7 +656,7 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
         return { eventId, inserted };
     }
 
-    function claimDelivery(input: { writer: string; seq: number; meshId?: string | null; sessionId: string; outcome?: string }): boolean {
+    function claimDelivery(input: { writer: string; seq: number; meshId?: string | null; sessionId: string; outcome?: string; wakeKey?: string }): boolean {
         const nowMs = now();
         return txn(() => store.insertEvent({
             eventId: deliveryClaimId(input.meshId, input.writer, input.seq),
@@ -668,7 +668,7 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
             source: 'input_service',
             verdict: 'recorded',
             dedupeKey: input.meshId ? `${input.meshId}:${input.writer}:${input.seq}` : `${input.writer}:${input.seq}`,
-            payload: { ...(input.meshId ? { meshId: input.meshId } : {}), ...(input.outcome ? { outcome: input.outcome } : {}) },
+            payload: { ...(input.meshId ? { meshId: input.meshId } : {}), ...(input.outcome ? { outcome: input.outcome } : {}), ...(input.wakeKey ? { wakeKey: input.wakeKey } : {}) },
             srcWriter: input.writer,
             srcSeq: input.seq,
             publishState: 'none',

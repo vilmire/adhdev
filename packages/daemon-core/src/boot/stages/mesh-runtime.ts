@@ -1,3 +1,6 @@
+import { createNoticeStats } from '../../mesh/turn-ledger/notice-stats.js';
+import { resolveTurnPolicy } from '../../mesh/turn-ledger/policy.js';
+import { workerSessionHealthFor } from '../../mesh/turn-ledger/worker-session-health.js';
 import {createNoticeSubmitInventory} from '../../mesh/turn-ledger/notice-submit-inventory.js';
 import { registerSessionArtifact } from '../../artifacts/artifact-store.js';
 import { setStageArtifactRegistrar } from '../../mesh/stage-ports-default.js';
@@ -354,6 +357,7 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
 
     // 3. Notices: producer API, deliver, MCP inbox read.
     const counters = createTurnDeliverCounters();
+    const noticeStats = createNoticeStats();
     const waiter = createDeliverEdgeWaiter({ now: () => Date.now() });
     const resolveHandoff = resolveHandoffOn(rt);
     // D2 (applied in C-W8): notices go through the daemon's ONE send funnel —
@@ -373,7 +377,9 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
         resolveHandoff,
         statusLine: (meshId) => buildMeshStatusLineForNotification(meshId),
         isControlEvent: (event) => event === 'coordinator_catchup',
+        policy: resolveTurnPolicy(process.env),
         counters,
+        stats: noticeStats,
         log: deliverLog,
     };
     const notifier = createCoordinatorNotifier({ ledger, selfDaemonIds, ...(appendHandoff ? { appendHandoff } : {}), log: deliverLog });
@@ -404,6 +410,8 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
         ...(appendHandoff ? { appendHandoff } : {}),
         // Deliver outcomes + the cursors' own counters (the consumer arms below).
         counters: () => ({ ...counters, ...(consumer?.counters() ?? {}) }),
+        noticeStats: (meshId) => noticeStats.snapshot(meshId),
+        quietWorkerSignals: (meshId) => workerSessionHealthFor(components).quiet(meshId, (attemptId) => !ledger.getAttempt(attemptId)?.terminal),
     };
     bindMeshNoticeRuntime(notices);
     // Review-in-task: the stage pipeline registers its diff / self-check / verdict artifacts (producerRole 'pipeline').

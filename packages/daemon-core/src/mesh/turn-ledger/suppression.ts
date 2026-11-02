@@ -32,7 +32,9 @@ export type NotifySuppression =
     | 'candidate_superseded'
     | 'attempt_terminal'
     /** Review-in-task: a stage-internal row's notice (review child / held stage parent) never wakes the coordinator. */
-    | 'stage_internal';
+    | 'stage_internal'
+    /** The coordinator was already woken for this exact fact (same attempt, generation and kind). */
+    | 'duplicate_wake';
 
 interface NotifySuppressionInput {
     notify: NotifyKind;
@@ -75,4 +77,40 @@ export function evaluateNotifySuppression(input: NotifySuppressionInput): Notify
             return null;
         }
     }
+}
+
+// ─── wake keys & hold classes (2026-11-02, coordinator-turn budget) ────────
+
+/**
+ * Kinds that state a one-off FACT about an attempt generation. The reducer already writes at most
+ * one such notice row per (attempt, generation, kind) for terminals, but `late_completion` rows
+ * are keyed by their cause evidence (turn_end + worker_report + transcript_final of the same
+ * superseded run each wrote one), and a relayed, re-issued or backlog-redelivered notice is a
+ * different row for the same fact. `no_progress` and `candidate` are deliberately NOT keyed: the
+ * reducer already limits them (once per attempt / once per generation), and a writer-checkpoint
+ * `no_progress` notice is a different, action-bearing message that a stall wake must never mask. The wake key makes the
+ * deliver step itself idempotent on the FACT: the first delivered/queued/surfaced notice claims
+ * the key; later rows for the same fact are suppressed as `duplicate_wake`. The key is stored on
+ * the delivery claim row, so it survives a daemon restart; a released claim (composer-residue
+ * recovery) frees it again, so a notice that never reached the composer is still retried.
+ */
+const WAKE_ONCE_KINDS: ReadonlySet<NotifyKind> = new Set<NotifyKind>([
+    'completed', 'failed', 'cancelled', 'stopped', 'blocked', 'late_completion',
+]);
+
+export function noticeWakeKey(input: { meshId: string; notify: NotifyKind; attemptId?: string | null; generation?: number | null }): string | null {
+    if (!WAKE_ONCE_KINDS.has(input.notify) || !input.attemptId) return null;
+    return `${input.meshId}|${input.attemptId}|g${input.generation ?? '-'}|${input.notify}`;
+}
+
+/**
+ * Informational notices may wait up to `coalesceWindowMs` for company so that several arriving
+ * together cost the coordinator ONE turn. Everything that states an outcome, a block, a failure,
+ * a question or an approval — and the mesh events a blocked coordinator waits on — is never held.
+ */
+const HOLDABLE_KINDS: ReadonlySet<NotifyKind> = new Set<NotifyKind>(['progress', 'no_progress', 'candidate']);
+
+export function isHoldableNotice(notify: NotifyKind, forceInjectEvent: boolean): boolean {
+    if (notify === 'mesh_event') return !forceInjectEvent;
+    return HOLDABLE_KINDS.has(notify);
 }

@@ -49,6 +49,7 @@ import {
     sweepQueueDependencyStalls,
     type MeshQueueDependencyNotice,
 } from '../../src/mesh/mesh-queue-dependency-notice.js';
+import { DEFAULT_TURN_POLICY } from '../../src/mesh/turn-ledger/policy.js';
 import { bindMeshNoticeRuntime, createCoordinatorNotifier, createTurnDeliverCounters, createTurnDeliverHandler, readCoordinatorNotices, type CoordinatorNotice, type TurnDeliverDeps } from '../../src/mesh/turn-ledger/deliver.js';
 import { T0, fakePublisher, ledgerOn, memDb } from '../turn-ledger/ledger-harness.js';
 
@@ -205,6 +206,8 @@ describe('N delivery — one notice row serves a PTY-hosted AND an MCP-only coor
             coordinators: () => [{ sessionId: 'coord', idle: true, modalParked: false }],
             waiter: { wait: async () => 'edge' as const, wake: () => {} } as any,
             now: () => clock.now,
+            // A frozen clock with an instant waiter would spin the coalescing hold forever; this test is about the notice, not the hold.
+            policy: { ...DEFAULT_TURN_POLICY, coalesceWindowMs: 0 },
             counters: createTurnDeliverCounters(),
         };
         const notifier = createCoordinatorNotifier({ ledger, selfDaemonIds: () => ['dc'], now: () => clock.now });

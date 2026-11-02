@@ -64,7 +64,9 @@ import type { TurnAttempt } from './types.js';
 import { isUnredeliveredDirectFailure } from './reducer.js';
 import { renderTurnNotify, type FormatStopReason, type TurnNotifyRefs, type TurnNotifyScalars } from './format.js';
 import { routeNotice, type CoordinatorSessionView } from './routing.js';
-import { evaluateNotifySuppression } from './suppression.js';
+import { evaluateNotifySuppression, isHoldableNotice, noticeWakeKey, type NotifySuppression } from './suppression.js';
+import type { NoticeStats, NoticeStatsSnapshot } from './notice-stats.js';
+import type { QuietWorkerSignal } from './worker-session-health.js';
 import { buildMeshSystemMessage } from '../mesh-events-utils.js';
 import { shouldForceInjectMeshEvent } from '../mesh-event-classify.js';
 
@@ -434,6 +436,10 @@ export function renderNotice(ctx: RenderContext, meshId: string, entry: Record<s
     const note = str(notice?.note);
     if (note) localTexts.set('note', note);
 
+    // A probe-origin stall (an idle worker the scheduler read) carries its numbers on the evidence
+    // row, not in a provider envelope; render it with the same actionable wording.
+    const stallEvidence = notify === 'no_progress' && isRecord(evidenceRow?.payload.evidence) && (evidenceRow!.payload.evidence as Record<string, unknown>).kind === 'no_progress'
+        ? evidenceRow!.payload.evidence as Record<string, unknown> : null;
     const reason = attempt?.terminal?.reason;
     // Forced-timeout / hollow-exhausted failures render through the completion
     // template's dedicated branches (today's wording), not the plain stop text.
@@ -462,8 +468,8 @@ export function renderNotice(ctx: RenderContext, meshId: string, entry: Record<s
         ...(Array.isArray(notice?.questions) ? { questions: notice!.questions as TurnNotifyScalars['questions'] } : {}),
         ...(notify === 'progress' && attempt?.taskId ? { progressTaskId: attempt.taskId } : {}),
         ...(isRecord(notice?.completionMetadata) ? { completionMetadata: notice!.completionMetadata as TurnNotifyScalars['completionMetadata'] } : {}),
-        ...(typeof notice?.stalledMs === 'number' ? { stalledMs: notice.stalledMs, meshWorkerStall: true } : {}),
-        ...(str(notice?.observedStatus) ? { observedStatus: str(notice?.observedStatus)! } : {}),
+        ...(typeof (notice?.stalledMs ?? stallEvidence?.stalledMs) === 'number' ? { stalledMs: (notice?.stalledMs ?? stallEvidence?.stalledMs) as number, meshWorkerStall: true } : {}),
+        ...(str(notice?.observedStatus ?? stallEvidence?.observedStatus) ? { observedStatus: str(notice?.observedStatus ?? stallEvidence?.observedStatus)! } : {}),
     };
     const refs: TurnNotifyRefs = {};
     if (localTexts.has('summary')) refs.summary = localRef('summary');
@@ -560,6 +566,8 @@ export interface TurnDeliverDeps extends RenderContext {
     policy?: TurnPolicy;
     now?: () => number;
     counters?: TurnDeliverCounters;
+    /** Per-mesh wake/suppression counters surfaced in mesh_status (notice-stats.ts). */
+    stats?: NoticeStats;
     log?: DeliverLog;
 }
 
@@ -603,6 +611,8 @@ export function createTurnDeliverHandler(deps: TurnDeliverDeps, handlerOpts: Tur
     const policy = deps.policy ?? DEFAULT_TURN_POLICY;
     const now = deps.now ?? (() => Date.now());
     const counters = deps.counters ?? createTurnDeliverCounters();
+    const stats = deps.stats;
+    const coalesceMs = policy.coalesceWindowMs;
     const log = deps.log ?? NOOP_LOG;
 
     const run = async (entry:DeliverCursorEntry, signal:AbortSignal):Promise<DeliverResult> => {
@@ -622,12 +632,15 @@ export function createTurnDeliverHandler(deps: TurnDeliverDeps, handlerOpts: Tur
 
         const attemptId = str(p.attemptId);
         const attempt = attemptId ? deps.ledger.getAttempt(attemptId) : null;
-        const suppression = isStageInternalNotice(entry.meshId, str(p.taskId) ?? attempt?.taskId, notify)
-            ? 'stage_internal' as const
-            : evaluateNotifySuppression({ notify, attempt, generation: row?.generation ?? null });
+        const wakeKey = noticeWakeKey({ meshId: entry.meshId, notify, attemptId: attemptId ?? attempt?.attemptId, generation: row?.generation ?? attempt?.generation ?? null });
+        const suppression: NotifySuppression | null = isStageInternalNotice(entry.meshId, str(p.taskId) ?? attempt?.taskId, notify)
+            ? 'stage_internal'
+            : evaluateNotifySuppression({ notify, attempt, generation: row?.generation ?? null })
+                ?? (wakeKey && store.hasWakeKey(entry.meshId, wakeKey, now() - NOTICE_BACKLOG_WINDOW_MS) ? 'duplicate_wake' : null);
         if (suppression) {
             deps.ledger.claimDelivery({ writer: entry.writer, seq: entry.seq, meshId: entry.meshId, sessionId: sessionForClaim, outcome: `suppressed:${suppression}` });
             counters.suppressed++;
+            stats?.recordSuppressed(entry.meshId, notify, suppression);
             log.info(`deliver mesh=${entry.meshId} entry=${entry.writer}:${entry.seq} notify=${notify} outcome=suppressed:${suppression}`);
             return { outcome: 'suppressed', why: suppression };
         }
@@ -643,6 +656,31 @@ export function createTurnDeliverHandler(deps: TurnDeliverDeps, handlerOpts: Tur
             // approval_resolved renders silently for a local coordinator (today's `return ''`).
             deps.ledger.claimDelivery({ writer: entry.writer, seq: entry.seq, meshId: entry.meshId, sessionId: sessionForClaim, outcome: 'empty' });
             return { outcome: 'empty' };
+        }
+
+        // Coalescing (2026-11-02): an informational notice waits out the window so that notices
+        // arriving close together become ONE coordinator turn; an outcome/blocked/failed/question
+        // notice never waits. Held relative to the notice's own time, so a replayed old notice is
+        // not delayed again.
+        if (!backlog && coalesceMs > 0 && isHoldableNotice(notify, notify === 'mesh_event' && !!rendered.event && shouldForceInjectMeshEvent(rendered.event))) {
+            const holdUntil = at + coalesceMs;
+            if (now() < holdUntil) {
+                await sleepUntil(deps.waiter, entry.meshId, holdUntil, signal, now);
+                if (isClaimed()) {
+                    counters.ackedElsewhere++;
+                    return { outcome: 'acked_elsewhere' };
+                }
+                // The attempt may have moved on while the notice waited (a candidate whose commit
+                // landed, progress for a turn that ended): that is a wake saved, not a late one.
+                const moved = evaluateNotifySuppression({ notify, attempt: attemptId ? deps.ledger.getAttempt(attemptId) : null, generation: row?.generation ?? null });
+                if (moved) {
+                    deps.ledger.claimDelivery({ writer: entry.writer, seq: entry.seq, meshId: entry.meshId, sessionId: sessionForClaim, outcome: `suppressed:${moved}` });
+                    counters.suppressed++;
+                    stats?.recordSuppressed(entry.meshId, notify, moved);
+                    log.info(`deliver mesh=${entry.meshId} entry=${entry.writer}:${entry.seq} notify=${notify} outcome=suppressed:${moved} afterHold=true`);
+                    return { outcome: 'suppressed', why: moved };
+                }
+            }
         }
 
         const deadline = at + policy.deliveryCeilingMs;
@@ -672,6 +710,12 @@ export function createTurnDeliverHandler(deps: TurnDeliverDeps, handlerOpts: Tur
                 continue;
             }
             const messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
+            // Everything else that is already waiting for this coordinator rides in the same message.
+            const extras = backlog ? [] : gatherCoalesced(deps, entry, p, wakeKey);
+            // With companions the mesh status line is appended once at the end, so the primary is rendered without it.
+            const text = extras.length > 0
+                ? composeCoalesced(deps, entry.meshId, renderNotice({ ...deps, statusLine: undefined }, entry.meshId, p, row).text, notify, rendered.event, extras)
+                : rendered.text;
             let outcome: SubmitOutcome;
             const submitMetadata=deps.submitInventory?.begin(entry,route.sessionId);
             try {
@@ -681,7 +725,7 @@ export function createTurnDeliverHandler(deps: TurnDeliverDeps, handlerOpts: Tur
                     sessionId: route.sessionId,
                     origin: 'mesh',
                     policy: { mode: 'queue' },
-                    input: { parts: [{ type: 'text', text: rendered.text }], textFallback: rendered.text },
+                    input: { parts: [{ type: 'text', text }], textFallback: text },
                     createdAt: now(),
                 });
                 submitMetadata?.outcome(outcome.kind);
@@ -707,18 +751,105 @@ export function createTurnDeliverHandler(deps: TurnDeliverDeps, handlerOpts: Tur
                 log.warn(`deliver mesh=${entry.meshId} entry=${entry.writer}:${entry.seq} notify=${notify} outcome=refused:${outcome.reason} session=${route.sessionId}`);
                 return { outcome: 'refused', reason: outcome.reason };
             }
-            const claimed = deps.ledger.claimDelivery({ writer: entry.writer, seq: entry.seq, meshId: entry.meshId, sessionId: route.sessionId, outcome: outcome.kind });
+            const claimed = deps.ledger.claimDelivery({ writer: entry.writer, seq: entry.seq, meshId: entry.meshId, sessionId: route.sessionId, outcome: outcome.kind, ...(wakeKey ? { wakeKey } : {}) });
             if (!claimed) counters.duplicates++; // an MCP read claimed it between submit and here (C2 residual)
+            for (const extra of extras) {
+                deps.ledger.claimDelivery({ writer: extra.writer, seq: extra.seq, meshId: entry.meshId, sessionId: route.sessionId, outcome: outcome.kind, ...(extra.wakeKey ? { wakeKey: extra.wakeKey } : {}) });
+                stats?.recordDelivered(entry.meshId, extra.notify);
+            }
+            stats?.recordDelivered(entry.meshId, notify);
+            if (outcome.kind === 'delivered' || outcome.kind === 'queued') stats?.recordWake(entry.meshId, extras.length);
             if (outcome.kind === 'delivered') counters.delivered++;
             else if (outcome.kind === 'queued') counters.queued++;
             else counters.duplicates++;
             if (route.escalated) counters.escalated++;
             const waitedMs = now() - startedAt;
-            log.info(`deliver mesh=${entry.meshId} entry=${entry.writer}:${entry.seq} notify=${notify}${rendered.event ? ` event=${rendered.event}` : ''} outcome=${outcome.kind}${route.escalated ? ' escalated=true' : ''} session=${route.sessionId} waitedMs=${waitedMs}`);
+            log.info(`deliver mesh=${entry.meshId} entry=${entry.writer}:${entry.seq} notify=${notify}${rendered.event ? ` event=${rendered.event}` : ''} outcome=${outcome.kind}${route.escalated ? ' escalated=true' : ''}${extras.length ? ` coalesced=${extras.length}` : ''} session=${route.sessionId} waitedMs=${waitedMs}`);
             return { outcome: outcome.kind, sessionId: route.sessionId, escalated: route.escalated, waitedMs };
         }
     };
     return (entry,signal)=>deps.submitInventory?deps.submitInventory.handling(()=>run(entry,signal)):run(entry,signal);
+}
+
+// ─── 4b. coalescing: one message for everything already waiting ───────────
+
+const COALESCE_MAX_EXTRAS = 5;
+/** An extra notice's body is cut to this many characters unless it needs action (the full text stays one tool call away). */
+const COALESCE_EXTRA_CLIP_CHARS = 1500;
+/** Kinds whose text carries instructions the coordinator must see in full. */
+const COALESCE_NEVER_CLIP: ReadonlySet<NotifyKind> = new Set<NotifyKind>(['blocked', 'failed', 'stopped', 'cancelled', 'approval', 'choice', 'late_completion']);
+
+interface CoalescedExtra {
+    writer: string;
+    seq: number;
+    notify: NotifyKind;
+    event: string | null;
+    text: string;
+    wakeKey: string | null;
+}
+
+/**
+ * Other undelivered notices of the same mesh, addressed to this daemon and to the same coordinator
+ * session as `primary`, that are deliverable right now: not suppressed, not a duplicate fact, text
+ * fully resolved. They are rendered here and claimed by the caller only after the shared submit
+ * succeeds, so a refused or failed submit loses nothing — each stays an ordinary undelivered row.
+ */
+function gatherCoalesced(
+    deps: TurnDeliverDeps,
+    primary: DeliverCursorEntry,
+    primaryPayload: Record<string, unknown>,
+    primaryWakeKey: string | null,
+): CoalescedExtra[] {
+    const out: CoalescedExtra[] = [];
+    const seenKeys = new Set<string>(primaryWakeKey ? [primaryWakeKey] : []);
+    const targetOf = (v: unknown) => str(v) ?? '';
+    const wantSession = targetOf(primaryPayload.targetSessionId);
+    let rows: TurnEventRow[];
+    try { rows = pendingNoticeRows(deps, primary.meshId, COALESCE_MAX_EXTRAS * 4 + 8); } catch { return out; }
+    for (const row of rows) {
+        if (out.length >= COALESCE_MAX_EXTRAS) break;
+        if (!row.srcWriter || row.publishedSeq === null) continue;
+        if (row.srcWriter === primary.writer && row.publishedSeq === primary.seq) continue;
+        const entry = isRecord(row.payload.entry) ? row.payload.entry as Record<string, unknown> : null;
+        if (!entry || targetOf(entry.targetSessionId) !== wantSession) continue;
+        if (deps.ledger.store.isDeliveryClaimed(primary.meshId, row.srcWriter, row.publishedSeq)) continue;
+        const notify = (isNotifyKind(entry.notify) ? entry.notify : 'mesh_event') as NotifyKind;
+        const attemptId = str(entry.attemptId);
+        const attempt = attemptId ? deps.ledger.getAttempt(attemptId) : null;
+        if (isStageInternalNotice(primary.meshId, str(entry.taskId) ?? attempt?.taskId, notify)) continue;
+        if (evaluateNotifySuppression({ notify, attempt, generation: row.generation })) continue;
+        const wakeKey = noticeWakeKey({ meshId: primary.meshId, notify, attemptId: attemptId ?? attempt?.attemptId, generation: row.generation ?? attempt?.generation ?? null });
+        if (wakeKey && (seenKeys.has(wakeKey) || deps.ledger.store.hasWakeKey(primary.meshId, wakeKey, (deps.now ?? Date.now)() - NOTICE_BACKLOG_WINDOW_MS))) continue;
+        const rendered = renderNotice({ ...deps, statusLine: undefined }, primary.meshId, entry, row);
+        if (rendered.missing > 0 || !rendered.text.trim()) continue;
+        if (wakeKey) seenKeys.add(wakeKey);
+        out.push({ writer: row.srcWriter, seq: row.publishedSeq, notify, event: rendered.event, text: rendered.text, wakeKey });
+    }
+    return out;
+}
+
+function clipExtra(text: string, notify: NotifyKind): string {
+    if (COALESCE_NEVER_CLIP.has(notify)) return text;
+    const points = Array.from(text);
+    if (points.length <= COALESCE_EXTRA_CLIP_CHARS) return text;
+    return `${points.slice(0, COALESCE_EXTRA_CLIP_CHARS).join('')}… (cut — read the task report or chat once if you need the rest)`;
+}
+
+/** The primary's text (rendered without a status line) plus its companions, with the mesh status line appended once. */
+function composeCoalesced(
+    deps: TurnDeliverDeps,
+    meshId: string,
+    primaryText: string,
+    primaryNotify: NotifyKind,
+    primaryEvent: string | null,
+    extras: readonly CoalescedExtra[],
+): string {
+    const wantsLine = (notify: NotifyKind, event: string | null) =>
+        STATUS_LINE_KINDS.has(notify) || (notify === 'mesh_event' && !!event && shouldForceInjectMeshEvent(event));
+    const line = (wantsLine(primaryNotify, primaryEvent) || extras.some((e) => wantsLine(e.notify, e.event))) ? deps.statusLine?.(meshId) ?? null : null;
+    const parts = [primaryText, `[System] ${extras.length} more notice${extras.length === 1 ? '' : 's'} for this mesh arrived together with the one above:`, ...extras.map((e) => clipExtra(e.text, e.notify))];
+    if (line) parts.push(line);
+    return parts.join('\n\n');
 }
 
 // ─── 5. MCP-only coordinator read + ack; backlog; control notices ─────────
@@ -747,6 +878,7 @@ interface ReadNoticesDeps extends RenderContext {
     isControlEvent?: (event: string) => boolean;
     now?: () => number;
     counters?: TurnDeliverCounters;
+    stats?: NoticeStats;
     waiter?: DeliverEdgeWaiter;
 }
 
@@ -822,6 +954,8 @@ export function readCoordinatorNotices(deps: ReadNoticesDeps, meshId: string, op
     const ack = opts.ack !== false;
     const counters = deps.counters ?? createTurnDeliverCounters();
     const out: PendingCoordinatorNoticeWire[] = [];
+    // Facts already surfaced earlier in THIS read (no-ack peeks never write a claim to dedupe against).
+    const surfacedKeys = new Set<string>();
     for (const row of pendingNoticeRows(deps, meshId, opts.limit ?? 200)) {
         const writer = row.srcWriter;
         const seq = row.publishedSeq;
@@ -830,16 +964,22 @@ export function readCoordinatorNotices(deps: ReadNoticesDeps, meshId: string, op
         const notify = (isNotifyKind(entry.notify) ? entry.notify : 'mesh_event') as NotifyKind;
         const attemptId = str(entry.attemptId);
         const mcpAttempt = attemptId ? deps.ledger.getAttempt(attemptId) : null;
-        const suppression = isStageInternalNotice(meshId, str(entry.taskId) ?? mcpAttempt?.taskId, notify)
-            ? 'stage_internal' as const
-            : evaluateNotifySuppression({ notify, attempt: mcpAttempt, generation: row.generation });
+        const wakeKey = noticeWakeKey({ meshId, notify, attemptId: attemptId ?? mcpAttempt?.attemptId, generation: row.generation ?? mcpAttempt?.generation ?? null });
+        const nowMs = (deps.now ?? (() => Date.now()))();
+        const suppression: NotifySuppression | null = isStageInternalNotice(meshId, str(entry.taskId) ?? mcpAttempt?.taskId, notify)
+            ? 'stage_internal'
+            : evaluateNotifySuppression({ notify, attempt: mcpAttempt, generation: row.generation })
+                ?? (wakeKey && (surfacedKeys.has(wakeKey) || deps.ledger.store.hasWakeKey(meshId, wakeKey, nowMs - NOTICE_BACKLOG_WINDOW_MS)) ? 'duplicate_wake' : null);
         if (suppression) {
             if (ack) deps.ledger.claimDelivery({ writer, seq, meshId, sessionId: str(entry.targetSessionId) ?? '', outcome: `suppressed:${suppression}` });
+            if (ack) deps.stats?.recordSuppressed(meshId, notify, suppression);
             continue;
         }
         const rendered = renderNotice(deps, meshId, entry, row);
+        if (wakeKey && rendered.text.trim()) surfacedKeys.add(wakeKey);
         if (ack) {
-            deps.ledger.claimDelivery({ writer, seq, meshId, sessionId: opts.surfacedSessionId ?? str(entry.targetSessionId) ?? '', outcome: 'mcp_read' });
+            deps.ledger.claimDelivery({ writer, seq, meshId, sessionId: opts.surfacedSessionId ?? str(entry.targetSessionId) ?? '', outcome: 'mcp_read', ...(wakeKey && rendered.text.trim() ? { wakeKey } : {}) });
+            if (rendered.text.trim()) deps.stats?.recordDelivered(meshId, notify);
         }
         if (!rendered.text.trim()) continue;
         const local = isRecord(row.payload.local) && isRecord((row.payload.local as Record<string, unknown>).payload)
@@ -999,6 +1139,10 @@ export interface MeshNoticeRuntime {
     /** Append to `mesh.<id>.handoff` (null when no seqscribe node / authority). */
     appendHandoff?: (meshId: string, kind: string, payload: Record<string, unknown>) => Promise<SummaryRef>;
     counters(): TurnDeliverCounters;
+    /** Per-mesh wake/suppression counters (null until the mesh has seen a notice). */
+    noticeStats?(meshId: string): NoticeStatsSnapshot | null;
+    /** Advisory worker-session signals held as quiet state for open attempts of the mesh. */
+    quietWorkerSignals?(meshId: string): QuietWorkerSignal[];
 }
 
 let boundNoticeRuntime: MeshNoticeRuntime | null = null;

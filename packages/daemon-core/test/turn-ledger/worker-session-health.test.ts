@@ -1,6 +1,4 @@
 import { describe, expect, it, vi } from 'vitest';
-const notice = vi.hoisted(() => vi.fn());
-vi.mock('../../src/mesh/turn-ledger/deliver.js', () => ({ notifyMeshCoordinator: notice }));
 import { createWorkerSessionHealthMonitor } from '../../src/mesh/turn-ledger/worker-session-health.js';
 import { createTurnScheduler } from '../../src/mesh/turn-ledger/scheduler.js';
 import { DEFAULT_TURN_POLICY as P } from '../../src/mesh/turn-ledger/policy.js';
@@ -17,22 +15,24 @@ function rig() {
 const transcript = { providerObservedStatus: 'generating', activeModal: false, selfAttributing: false, trailingActivity: 0, nativeRead: false };
 
 describe('worker session health advisory consumer', () => {
-    it('scheduler probes deliver a stalled signal to the coordinator without reclaiming a live generating worker', async () => {
-        notice.mockClear();
+    it('scheduler probes hold a stalled worker as QUIET state (mesh_status), never a coordinator notice, without reclaiming it', async () => {
         const ledger = rig();
         const now = T0 + P.stallNoticeMs + 1000;
-        const scheduler = createTurnScheduler({ ledger, now: () => now,
-            probe: { locate: () => ({ kind: 'local' }), reader: { read: async () => ({ presence: 'present', status: 'generating' }) } },
+        const sessionHealth = createWorkerSessionHealthMonitor();
+        const scheduler = createTurnScheduler({ ledger, now: () => now, sessionHealth,
+            probe: { locate: () => ({ kind: 'local' }), reader: { read: async () => ({ presence: 'present', status: 'generating', transcript }) } },
         });
         scheduler.requestProbe('a1');
         await scheduler.tick();
-        expect(notice).toHaveBeenCalledWith(expect.objectContaining({ meshId: 'm1',
-            metadataEvent: expect.objectContaining({ source: 'worker_session_health', signal: 'stalled', attemptId: 'a1', sessionId: 's1' }),
-        }));
+        expect(sessionHealth.quiet('m1')).toEqual([expect.objectContaining({ signal: 'stalled', attemptId: 'a1', sessionId: 's1', taskId: 't1', nodeId: 'n1', quietSec: expect.any(Number) })]);
         expect(ledger.getAttempt('a1')).toMatchObject({ generation: 0, state: 'generating', terminal: null });
-        scheduler.requestProbe('a1');
-        await scheduler.tick();
-        expect(notice).toHaveBeenCalledTimes(1);
+        // Another mesh sees nothing; a terminal attempt's signal is not reported as live state.
+        expect(sessionHealth.quiet('other')).toEqual([]);
+        expect(sessionHealth.quiet('m1', () => false)).toEqual([]);
+        // Progress clears it.
+        const a = ledger.getAttempt('a1')!;
+        sessionHealth.observe(a, { presence: 'present', status: 'generating', transcript: { ...transcript, newestActivityAt: now } }, now + 1000, P.stallNoticeMs);
+        expect(sessionHealth.quiet('m1')).toEqual([]);
         scheduler.stop();
     });
     it('read failure deterioration is emitted once per streak and resets after a successful read', () => {

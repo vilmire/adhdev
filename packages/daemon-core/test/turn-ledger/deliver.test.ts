@@ -19,6 +19,8 @@ import { createSessionInputService } from '../../src/sessions/session-input-serv
 import { DEFAULT_TURN_POLICY } from '../../src/mesh/turn-ledger/policy.js';
 import type { TurnLedger } from '../../src/mesh/turn-ledger/ledger.js';
 import { T0, dispatch, evd, fakePublisher, ledgerOn, memDb, rowsOf } from './ledger-harness.js';
+import { createNoticeStats } from '../../src/mesh/turn-ledger/notice-stats.js';
+import { deliveryClaimId } from '../../src/mesh/turn-ledger/store.js';
 
 // turn-ledger/deliver — the C2 notice path (C-W3): producer → ingest →
 // deliver (suppression, render, route, deferral, escalation) → exactly-once
@@ -103,6 +105,8 @@ function fixture(self = 'dc', confirmStop = false): Fixture {
         coordinators: () => coordinators.map((c) => ({ ...c })),
         waiter,
         now: () => clock.now,
+        // Coalescing holds are exercised by their own tests; the rest of this file drives delivery directly.
+        policy: { ...DEFAULT_TURN_POLICY, coalesceWindowMs: 0 },
         counters: createTurnDeliverCounters(),
     };
     return {
@@ -615,5 +619,167 @@ describe('report gate — queue report-missing expiry requests recovery (R13q)',
         expect(result).toMatchObject({ outcome: 'delivered' });
         expect(f.port.calls).toHaveLength(1);
         expect(f.port.calls[0]!.input.textFallback).toContain('report_completion');
+    });
+});
+
+
+// ─── coordinator-turn budget (2026-11-02): wake keys, coalescing, counters ────
+
+function reissue(f: Fixture, over: { eventId: string; notify: 'completed' | 'late_completion' | 'failed'; attemptId?: string }): void {
+    f.ledger.notifyMeshEvent({ meshId: 'm1', event: 'relayed', notify: over.notify, attemptId: over.attemptId ?? 'a1', taskId: 't1', targetDaemonId: 'dc', eventId: over.eventId });
+}
+const signal = () => new AbortController().signal;
+
+describe('wake keys — one wake per attempt fact, durable', () => {
+    it('a second notice for the same attempt+generation+kind is suppressed as duplicate_wake, also after a restart', async () => {
+        const f = fixture();
+        f.deps.stats = createNoticeStats(() => f.clock.now);
+        await commitWithLocalSummary(f);
+        const first = notifyEntry(f);
+        expect(await createTurnDeliverHandler(f.deps)(first, signal())).toMatchObject({ outcome: 'delivered' });
+        // A re-issued/relayed row for the very same fact (a different notice row).
+        reissue(f, { eventId: 'dup-completed', notify: 'completed' });
+        await f.ledger.flushPublish();
+        const dup = f.entries().filter((e) => e.kind === 'turn.notify').find((e) => e.seq !== first.seq)!;
+        // A fresh handler instance = a daemon restart: the key lives on the claim row, not in memory.
+        expect(await createTurnDeliverHandler({ ...f.deps })(dup, signal())).toEqual({ outcome: 'suppressed', why: 'duplicate_wake' });
+        expect(f.port.calls).toHaveLength(1);
+        expect(f.ledger.store.hasEvent(deliveryClaimId('m1', dup.writer, dup.seq))).toBe(true);
+        expect(f.deps.stats!.snapshot('m1')).toMatchObject({ wakes: 1, delivered: { completed: 1 }, suppressed: { 'completed:duplicate_wake': 1 } });
+    });
+
+    it('never suppresses a first completion, a different attempt, or a notice whose claim was released (composer residue)', async () => {
+        const f = fixture();
+        await commitWithLocalSummary(f);
+        const first = notifyEntry(f);
+        await createTurnDeliverHandler(f.deps)(first, signal());
+        reissue(f, { eventId: 'other-attempt', notify: 'completed', attemptId: 'a2' });
+        await f.ledger.flushPublish();
+        const other = f.entries().filter((e) => e.kind === 'turn.notify').find((e) => e.seq !== first.seq)!;
+        expect(await createTurnDeliverHandler(f.deps)(other, signal())).toMatchObject({ outcome: 'delivered' });
+        // Residue recovery releases the first claim: the same fact may be typed again.
+        expect(f.ledger.store.releaseDeliveryClaim(deliveryClaimId('m1', first.writer, first.seq))).toBe(true);
+        reissue(f, { eventId: 'retry-after-release', notify: 'completed' });
+        await f.ledger.flushPublish();
+        const retry = f.entries().filter((e) => e.kind === 'turn.notify').find((e) => e.seq !== first.seq && e.seq !== other.seq)!;
+        expect(await createTurnDeliverHandler(f.deps)(retry, signal())).toMatchObject({ outcome: 'delivered' });
+    });
+
+    it('late_completion rows written by several cause events of one superseded run wake once; no_progress rows are never wake-keyed', async () => {
+        const f = fixture();
+        f.ledger.observe(dispatch());
+        f.ledger.observe(evd('delivered', { messageId: 'msg-1', outcome: 'delivered', via: 'local' }, { source: 'input_service' }));
+        f.ledger.observe(evd('turn_started', { retro: false }));
+        for (const id of ['late-turn-end', 'late-report', 'late-final']) {
+            f.ledger.notifyMeshEvent({ meshId: 'm1', event: 'relayed', notify: 'late_completion', attemptId: 'a1', taskId: 't1', targetDaemonId: 'dc', eventId: id });
+        }
+        for (const id of ['stall-1', 'checkpoint-2']) {
+            f.ledger.notifyMeshEvent({ meshId: 'm1', event: 'relayed', notify: 'no_progress', attemptId: 'a1', taskId: 't1', targetDaemonId: 'dc', eventId: id });
+        }
+        await f.ledger.flushPublish();
+        const handler = createTurnDeliverHandler({ ...f.deps, policy: { ...DEFAULT_TURN_POLICY, coalesceWindowMs: 0 }, port: f.port });
+        const results = [];
+        for (const e of f.entries().filter((x) => x.kind === 'turn.notify')) results.push(await handler(e, signal()));
+        expect(results.map((r) => (r as { outcome: string }).outcome)).toEqual(['delivered', 'suppressed', 'suppressed', 'skipped', 'skipped']);
+        // One message: the late completion plus BOTH no_progress notices (distinct messages, never deduped by key).
+        expect(f.port.calls).toHaveLength(1);
+        const text = f.port.calls[0]!.input.textFallback;
+        expect(text.match(/long interval/g)).toHaveLength(2);
+        expect(text).toContain('2 more notices');
+    });
+
+    it('the MCP inbox read applies the same key: a repeated fact is returned once and the repeat is claimed as duplicate', async () => {
+        const f = fixture();
+        await commitWithLocalSummary(f);
+        reissue(f, { eventId: 'dup-for-mcp', notify: 'completed' });
+        await f.ledger.flushPublish();
+        f.deps.stats = createNoticeStats(() => f.clock.now);
+        const read = readCoordinatorNotices(f.deps, 'm1');
+        expect(read.map((n) => n.notify)).toEqual(['completed']);
+        expect(f.deps.stats.snapshot('m1')).toMatchObject({ delivered: { completed: 1 }, suppressed: { 'completed:duplicate_wake': 1 } });
+        expect(readCoordinatorNotices(f.deps, 'm1')).toEqual([]);
+    });
+});
+
+describe('coalescing — several notices, one coordinator turn', () => {
+    function progress(f: Fixture, n: number): void {
+        const notifier = createCoordinatorNotifier({ ledger: f.ledger, selfDaemonIds: () => ['dc'], now: () => f.clock.now });
+        for (let i = 1; i <= n; i++) {
+            notifier.notify({ meshId: 'm1', event: 'mesh:worker_progress', nodeLabel: `n${i}`, coordinatorMessage: `[System] progress ${i} on task t${i}`, metadataEvent: { taskId: `t${i}` } });
+        }
+    }
+
+    it('informational notices inside the window are delivered as ONE message; the others are claimed and skipped', async () => {
+        const f = fixture();
+        f.deps.policy = DEFAULT_TURN_POLICY;
+        f.deps.stats = createNoticeStats(() => f.clock.now);
+        progress(f, 3);
+        await f.ledger.flushPublish();
+        const [e1, e2, e3] = f.entries().filter((e) => e.kind === 'turn.notify');
+        const handler = createTurnDeliverHandler(f.deps);
+        const first = handler(e1!, signal());
+        await flush();
+        expect(f.port.calls).toHaveLength(0);          // held for company, not typed yet
+        expect(f.waiter.parked).toBe(1);
+        f.waiter.tick(DEFAULT_TURN_POLICY.coalesceWindowMs);
+        expect(await first).toMatchObject({ outcome: 'delivered' });
+        expect(f.port.calls).toHaveLength(1);
+        const text = f.port.calls[0]!.input.textFallback;
+        for (const i of [1, 2, 3]) expect(text).toContain(`progress ${i} on task t${i}`);
+        expect(await handler(e2!, signal())).toEqual({ outcome: 'skipped', why: 'already_delivered' });
+        expect(await handler(e3!, signal())).toEqual({ outcome: 'skipped', why: 'already_delivered' });
+        expect(f.port.calls).toHaveLength(1);
+        expect(claims(f.db)).toBe(3);
+        expect(f.deps.stats.snapshot('m1')).toMatchObject({ wakes: 1, coalesced: 2, delivered: { mesh_event: 3 } });
+    });
+
+    it('a failed/outcome notice is never held, and sweeps up what is already waiting', async () => {
+        const f = fixture();
+        f.deps.policy = DEFAULT_TURN_POLICY;
+        progress(f, 2);
+        const notifier = createCoordinatorNotifier({ ledger: f.ledger, selfDaemonIds: () => ['dc'], now: () => f.clock.now });
+        notifier.notify({ meshId: 'm1', event: 'refine:failed', nodeLabel: 'n9', coordinatorMessage: '[System] refine FAILED on branch x', metadataEvent: { jobId: 'j1' } });
+        await f.ledger.flushPublish();
+        const urgent = f.entries().filter((e) => e.kind === 'turn.notify')[2]!;
+        const result = await createTurnDeliverHandler(f.deps)(urgent, signal());
+        expect(result).toMatchObject({ outcome: 'delivered' });
+        expect(f.waiter.parked).toBe(0);                // no hold
+        expect(f.port.calls).toHaveLength(1);
+        const text = f.port.calls[0]!.input.textFallback;
+        expect(text).toContain('refine FAILED on branch x');
+        expect(text).toContain('progress 1 on task t1');
+        expect(text).toContain('progress 2 on task t2');
+        expect(text.indexOf('refine FAILED')).toBeLessThan(text.indexOf('progress 1'));
+    });
+
+    it('a refused/failed shared submit claims nothing: every notice stays an ordinary undelivered row', async () => {
+        const f = fixture();
+        f.deps.policy = { ...DEFAULT_TURN_POLICY, coalesceWindowMs: 0 };
+        progress(f, 3);
+        await f.ledger.flushPublish();
+        const [e1] = f.entries().filter((e) => e.kind === 'turn.notify');
+        f.port.next.push({ kind: 'refused', reason: 'not_ready' });
+        await expect(createTurnDeliverHandler(f.deps)(e1!, signal())).rejects.toThrow(/refused/);
+        expect(f.ledger.store.listUndeliveredNotifies('m1')).toHaveLength(3);
+        f.coordinators[0]!.idle = true;
+        expect(await createTurnDeliverHandler(f.deps)(e1!, signal())).toMatchObject({ outcome: 'delivered' });
+        expect(f.ledger.store.listUndeliveredNotifies('m1')).toHaveLength(0);
+    });
+
+    it('a held notice whose attempt ended while it waited is suppressed after the hold (a wake saved)', async () => {
+        const f = fixture();
+        f.deps.policy = DEFAULT_TURN_POLICY;
+        f.ledger.observe(dispatch());
+        f.ledger.observe(evd('delivered', { messageId: 'msg-1', outcome: 'delivered', via: 'local' }, { source: 'input_service' }));
+        f.ledger.observe(evd('turn_started', { retro: false }));
+        f.ledger.notifyMeshEvent({ meshId: 'm1', event: 'relayed', notify: 'progress', attemptId: 'a1', taskId: 't1', targetDaemonId: 'dc', eventId: 'prog-1', at: f.clock.now });
+        await f.ledger.flushPublish();
+        const entry = f.entries().find((e) => e.kind === 'turn.notify')!;
+        const pending = createTurnDeliverHandler(f.deps)(entry, signal());
+        await flush();
+        f.ledger.observe(evd('turn_end', { strength: 'genuine' }), { envelope: { finalSummary: SENTINEL } });
+        f.waiter.tick(DEFAULT_TURN_POLICY.coalesceWindowMs);
+        expect(await pending).toEqual({ outcome: 'suppressed', why: 'attempt_terminal' });
+        expect(f.port.calls).toHaveLength(0);
     });
 });

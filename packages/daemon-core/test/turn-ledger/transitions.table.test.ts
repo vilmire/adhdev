@@ -126,7 +126,7 @@ const FIRES: Record<string, Fixture> = {
     R22: { attempt: G(), evidence: ev('cancel', { reason: 'operator_cancel' }, { source: 'operator' }), state: 'stopping', effects: ['cancel_dispatch', 'hold'] },
     R23: { attempt: G(), evidence: ev('operator_status', { status: 'failed', reason: 'refine_terminal' }, { source: 'operator' }), state: 'stopping', effects: ['cancel_dispatch', 'hold'] },
     R29: { attempt: G(), evidence: ev('no_progress', { stalledMs: 200_000, observedStatus: 'idle', finalAssistantPresent: true }), state: 'finalizing', effects: ['hold'] },
-    R30: { attempt: G(), evidence: ev('no_progress', { stalledMs: 200_000, observedStatus: 'generating', finalAssistantPresent: false }), state: 'generating', effects: ['notify_coordinator'] },
+    R30: { attempt: G(), evidence: ev('no_progress', { stalledMs: 900_000, observedStatus: 'idle', finalAssistantPresent: false }), state: 'generating', effects: ['notify_coordinator'] },
     R31: { attempt: G(), evidence: ev('liveness', { result: 'dead' }), state: 'stopping', generation: 1, effects: ['cancel_dispatch', 'hold'] },
     R31a: { attempt: G(), evidence: ev('liveness', { result: 'read_failed' }), state: 'generating' },
     R32: { attempt: G(), evidence: ev('liveness', { result: 'alive' }), state: 'generating', effects: ['hold'] },
