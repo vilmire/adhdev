@@ -17,7 +17,7 @@ import {
   validateFinalName, validateSelectionManifest, type SelectionManifest,
 } from './manifest.js';
 import type { TransferLink, TransferLinkFactory, TransferSignal } from './link.js';
-import { ReceiverSession, SenderSession, SessionError } from './link-session.js';
+import { ReceiverSession, SenderSession, SessionError, safeTransferCode } from './link-session.js';
 import { extractSdpFingerprint, sdpHasRelayCandidate } from './protocol.js';
 import { TransferRateLimiter } from './rate-limit.js';
 import { TransferReceiver, removeStagingFor } from './receiver.js';
@@ -260,7 +260,7 @@ export class ProjectTransferEngine {
     let reply: Awaited<ReturnType<TransferHostPorts['dispatchPeer']>>;
     try { reply = await this.ports.dispatchPeer(input.targetDaemonId, { op: 'offer', transferId: manifest.transferId, selection: manifest, selectionDigest: digest }); }
     catch (e) { return fail('PEER_UNREACHABLE', (e as Error).message); }
-    if (!reply?.ok) return fail(String(reply?.code ?? 'OFFER_REFUSED'));
+    if (!reply?.ok) return fail(safeTransferCode(reply?.code ?? 'OFFER_REFUSED'));
     this.persist(rec, 'previewed');
     return { ok: true, transferId: rec.id, record: rec };
   }
@@ -346,7 +346,7 @@ export class ProjectTransferEngine {
     const reply = await this.ports.dispatchPeer(rec.peerDaemonId, {
       op: 'content', transferId: rec.id, selectionDigest: rec.selectionDigest, content: rec.content, linkGen: rec.linkGen, linkKeyB64: run.linkKey.toString('base64'),
     });
-    if (!reply?.ok) { LOG.warn(LOG_TAG, `${idTag(rec)} peer refused content for link ${rec.linkGen} code=${String(reply?.code ?? 'PEER_REFUSED')}`); throw new SessionError(String(reply?.code ?? 'PEER_REFUSED'), 'peer refused content'); }
+    if (!reply?.ok) { const code = safeTransferCode(reply?.code ?? 'PEER_REFUSED'); LOG.warn(LOG_TAG, `${idTag(rec)} peer refused content for link ${rec.linkGen} code=${code}`); throw new SessionError(code, 'peer refused content'); }
     const link = factory.create({ transferId: rec.id, role: 'initiator', linkGen: rec.linkGen });
     run.link = link;
     link.onSignalOut((s) => { void this.ports.dispatchPeer(rec.peerDaemonId, { op: 'signal', transferId: rec.id, linkGen: rec.linkGen, signal: s }).catch(() => {}); });
@@ -540,7 +540,7 @@ export class ProjectTransferEngine {
       }
       this.completeRecord(rec);
     } else if (args.state === 'failed') {
-      this.terminate(rec, 'failed', String(args.code ?? 'TARGET_FAILED'), false);
+      this.terminate(rec, 'failed', safeTransferCode(args.code ?? 'TARGET_FAILED'), false);
     }
     return { ok: true };
   }

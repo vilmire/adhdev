@@ -16,6 +16,12 @@ import type { TransferLink } from './link.js';
 import { ReceiverError, type TransferReceiver } from './receiver.js';
 import { spoolFilePath } from './spool.js';
 
+/** Peer-supplied failure codes are untrusted: keep only the closed code shape (they reach logs and state). */
+export function safeTransferCode(value: unknown, fallback = 'PEER_ERROR'): string {
+  const s = String(value ?? '');
+  return /^[A-Z][A-Z0-9_]{0,47}$/.test(s) ? s : fallback;
+}
+
 export class SessionError extends Error {
   constructor(public readonly code: string, message: string) {
     super(message);
@@ -109,7 +115,7 @@ abstract class BaseSession {
       this.inSeq = frame.seq;
       this.touch(); // only a valid, new-sequence frame proves the peer is alive
       if (frame.type === FrameType.ABORT) {
-        this.fail(new SessionError(String(parseJsonPayload(frame.payload).code ?? 'PEER_ABORT'), 'peer aborted'));
+        this.fail(new SessionError(safeTransferCode(parseJsonPayload(frame.payload).code ?? 'PEER_ABORT'), 'peer aborted'));
         return;
       }
       if (!this.helloOk) {

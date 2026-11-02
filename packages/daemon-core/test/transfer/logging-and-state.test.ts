@@ -84,3 +84,14 @@ describe('transfer engine logging', () => {
     expect(states).toContain('transferring'); // DATA frames only after it was
   });
 });
+
+describe('peer-supplied failure codes', () => {
+  it('keep only the closed code shape before they reach logs or state', async () => {
+    const { safeTransferCode } = await import('../../src/transfer/link-session.js')
+    expect(safeTransferCode('DIRECT_UNAVAILABLE')).toBe('DIRECT_UNAVAILABLE')
+    expect(safeTransferCode('X\n[00:00:00.000] [INF] [Transfer] forged')).toBe('PEER_ERROR')
+    expect(safeTransferCode('lowercase')).toBe('PEER_ERROR')
+    expect(safeTransferCode('A'.repeat(49))).toBe('PEER_ERROR')
+    expect(safeTransferCode(undefined, 'TARGET_FAILED')).toBe('TARGET_FAILED')
+  })
+})

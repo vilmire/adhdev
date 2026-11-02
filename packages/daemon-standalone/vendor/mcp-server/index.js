@@ -97669,10 +97669,10 @@ ${buildSafetyTailSection(coordinatorCliType)}`,
       };
       const pin = n.pinned ? "\u{1F4CC} " : "";
       const noteId = typeof n.noteId === "string" && n.noteId.trim() ? n.noteId.trim() : typeof n.id === "string" && n.id.trim() ? n.id.trim() : "";
-      const idTag = noteId ? `[id: ${noteId}] ` : "";
+      const idTag2 = noteId ? `[id: ${noteId}] ` : "";
       const cat = n.category && categoryLabel[n.category] ? `[${categoryLabel[n.category]}] ` : "";
       const fold = folded.subsumedCount > 0 ? ` _(+${folded.subsumedCount} earlier same-subject note${folded.subsumedCount === 1 ? "" : "s"} folded${folded.subsumedIds.length ? `: ${folded.subsumedIds.join(", ")}` : ""})_` : "";
-      return `- ${pin}${idTag}${cat}${truncateNote(n.text.trim())}${fold}`;
+      return `- ${pin}${idTag2}${cat}${truncateNote(n.text.trim())}${fold}`;
     }
     function buildOperatingNotesSection(notes, now = Date.now()) {
       const hasAny = Array.isArray(notes) ? notes.some((n) => n && typeof n.text === "string" && n.text.trim()) : false;
@@ -187907,6 +187907,7 @@ ${output}` : "";
     var fs106 = __toESM2(require("fs"));
     var path112 = __toESM2(require("path"));
     init_dist();
+    init_logger();
     var TransferFsError = class extends Error {
       reason;
       code;
@@ -189421,6 +189422,10 @@ ${output}` : "";
         safeClose2(root);
       }
     }
+    function safeTransferCode(value, fallback = "PEER_ERROR") {
+      const s2 = String(value ?? "");
+      return /^[A-Z][A-Z0-9_]{0,47}$/.test(s2) ? s2 : fallback;
+    }
     var SessionError = class extends Error {
       constructor(code, message) {
         super(message);
@@ -189457,6 +189462,7 @@ ${output}` : "";
       promise;
       idle;
       helloTimer;
+      established;
       touch() {
         clearTimeout(this.idle);
         this.idle = setTimeout(() => this.fail(new SessionError("LINK_LOST", "link idle timeout")), IDLE_TIMEOUT_MS);
@@ -189508,7 +189514,7 @@ ${output}` : "";
           this.inSeq = frame2.seq;
           this.touch();
           if (frame2.type === 8) {
-            this.fail(new SessionError(String(parseJsonPayload(frame2.payload).code ?? "PEER_ABORT"), "peer aborted"));
+            this.fail(new SessionError(safeTransferCode(parseJsonPayload(frame2.payload).code ?? "PEER_ABORT"), "peer aborted"));
             return;
           }
           if (!this.helloOk) {
@@ -189524,6 +189530,7 @@ ${output}` : "";
             }
             this.helloOk = true;
             clearTimeout(this.helloTimer);
+            this.established?.();
             this.onHelloOk();
             return;
           }
@@ -189533,6 +189540,10 @@ ${output}` : "";
           else if (err2 instanceof ReceiverError) this.abort(err2.code === "HASH_MISMATCH" || err2.code === "DISK_SPACE_EXHAUSTED" ? err2.code : "PROTOCOL_ERROR");
           else this.abort("IO_ERROR");
         }
+      }
+      /** Called once the peer's channel-binding HELLO verified: the link is usable for the data phase. */
+      onEstablished(cb) {
+        this.established = cb;
       }
       wait() {
         return this.promise;
@@ -189800,7 +189811,10 @@ ${output}` : "";
         return { staleTempIds };
       }
     };
+    var LOG_TAG = "Transfer";
+    var idTag = (rec7) => `${rec7.id.slice(0, 8)}/${rec7.role}`;
     var MAX_OPEN_TRANSFERS = 10;
+    var LOG_SKIP_EVENTS = /* @__PURE__ */ new Set(["failed", "cancelled", "expired", "revoked"]);
     var fail3 = (code, detail) => ({ ok: false, code, ...detail ? { detail } : {} });
     var ProjectTransferEngine = class {
       constructor(ports) {
@@ -189873,6 +189887,7 @@ ${output}` : "";
         rec7.activityAt = rec7.updatedAt;
         this.records.set(rec7.id, rec7);
         this.store.save(rec7);
+        if (event && !LOG_SKIP_EVENTS.has(event)) LOG.info(LOG_TAG, `${idTag(rec7)} ${event} state=${rec7.state} linkGen=${rec7.linkGen} files=${rec7.selection.entries.filter((e) => e.kind === "file").length} bytes=${rec7.bytesDone}/${rec7.totalBytes}`);
         if (event) this.store.audit({ id: rec7.id, role: rec7.role, event, ...rec7.errorCode ? { code: rec7.errorCode } : {}, files: rec7.selection.entries.filter((e) => e.kind === "file").length, bytes: rec7.totalBytes }, this.now());
       }
       setState(rec7, state2, event) {
@@ -189894,6 +189909,7 @@ ${output}` : "";
         rec7.state = state2;
         delete rec7.localApproval;
         this.persist(rec7, state2);
+        (state2 === "failed" ? LOG.warn : LOG.info).call(LOG, LOG_TAG, `${idTag(rec7)} terminal state=${state2} code=${code} linkGen=${rec7.linkGen} bytes=${rec7.bytesDone}/${rec7.totalBytes}`);
         this.store.removeSpool(rec7.id);
         this.store.writeReceipt({
           id: rec7.id,
@@ -190025,7 +190041,7 @@ ${output}` : "";
         } catch (e) {
           return fail3("PEER_UNREACHABLE", e.message);
         }
-        if (!reply?.ok) return fail3(String(reply?.code ?? "OFFER_REFUSED"));
+        if (!reply?.ok) return fail3(safeTransferCode(reply?.code ?? "OFFER_REFUSED"));
         this.persist(rec7, "previewed");
         return { ok: true, transferId: rec7.id, record: rec7 };
       }
@@ -190111,6 +190127,7 @@ ${output}` : "";
         if (!factory) throw new SessionError("LINK_UNAVAILABLE", "no link factory");
         run4.linkKey = (0, import_node_crypto48.randomBytes)(32);
         rec7.linkGen += 1;
+        LOG.info(LOG_TAG, `${idTag(rec7)} link attempt ${rec7.linkGen} started (retries=${run4.retries})`);
         this.setState(rec7, "linking");
         const reply = await this.ports.dispatchPeer(rec7.peerDaemonId, {
           op: "content",
@@ -190120,7 +190137,11 @@ ${output}` : "";
           linkGen: rec7.linkGen,
           linkKeyB64: run4.linkKey.toString("base64")
         });
-        if (!reply?.ok) throw new SessionError(String(reply?.code ?? "PEER_REFUSED"), "peer refused content");
+        if (!reply?.ok) {
+          const code = safeTransferCode(reply?.code ?? "PEER_REFUSED");
+          LOG.warn(LOG_TAG, `${idTag(rec7)} peer refused content for link ${rec7.linkGen} code=${code}`);
+          throw new SessionError(code, "peer refused content");
+        }
         const link2 = factory.create({ transferId: rec7.id, role: "initiator", linkGen: rec7.linkGen });
         run4.link = link2;
         link2.onSignalOut((s2) => {
@@ -190133,11 +190154,25 @@ ${output}` : "";
           rec7.activityAt = this.now();
         });
         run4.session = session;
-        this.setState(rec7, "transferring");
+        this.bindEstablished(rec7, session);
         this.armWatchdog(rec7, run4);
         session.wait().then(() => {
           if (!TERMINAL_STATES.has(rec7.state)) this.setState(rec7, "verifying");
         }, (e) => this.onSessionFailure(rec7, run4, e));
+      }
+      /**
+       * A record is `transferring` only once the link is up AND the session's channel binding is
+       * verified (HELLO ok) — i.e. the data phase can start. Until then it stays `linking`, so a link
+       * that never connects does not flicker between "transferring" and "connecting" (bug 3: the state
+       * used to flip to `transferring` the moment the session object was created, before any link).
+       */
+      bindEstablished(rec7, session) {
+        const gen = rec7.linkGen;
+        session.onEstablished(() => {
+          if (TERMINAL_STATES.has(rec7.state) || rec7.linkGen !== gen) return;
+          LOG.info(LOG_TAG, `${idTag(rec7)} link ${gen} connected (direct)`);
+          if (rec7.state === "linking") this.setState(rec7, "transferring");
+        });
       }
       armWatchdog(rec7, run4) {
         clearInterval(run4.watchdog);
@@ -190154,6 +190189,7 @@ ${output}` : "";
       onSessionFailure(rec7, run4, err2) {
         if (TERMINAL_STATES.has(rec7.state) || run4.cancelled) return;
         const code = err2 instanceof SessionError ? err2.code : "INTERNAL_ERROR";
+        LOG.warn(LOG_TAG, `${idTag(rec7)} link ${rec7.linkGen} failed code=${code}`);
         if (code === "LINK_LOST" || code === "PEER_ABORT") {
           this.setState(rec7, "paused", "paused");
           try {
@@ -190173,6 +190209,7 @@ ${output}` : "";
           return;
         }
         const delay3 = Math.min(3e4, 1e3 * 2 ** run4.retries++);
+        LOG.info(LOG_TAG, `${idTag(rec7)} retry ${run4.retries}/5 scheduled in ${delay3}ms`);
         run4.retryTimer = setTimeout(() => {
           if (TERMINAL_STATES.has(rec7.state)) return;
           this.openSourceLink(rec7, run4).catch((e) => this.onSessionFailure(rec7, run4, e instanceof Error ? e : new SessionError("INTERNAL_ERROR", String(e))));
@@ -190303,6 +190340,7 @@ ${output}` : "";
         run4.receiver = receiver;
         this.runs.set(rec7.id, run4);
         this.setState(rec7, "linking");
+        LOG.info(LOG_TAG, `${idTag(rec7)} link attempt ${rec7.linkGen} started (responder)`);
         const link2 = factory.create({ transferId: rec7.id, role: "responder", linkGen: rec7.linkGen });
         run4.link = link2;
         link2.onSignalOut((s2) => {
@@ -190312,7 +190350,7 @@ ${output}` : "";
         const session = new ReceiverSession(link2, rec7.id, rec7.linkGen, key6, receiver, resume);
         run4.session = session;
         this.armWatchdog(rec7, run4);
-        this.setState(rec7, "transferring");
+        this.bindEstablished(rec7, session);
         session.wait().then(() => this.finishTarget(rec7, run4), (e) => this.onSessionFailure(rec7, run4, e));
         return { ok: true };
       }
@@ -190344,7 +190382,7 @@ ${output}` : "";
           }
           this.completeRecord(rec7);
         } else if (args.state === "failed") {
-          this.terminate(rec7, "failed", String(args.code ?? "TARGET_FAILED"), false);
+          this.terminate(rec7, "failed", safeTransferCode(args.code ?? "TARGET_FAILED"), false);
         }
         return { ok: true };
       }
