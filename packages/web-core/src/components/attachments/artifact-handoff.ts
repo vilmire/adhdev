@@ -8,7 +8,7 @@
  * carries only the handle — never an artifact id, filename or content.
  *
  * The record is deleted when read and records older than HANDOFF_MAX_AGE_MS are swept on every
- * write, so content does not sit at rest. The store is injectable (tests, odd runtimes).
+ * write and viewer load (all of them on sign-out), so content does not sit at rest. The store is injectable (tests, odd runtimes).
  */
 export const ARTIFACT_HANDOFF_PARAM = 'h'
 export const HANDOFF_MAX_AGE_MS = 10 * 60 * 1000
@@ -114,6 +114,16 @@ export async function putArtifactHandoff(item: unknown, now: number = Date.now()
 /** Best-effort removal of a parked record (e.g. the window turned out to be blocked). */
 export async function discardArtifactHandoff(handle: string): Promise<void> {
     try { await getStore().take(handle) } catch { /* swept later */ }
+}
+
+/** Best-effort sweep of expired records; a window that never read its record must not leave it behind. */
+export async function sweepArtifactHandoffs(now: number = Date.now()): Promise<void> {
+    try { await getStore().sweep(now - HANDOFF_MAX_AGE_MS) } catch { /* retried on the next open */ }
+}
+
+/** Remove every parked record, expired or not (sign-out: parked content must not outlive the session). */
+export async function purgeArtifactHandoffs(): Promise<void> {
+    try { await getStore().sweep(Number.MAX_SAFE_INTEGER) } catch { /* expires on the next sweep */ }
 }
 
 const consumed = new Map<string, Promise<unknown | null>>()

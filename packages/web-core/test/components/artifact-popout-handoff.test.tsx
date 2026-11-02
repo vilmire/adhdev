@@ -8,7 +8,7 @@ import React, { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ArtifactViewerPage from '../../src/pages/ArtifactViewerPage'
-import { HANDOFF_MAX_AGE_MS, putArtifactHandoff, setArtifactHandoffStore } from '../../src/components/attachments/artifact-handoff'
+import { HANDOFF_MAX_AGE_MS, purgeArtifactHandoffs, putArtifactHandoff, setArtifactHandoffStore } from '../../src/components/attachments/artifact-handoff'
 import { goBackToDashboard, openArtifactInNewWindow } from '../../src/components/attachments/artifact-popout'
 import { DriverBundleInstallPopout } from '../../src/components/attachments/DriverBundleInstall'
 import type { ArtifactViewerItem } from '../../src/components/attachments/artifact-viewer-item'
@@ -49,6 +49,24 @@ async function openAndNavigate(shown: ArtifactViewerItem) {
 }
 
 describe('handoff when the pop-out has no opener', () => {
+    it('ignores a same-origin postMessage payload when there is no opener', async () => {
+        await render(<ArtifactViewerPage />)
+        await act(async () => {
+            window.dispatchEvent(new MessageEvent('message', { origin: window.location.origin, source: window, data: { type: 'adhdev-artifact-viewer-payload', payload: item({ text: 'INJECTED' }) } }))
+        })
+        expect(container.textContent).not.toContain('INJECTED')
+    })
+
+    it('sweeps expired records on viewer load and purges everything on sign-out', async () => {
+        const old = await putArtifactHandoff(item(), Date.now() - HANDOFF_MAX_AGE_MS - 1000)
+        await render(<ArtifactViewerPage />)
+        await act(async () => { await Promise.resolve() })
+        expect(await store.take(old)).toBeNull()
+        const fresh = await putArtifactHandoff(item())
+        await purgeArtifactHandoffs()
+        expect(await store.take(fresh)).toBeNull()
+    })
+
     it('renders a text artifact from the handle', async () => {
         await openAndNavigate(item())
         await render(<ArtifactViewerPage />)

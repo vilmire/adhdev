@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import ArtifactFullscreenViewer from '../components/attachments/ArtifactFullscreenViewer'
 import { trArtifact } from '../components/attachments/artifact-i18n'
-import { ARTIFACT_HANDOFF_PARAM, consumeArtifactHandoff, isHandoffHandle } from '../components/attachments/artifact-handoff'
+import { ARTIFACT_HANDOFF_PARAM, consumeArtifactHandoff, isHandoffHandle, sweepArtifactHandoffs } from '../components/attachments/artifact-handoff'
 import {
     ARTIFACT_VIEWER_READY,
     goBackToDashboard,
@@ -35,7 +35,8 @@ export default function ArtifactViewerPage({ timeoutMs = ARTIFACT_POPOUT_TIMEOUT
         const opener = window.opener as Window | null
         const onMessage = (event: MessageEvent) => {
             if (event.origin !== window.location.origin) return
-            if (opener && event.source !== opener) return
+            // Without an opener the handoff record is the only legitimate source.
+            if (!opener || event.source !== opener) return
             const parsed = parseArtifactViewerPayloadMessage(event.data)
             if (parsed) {
                 setItem(parsed)
@@ -46,6 +47,7 @@ export default function ArtifactViewerPage({ timeoutMs = ARTIFACT_POPOUT_TIMEOUT
         if (opener) {
             try { opener.postMessage({ type: ARTIFACT_VIEWER_READY }, window.location.origin) } catch { /* opener gone */ }
         }
+        void sweepArtifactHandoffs()
         const handle = readHandle()
         let cancelled = false
         if (handle) {

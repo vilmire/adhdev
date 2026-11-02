@@ -393,7 +393,7 @@ export { default as TodoButton } from './components/needs-you/TodoButton'
 export { default as TodoDrawer, TodoDrawerHost } from './components/needs-you/TodoDrawer'
 export { useTodoDrawer } from './hooks/useTodoDrawer'
 export { default as ArtifactViewerPage } from './pages/ArtifactViewerPage'
-export { ArtifactFullscreenViewer, openArtifactInNewWindow } from './components/attachments'
+export { ArtifactFullscreenViewer, openArtifactInNewWindow, purgeArtifactHandoffs } from './components/attachments'
 export type { ArtifactFullscreenViewerProps, ArtifactViewerItem } from './components/attachments'
 // Imported from the module itself, not the MeshGraph index, for the same reason.
 export { default as PendingApprovalsInbox, derivePendingApprovals } from './components/MeshGraph/PendingApprovalsInbox'
