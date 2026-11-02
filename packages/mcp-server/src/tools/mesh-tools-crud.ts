@@ -15,7 +15,40 @@
 // surface the returned ids so the agent can chain the next step.
 
 import type { CommandTransport } from '../transports/mode.js';
+import { configDirIdentity } from '@adhdev/daemon-core';
 import { unwrapCommandPayload } from './mesh-session-helpers.js';
+
+/** Operator escape hatch for a deliberate cross-config-dir setup (see {@link configDirMismatchFailure}). */
+const ALLOW_CONFIG_MISMATCH_ENV = 'ADHDEV_MCP_ALLOW_CONFIG_DIR_MISMATCH';
+
+/**
+ * Mesh topology writes (create_mesh / add_mesh_node) always execute INSIDE the
+ * daemon the transport is connected to — never in this process. But this process
+ * resolves its own config dir (ADHDEV_CONFIG_DIR, a track-pinning wrapper) and
+ * reads meshes.json / machine identity from it in-process, so a coordinator
+ * connected to a daemon of ANOTHER config dir splits topology across two stores:
+ * the mesh is born in one dir and the MCP's own lookups search the other (live
+ * 2026-11-01: `adhdev mcp --mode ipc --port <standalone>` under a preview-pinned
+ * env created the mesh in the preview dir).
+ *
+ * The daemon stamps `daemonConfigIdentity` (digest of its realpath'd config dir)
+ * on its onboarding-plan answer; this process compares it with its own. A daemon
+ * that does not report one (older build) is unverifiable and proceeds.
+ */
+function configDirMismatchFailure(planPayload: any): Record<string, unknown> | null {
+    const daemonIdentity = typeof planPayload?.daemonConfigIdentity === 'string' ? planPayload.daemonConfigIdentity : '';
+    if (!daemonIdentity) return null;
+    if (/^(1|true|yes)$/i.test(String(process.env[ALLOW_CONFIG_MISMATCH_ENV] ?? '').trim())) return null;
+    let own = '';
+    try { own = configDirIdentity(); } catch { return null; }
+    if (own === daemonIdentity) return null;
+    return {
+        success: false,
+        code: 'mesh_config_dir_mismatch',
+        error: 'This MCP process and the daemon it is connected to use different ADHDev config directories, so a mesh written now would land in the daemon\'s store while this process reads its own. Refusing to write.',
+        action: `Start the MCP with the same config dir as the daemon (same ADHDEV_CONFIG_DIR / track wrapper as the daemon), or connect it to the daemon that owns this config dir. Set ${ALLOW_CONFIG_MISMATCH_ENV}=1 only for a deliberate cross-config setup.`,
+    };
+}
 
 /**
  * Read-only Git-aware onboarding discovery/plan. This is intentionally callable
@@ -88,6 +121,8 @@ export async function meshCreate(
             ...(workspace ? { workspace } : {}),
             operation: 'auto',
         }));
+        const mismatch = configDirMismatchFailure(planned);
+        if (mismatch) return JSON.stringify(mismatch, null, 2);
         if (!planned?.success) {
             return JSON.stringify({
                 success: false,
@@ -112,6 +147,14 @@ export async function meshCreate(
         repoRemoteUrl = discovery?.origin?.urls?.[0] || discovery?.upstream?.urls?.[0] || '';
         repoIdentity = discovery?.repoIdentity || '';
         defaultBranch ||= discovery?.defaultBranch || '';
+    }
+
+    if (!discovery) {
+        // Identity given explicitly: no planner ran, so ask the daemon who it is (read-only).
+        let probe: any;
+        try { probe = unwrapCommandPayload(await transport.command('plan_mesh_onboarding', { operation: 'create_mesh', ...(typeof args?.workspace === 'string' && args.workspace.trim() ? { workspace: args.workspace.trim() } : {}) })); } catch { probe = null; }
+        const mismatch = configDirMismatchFailure(probe);
+        if (mismatch) return JSON.stringify(mismatch, null, 2);
     }
 
     const createResult = await transport.command('create_mesh', {
@@ -209,6 +252,8 @@ export async function meshAddNode(
         ...(args?.inline_mesh ? { inlineMesh: args.inline_mesh } : {}),
     });
     const planPayload = unwrapCommandPayload(planResult);
+    const mismatch = configDirMismatchFailure(planPayload);
+    if (mismatch) return JSON.stringify(mismatch, null, 2);
     if (!planPayload?.success) {
         return JSON.stringify({
             success: false,

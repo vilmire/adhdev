@@ -671,10 +671,47 @@ function checkRequestedLaunchType(
  * its own token refresh must still launch when its token has expired, or the
  * token can never be refreshed. See mesh-quota-routing.ts's module header.
  */
-async function detectLaunchProviderType(ctx: MeshContext, node: LocalMeshNodeEntry, nodeId: string): Promise<{ providerType: string } | string> {
+/**
+ * `mesh_resolve_launch_provider`: the provider the daemon's auto-launch routing
+ * (resolveUsableProvider) would pick for this node. Best-effort — an older daemon
+ * without the command, or any transport failure, yields no answer and the caller
+ * keeps its legacy refusal.
+ */
+async function resolveLaunchProviderViaDaemon(
+    ctx: MeshContext,
+    nodeId: string,
+): Promise<{ providerType?: string; slot?: NodeCapabilitySlot; reason?: string }> {
+    try {
+        const payload = unwrapCommandPayload(await ctx.transport.command('mesh_resolve_launch_provider', { meshId: ctx.mesh.id, nodeId }));
+        if (payload?.success === true && typeof payload.providerType === 'string' && payload.providerType.trim()) {
+            const providerType = payload.providerType.trim();
+            const model = typeof payload.model === 'string' && payload.model.trim() ? payload.model.trim() : undefined;
+            const thinkingLevel = typeof payload.thinkingLevel === 'string' && payload.thinkingLevel.trim() ? payload.thinkingLevel.trim() : undefined;
+            return {
+                providerType,
+                ...(model || thinkingLevel ? { slot: { provider: providerType, ...(model ? { model } : {}), ...(thinkingLevel ? { thinkingLevel } : {}) } as NodeCapabilitySlot } : {}),
+            };
+        }
+        return { reason: typeof payload?.reason === 'string' ? payload.reason : undefined };
+    } catch {
+        return {};
+    }
+}
+
+async function detectLaunchProviderType(ctx: MeshContext, node: LocalMeshNodeEntry, nodeId: string): Promise<{ providerType: string; slot?: NodeCapabilitySlot } | string> {
     const providerPriority = readNodeProviderPriority(node);
     if (!providerPriority.length) {
-        return JSON.stringify({ success: false, error: missingProviderPriorityMessage(nodeId) });
+        // The node declares neither slots nor providerPriority (and its facts bundle
+        // names no enabled provider): the queue auto-launch still launches here, because
+        // the DAEMON's routing falls back to the machine's enabled providers. Ask it —
+        // one routing, no second copy of the policy in this process.
+        const routed = await resolveLaunchProviderViaDaemon(ctx, nodeId);
+        if (routed.providerType) return { providerType: routed.providerType, ...(routed.slot ? { slot: routed.slot } : {}) };
+        return JSON.stringify({
+            success: false,
+            error: missingProviderPriorityMessage(nodeId),
+            ...(routed.reason ? { routingReason: routed.reason } : {}),
+        });
     }
     const failed: string[] = [];
     const detectedCandidates: string[] = [];
@@ -980,6 +1017,7 @@ async function meshLaunchSessionImpl(
     // proceeds (operator override) but the response carries the warning.
     let explicitTypeQuotaWarning: Record<string, unknown> | null = null;
     let resolvedProviderType: string;
+    let routedSlot: NodeCapabilitySlot | undefined;
     if (requestedType) {
         const checked = checkRequestedLaunchType(ctx, node, args.node_id, requestedType);
         if (typeof checked === 'string') return checked;
@@ -989,13 +1027,14 @@ async function meshLaunchSessionImpl(
         const detected = await detectLaunchProviderType(ctx, node, args.node_id);
         if (typeof detected === 'string') return detected;
         resolvedProviderType = detected.providerType;
+        routedSlot = detected.slot;
     }
 
     // Match the no-task canonical launch order: retain the resolved provider and
     // use its first configured slot. There is no task difficulty to rank here;
     // selecting a higher grade or a different provider would invent an override.
     const profile = normalizeNodeCapabilitySlots(node.policy?.slots)
-        .find(slot => slot.provider === resolvedProviderType);
+        .find(slot => slot.provider === resolvedProviderType) ?? routedSlot;
     const coordinatorNode = resolveCoordinatorNode(ctx);
     const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
     const spawnedSessionVisibility = readSpawnedSessionVisibility(ctx.mesh.policy);

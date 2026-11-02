@@ -40,6 +40,9 @@ import { daemonIdsEquivalent, meshNodeIdMatches, TURN_IPC_PROTOCOL_VERSION, read
 import { getMachineId } from '../../config/config.js';
 import { readMeshNodeDaemonId } from '../../mesh/mesh-node-identity.js';
 import { defineCommandSpecs } from '../command-registry.js';
+import { resolveUsableProvider } from '../../mesh/mesh-autolaunch-usable-provider.js';
+import { isLocalAutoLaunchNode } from '../../mesh/mesh-candidacy-predicates.js';
+import { quotaFactsContextForLiveRouting } from '../../mesh/mesh-quota-sources.js';
 import type { CommandRouterResult } from '../router.js';
 import { isForeignDaemonMeshNode } from './mesh-status-node-state.js';
 import type { HighFamilyContext, HighFamilyHandler } from './types.js';
@@ -230,6 +233,40 @@ export const meshStatusViewHandlers: Record<string, HighFamilyHandler> = {
         }) };
     },
 
+    /**
+     * mesh_resolve_launch_provider: the provider the AUTO-LAUNCH routing would pick for a
+     * node when a manual launch names no `type` — the same `resolveUsableProvider` the
+     * queue drain runs (capability slots → providerPriority → this machine's enabled
+     * providers, usability + quota gate + fitness order). The MCP asks, the daemon decides;
+     * the tool keeps no second copy of the policy. Read-only.
+     */
+    mesh_resolve_launch_provider: async (ctx: HighFamilyContext, args: any) => {
+        const meshId = readText(args?.meshId);
+        const nodeId = readText(args?.nodeId);
+        if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
+        const record = await ctx.getMeshForCommand(meshId, undefined, { preferInline: true });
+        const mesh = record?.mesh;
+        const rostered = Array.isArray(mesh?.nodes) ? mesh.nodes.find((n: any) => meshNodeIdMatches(n, nodeId)) : undefined;
+        const described = readOptionalRecord(args?.node);
+        const node = rostered ?? (described && meshNodeIdMatches(described, nodeId) ? described : undefined);
+        if (!node) return { success: false, code: 'mesh_node_unknown', error: `Node ${nodeId} is not on mesh ${meshId}` };
+        const components = ctx.components();
+        const resolved = await resolveUsableProvider(
+            components, readText(node.id) || nodeId, node, meshId, undefined, {},
+            mesh?.policy?.quotaRouting ?? null,
+            quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader),
+        );
+        if (!resolved.providerType) {
+            return { success: false, code: 'mesh_launch_provider_unresolved', meshId, nodeId, reason: resolved.reason || 'provider_unusable', error: `No launchable provider for node ${nodeId}: ${resolved.reason || 'provider_unusable'}` };
+        }
+        return {
+            success: true, meshId, nodeId, providerType: resolved.providerType,
+            ...(resolved.model ? { model: resolved.model } : {}),
+            ...(resolved.thinkingLevel ? { thinkingLevel: resolved.thinkingLevel } : {}),
+            ...(resolved.quotaGated?.length ? { quotaGated: resolved.quotaGated.map(g => ({ providerType: g.providerType, reason: g.block.reason })) } : {}),
+        };
+    },
+
     mesh_node_route: async (ctx: HighFamilyContext, args: any) => {
         const meshId = readText(args?.meshId);
         if (!meshId) return { success: false, error: 'meshId required' };
@@ -323,4 +360,5 @@ export const meshStatusViewSpecs = defineCommandSpecs('high', meshStatusViewHand
     mesh_status_view: { sources: [...TOOL_SOURCES] },
     mesh_dispatch_route: { sources: [...TOOL_SOURCES] },
     mesh_node_route: { sources: [...TOOL_SOURCES] },
+    mesh_resolve_launch_provider: { sources: [...TOOL_SOURCES] },
 });

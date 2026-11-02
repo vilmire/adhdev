@@ -329,7 +329,7 @@ const LEGACY_HIGH_FAMILY_COMMANDS = [
     // Tool answers composed by the coordinator (high-family/mesh-status-view.ts):
     // the MCP mesh_status tool's ONE call, the direct-dispatch route decision,
     // and the same decision for every node a tool reasons over (mesh_node_route).
-    'mesh_status_view', 'mesh_dispatch_route', 'mesh_node_route',
+    'mesh_status_view', 'mesh_dispatch_route', 'mesh_node_route', 'mesh_resolve_launch_provider',
     // Assistant store verbs (high-family/assistant-store.ts, design
     // 2026-10-07-assistant-layer.md §4.4). Fresh additions; sources pinned by
     // assistant-store-sources.test.ts.
