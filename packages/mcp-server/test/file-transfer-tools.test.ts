@@ -31,6 +31,21 @@ test('request resolves a node id to its machine and workspace and calls only pro
   assert.deepEqual(calls[0].args, { action: 'request', fromWorkspace: 'src', selected: ['a'], toDaemonId: 'daemon_mach_b', toWorkspace: '/srv/b', finalName: 'in' });
 });
 
+test('request can name another machine as the source (node id or daemon id) and status routes by machine', async () => {
+  const calls: Array<{ type: string; args: any }> = [];
+  const c = ctx(calls);
+  await meshFileTransfer(c, { action: 'request', from_node_id: 'node-b', selected: ['a'], to_daemon_id: 'daemon_mach_z', to_workspace: 'w', final_name: 'in' } as any);
+  assert.equal(calls[0].args.fromDaemonId, 'daemon_mach_b');
+  assert.equal(calls[0].args.fromWorkspace, '/srv/b');
+  await meshFileTransfer(c, { action: 'request', from_daemon_id: 'daemon_mach_q', from_workspace: 'src', selected: ['a'], to_daemon_id: 'daemon_mach_z', final_name: 'in' } as any);
+  assert.equal(calls[1].args.fromDaemonId, 'daemon_mach_q');
+  await meshFileTransfer(c, { action: 'status', transfer_id: 't', from_daemon_id: 'daemon_mach_q' } as any);
+  assert.deepEqual(calls[2].args, { action: 'status', transferId: 't', fromDaemonId: 'daemon_mach_q' });
+  const props = (ALL_MESH_TOOLS.find((t) => t.name === 'mesh_file_transfer')!.inputSchema.properties as any);
+  assert.ok(props.from_node_id && props.from_daemon_id);
+  assert.equal(validateMeshToolArgs('mesh_file_transfer', { action: 'request', fromDaemonId: 'x' }), null);
+});
+
 test('status and cancel forward the transfer id; daemon refusals surface as failures', async () => {
   const calls: Array<{ type: string; args: any }> = [];
   await meshFileTransfer(ctx(calls), { action: 'cancel', transfer_id: 'abc' });

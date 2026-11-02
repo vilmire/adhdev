@@ -44,7 +44,7 @@ Tool descriptions say what each does; these are routing rules.
 - \`discover_repos\` then \`project_add\` makes a local repository a project; \`project_attach_remote\` adds one to the exact machine the user named.
 - \`memory\`, \`project_note\`, \`skill_view\` and \`skill_manage\`: see "Memory, notes and skills".
 - \`launch_defaults\` reads launch defaults; \`launch_defaults_set\` proposes a change for the owner.
-- \`driver_list\`/\`driver_describe\` inspect drivers (workers invoke them); \`file_transfer\` only requests, the owner approves.
+- \`driver_list\`/\`driver_describe\` show drivers; \`file_transfer\` (from_daemon_id=other machine) only requests, owner approves.
 - \`session_control\` stops/restarts/switches a coordinator, worker or you on the user's words (\`interpretedFrom\`); \`proposed\` = awaits owner approval.
 
 Every project-level tool answers \`{project, meshId, result}\`. Name the project in every answer, e.g. "[blog] done: …".

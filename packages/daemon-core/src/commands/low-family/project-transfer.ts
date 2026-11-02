@@ -13,6 +13,7 @@ import { readAuthenticatedMcpCommand, readAuthenticatedMcpScope } from '../mcp-c
 import { stripRouterInternalArgs } from '../router-internal-args.js';
 import { getProjectTransferEngine } from '../../transfer/runtime.js';
 import { runAgentTransfer } from '../../transfer/agent-transfer.js';
+import { resolveMeshScope } from '../../transfer/workspace-scope.js';
 import type { TransferRecord } from '../../transfer/store.js';
 import type { LowFamilyContext } from './types.js';
 
@@ -187,7 +188,12 @@ handlers.project_transfer_agent = async (_ctx, rawArgs) => {
     const caller = classifyTransferAgentCaller(raw);
     if (!caller.ok) return { success: false, code: 'transfer_agent_not_allowed', error: caller.error };
     const args = stripRouterInternalArgs(raw) as Record<string, unknown>;
-    return runAgentTransfer({ role: 'coordinator', sessionId: caller.sessionId, meshId: caller.meshId }, args);
+    // The coordinator may export only workspaces of the nodes of its OWN mesh on this machine.
+    const engine = getProjectTransferEngine();
+    const scope = engine ? resolveMeshScope(caller.meshId, engine.selfId()) : null;
+    return runAgentTransfer({ role: 'coordinator', sessionId: caller.sessionId, meshId: caller.meshId }, args, {
+        sourceWorkspaceIds: scope ? new Set(scope.workspaces.map((w) => w.id)) : null,
+    });
 };
 
 const OWNER_SOURCES = ['p2p', 'standalone'] as const;

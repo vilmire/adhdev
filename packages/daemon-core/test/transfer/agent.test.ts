@@ -29,6 +29,7 @@ import { answerMissionDecision, buildOwnerDecisions } from '../../src/mesh/mesh-
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { configureProjectTransfer, resetProjectTransferForTest } from '../../src/transfer/runtime.js';
 import { setWorkspaceLookupForTest } from '../../src/transfer/workspace-lookup.js';
+import { setMeshScopeResolverForTest } from '../../src/transfer/workspace-scope.js';
 import { LinkBroker, makeSide, readTree, waitFor, writeTree, type Side } from './helpers.js';
 
 const cleanups: Array<() => void> = [];
@@ -39,6 +40,7 @@ afterEach(() => {
   while (cleanups.length) cleanups.pop()!();
   resetProjectTransferForTest();
   setWorkspaceLookupForTest(null);
+  setMeshScopeResolverForTest(null);
   __resetMcpSessionCredentialsForTest();
   try { MeshRuntimeStore.getInstance().clearMissionsForMesh(meshId); } catch { /* fresh */ }
   MeshRuntimeStore.resetForTests();
@@ -59,6 +61,12 @@ function setup(src: Record<string, string>, dst: Record<string, string> = {}) {
     if (q === a.ws.id || q === 'src') return { id: a.ws.id, path: a.ws.path, label: 'src' };
     if (q === b.ws.id || q === 'dst') return { id: b.ws.id, path: b.ws.path, label: 'dst' };
     return null;
+  });
+  // The mesh scope: each machine contributes only its own workspace; any known peer is on the roster.
+  setMeshScopeResolverForTest((_mesh, machine, via) => {
+    if (via && !peers.has(via)) return null;
+    const side = peers.get(machine);
+    return side ? { workspaces: [{ id: side.ws.id, path: side.ws.path, label: side.id === a.id ? 'src' : 'dst' }] } : null;
   });
   return { a, b };
 }

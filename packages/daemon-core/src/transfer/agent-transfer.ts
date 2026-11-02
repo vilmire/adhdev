@@ -1,108 +1,70 @@
 /**
  * Agent-facing transfer verbs (owner decision 2026-11-02 section 6): a coordinator or the assistant
- * can REQUEST a transfer, read the status of its own requests and cancel them. It can never approve:
- * the request becomes an owner decision, or - only when BOTH machines opted in and nothing would be
- * replaced - the daemons approve it themselves (each against its own setting).
+ * can REQUEST a transfer, read the status of its own requests and cancel them. It can never approve.
+ * The files may live on THIS machine or on another machine of the mesh (`fromDaemonId`): then the
+ * request is forwarded over the authenticated mesh channel to the source daemon, which creates the
+ * transfer and raises the owner decision itself (agent-peer.ts).
  */
-import { findWorkspace } from './workspace-lookup.js';
+import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { getProjectTransferEngine } from './runtime.js';
-import { raiseTransferDecision, withdrawTransferDecision } from './agent-decision.js';
-import { TERMINAL_STATES, type TransferRecord, type TransferRequester } from './store.js';
+import { bad, cancelLocal, requestLocal, statusLocal, str, type AgentCaller, type R } from './agent-core.js';
 import type { ProjectTransferEngine } from './engine.js';
 
-export interface AgentCaller {
-  role: 'coordinator' | 'assistant';
-  sessionId: string;
-  /** Mesh (project) whose owner-decision inbox receives the request. */
-  meshId: string;
-}
+export type { AgentCaller } from './agent-core.js';
+export { agentView } from './agent-core.js';
 
-type R = { success: boolean; [k: string]: unknown };
-const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
-const bad = (code: string, error: string, extra: Record<string, unknown> = {}): R => ({ success: false, code, error, ...extra });
+/** What the caller may export from THIS machine (workspace ids of its own mesh here). null = nothing. */
+export interface AgentScope { sourceWorkspaceIds: ReadonlySet<string> | null }
 
-const watched = new WeakSet<ProjectTransferEngine>();
+const REQUEST_FIELDS = ['fromWorkspace', 'selected', 'toDaemonId', 'toWorkspace', 'targetMode', 'finalName', 'targetDir'] as const;
+const VIEW_KEYS = ['transferId', 'state', 'errorCode', 'files', 'totalBytes', 'bytesDone', 'excluded', 'targetMode', 'newFiles', 'replacedFiles', 'publishedName', 'approved', 'path', 'awaitingOwner', 'createdAt', 'previewExpiresAt', 'autoApproved', 'decisionItemId', 'note'] as const;
 
-/** One listener per engine: an agent request that ends without the owner closes its pending decision. */
-function ensureDecisionWithdrawal(engine: ProjectTransferEngine): void {
-  if (watched.has(engine)) return;
-  watched.add(engine);
-  engine.onTerminal((rec) => {
-    if (rec.decision && rec.state !== 'completed') withdrawTransferDecision(rec.decision.meshId, rec.decision.itemId, `transfer_${rec.state}`);
-  });
-}
-
-const isOwn = (rec: TransferRecord, caller: AgentCaller): boolean =>
-  rec.role === 'source' && rec.requestedBy?.role === caller.role && rec.requestedBy.sessionId === caller.sessionId;
-
-/** What an agent may see of its own request: state and counts, never the replaced file names. */
-export function agentView(rec: TransferRecord): Record<string, unknown> {
-  const files = rec.selection.entries.filter((e) => e.kind === 'file').length;
-  return {
-    transferId: rec.id, state: rec.state, ...(rec.errorCode ? { errorCode: rec.errorCode } : {}),
-    files, totalBytes: rec.totalBytes, bytesDone: rec.bytesDone, excluded: rec.selection.excluded.length,
-    targetMode: rec.selection.targetMode ?? 'new_folder',
-    ...(rec.overwrite ? { newFiles: rec.overwrite.newFiles.length, replacedFiles: rec.overwrite.replaced.length } : {}),
-    ...(rec.publishedName ? { publishedName: rec.publishedName } : {}),
-    approved: !!rec.localApproval && rec.peerApproved === true,
-    ...(rec.path ? { path: rec.path } : {}),
-    awaitingOwner: !TERMINAL_STATES.has(rec.state) && !rec.localApproval,
-    createdAt: rec.createdAt, previewExpiresAt: rec.previewExpiresAt,
-  };
-}
-
-async function request(engine: ProjectTransferEngine, caller: AgentCaller, a: Record<string, unknown>): Promise<R> {
-  const from = findWorkspace(str(a.fromWorkspace));
-  if (!from) return bad('WORKSPACE_NOT_REGISTERED', 'fromWorkspace is not a workspace registered on this machine (id, label or path)');
-  const toDaemonId = str(a.toDaemonId);
-  if (!toDaemonId) return bad('INVALID_TARGET', 'toDaemonId is required');
-  const selected = Array.isArray(a.selected) ? a.selected.filter((s): s is string => typeof s === 'string') : [];
-  if (!selected.length) return bad('MANIFEST_INVALID', 'selected (paths relative to the source workspace) is required');
-  const target = await engine.resolveTargetWorkspace(toDaemonId, str(a.toWorkspace));
-  if (!target) return bad('TARGET_WORKSPACE_UNKNOWN', 'the target machine did not recognise toWorkspace (use its workspace id, label or path)');
-  const mode = a.targetMode === 'existing_path' ? 'existing_path' : a.targetMode === undefined || a.targetMode === 'new_folder' ? 'new_folder' : null;
-  if (!mode) return bad('INVALID_TARGET_MODE', "targetMode must be 'new_folder' or 'existing_path'");
-  if (mode === 'new_folder' && !str(a.finalName)) return bad('INVALID_FINAL_NAME', 'finalName (the new folder name) is required');
-  const requestedBy: TransferRequester = { role: caller.role, sessionId: caller.sessionId };
-  ensureDecisionWithdrawal(engine);
-  const created = await engine.create({
-    workspaceId: from.id, selected, targetDaemonId: toDaemonId, targetWorkspaceId: target.workspaceId,
-    finalName: str(a.finalName), targetMode: mode, ...(mode === 'existing_path' ? { targetDir: str(a.targetDir) } : {}), requestedBy,
-  });
-  if (!created.ok) return bad(created.code, created.code, created.detail ? { detail: created.detail } : {});
-  const rec = created.record;
-  // A: both machines opted in AND nothing is replaced -> the daemons approve it themselves.
-  if (await engine.tryAgentAutoApprove(rec.id, created.peerAllowsAgentAutoApprove === true)) {
-    return { success: true, ...agentView(engine.get(rec.id) ?? rec), autoApproved: true };
+/** Remote replies are re-projected to the known scalar view fields: nothing else reaches the agent. */
+function cleanView(v: unknown): Record<string, unknown> {
+  const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const k of VIEW_KEYS) {
+    const x = o[k];
+    if (typeof x === 'string') out[k] = x.slice(0, 300);
+    else if (typeof x === 'number' || typeof x === 'boolean') out[k] = x;
   }
-  const labels = { from: from.label || 'this machine', to: target.label || 'target machine' };
-  const decision = raiseTransferDecision(caller.meshId, rec, labels, engine.relayAllowed());
-  if ('error' in decision) {
-    await engine.cancel(rec.id);
-    return bad('DECISION_UNAVAILABLE', decision.error);
-  }
-  engine.setDecision(rec.id, { meshId: caller.meshId, itemId: decision.itemId });
-  return { success: true, ...agentView(engine.get(rec.id) ?? rec), autoApproved: false, decisionItemId: decision.itemId, note: 'Waiting for the owner to approve in the dashboard (To-do). You cannot approve it yourself.' };
+  return out;
 }
 
-export async function runAgentTransfer(caller: AgentCaller, args: Record<string, unknown>): Promise<R> {
+/** transferId -> source machine, for requests this daemon forwarded (so status/cancel route without repeating it). */
+const forwarded = new Map<string, string>();
+const fwdKey = (c: AgentCaller, id: string): string => `${c.role}:${c.sessionId}:${id}`;
+
+async function viaPeer(engine: ProjectTransferEngine, peer: string, op: 'agent_request' | 'agent_status' | 'agent_cancel', caller: AgentCaller, args: Record<string, unknown>): Promise<R> {
+  const reply = await engine.forwardAgentOp(peer, op, { role: caller.role, sessionId: caller.sessionId, meshId: caller.meshId }, args);
+  if (!reply.ok) return bad(String(reply.code ?? 'PEER_REFUSED'), String(reply.error ?? reply.code ?? 'PEER_REFUSED'));
+  if (Array.isArray(reply.transfers)) return { success: true, transfers: reply.transfers.slice(0, 100).map(cleanView), machine: peer };
+  const view = cleanView(reply);
+  if (op === 'agent_request' && typeof view.transferId === 'string') {
+    forwarded.set(fwdKey(caller, view.transferId), peer);
+    if (forwarded.size > 500) forwarded.delete(forwarded.keys().next().value as string);
+  }
+  return { success: true, ...view, sourceMachine: peer };
+}
+
+export async function runAgentTransfer(caller: AgentCaller, args: Record<string, unknown>, scope: AgentScope): Promise<R> {
   const engine = getProjectTransferEngine();
   if (!engine) return bad('TRANSFER_UNAVAILABLE', 'This daemon cannot transfer project files');
   const action = str(args.action) || 'status';
-  if (action === 'request') return request(engine, caller, args);
-  if (action === 'status') {
-    const id = str(args.transferId);
-    if (id) {
-      const rec = engine.get(id);
-      return rec && isOwn(rec, caller) ? { success: true, ...agentView(rec) } : bad('NOT_FOUND', 'no such request of yours');
+  if (action !== 'request' && action !== 'status' && action !== 'cancel') return bad('INVALID_ARGS', "action must be 'request', 'status' or 'cancel'");
+  const id = str(args.transferId);
+  let peer = str(args.fromDaemonId) || (id ? forwarded.get(fwdKey(caller, id)) ?? '' : '');
+  if (peer && daemonIdsEquivalent(peer, engine.selfId())) peer = '';
+  if (peer) {
+    if (action === 'request') {
+      const request: Record<string, unknown> = {};
+      for (const k of REQUEST_FIELDS) if (args[k] !== undefined) request[k] = args[k];
+      return viaPeer(engine, peer, 'agent_request', caller, { request });
     }
-    return { success: true, transfers: engine.list().filter((r) => isOwn(r, caller)).map(agentView) };
+    if (action === 'cancel' && !id) return bad('NOT_FOUND', 'no such request of yours');
+    return viaPeer(engine, peer, action === 'status' ? 'agent_status' : 'agent_cancel', caller, { transferId: id });
   }
-  if (action === 'cancel') {
-    const rec = engine.get(str(args.transferId));
-    if (!rec || !isOwn(rec, caller)) return bad('NOT_FOUND', 'no such request of yours');
-    const r = await engine.cancel(rec.id);
-    return r.ok ? { success: true, transferId: rec.id, state: 'cancelled' } : bad(r.code, r.code);
-  }
-  return bad('INVALID_ARGS', "action must be 'request', 'status' or 'cancel'");
+  if (action === 'request') return requestLocal(engine, caller, args, scope.sourceWorkspaceIds);
+  if (action === 'status') return statusLocal(engine, caller, id);
+  return cancelLocal(engine, caller, id);
 }

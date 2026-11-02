@@ -31,6 +31,8 @@ export interface ApprovalStamp {
 export interface TransferRequester {
   role: 'coordinator' | 'assistant';
   sessionId?: string;
+  /** The daemon the agent is attached to, when it is not the source machine itself. */
+  viaDaemonId?: string;
 }
 
 /** `existing_path` preview, computed by the TARGET machine and bound into the owner approval. */

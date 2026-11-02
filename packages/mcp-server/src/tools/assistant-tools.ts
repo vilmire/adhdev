@@ -431,13 +431,14 @@ const FILE_TRANSFER_TOOL: AssistantToolSchema = {
     + 'action "request" builds a preview (counts, size, excluded secrets; for target_mode "existing_path" also which files are new vs replaced) and puts an approval into the owner\'s To-do. '
     + 'YOU CANNOT APPROVE: the owner approves in the dashboard, or - only if the owner enabled "auto-approve agent transfers" on BOTH machines and nothing would be replaced - the daemons approve it themselves. '
     + 'Secrets (.env, keys, .git) are never sent. "new_folder" (default) writes a NEW folder and replaces nothing; "existing_path" writes into an existing directory of the target project and ALWAYS needs the owner (originals are backed up for 7 days). '
-    + 'Do not tell the owner the files arrived until status says completed. Hosted projects only.',
+    + 'Do not tell the owner the files arrived until status says completed. Hosted projects only; from_daemon_id may name another machine of the project as the source.',
   inputSchema: {
     type: 'object',
     properties: {
       ...PROJECT_PROP,
       action: enumOf(['request', 'status', 'cancel'] as const, 'Default status.'),
-      from_workspace: { type: 'string', description: 'request: workspace on the project host (id, label or path) holding the files.' },
+      from_workspace: { type: 'string', description: 'request: workspace of the project on the source machine (id or label) holding the files.' },
+      from_daemon_id: { type: 'string', description: 'request: source machine id, a machine of the project (default = this machine).' },
       selected: { type: 'array', items: { type: 'string' }, description: 'request: files/folders to send, relative to from_workspace.' },
       to_daemon_id: { type: 'string', description: 'request: destination machine id.' },
       to_workspace: { type: 'string', description: 'request: workspace on the destination machine (id, label or path).' },

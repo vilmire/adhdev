@@ -11,7 +11,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
-import { findWorkspace } from './workspace-lookup.js';
+import { AGENT_PEER_OPS, handleAgentPeerOp } from './agent-peer.js';
+import { matchScopedWorkspace, resolveMeshScope } from './workspace-scope.js';
 import { close as nativeClose, getBindingInfo, openRoot, probeRoot, TransferFsError } from '../transfer-fs/index.js';
 import { OverwriteError, revertOverwrite, scanOverwriteTargets, type OverwritePlan, type RevertResult } from './overwrite.js';
 import { TRANSFER_LIMITS, TRANSFER_RETENTION_MS } from './limits.js';
@@ -98,6 +99,35 @@ export class ProjectTransferEngine {
 
   private now(): number { return this.ports.now ? this.ports.now() : Date.now(); }
 
+  /** This daemon's own id (for callers that must tell "this machine" from a peer). */
+  selfId(): string { return this.ports.selfDaemonId(); }
+
+  /**
+   * Forward an agent request / status / cancel to the daemon that holds the files. Authority stays there:
+   * the peer creates the record and the owner decision; this only carries the request. A peer that does
+   * not know the op answers PROTOCOL_ERROR (or nothing usable): reported as PEER_TOO_OLD, never a hang.
+   */
+  async forwardAgentOp(peerId: string, op: 'agent_request' | 'agent_status' | 'agent_cancel', caller: { role: string; sessionId: string; meshId: string }, payload: Record<string, unknown>): Promise<{ ok: boolean; code?: string; [k: string]: unknown }> {
+    if (!this.ports.isPeerAuthorized(peerId)) return { ok: false, code: 'PEER_UNAUTHORIZED' };
+    let reply: Awaited<ReturnType<TransferHostPorts['dispatchPeer']>>;
+    try { reply = await this.ports.dispatchPeer(peerId, { op, caller, ...payload }); }
+    catch { return { ok: false, code: 'PEER_UNREACHABLE' }; }
+    if (reply?.ok) return reply;
+    const code = typeof reply?.code === 'string' ? reply.code : '';
+    if (!code || code === 'PROTOCOL_ERROR') return { ok: false, code: 'PEER_TOO_OLD', error: 'the source machine runs a version that cannot serve remote file transfer requests (update it)' };
+    return { ok: false, code: safeTransferCode(code), ...(typeof reply.error === 'string' ? { error: reply.error.slice(0, 300) } : {}) };
+  }
+
+  private resolveHits = new Map<string, { windowStart: number; n: number }>();
+  /** Per-peer limit for the workspace-name probe op: 30 per minute. */
+  private resolveAllowed(peer: string): boolean {
+    const t = this.now();
+    const h = this.resolveHits.get(peer);
+    if (!h || t - h.windowStart > 60_000) { this.resolveHits.set(peer, { windowStart: t, n: 1 }); return true; }
+    h.n += 1;
+    return h.n <= 30;
+  }
+
   /** Per-machine option (default ON): may this daemon's transfers fall back to a TURN relay? */
   relayAllowed(): boolean { return this.store.readRelayAllowed(); }
   setRelayAllowed(allowed: boolean): void { this.store.writeRelayAllowed(allowed === true); }
@@ -110,10 +140,10 @@ export class ProjectTransferEngine {
   isPeerAllowed(peerId: string): boolean { return !!peerId && this.ports.isPeerAuthorized(peerId); }
 
   /** Ask the target machine which of its registered workspaces a loose name (id / label / path) means. */
-  async resolveTargetWorkspace(peerId: string, query: string): Promise<{ workspaceId: string; label?: string } | null> {
+  async resolveTargetWorkspace(peerId: string, query: string, meshId: string): Promise<{ workspaceId: string; label?: string } | null> {
     if (!this.ports.isPeerAuthorized(peerId)) return null;
     let reply: Awaited<ReturnType<TransferHostPorts['dispatchPeer']>>;
-    try { reply = await this.ports.dispatchPeer(peerId, { op: 'resolve_workspace', query }); } catch { return null; }
+    try { reply = await this.ports.dispatchPeer(peerId, { op: 'resolve_workspace', query, meshId }); } catch { return null; }
     if (!reply?.ok || typeof reply.workspaceId !== 'string' || !reply.workspaceId) return null;
     return { workspaceId: reply.workspaceId, ...(typeof reply.label === 'string' ? { label: reply.label.slice(0, 80) } : {}) };
   }
@@ -637,11 +667,15 @@ export class ProjectTransferEngine {
   async handlePeerOp(sender: string, args: Record<string, any>): Promise<{ ok: boolean; code?: string; [k: string]: unknown }> {
     const op = String(args?.op ?? '');
     if (op === 'resolve_workspace') {
-      // Which of MY registered workspaces does this loose name mean? Id and label only: no paths leave this machine.
+      // Which of MY workspaces does this name mean? Exact id or label only (never a path), only among the
+      // workspaces of a mesh the asker shares with me, rate limited. Id and label leave; paths never do.
       if (!sender || !this.ports.isPeerAuthorized(sender)) return fail('PEER_UNAUTHORIZED');
-      const w = findWorkspace(String(args?.query ?? '').slice(0, 1024));
-      return w ? { ok: true, workspaceId: w.id, ...(w.label ? { label: w.label } : {}) } : fail('WORKSPACE_NOT_REGISTERED');
+      if (!this.resolveAllowed(sender)) return fail('RATE_LIMITED');
+      const scope = resolveMeshScope(String(args?.meshId ?? '').slice(0, 200), this.ports.selfDaemonId(), sender);
+      const w = scope ? matchScopedWorkspace(scope, String(args?.query ?? '').slice(0, 1024)) : null;
+      return w ? { ok: true, workspaceId: w.id, ...(w.label ? { label: w.label } : {}) } : fail('WORKSPACE_NOT_IN_SCOPE');
     }
+    if (AGENT_PEER_OPS.has(op)) return handleAgentPeerOp(this, sender, op, args);
     const id = args?.transferId;
     if (!isTransferId(id)) return fail('PROTOCOL_ERROR');
     if (!sender || !this.ports.isPeerAuthorized(sender)) return fail('PEER_UNAUTHORIZED');
@@ -834,10 +868,11 @@ export class ProjectTransferEngine {
 }
 
 function normalizeRequester(v: unknown): TransferRequester | undefined {
-  const r = v as { role?: unknown; sessionId?: unknown } | null;
+  const r = v as { role?: unknown; sessionId?: unknown; viaDaemonId?: unknown } | null;
   if (!r || typeof r !== 'object' || (r.role !== 'coordinator' && r.role !== 'assistant')) return undefined;
   const sid = typeof r.sessionId === 'string' && /^[A-Za-z0-9_.:-]{1,80}$/.test(r.sessionId) ? r.sessionId : undefined;
-  return { role: r.role, ...(sid ? { sessionId: sid } : {}) };
+  const via = typeof r.viaDaemonId === 'string' && /^[A-Za-z0-9_.:-]{1,120}$/.test(r.viaDaemonId) ? r.viaDaemonId : undefined;
+  return { role: r.role, ...(sid ? { sessionId: sid } : {}), ...(via ? { viaDaemonId: via } : {}) };
 }
 
 /** The target machine's overwrite preview as received by the source (no content hashes of foreign files). */
