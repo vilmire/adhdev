@@ -38,7 +38,12 @@ export function isNegativeApprovalLabel(value: string): boolean {
  * decline, which distinguishes it from a generic numbered menu or prose list.
  */
 export function hasNegativeApprovalOption(buttons: string[] | null | undefined): boolean {
-    return (buttons || []).some((button) => isNegativeApprovalLabel(String(button || '')));
+    // Structural consent anchor: a bare "Never" (a settings tri-state) is excluded from auto-picks by
+    // isNegativeApprovalLabel but must not make a picker look like an approval prompt.
+    return (buttons || []).some((button) => {
+        const label = normalizeApprovalLabel(String(button || ''));
+        return isNegativeApprovalLabel(label) && (!/^never\b/.test(label) || /^never (allow|approve|run)\b/.test(label));
+    });
 }
 
 /**

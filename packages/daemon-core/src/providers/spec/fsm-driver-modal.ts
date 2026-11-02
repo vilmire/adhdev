@@ -34,6 +34,10 @@ const MODAL_FOOTER_LINE_RE = /enter to submit|press\s+enter\s+to\s+(?:continue|c
 
 /** Footer that lets a modal stay live while the cursor is parked elsewhere (grok: `1/5:select  │ …`). */
 const DETACHED_CURSOR_FOOTER_RE = /^\s*\d+\/\d+:select\b/;
+/** The only row such a cursor may be parked on: the live activity row (`◆ Running … [stop]`). */
+const DETACHED_CURSOR_ACTIVITY_ROW_RE = /^\s*◆\s+\S|\[stop\]\s*$/;
+/** Between that row and the footer only blank rows and the prompt's gutter (`┃ …`) are allowed. */
+const DETACHED_CURSOR_GAP_ROW_RE = /^\s*(?:┃.*)?$/;
 
 function matchNumberedChoiceIndex(line: string): number | null {
     const m = NUMBERED_CHOICE_LINE_RE.exec(line);
@@ -259,12 +263,15 @@ export function resolveLiveModalSlice(
             // DETACHED CURSOR: grok keeps repainting its `◆ Running … [stop]` spinner above the
             // permission block and parks the cursor on that row, never on the block. A block that
             // ends the screen on a `N/M:select` footer (live chrome that transcript text quoting a
-            // prompt can never be followed by) is still the live modal. The cursor must lie ABOVE the
-            // block: a cursor below it, or a quoted block with anything after its footer, stays rejected.
+            // prompt can never be followed by) is still the live modal. The cursor must sit ON that
+            // activity row, directly above the prompt's gutter: a cursor anywhere else (homed, stale, in
+            // the transcript, below the block) or anything else between it and the footer stays rejected.
             const detached = effectiveCursorRow < interactiveStartRow
                 && lastChoiceBlock !== undefined
                 && choiceEndRow === lastChoiceBlock.endRow
-                && DETACHED_CURSOR_FOOTER_RE.test(lines[lastNonBlankRow]);
+                && DETACHED_CURSOR_FOOTER_RE.test(lines[lastNonBlankRow])
+                && DETACHED_CURSOR_ACTIVITY_ROW_RE.test(lines[effectiveCursorRow] ?? '')
+                && lines.slice(effectiveCursorRow + 1, lastNonBlankRow).every(row => DETACHED_CURSOR_GAP_ROW_RE.test(row));
             if (!detached) return empty;
         }
     }

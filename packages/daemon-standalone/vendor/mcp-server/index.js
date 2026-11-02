@@ -127024,7 +127024,8 @@ ${detail.join("\n")}` : stripped;
           return empty;
         }
         if (effectiveCursorRow < interactiveStartRow || effectiveCursorRow > modalEndRow + 1) {
-          return empty;
+          const detached = effectiveCursorRow < interactiveStartRow && lastChoiceBlock !== void 0 && choiceEndRow === lastChoiceBlock.endRow && DETACHED_CURSOR_FOOTER_RE.test(lines[lastNonBlankRow]) && DETACHED_CURSOR_ACTIVITY_ROW_RE.test(lines[effectiveCursorRow] ?? "") && lines.slice(effectiveCursorRow + 1, lastNonBlankRow).every((row2) => DETACHED_CURSOR_GAP_ROW_RE.test(row2));
+          if (!detached) return empty;
         }
       }
       const sliceLines = lines.slice(minStartRow, modalEndRow + 1);
@@ -127144,6 +127145,9 @@ ${detail.join("\n")}` : stripped;
     var NUMBERED_CHOICE_LINE_RE;
     var UNNUMBERED_CHOICE_LINE_RE;
     var MODAL_FOOTER_LINE_RE;
+    var DETACHED_CURSOR_FOOTER_RE;
+    var DETACHED_CURSOR_ACTIVITY_ROW_RE;
+    var DETACHED_CURSOR_GAP_ROW_RE;
     var init_fsm_driver_modal = __esm2({
       "src/providers/spec/fsm-driver-modal.ts"() {
         "use strict";
@@ -127155,6 +127159,9 @@ ${detail.join("\n")}` : stripped;
         NUMBERED_CHOICE_LINE_RE = /^\s*(?:[┃│|]\s*)?(?:[❯›➜>→●○◉◯▶]\s*)?(?:\(\s*[●○xX ]\s*\)\s*)?(?:\[[ xX]\]|[☐☒◻◼])?\s*(\d+)(?:\.\s*(?:\[[ xX]\]|[☐☒◻◼])?\s*\S|\s*\([●○xX ]\)\s*\S)/;
         UNNUMBERED_CHOICE_LINE_RE = /^\s*(?:[┃│|]\s*)?(?:[❯›➜>→]\s*)?(?:Yes,\s*I trust this folder|No,\s*exit)\s*$|Allow once\s+Allow always\s+Reject|\bConfirm\s+Cancel\b|^\s*Yes,\s*proceed\s+y\s*$|^\s*No,\s*quit\s+n\s*$/i;
         MODAL_FOOTER_LINE_RE = /enter to submit|press\s+enter\s+to\s+(?:continue|confirm|submit|select)\b|Press enter to confirm or esc to cancel|Enter to confirm\s*[·•|]\s*Esc to cancel|Esc to cancel\b|escape to cancel\b|press\s+esc(?:ape)?\b|Enter to select\b|(?:↑|↓|up|down)[\s/]+(?:↑|↓)?\s*to navigate\b|↑\/↓\s*(?:Navigate|select)\b|\d+\/\d+:select\b|Space to select\b|Tab to amend\b|ctrl\+e to explain\b/i;
+        DETACHED_CURSOR_FOOTER_RE = /^\s*\d+\/\d+:select\b/;
+        DETACHED_CURSOR_ACTIVITY_ROW_RE = /^\s*◆\s+\S|\[stop\]\s*$/;
+        DETACHED_CURSOR_GAP_ROW_RE = /^\s*(?:┃.*)?$/;
       }
     });
     function unavailableSignalSnapshot(now, reason, profile) {
@@ -170892,10 +170899,13 @@ ${marker2}`,
     }
     function isNegativeApprovalLabel(value) {
       const label2 = normalizeApprovalLabel(value);
-      return /^(no|deny|reject|cancel|skip|exit|stop)\b/.test(label2) || /\bwithout\b/.test(label2) || /\bdo not\b/.test(label2);
+      return /^(no|never|deny|reject|cancel|skip|exit|stop)\b/.test(label2) || /\bwithout\b/.test(label2) || /\bdo not\b/.test(label2);
     }
     function hasNegativeApprovalOption(buttons) {
-      return (buttons || []).some((button) => isNegativeApprovalLabel(String(button || "")));
+      return (buttons || []).some((button) => {
+        const label2 = normalizeApprovalLabel(String(button || ""));
+        return isNegativeApprovalLabel(label2) && (!/^never\b/.test(label2) || /^never (allow|approve|run)\b/.test(label2));
+      });
     }
     function hasReliableApprovalAffirmative(buttons) {
       return (buttons || []).some((button) => {

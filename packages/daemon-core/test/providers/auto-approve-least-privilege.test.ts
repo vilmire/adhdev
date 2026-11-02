@@ -7,6 +7,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
 import { ManualAttendanceTracker } from '../../src/providers/manual-attendance.js'
+import { hasNegativeApprovalOption } from '../../src/providers/approval-utils.js'
 import {
   isNegativeApprovalLabel,
   isPersistentApprovalGrantLabel,
@@ -201,3 +202,11 @@ describe('maybeAutoApproveStatus — least privilege end to end', () => {
     expect(formatAutoApprovalLogLine(h.instance, 'q', 'Yes', ['Yes', 'No'])).toMatch(/^\[claude-cli\] auto-approved \(one-time\) session=sess-1 mesh=- task=- /)
   })
 })
+
+describe('consent anchor', () => {
+  it('counts "Never allow" but not a bare "Never" as a decline option', () => {
+    expect(hasNegativeApprovalOption(['Always', 'Never allow: x'])).toBe(true);
+    expect(hasNegativeApprovalOption(['Always', 'Sometimes', 'Never'])).toBe(false);
+    expect(isNegativeApprovalLabel('Never')).toBe(true);
+  });
+});

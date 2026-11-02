@@ -53,6 +53,19 @@ describe('resolveLiveModalSlice with the cursor parked on the spinner row', () =
     expect(resolveLiveModalSlice(other, { row: spinnerRow, col: 42 }, 0).hasLiveModal).toBe(false);
   });
 
+  it('rejects a homed or transcript cursor even when the screen ends on the footer', () => {
+    const lines = [...HEAD, ...BLOCK];
+    expect(resolveLiveModalSlice(lines, { row: 0, col: 0 }, 0).hasLiveModal).toBe(false);
+    expect(resolveLiveModalSlice(lines, { row: 1, col: 3 }, 0).hasLiveModal).toBe(false);
+  });
+
+  it('rejects anything outside the gutter between the activity row and the footer', () => {
+    const painted = [...HEAD, '  some transcript line', ...BLOCK];
+    expect(resolveLiveModalSlice(painted, { row: spinnerRow, col: 42 }, 0).hasLiveModal).toBe(false);
+    const unguttered = [...HEAD, ...BLOCK.map(l => l.replace('┃', ' '))];
+    expect(resolveLiveModalSlice(unguttered, { row: spinnerRow, col: 42 }, 0).hasLiveModal).toBe(false);
+  });
+
   it('rejects a cursor below the block', () => {
     const lines = [...HEAD, ...BLOCK, ''];
     expect(resolveLiveModalSlice(lines, { row: lines.length + 3, col: 0 }, 0).hasLiveModal).toBe(false);
