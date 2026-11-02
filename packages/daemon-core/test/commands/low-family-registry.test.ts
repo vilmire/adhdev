@@ -130,9 +130,10 @@ const COOPERATIVE_MAINTENANCE_CMDS = [
 // Project file transfer (low-family/project-transfer.ts): 9 owner commands
 // (p2p + standalone) + the daemon<->daemon `project_transfer_peer` (mesh).
 const PROJECT_TRANSFER_CMDS = [
-  'project_transfer_capabilities', 'project_transfer_set_relay', 'project_transfer_browse', 'project_transfer_create',
+  'project_transfer_capabilities', 'project_transfer_set_relay', 'project_transfer_set_agent_auto_approve', 'project_transfer_revert',
+  'project_transfer_browse', 'project_transfer_create',
   'project_transfer_approve', 'project_transfer_revoke_approval', 'project_transfer_cancel',
-  'project_transfer_list', 'project_transfer_status', 'project_transfer_peer',
+  'project_transfer_list', 'project_transfer_status', 'project_transfer_peer', 'project_transfer_agent',
 ]
 
 // Machine quota reserve (owner-only set, readable get): commands/low-family/quota-reserve-commands.ts.
@@ -152,7 +153,7 @@ const NEW_WORK_HOLD_CMDS = [
 ]
 
 describe('low-family registry', () => {
-  it('registers all 130 LOW family commands once, no overlap', () => {
+  it('registers all 133 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,
@@ -178,8 +179,9 @@ describe('low-family registry', () => {
     // commands added in rc33 were removed again, mission e6d4293c, so they net out.)
     // rc.37: + mesh_direct_cancel = 125; + 2 machine quota reserve commands
     // (quota_reserve_get/set, 2026-11-01) = 127; + light_land/light_discard
-    // (same-machine light tasks, 2026-11-01) = 129, +1 project_transfer_set_relay (2026-11-02) = 130.
-    expect(all).toHaveLength(130)
+    // (same-machine light tasks, 2026-11-01) = 129, +1 project_transfer_set_relay (2026-11-02) = 130,
+    // + project_transfer_set_agent_auto_approve / _revert / _agent (agent transfers + overwrite revert, 2026-11-02) = 133.
+    expect(all).toHaveLength(133)
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
     expect(lowFamilyNames()).toHaveLength(all.length)

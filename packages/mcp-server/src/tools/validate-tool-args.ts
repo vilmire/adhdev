@@ -390,6 +390,7 @@ export const MESH_ACCEPTED_ARG_ALIASES: Readonly<Record<string, Readonly<Record<
     mesh_release_list: { [TOP_LEVEL_SCOPE]: { releaseId: 'release_id' } },
     mesh_release_record_deploy: { [TOP_LEVEL_SCOPE]: { releaseId: 'release_id', baseCommit: 'base_commit' } },
     mesh_release_changelog_draft: { [TOP_LEVEL_SCOPE]: { releaseId: 'release_id', markApplied: 'mark_applied' } },
+    mesh_file_transfer: { [TOP_LEVEL_SCOPE]: { transferId: 'transfer_id', fromWorkspace: 'from_workspace', toNodeId: 'to_node_id', toDaemonId: 'to_daemon_id', toWorkspace: 'to_workspace', targetMode: 'target_mode', finalName: 'final_name', targetDir: 'target_dir' } },
     mesh_note: {
         [TOP_LEVEL_SCOPE]: {
             expires_at: 'expiresAt',

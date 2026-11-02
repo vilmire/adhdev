@@ -7,9 +7,12 @@
  * carried over the authenticated mesh relay; the sender id is the transport-stamped one.
  */
 import { defineCommandSpecs } from '../command-registry.js';
-import { isTrustedOwnerIngress } from '../command-args.js';
+import { COMMAND_SOURCE_ARG, isTrustedOwnerIngress } from '../command-args.js';
 import { readMeshSender } from '../mesh-sender.js';
+import { readAuthenticatedMcpCommand, readAuthenticatedMcpScope } from '../mcp-command-ingress.js';
+import { stripRouterInternalArgs } from '../router-internal-args.js';
 import { getProjectTransferEngine } from '../../transfer/runtime.js';
+import { runAgentTransfer } from '../../transfer/agent-transfer.js';
 import type { TransferRecord } from '../../transfer/store.js';
 import type { LowFamilyContext } from './types.js';
 
@@ -29,7 +32,7 @@ function unavailable(): R {
 
 function fromEngine(r: { ok: boolean; [k: string]: unknown }): R {
     if (r.ok) { const { ok: _ok, ...rest } = r; return { success: true, ...rest }; }
-    return { success: false, code: str(r.code) || 'FAILED', error: str(r.code) || 'FAILED', ...(r.detail ? { detail: r.detail } : {}) };
+    return { success: false, code: str(r.code) || 'FAILED', error: str(r.code) || 'FAILED', ...(r.detail ? { detail: r.detail } : {}), ...(r.overwrite ? { overwrite: r.overwrite } : {}) };
 }
 
 /** Owner-visible projection. File names are shown to the owner only; keys/paths of the peer never. */
@@ -45,6 +48,20 @@ function view(rec: TransferRecord) {
         localApproved: !!rec.localApproval, peerApproved: rec.peerApproved === true,
         // Network path of the latest established link; `relay` = bytes crossed a TURN relay (still end-to-end encrypted).
         path: rec.path,
+        targetMode: rec.selection.targetMode ?? 'new_folder',
+        // Who asked, when a coordinator or the assistant (not the owner's dashboard) created it.
+        ...(rec.requestedBy ? { requestedBy: rec.requestedBy } : {}),
+        // existing_path preview (names are for the owner's dashboard only): what is new and what would be replaced.
+        ...(rec.overwrite ? {
+            overwrite: {
+                targetDir: rec.overwrite.targetDir, digest: rec.overwrite.digest,
+                newCount: rec.overwrite.newFiles.length, replacedCount: rec.overwrite.replaced.length,
+                replaced: rec.overwrite.replaced.map((r) => ({ path: r.path, size: r.size })),
+                reverted: rec.overwrite.reverted === true,
+                revertible: rec.role === 'target' && rec.state === 'completed' && rec.overwrite.replaced.length > 0 && rec.overwrite.reverted !== true,
+            },
+        } : {}),
+        ...(rec.decision ? { decision: rec.decision } : {}),
     };
 }
 
@@ -66,6 +83,24 @@ const handlers: Record<string, (ctx: LowFamilyContext, args: any) => Promise<R>>
         engine.setRelayAllowed(args.allowRelay);
         return { success: true, relayAllowed: engine.relayAllowed() };
     },
+    // Per-machine option (default OFF): agent-requested transfers that replace nothing may skip the owner when BOTH machines allow it.
+    project_transfer_set_agent_auto_approve: async (_ctx, args) => {
+        const denied = ownerOnly(args);
+        if (denied) return denied;
+        const engine = getProjectTransferEngine();
+        if (!engine) return unavailable();
+        if (typeof args?.allow !== 'boolean') return { success: false, code: 'INVALID_ARGS', error: 'allow (boolean) required' };
+        engine.setAgentAutoApprove(args.allow);
+        return { success: true, agentAutoApprove: engine.agentAutoApproveAllowed() };
+    },
+    project_transfer_revert: async (_ctx, args) => {
+        const denied = ownerOnly(args);
+        if (denied) return denied;
+        const engine = getProjectTransferEngine();
+        if (!engine) return unavailable();
+        const r = engine.revert(str(args?.transferId));
+        return r.ok ? { success: true, restored: r.result.restored.length, conflicts: r.result.conflicts, transfer: view(r.record) } : fromEngine(r);
+    },
     project_transfer_browse: async (_ctx, args) => {
         const denied = ownerOnly(args);
         if (denied) return denied;
@@ -82,6 +117,8 @@ const handlers: Record<string, (ctx: LowFamilyContext, args: any) => Promise<R>>
         const r = await engine.create({
             workspaceId: str(args?.workspaceId), selected, targetDaemonId: str(args?.targetDaemonId),
             targetWorkspaceId: str(args?.targetWorkspaceId), finalName: str(args?.finalName),
+            ...(args?.targetMode !== undefined ? { targetMode: args.targetMode } : {}),
+            ...(args?.targetDir !== undefined ? { targetDir: str(args.targetDir) } : {}),
         });
         return r.ok ? { success: true, transferId: r.transferId, transfer: view(r.record) } : fromEngine(r);
     },
@@ -90,7 +127,7 @@ const handlers: Record<string, (ctx: LowFamilyContext, args: any) => Promise<R>>
         if (denied) return denied;
         const engine = getProjectTransferEngine();
         if (!engine) return unavailable();
-        const r = await engine.approve(str(args?.transferId), str(args?.selectionDigest));
+        const r = await engine.approve(str(args?.transferId), str(args?.selectionDigest), typeof args?.replaceDigest === 'string' ? args.replaceDigest : undefined);
         return r.ok ? { success: true, transfer: view(r.record) } : fromEngine(r);
     },
     project_transfer_revoke_approval: async (_ctx, args) => {
@@ -128,11 +165,39 @@ const handlers: Record<string, (ctx: LowFamilyContext, args: any) => Promise<R>>
     },
 };
 
+/**
+ * Coordinator verb: request / status / cancel the coordinator's own transfers. Never approves.
+ * The caller is the router-recorded MCP capability (MCP_ROLE_CLASSIFIED_COMMANDS), never a payload field;
+ * workers and credential-less callers (the owner's CLI uses the owner commands) are refused.
+ */
+export const PROJECT_TRANSFER_AGENT = 'project_transfer_agent';
+
+export function classifyTransferAgentCaller(raw: Record<string, unknown>): { ok: true; sessionId: string; meshId: string } | { ok: false; error: string } {
+    if (raw.bind !== undefined || raw.token !== undefined || raw.mcpSessionCredential !== undefined) return { ok: false, error: 'worker credentials cannot request transfers' };
+    const mcp = readAuthenticatedMcpCommand(raw, PROJECT_TRANSFER_AGENT);
+    const scope = mcp.present && mcp.valid ? readAuthenticatedMcpScope(raw, PROJECT_TRANSFER_AGENT) : null;
+    if (!scope?.sessionId || scope.isCoordinator !== true || !scope.meshId) {
+        return { ok: false, error: `${raw[COMMAND_SOURCE_ARG] === 'ipc' ? 'only a mesh coordinator session' : 'this transport'} can request project transfers` };
+    }
+    return { ok: true, sessionId: scope.sessionId, meshId: scope.meshId };
+}
+
+handlers.project_transfer_agent = async (_ctx, rawArgs) => {
+    const raw = (rawArgs ?? {}) as Record<string, unknown>;
+    const caller = classifyTransferAgentCaller(raw);
+    if (!caller.ok) return { success: false, code: 'transfer_agent_not_allowed', error: caller.error };
+    const args = stripRouterInternalArgs(raw) as Record<string, unknown>;
+    return runAgentTransfer({ role: 'coordinator', sessionId: caller.sessionId, meshId: caller.meshId }, args);
+};
+
 const OWNER_SOURCES = ['p2p', 'standalone'] as const;
 
 export const projectTransferSpecs = defineCommandSpecs('low', handlers, {
     project_transfer_capabilities: { sources: OWNER_SOURCES },
     project_transfer_set_relay: { sources: OWNER_SOURCES },
+    project_transfer_set_agent_auto_approve: { sources: OWNER_SOURCES },
+    project_transfer_revert: { sources: OWNER_SOURCES },
+    project_transfer_agent: { sources: ['ipc'] },
     project_transfer_browse: { sources: OWNER_SOURCES },
     project_transfer_create: { sources: OWNER_SOURCES },
     project_transfer_approve: { sources: OWNER_SOURCES },

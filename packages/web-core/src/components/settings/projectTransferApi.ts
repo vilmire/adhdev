@@ -22,6 +22,36 @@ export interface TransferView {
     peerApproved: boolean
     /** Network path of the latest established link; `relay` = bytes crossed a TURN relay. */
     path?: 'direct' | 'relay'
+    targetMode?: 'new_folder' | 'existing_path'
+    /** Set when a coordinator or the assistant (not the owner) asked for this transfer. */
+    requestedBy?: { role: 'coordinator' | 'assistant'; sessionId?: string }
+    /** existing_path preview (replaced file names are for the owner only). */
+    overwrite?: {
+        targetDir: string
+        digest: string
+        newCount: number
+        replacedCount: number
+        replaced: Array<{ path: string; size: number }>
+        reverted?: boolean
+        revertible?: boolean
+    }
+    /** The owner decision (To-do) waiting on an agent request. */
+    decision?: { meshId: string; itemId: string }
+}
+
+/** Does this state's title already say the outcome (so the state word is not repeated)? */
+export const TITLE_SAYS_OUTCOME = new Set(['completed', 'failed', 'cancelled', 'expired'])
+
+/** Locale key (under settings.projectTransfer) of a transfer row title: direction while active, outcome once finished. */
+export function transferTitleKey(role: 'source' | 'target', state: string): string {
+    const src = role === 'source'
+    switch (state) {
+        case 'completed': return src ? 'roleTitle.sourceDone' : 'roleTitle.targetDone'
+        case 'failed': return src ? 'roleTitle.sourceFailed' : 'roleTitle.targetFailed'
+        case 'cancelled': return 'roleTitle.cancelled'
+        case 'expired': return 'roleTitle.expired'
+        default: return src ? 'roleSource' : 'roleTarget'
+    }
 }
 
 export interface BrowseEntry { name: string; kind: 'file' | 'dir' | 'other'; size?: number; excluded?: string }

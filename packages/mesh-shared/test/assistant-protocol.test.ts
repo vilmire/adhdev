@@ -22,7 +22,7 @@ describe('ASSISTANT_TOOLS', () => {
             'projects', 'environment', 'assistant_action', 'project_watch', 'project_status', 'project_send', 'project_read', 'project_add',
             'project_attach_remote', 'discover_repos', 'memory', 'memory_search', 'skill_view', 'skill_manage', 'project_note',
             'launch_defaults', 'launch_defaults_set', 'driver_list', 'driver_describe', 'artifact_list', 'artifact_read',
-            'decision_answer', 'decision_request', 'session_control',
+            'decision_answer', 'decision_request', 'session_control', 'file_transfer',
         ])
         expect(new Set(ASSISTANT_TOOLS).size).toBe(ASSISTANT_TOOLS.length)
     })
@@ -43,16 +43,16 @@ describe('ASSISTANT_TOOLS', () => {
     })
 
     it('write tools are memory, skill_manage, project_note and the owner-decision tools', () => {
-        expect([...ASSISTANT_WRITE_TOOLS].sort()).toEqual(['assistant_action', 'decision_answer', 'decision_request', 'launch_defaults_set', 'memory', 'project_add', 'project_attach_remote', 'project_note', 'project_send', 'project_watch', 'session_control', 'skill_manage'])
+        expect([...ASSISTANT_WRITE_TOOLS].sort()).toEqual(['assistant_action', 'decision_answer', 'decision_request', 'launch_defaults_set', 'memory', 'project_add', 'project_attach_remote', 'project_note', 'project_send', 'project_watch', 'session_control', 'skill_manage'].concat('file_transfer').sort())
     })
 })
 
 describe('assistant verbs', () => {
     const all = Object.values(ASSISTANT_VERB)
 
-    it('are thirty-six distinct names: twenty-four tool verbs + launch/pull/state/threads + eight owner verbs', () => {
-        expect(all.length).toBe(36)
-        expect(new Set(all).size).toBe(36)
+    it('are thirty-seven distinct names: twenty-five tool verbs + launch/pull/state/threads + eight owner verbs', () => {
+        expect(all.length).toBe(37)
+        expect(new Set(all).size).toBe(37)
         const toolVerbs = new Set<string>(Object.values(ASSISTANT_TOOL_VERBS))
         expect(all.filter((v) => !toolVerbs.has(v)).sort()).toEqual([
             'assistant_execution_settings', 'assistant_execution_state', 'assistant_import_skills', 'assistant_memory_digest', 'assistant_memory_undo', 'assistant_pending_relays', 'assistant_skills_list', 'assistant_staged_resolve',

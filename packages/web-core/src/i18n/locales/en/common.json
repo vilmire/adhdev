@@ -4298,6 +4298,37 @@
             },
             "roleSource": "Sending",
             "roleTarget": "Receiving",
+            "roleTitle": {
+                "sourceDone": "Sent",
+                "targetDone": "Received",
+                "sourceFailed": "Send failed",
+                "targetFailed": "Receive failed",
+                "cancelled": "Cancelled",
+                "expired": "Expired"
+            },
+            "agent": {
+                "toggle": "Auto-approve agent transfers on {{machine}}",
+                "hint": "Lets the coordinator or assistant start transfers that replace nothing without asking you. Both machines must allow it. Transfers that would replace existing files always ask you.",
+                "setFailed": "Could not change the agent auto-approve setting",
+                "coordinator": "Requested by coordinator",
+                "assistant": "Requested by assistant"
+            },
+            "mode": {
+                "newFolder": "New folder (nothing is replaced)",
+                "existingPath": "Write into an existing folder (can replace files)",
+                "targetDir": "Folder in the target project (empty = project root)",
+                "targetDirHint": "Files are written at the same relative paths. Files that exist only on the target are never deleted."
+            },
+            "overwrite": {
+                "newCount": "{{count}} new files",
+                "replacedCount": "{{count}} files will be replaced",
+                "replacedTitle": "Files that will be replaced",
+                "backupNote": "Originals are backed up on the target machine for 7 days and can be reverted.",
+                "revert": "Revert",
+                "reverted": "Reverted",
+                "revertConflicts": "{{count}} files changed since and were left as they are",
+                "revertFailed": "Could not revert"
+            },
             "errorCode": "Reason: {{code}}",
             "loadingProjects": "Loading projects…",
             "noProjects": "No projects found on this machine",
@@ -4307,7 +4338,15 @@
             "progressPercent": "{{percent}}%",
             "errorGeneric": "Transfer failed",
             "errors": {
-                "DIRECT_UNAVAILABLE": "These two machines can't connect directly (firewall or NAT), and sending through a relay isn't turned on for both. Turn on the relay option in this section for each machine to send anyway.",
+                "DIRECT_UNAVAILABLE": "These two machines couldn't connect directly (firewall or NAT), and a relay wasn't used for this transfer. Check the relay option above.",
+                "TARGET_CHANGED": "The target folder changed after the preview. Preview again and approve the new preview.",
+                "TARGET_DIR_MISSING": "The folder does not exist in the target project.",
+                "TARGET_PATH_UNSAFE": "A file in the target is a link or cannot be replaced safely.",
+                "TARGET_CONFLICT": "A folder and a file have the same name in the target.",
+                "SECRET_PATH_REJECTED": "That location is protected (secrets or .git) and cannot be written to.",
+                "REVERT_UNAVAILABLE": "There is nothing to revert for this transfer.",
+                "ALREADY_REVERTED": "This transfer was already reverted.",
+                "PEER_UNSUPPORTED": "The other machine must be updated to overwrite files.",
                 "RELAY_LIMIT_EXCEEDED": "The relay limit was reached (500 MB per transfer, 2 GB per machine per day). Try again tomorrow or reduce the selection.",
                 "LINK_UNAVAILABLE": "The direct connection between the machines could not be set up. Check both are online and try again.",
                 "LINK_LOST": "The direct connection dropped and could not be restored.",
@@ -4819,6 +4858,18 @@
         "soundEffectsDesc": "Play a sound when agent completes or needs approval"
     },
     "needsYou": {
+        "transfer": {
+            "title": "File transfer",
+            "summary": "{{files}} files, {{size}}, from {{from}} to {{to}}",
+            "replacedTitle": "These {{count}} existing files will be replaced",
+            "newOnly": "{{count}} new files; nothing is replaced",
+            "approve": "Approve transfer",
+            "reject": "Reject",
+            "loading": "Loading the transfer preview…",
+            "gone": "This transfer is no longer waiting.",
+            "failed": "Could not complete: {{code}}",
+            "requestedBy": "Requested by {{who}}"
+        },
         "pageTitle": "To do",
         "pageSubtitle": "Decisions, approvals and live checks waiting on you.",
         "openTitle": "To do ({{count}} waiting)",

@@ -259,6 +259,7 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     'project_transfer_capabilities', 'project_transfer_browse', 'project_transfer_create',
     'project_transfer_approve', 'project_transfer_revoke_approval', 'project_transfer_cancel',
     'project_transfer_list', 'project_transfer_status', 'project_transfer_set_relay', 'project_transfer_peer',
+    'project_transfer_set_agent_auto_approve', 'project_transfer_revert', 'project_transfer_agent',
     // Intentional hold commands and their compatibility aliases.
     'maintenance_new_work_hold_set',
     'maintenance_new_work_hold_extend',
@@ -342,7 +343,7 @@ const LEGACY_HIGH_FAMILY_COMMANDS = [
     'assistant_project_read', 'assistant_project_add', 'assistant_discover_repos',
     'assistant_artifact_list', 'assistant_artifact_read',
     // Owner-decision inbox verbs (high-family/assistant-decisions.ts, structured missions §6.3).
-    'assistant_decision_answer', 'assistant_decision_request', 'assistant_session_control', 'assistant_quota_failover', 'assistant_switch_provider',
+    'assistant_decision_answer', 'assistant_decision_request', 'assistant_session_control', 'assistant_file_transfer', 'assistant_quota_failover', 'assistant_switch_provider',
     'mesh_host_handoff', 'mesh_host_handoff_ack', 'mesh_host_handoff_activate', 'mesh_host_handoff_capability', 'mesh_host_handoff_certificate',
     'mesh_host_handoff_chunk', 'mesh_host_handoff_discard', 'mesh_host_handoff_status',
     // Authenticated remote project attach (high-family/remote-project-attach.ts): the
@@ -513,7 +514,7 @@ describe('turn-ledger IPC commands (C-W6)', () => {
 
 describe('project transfer commands', () => {
     it('owner commands are p2p + standalone only; the peer op is mesh-only with an authenticated sender', () => {
-        const owner = ['capabilities', 'browse', 'create', 'approve', 'revoke_approval', 'cancel', 'list', 'status', 'set_relay'].map((n) => `project_transfer_${n}`);
+        const owner = ['capabilities', 'browse', 'create', 'approve', 'revoke_approval', 'cancel', 'list', 'status', 'set_relay', 'set_agent_auto_approve', 'revert'].map((n) => `project_transfer_${n}`);
         for (const name of owner) {
             const spec = getDaemonCommandRegistry().get(name);
             expect(spec?.family, name).toBe('low');

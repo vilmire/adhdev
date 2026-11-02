@@ -76,6 +76,7 @@ export const CANONICAL_MESH_TOOL_NAMES = [
     'mesh_release_list',
     'mesh_release_record_deploy',
     'mesh_release_changelog_draft',
+    'mesh_file_transfer',
     'mesh_review_inbox',
     'mesh_node_slots',
     'driver_list',

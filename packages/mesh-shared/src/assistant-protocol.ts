@@ -40,6 +40,7 @@ export const ASSISTANT_TOOLS = [
     'decision_answer',
     'decision_request',
     'session_control',
+    'file_transfer',
 ] as const
 
 export type AssistantTool = typeof ASSISTANT_TOOLS[number]
@@ -83,6 +84,8 @@ export const ASSISTANT_VERB = {
     decisionRequest: 'assistant_decision_request',
     /** Stop / restart / switch the provider of a coordinator, worker or the assistant session (handoff design 2026-11-01 §4). */
     sessionControl: 'assistant_session_control',
+    /** Request / status / cancel the assistant's own project file transfers (owner approves in the dashboard; file-transfer design section 6). */
+    fileTransfer: 'assistant_file_transfer',
     // assistant-side daemon verbs without a tool of the same name
     launch: 'launch_assistant',
     pendingRelays: 'assistant_pending_relays',
@@ -129,6 +132,7 @@ export const ASSISTANT_TOOL_VERBS: Readonly<Record<AssistantTool, AssistantVerb>
     decision_answer: ASSISTANT_VERB.decisionAnswer,
     decision_request: ASSISTANT_VERB.decisionRequest,
     session_control: ASSISTANT_VERB.sessionControl,
+    file_transfer: ASSISTANT_VERB.fileTransfer,
 }
 
 /**
@@ -137,7 +141,7 @@ export const ASSISTANT_TOOL_VERBS: Readonly<Record<AssistantTool, AssistantVerb>
  * because they cause effects (a coordinator message or launch, a new
  * project), and MCP clients use readOnlyHint to skip confirmation.
  */
-export const ASSISTANT_WRITE_TOOLS: readonly AssistantTool[] = ['project_watch', 'assistant_action', 'memory', 'skill_manage', 'project_note', 'project_send', 'project_add', 'project_attach_remote', 'launch_defaults_set', 'decision_answer', 'decision_request', 'session_control']
+export const ASSISTANT_WRITE_TOOLS: readonly AssistantTool[] = ['project_watch', 'assistant_action', 'memory', 'skill_manage', 'project_note', 'project_send', 'project_add', 'project_attach_remote', 'launch_defaults_set', 'decision_answer', 'decision_request', 'session_control', 'file_transfer']
 
 /** Owner-only verbs: never reachable from the assistant's MCP server (no `ipc`). */
 export const ASSISTANT_OWNER_VERBS: readonly AssistantVerb[] = [

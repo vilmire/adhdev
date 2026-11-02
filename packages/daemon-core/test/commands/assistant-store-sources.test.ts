@@ -38,6 +38,7 @@ const EXPECTED_SOURCES: Record<string, string[]> = {
     assistant_decision_answer: ['ipc', 'standalone'],
     assistant_decision_request: ['ipc', 'standalone'],
     assistant_session_control: ['ipc', 'standalone'],
+    assistant_file_transfer: ['ipc', 'standalone'],
     assistant_staged_resolve: ['p2p', 'standalone', 'ws'],
     assistant_store_admin: ['p2p', 'standalone', 'ws'],
     assistant_memory_limits: ['p2p', 'standalone', 'ws'],

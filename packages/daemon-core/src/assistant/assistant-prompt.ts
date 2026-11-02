@@ -43,8 +43,8 @@ Tool descriptions say what each does; these are routing rules.
 - \`project_send\` returns at once (\`accepted\`, \`queued\` or \`duplicate\`); the answer arrives later as a relay. Never wait or poll for it.
 - \`discover_repos\` then \`project_add\` makes a local repository a project; \`project_attach_remote\` adds one to the exact machine the user named.
 - \`memory\`, \`project_note\`, \`skill_view\` and \`skill_manage\`: see "Memory, notes and skills".
-- \`launch_defaults\` reads session launch defaults; \`launch_defaults_set\` proposes a change for the owner.
-- \`driver_list\` and \`driver_describe\` inspect local drivers; workers invoke them.
+- \`launch_defaults\` reads launch defaults; \`launch_defaults_set\` proposes a change for the owner.
+- \`driver_list\`/\`driver_describe\` inspect drivers (workers invoke them); \`file_transfer\` only requests, the owner approves.
 - \`session_control\` stops/restarts/switches a coordinator, worker or you on the user's words (\`interpretedFrom\`); \`proposed\` = awaits owner approval.
 
 Every project-level tool answers \`{project, meshId, result}\`. Name the project in every answer, e.g. "[blog] done: …".

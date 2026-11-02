@@ -4298,6 +4298,37 @@
             },
             "roleSource": "보내는 중",
             "roleTarget": "받는 중",
+            "roleTitle": {
+                "sourceDone": "전송 완료",
+                "targetDone": "수신 완료",
+                "sourceFailed": "전송 실패",
+                "targetFailed": "수신 실패",
+                "cancelled": "취소됨",
+                "expired": "만료됨"
+            },
+            "agent": {
+                "toggle": "{{machine}}에서 에이전트 전송 자동 승인",
+                "hint": "코디네이터나 비서가 아무것도 덮어쓰지 않는 전송을 묻지 않고 시작할 수 있게 합니다. 양쪽 머신 모두 허용해야 합니다. 기존 파일을 덮어쓰는 전송은 항상 승인을 요청합니다.",
+                "setFailed": "에이전트 자동 승인 설정을 바꾸지 못했습니다",
+                "coordinator": "코디네이터가 요청함",
+                "assistant": "비서가 요청함"
+            },
+            "mode": {
+                "newFolder": "새 폴더 (아무것도 덮어쓰지 않음)",
+                "existingPath": "기존 폴더에 쓰기 (파일을 덮어쓸 수 있음)",
+                "targetDir": "대상 프로젝트 안의 폴더 (비우면 프로젝트 루트)",
+                "targetDirHint": "같은 상대 경로에 파일을 씁니다. 대상에만 있는 파일은 삭제되지 않습니다."
+            },
+            "overwrite": {
+                "newCount": "새 파일 {{count}}개",
+                "replacedCount": "덮어쓸 파일 {{count}}개",
+                "replacedTitle": "덮어쓸 파일",
+                "backupNote": "원본은 대상 머신에 7일간 백업되며 되돌릴 수 있습니다.",
+                "revert": "되돌리기",
+                "reverted": "되돌림",
+                "revertConflicts": "그 사이 바뀐 파일 {{count}}개는 그대로 두었습니다",
+                "revertFailed": "되돌리지 못했습니다"
+            },
             "errorCode": "사유: {{code}}",
             "loadingProjects": "프로젝트 불러오는 중…",
             "noProjects": "이 머신에서 프로젝트를 찾지 못했습니다",
@@ -4307,7 +4338,15 @@
             "progressPercent": "{{percent}}%",
             "errorGeneric": "전송 실패",
             "errors": {
-                "DIRECT_UNAVAILABLE": "두 머신이 직접 연결되지 않고(방화벽 또는 NAT), 릴레이 전송이 양쪽 모두에서 켜져 있지 않습니다. 이 섹션에서 각 머신의 릴레이 옵션을 켜면 그래도 전송할 수 있습니다.",
+                "DIRECT_UNAVAILABLE": "두 머신이 직접 연결되지 않았고(방화벽 또는 NAT), 이 전송에는 릴레이가 사용되지 않았습니다. 위의 릴레이 옵션을 확인하세요.",
+                "TARGET_CHANGED": "미리보기 이후 대상 폴더가 바뀌었습니다. 다시 미리보기를 만들어 새 미리보기를 승인하세요.",
+                "TARGET_DIR_MISSING": "대상 프로젝트에 해당 폴더가 없습니다.",
+                "TARGET_PATH_UNSAFE": "대상의 파일이 링크이거나 안전하게 교체할 수 없습니다.",
+                "TARGET_CONFLICT": "대상에 같은 이름의 폴더와 파일이 있습니다.",
+                "SECRET_PATH_REJECTED": "보호된 위치(비밀 파일 또는 .git)라서 쓸 수 없습니다.",
+                "REVERT_UNAVAILABLE": "이 전송에는 되돌릴 내용이 없습니다.",
+                "ALREADY_REVERTED": "이미 되돌린 전송입니다.",
+                "PEER_UNSUPPORTED": "파일을 덮어쓰려면 상대 머신을 업데이트해야 합니다.",
                 "RELAY_LIMIT_EXCEEDED": "릴레이 한도에 도달했습니다(전송당 500 MB, 머신당 하루 2 GB). 내일 다시 시도하거나 선택 항목을 줄여 주세요.",
                 "LINK_UNAVAILABLE": "머신 간 직접 연결을 만들지 못했습니다. 두 머신이 모두 온라인인지 확인하고 다시 시도하세요.",
                 "LINK_LOST": "직접 연결이 끊어졌고 복구하지 못했습니다.",
@@ -4819,6 +4858,18 @@
         "soundEffectsDesc": "에이전트가 완료하거나 승인이 필요할 때 사운드 재생"
     },
     "needsYou": {
+        "transfer": {
+            "title": "파일 전송",
+            "summary": "{{from}} → {{to}}, 파일 {{files}}개, {{size}}",
+            "replacedTitle": "기존 파일 {{count}}개를 덮어씁니다",
+            "newOnly": "새 파일 {{count}}개, 덮어쓰는 파일 없음",
+            "approve": "전송 승인",
+            "reject": "거절",
+            "loading": "전송 미리보기를 불러오는 중…",
+            "gone": "이 전송은 더 이상 대기 중이 아닙니다.",
+            "failed": "처리하지 못했습니다: {{code}}",
+            "requestedBy": "{{who}} 요청"
+        },
         "pageTitle": "할 일",
         "pageSubtitle": "내 결정을 기다리는 결정, 승인, 라이브 확인입니다.",
         "openTitle": "할 일 ({{count}}건 대기)",

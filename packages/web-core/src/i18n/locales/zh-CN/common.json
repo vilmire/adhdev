@@ -4298,6 +4298,37 @@
             },
             "roleSource": "发送中",
             "roleTarget": "接收中",
+            "roleTitle": {
+                "sourceDone": "已发送",
+                "targetDone": "已接收",
+                "sourceFailed": "发送失败",
+                "targetFailed": "接收失败",
+                "cancelled": "已取消",
+                "expired": "已过期"
+            },
+            "agent": {
+                "toggle": "在 {{machine}} 上自动批准代理发起的传输",
+                "hint": "允许协调器或助手在不询问你的情况下发起不会替换任何文件的传输。两台设备都必须允许。会替换现有文件的传输始终需要你确认。",
+                "setFailed": "无法更改代理自动批准设置",
+                "coordinator": "由协调器发起",
+                "assistant": "由助手发起"
+            },
+            "mode": {
+                "newFolder": "新文件夹（不替换任何文件）",
+                "existingPath": "写入现有文件夹（可能替换文件）",
+                "targetDir": "目标项目中的文件夹（留空 = 项目根目录）",
+                "targetDirHint": "文件会写入相同的相对路径。仅存在于目标的文件不会被删除。"
+            },
+            "overwrite": {
+                "newCount": "{{count}} 个新文件",
+                "replacedCount": "将替换 {{count}} 个文件",
+                "replacedTitle": "将被替换的文件",
+                "backupNote": "原文件会在目标设备上备份 7 天，可以还原。",
+                "revert": "还原",
+                "reverted": "已还原",
+                "revertConflicts": "之后被修改的 {{count}} 个文件保持原样",
+                "revertFailed": "无法还原"
+            },
             "errorCode": "原因:{{code}}",
             "loadingProjects": "正在加载项目…",
             "noProjects": "此设备上没有找到项目",
@@ -4307,7 +4338,15 @@
             "progressPercent": "{{percent}}%",
             "errorGeneric": "传输失败",
             "errors": {
-                "DIRECT_UNAVAILABLE": "这两台设备无法直接连接（防火墙或 NAT），且两台设备没有同时开启中继发送。请在本区域为每台设备开启中继选项后再发送。",
+                "DIRECT_UNAVAILABLE": "这两台设备无法直接连接（防火墙或 NAT），且本次传输没有使用中继。请检查上方的中继选项。",
+                "TARGET_CHANGED": "预览之后目标文件夹发生了变化。请重新预览并批准新的预览。",
+                "TARGET_DIR_MISSING": "目标项目中不存在该文件夹。",
+                "TARGET_PATH_UNSAFE": "目标中的某个文件是链接，无法安全替换。",
+                "TARGET_CONFLICT": "目标中存在同名的文件夹和文件。",
+                "SECRET_PATH_REJECTED": "该位置受保护（机密或 .git），无法写入。",
+                "REVERT_UNAVAILABLE": "此传输没有可还原的内容。",
+                "ALREADY_REVERTED": "此传输已还原。",
+                "PEER_UNSUPPORTED": "需要更新对方设备才能替换文件。",
                 "RELAY_LIMIT_EXCEEDED": "已达到中继上限（每次传输 500 MB，每台设备每天 2 GB）。请明天再试，或减少所选内容。",
                 "LINK_UNAVAILABLE": "无法建立设备之间的直接连接。请确认两台设备都在线后重试。",
                 "LINK_LOST": "直接连接已断开且无法恢复。",
@@ -4819,6 +4858,18 @@
         "soundEffectsDesc": "代理完成或需要审批时播放声音"
     },
     "needsYou": {
+        "transfer": {
+            "title": "文件传输",
+            "summary": "从 {{from}} 到 {{to}}，{{files}} 个文件，{{size}}",
+            "replacedTitle": "将替换这 {{count}} 个现有文件",
+            "newOnly": "{{count}} 个新文件，不替换任何文件",
+            "approve": "批准传输",
+            "reject": "拒绝",
+            "loading": "正在加载传输预览…",
+            "gone": "此传输已不再等待处理。",
+            "failed": "无法完成：{{code}}",
+            "requestedBy": "{{who}}"
+        },
         "pageTitle": "待办",
         "pageSubtitle": "正在等你的决定、审批和实机检查。",
         "openTitle": "待办（{{count}} 项等待中）",

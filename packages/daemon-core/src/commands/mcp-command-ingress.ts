@@ -33,6 +33,7 @@ export const MCP_ATTRIBUTED_COMMANDS: ReadonlySet<string> = new Set(['mission_de
  */
 export const MCP_ROLE_CLASSIFIED_COMMANDS: ReadonlySet<string> = new Set([
     'release_upsert', 'release_scope', 'release_list', 'release_record_deploy', 'release_changelog_draft',
+    'project_transfer_agent',
 ]);
 
 export interface AuthenticatedMcpScope {

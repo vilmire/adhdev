@@ -17,6 +17,8 @@ export interface SelectionEntry {
   size?: number;
 }
 
+export type TransferTargetMode = 'new_folder' | 'existing_path';
+
 export interface ExcludedEntry {
   path: string;
   reason: string;
@@ -30,6 +32,10 @@ export interface SelectionManifest {
   sourceWorkspaceId: string;
   targetWorkspaceId: string;
   finalName: string;
+  /** `new_folder` (default, no-replace) or `existing_path`: write into an existing directory of the target project. */
+  targetMode?: TransferTargetMode;
+  /** existing_path only: project-relative directory (empty = project root) the entries are written under. */
+  targetDir?: string;
   entries: SelectionEntry[];
   excluded: ExcludedEntry[];
 }
@@ -132,6 +138,7 @@ export function validateSelectionManifest(raw: unknown): SelectionManifest {
     if (typeof m[k] !== 'string' || !m[k] || m[k].length > 256) throw new ManifestError('MANIFEST_INVALID', `bad ${k}`);
   }
   validateFinalName(m.finalName);
+  validateTargetMode(m);
   if (!Array.isArray(m.entries) || !Array.isArray(m.excluded)) throw new ManifestError('MANIFEST_INVALID', 'entries/excluded required');
   if (m.entries.length > TRANSFER_LIMITS.maxEntries) throw new ManifestError('LIMIT_EXCEEDED', `more than ${TRANSFER_LIMITS.maxEntries} entries`);
   if (m.entries.length === 0) throw new ManifestError('MANIFEST_INVALID', 'nothing selected');
@@ -203,4 +210,27 @@ export function validateContentManifest(raw: unknown, selection: SelectionManife
   });
   if (manifestByteLength(c) > TRANSFER_LIMITS.maxManifestBytes) throw new ManifestError('LIMIT_EXCEEDED', 'content manifest exceeds 2 MiB');
   return { ...c, files: sorted };
+}
+
+/** Validate `targetMode` / `targetDir` of a manifest (own or received). Absent mode = new_folder. */
+export function validateTargetMode(m: { targetMode?: unknown; targetDir?: unknown }): void {
+  if (m.targetMode === undefined) {
+    if (m.targetDir !== undefined) throw new ManifestError('MANIFEST_INVALID', 'targetDir requires existing_path');
+    return;
+  }
+  if (m.targetMode === 'new_folder') {
+    if (m.targetDir !== undefined) throw new ManifestError('MANIFEST_INVALID', 'targetDir requires existing_path');
+    return;
+  }
+  if (m.targetMode !== 'existing_path') throw new ManifestError('MANIFEST_INVALID', 'bad targetMode');
+  validateTargetDir(m.targetDir);
+}
+
+/** `''` (project root) or a portable relative directory that is not a secret/protected location. */
+export function validateTargetDir(dir: unknown): string {
+  if (typeof dir !== 'string') throw new ManifestError('MANIFEST_INVALID', 'targetDir required');
+  if (dir === '') return '';
+  try { splitPortableRelativePath(dir); } catch (err) { throw new ManifestError('PATH_REJECTED', `targetDir rejected: ${(err as Error).message}`); }
+  if (matchSecretPath(dir) !== null) throw new ManifestError('SECRET_PATH_REJECTED', 'targetDir matches a secret exclusion rule');
+  return dir;
 }

@@ -60,6 +60,7 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   decision_answer: { project: 'adhdev', itemId: 'dec_1', optionId: 'a', interpretedFrom: 'budget temp' },
   decision_request: { project: 'adhdev', question: 'Which database?', options: ['postgres', 'sqlite'] },
   session_control: { project: 'adhdev', role: 'coordinator', action: 'restart', interpretedFrom: 'restart the blog coordinator' },
+  file_transfer: { project: 'adhdev', action: 'status' },
 };
 
 function fakeTransport(reply: (type: string, args: Record<string, unknown>) => any = () => ({ success: true })) {

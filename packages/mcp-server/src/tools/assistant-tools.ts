@@ -424,6 +424,32 @@ const DECISION_REQUEST_TOOL: AssistantToolSchema = {
 };
 
 
+const FILE_TRANSFER_TOOL: AssistantToolSchema = {
+  name: 'file_transfer',
+  description:
+    'Request that project files move from the machine this project is hosted on to another machine of the same account, or check/cancel your own requests. '
+    + 'action "request" builds a preview (counts, size, excluded secrets; for target_mode "existing_path" also which files are new vs replaced) and puts an approval into the owner\'s To-do. '
+    + 'YOU CANNOT APPROVE: the owner approves in the dashboard, or - only if the owner enabled "auto-approve agent transfers" on BOTH machines and nothing would be replaced - the daemons approve it themselves. '
+    + 'Secrets (.env, keys, .git) are never sent. "new_folder" (default) writes a NEW folder and replaces nothing; "existing_path" writes into an existing directory of the target project and ALWAYS needs the owner (originals are backed up for 7 days). '
+    + 'Do not tell the owner the files arrived until status says completed. Hosted projects only.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      ...PROJECT_PROP,
+      action: enumOf(['request', 'status', 'cancel'] as const, 'Default status.'),
+      from_workspace: { type: 'string', description: 'request: workspace on the project host (id, label or path) holding the files.' },
+      selected: { type: 'array', items: { type: 'string' }, description: 'request: files/folders to send, relative to from_workspace.' },
+      to_daemon_id: { type: 'string', description: 'request: destination machine id.' },
+      to_workspace: { type: 'string', description: 'request: workspace on the destination machine (id, label or path).' },
+      target_mode: enumOf(['new_folder', 'existing_path'] as const, 'Default new_folder.'),
+      final_name: { type: 'string', description: 'new_folder: single-segment name of the new folder.' },
+      target_dir: { type: 'string', description: 'existing_path: directory of the target project to write into (relative, empty = project root).' },
+      transfer_id: { type: 'string', description: 'status/cancel: the request id.' },
+    },
+    required: ['project'],
+  },
+};
+
 const SESSION_CONTROL_TOOL: AssistantToolSchema = {
   name: 'session_control',
   description:
@@ -472,6 +498,7 @@ export const ALL_ASSISTANT_TOOL_SCHEMAS: readonly AssistantToolSchema[] = [
   DECISION_ANSWER_TOOL,
   DECISION_REQUEST_TOOL,
   SESSION_CONTROL_TOOL,
+  FILE_TRANSFER_TOOL,
   DRIVER_LIST_TOOL,
   DRIVER_DESCRIBE_TOOL,
   {
@@ -553,7 +580,7 @@ export async function callAssistantTool(
   const sessionCred =
     (verb === ASSISTANT_VERB.artifactList || verb === ASSISTANT_VERB.artifactRead
       || (verb === ASSISTANT_VERB.projectSend && Array.isArray(args.attachments) && args.attachments.length > 0)
-      || verb === ASSISTANT_VERB.decisionAnswer || verb === ASSISTANT_VERB.decisionRequest
+      || verb === ASSISTANT_VERB.decisionAnswer || verb === ASSISTANT_VERB.decisionRequest || verb === ASSISTANT_VERB.fileTransfer
       || verb === ASSISTANT_VERB.sessionControl)
       ? process.env.ADHDEV_MCP_SESSION_CREDENTIAL?.trim()
       : undefined;

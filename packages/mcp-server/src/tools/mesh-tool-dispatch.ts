@@ -54,7 +54,7 @@ import {
     meshCleanupSessionsOrPrune, meshTaskHistory, meshLedgerQuery,
     meshNote, meshReconcileLedger,
     meshMissionUpsert, meshMissionList, meshMissionGitEval, meshReviewInbox,
-    meshReleaseUpsert, meshReleaseScope, meshReleaseList, meshReleaseRecordDeploy, meshReleaseChangelogDraft,
+    meshReleaseUpsert, meshReleaseScope, meshReleaseList, meshReleaseRecordDeploy, meshReleaseChangelogDraft, meshFileTransfer,
     meshNodeSlots,
 } from './mesh-tools.js';
 
@@ -129,6 +129,7 @@ export const MESH_TOOL_DISPATCH: Readonly<Record<CanonicalMeshToolName, MeshTool
     mesh_release_list: (ctx, a) => meshReleaseList(ctx, a as any),
     mesh_release_record_deploy: (ctx, a) => meshReleaseRecordDeploy(ctx, a as any),
     mesh_release_changelog_draft: (ctx, a) => meshReleaseChangelogDraft(ctx, a as any),
+    mesh_file_transfer: (ctx, a) => meshFileTransfer(ctx, a),
     mesh_review_inbox: (ctx, a) => meshReviewInbox(ctx, a as any),
     mesh_node_slots: (ctx, a) => meshNodeSlots(ctx, a),
 };

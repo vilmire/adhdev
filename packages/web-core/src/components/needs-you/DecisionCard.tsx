@@ -25,6 +25,7 @@ import {
 } from './needs-you-model'
 import { mayAlreadyBeInProgress, describeAnswer } from './needs-you-model'
 import { useSwipe } from './useSwipe'
+import { TransferDecisionBody } from './TransferDecisionBody'
 import type { TFunction } from 'i18next'
 import type { NeedsYouOutcome } from '../../context/NeedsYouContext'
 
@@ -139,7 +140,8 @@ export default function DecisionCard({
             <div className="text-sm font-semibold text-text-primary">{shown.question}</div>
             {shown.context && <div className="text-xs text-text-secondary whitespace-pre-wrap">{shown.context}</div>}
 
-            {shown.options.length > 0 && (
+            {decision.transferId && <TransferDecisionBody decision={decision} busy={busy} onAnswer={onAnswer} />}
+            {shown.options.length > 0 && !decision.transferId && (
                 <div className="flex flex-wrap gap-2" role="group" aria-label={t('needsYou.optionsLabel')}>
                     {shown.options.map(o => {
                         const isRec = o.id === decision.recommended

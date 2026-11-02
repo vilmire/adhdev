@@ -4298,6 +4298,37 @@
             },
             "roleSource": "送信中",
             "roleTarget": "受信中",
+            "roleTitle": {
+                "sourceDone": "送信完了",
+                "targetDone": "受信完了",
+                "sourceFailed": "送信失敗",
+                "targetFailed": "受信失敗",
+                "cancelled": "キャンセル済み",
+                "expired": "期限切れ"
+            },
+            "agent": {
+                "toggle": "{{machine}} でエージェント転送を自動承認",
+                "hint": "コーディネーターやアシスタントが、何も置き換えない転送を確認なしで開始できるようにします。両方のマシンで許可が必要です。既存ファイルを置き換える転送は常に確認します。",
+                "setFailed": "エージェント自動承認の設定を変更できませんでした",
+                "coordinator": "コーディネーターが要求",
+                "assistant": "アシスタントが要求"
+            },
+            "mode": {
+                "newFolder": "新しいフォルダ（何も置き換えない）",
+                "existingPath": "既存フォルダに書き込む（ファイルを置き換える場合あり）",
+                "targetDir": "転送先プロジェクト内のフォルダ（空 = プロジェクトのルート）",
+                "targetDirHint": "同じ相対パスに書き込みます。転送先にしかないファイルは削除されません。"
+            },
+            "overwrite": {
+                "newCount": "新規ファイル {{count}} 件",
+                "replacedCount": "置き換えるファイル {{count}} 件",
+                "replacedTitle": "置き換えるファイル",
+                "backupNote": "元のファイルは転送先マシンに7日間バックアップされ、元に戻せます。",
+                "revert": "元に戻す",
+                "reverted": "元に戻しました",
+                "revertConflicts": "その後変更された {{count}} 件のファイルはそのままにしました",
+                "revertFailed": "元に戻せませんでした"
+            },
             "errorCode": "理由: {{code}}",
             "loadingProjects": "プロジェクトを読み込み中…",
             "noProjects": "このマシンにプロジェクトが見つかりません",
@@ -4307,7 +4338,15 @@
             "progressPercent": "{{percent}}%",
             "errorGeneric": "転送に失敗しました",
             "errors": {
-                "DIRECT_UNAVAILABLE": "この2台は直接接続できず（ファイアウォールまたは NAT）、リレー経由の送信が両方で有効になっていません。このセクションで各マシンのリレーオプションをオンにすると送信できます。",
+                "DIRECT_UNAVAILABLE": "この2台は直接接続できず（ファイアウォールまたは NAT）、この転送ではリレーが使われませんでした。上のリレーオプションを確認してください。",
+                "TARGET_CHANGED": "プレビュー後に転送先フォルダが変わりました。もう一度プレビューして新しいプレビューを承認してください。",
+                "TARGET_DIR_MISSING": "転送先プロジェクトにそのフォルダがありません。",
+                "TARGET_PATH_UNSAFE": "転送先のファイルがリンクであるか、安全に置き換えられません。",
+                "TARGET_CONFLICT": "転送先に同じ名前のフォルダとファイルがあります。",
+                "SECRET_PATH_REJECTED": "保護された場所（秘密情報または .git）のため書き込めません。",
+                "REVERT_UNAVAILABLE": "この転送には元に戻す内容がありません。",
+                "ALREADY_REVERTED": "この転送はすでに元に戻されています。",
+                "PEER_UNSUPPORTED": "ファイルを置き換えるには相手のマシンを更新してください。",
                 "RELAY_LIMIT_EXCEEDED": "リレーの上限に達しました（1回の転送あたり 500 MB、1台につき1日 2 GB）。明日もう一度試すか、選択を減らしてください。",
                 "LINK_UNAVAILABLE": "マシン間の直接接続を確立できませんでした。両方がオンラインか確認して、もう一度お試しください。",
                 "LINK_LOST": "直接接続が切れ、復旧できませんでした。",
@@ -4819,6 +4858,18 @@
         "soundEffectsDesc": "エージェントが完了または承認を必要とするときに音を鳴らす"
     },
     "needsYou": {
+        "transfer": {
+            "title": "ファイル転送",
+            "summary": "{{from}} → {{to}}、{{files}} ファイル、{{size}}",
+            "replacedTitle": "既存の {{count}} ファイルを置き換えます",
+            "newOnly": "新規 {{count}} ファイル、置き換えなし",
+            "approve": "転送を承認",
+            "reject": "拒否",
+            "loading": "転送プレビューを読み込み中…",
+            "gone": "この転送はもう待機中ではありません。",
+            "failed": "完了できませんでした: {{code}}",
+            "requestedBy": "{{who}}"
+        },
         "pageTitle": "やること",
         "pageSubtitle": "あなたの判断を待っている決定・承認・ライブ確認です。",
         "openTitle": "やること（{{count}} 件待ち）",

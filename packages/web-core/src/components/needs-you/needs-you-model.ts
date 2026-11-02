@@ -30,6 +30,8 @@ export interface NeedsYouDecision {
     source: 'coordinator' | 'worker' | 'daemon'
     createdAt: string
     carryOver?: boolean
+    /** A file-transfer approval requested by an agent: rendered as a preview card, approved on both machines. */
+    transferId?: string
 }
 
 export interface NeedsYouLiveCheck {
@@ -135,6 +137,7 @@ export function parseNeedsYouList(raw: unknown, daemonId: string): NeedsYouSnaps
             source: d.source === 'worker' ? 'worker' : d.source === 'daemon' ? 'daemon' : 'coordinator',
             createdAt: s(d.createdAt),
             ...(d.carryOver === true ? { carryOver: true } : {}),
+            ...(/^[0-9a-f]{32}$/.test(s(d.transferId)) ? { transferId: s(d.transferId) } : {}),
         })
     }
     const liveChecks: NeedsYouLiveCheck[] = []

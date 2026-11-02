@@ -7,7 +7,7 @@ import { getMachineDisplayName } from '../../utils/daemon-utils'
 import { AlertBanner } from '../ui/AlertBanner'
 import Button from '../ui/Button'
 import {
-    TERMINAL_TRANSFER_STATES, call, formatBytes,
+    TERMINAL_TRANSFER_STATES, TITLE_SAYS_OUTCOME, call, formatBytes, transferTitleKey,
     type BrowseEntry, type SendCommand, type TransferView,
 } from './projectTransferApi'
 
@@ -55,13 +55,15 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
     const [toId, setToId] = useState('')
     const [toWs, setToWs] = useState('')
     const [folder, setFolder] = useState('')
+    const [targetMode, setTargetMode] = useState<'new_folder' | 'existing_path'>('new_folder')
+    const [targetDir, setTargetDir] = useState('')
     const [dir, setDir] = useState('')
     const [entries, setEntries] = useState<BrowseEntry[]>([])
     const [selected, setSelected] = useState<Set<string>>(new Set())
     const [preview, setPreview] = useState<TransferView | null>(null)
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState('')
-    const [caps, setCaps] = useState<Record<string, { supported: boolean; reasons: string[]; relayAllowed: boolean }>>({})
+    const [caps, setCaps] = useState<Record<string, { supported: boolean; reasons: string[]; relayAllowed: boolean; agentAutoApprove: boolean }>>({})
     const [transfers, setTransfers] = useState<TransferView[]>([])
     // Machines whose workspace list (daemon.metadata lane) is still being fetched.
     const [metaLoading, setMetaLoading] = useState<Set<string>>(new Set())
@@ -94,8 +96,8 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
         for (const id of [fromId, toId]) {
             if (!id || caps[id]) continue
             void call(sendRef.current, id, 'project_transfer_capabilities', {}).then(body => {
-                setCaps(prev => ({ ...prev, [id]: { supported: body.supported === true, reasons: Array.isArray(body.reasons) ? body.reasons : [], relayAllowed: body.relayAllowed !== false } }))
-            }).catch(() => setCaps(prev => ({ ...prev, [id]: { supported: false, reasons: ['UNREACHABLE'], relayAllowed: true } })))
+                setCaps(prev => ({ ...prev, [id]: { supported: body.supported === true, reasons: Array.isArray(body.reasons) ? body.reasons : [], relayAllowed: body.relayAllowed !== false, agentAutoApprove: body.agentAutoApprove === true } }))
+            }).catch(() => setCaps(prev => ({ ...prev, [id]: { supported: false, reasons: ['UNREACHABLE'], relayAllowed: true, agentAutoApprove: false } })))
         }
     }, [fromId, toId, caps])
 
@@ -111,6 +113,20 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
         } catch {
             setCaps(p => ({ ...p, [id]: prev }))
             setError(t('settings.projectTransfer.relay.setFailed'))
+        }
+    }
+    // Per-machine option (default OFF): agent-requested transfers that replace nothing may skip the owner when BOTH machines allow it.
+    const setAgentAuto = async (id: string, allow: boolean) => {
+        const prev = caps[id]
+        if (!prev) return
+        setCaps(p => ({ ...p, [id]: { ...prev, agentAutoApprove: allow } }))
+        try {
+            const body = await call(sendRef.current, id, 'project_transfer_set_agent_auto_approve', { allow })
+            if (body.success !== true) throw new Error('set_agent_auto_approve failed')
+            setCaps(p => ({ ...p, [id]: { ...prev, agentAutoApprove: body.agentAutoApprove === true } }))
+        } catch {
+            setCaps(p => ({ ...p, [id]: prev }))
+            setError(t('settings.projectTransfer.agent.setFailed'))
         }
     }
     const relayMachines = [...new Set([fromId, toId].filter(id => id && caps[id]?.supported))]
@@ -144,6 +160,8 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
         }))
         const merged = new Map<string, TransferView>()
         for (const x of all) { const cur = merged.get(x.id); if (!cur || x.role === 'source') merged.set(x.id, x) }
+        // The revert button belongs to the TARGET machine's record (it holds the backups).
+        for (const x of all) if (x.role === 'target' && x.overwrite?.revertible) { const m = merged.get(x.id); if (m) merged.set(x.id, { ...m, overwrite: { ...(m.overwrite ?? x.overwrite), revertible: true }, __revert: (x as any).__machine } as TransferView) }
         setTransfers([...merged.values()].sort((a, b) => b.previewExpiresAt - a.previewExpiresAt))
     }, [machines])
     useEffect(() => {
@@ -171,13 +189,14 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
         return t('settings.projectTransfer.unsupported', { machine: byId.get(id)?.name ?? id, reason })
     }).find(Boolean) ?? ''
 
-    const canPreview = !!(fromId && fromWs && toId && toWs && folder.trim() && selected.size > 0 && toId !== fromId && !unsupportedMessage && !busy)
+    const canPreview = !!(fromId && fromWs && toId && toWs && (targetMode === 'existing_path' || folder.trim()) && selected.size > 0 && toId !== fromId && !unsupportedMessage && !busy)
 
     const handlePreview = async () => {
         setBusy(true); setError('')
         try {
             const body = await call(sendRef.current, fromId, 'project_transfer_create', {
-                workspaceId: fromWs, selected: [...selected], targetDaemonId: toId, targetWorkspaceId: toWs, finalName: folder.trim(),
+                workspaceId: fromWs, selected: [...selected], targetDaemonId: toId, targetWorkspaceId: toWs,
+                ...(targetMode === 'existing_path' ? { targetMode, targetDir: targetDir.trim() } : { finalName: folder.trim() }),
             })
             if (body.success === true && body.transfer) { setPreview(body.transfer as TransferView); void refresh() }
             else setError(`${t('settings.projectTransfer.createFailed')}: ${(typeof body.code === 'string' && errorCodeText(body.code)) || errText(body, '')}`)
@@ -186,7 +205,7 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
     }
 
     const approve = async (daemonId: string, tr: TransferView) => {
-        const body = await call(sendRef.current, daemonId, 'project_transfer_approve', { transferId: tr.id, selectionDigest: tr.selectionDigest })
+        const body = await call(sendRef.current, daemonId, 'project_transfer_approve', { transferId: tr.id, selectionDigest: tr.selectionDigest, ...(tr.overwrite ? { replaceDigest: tr.overwrite.digest } : {}) })
         if (body.success !== true) throw new Error(errText(body, t('settings.projectTransfer.actionFailed')))
     }
     const approveBoth = async () => {
@@ -198,6 +217,14 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
             setPreview(null); setSelected(new Set()); void refresh()
         } catch (e) { setError(e instanceof Error ? e.message : t('settings.projectTransfer.actionFailed')) }
         finally { setBusy(false) }
+    }
+    const revertTransfer = async (tr: TransferView) => {
+        const machine = (tr as any).__revert as string | undefined
+        if (!machine) return
+        const body = await call(sendRef.current, machine, 'project_transfer_revert', { transferId: tr.id }).catch(() => ({ success: false } as Record<string, any>))
+        if (body.success !== true) setError(`${t('settings.projectTransfer.overwrite.revertFailed')}: ${(typeof body.code === 'string' && errorCodeText(body.code)) || ''}`)
+        else if (Array.isArray(body.conflicts) && body.conflicts.length > 0) setError(t('settings.projectTransfer.overwrite.revertConflicts', { count: body.conflicts.length }))
+        void refresh()
     }
     const cancelTransfer = async (tr: TransferView) => {
         const owner = (tr as any).__machine ?? (tr.role === 'source' ? fromId : toId)
@@ -261,10 +288,31 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
                     ))}
             </div>
 
-            <label className="flex flex-col gap-1 text-xs">{t('settings.projectTransfer.newFolder')}
-                <input className="input" value={folder} onChange={e => setFolder(e.target.value)} data-testid="project-transfer-folder" />
-                <span className="text-text-muted">{t('settings.projectTransfer.newFolderHint')}</span>
-            </label>
+            <div className="rounded-xl border border-border-subtle bg-bg-glass p-3 flex flex-col gap-1.5" data-testid="project-transfer-agent-auto">
+                <div className="text-2xs text-text-muted">{t('settings.projectTransfer.agent.hint')}</div>
+                {relayMachines.map(id => (
+                    <label key={id} className="flex items-center gap-2 text-xs">
+                        <input type="checkbox" checked={caps[id]?.agentAutoApprove === true} onChange={e => { void setAgentAuto(id, e.target.checked) }} data-testid={`project-transfer-agent-auto-toggle-${id}`} />
+                        {t('settings.projectTransfer.agent.toggle', { machine: byId.get(id)?.name ?? id })}
+                    </label>
+                ))}
+            </div>
+
+            <div className="flex flex-col gap-1 text-xs" role="radiogroup">
+                <label className="flex items-center gap-2"><input type="radio" name="project-transfer-mode" checked={targetMode === 'new_folder'} onChange={() => setTargetMode('new_folder')} data-testid="project-transfer-mode-new" />{t('settings.projectTransfer.mode.newFolder')}</label>
+                <label className="flex items-center gap-2"><input type="radio" name="project-transfer-mode" checked={targetMode === 'existing_path'} onChange={() => setTargetMode('existing_path')} data-testid="project-transfer-mode-existing" />{t('settings.projectTransfer.mode.existingPath')}</label>
+            </div>
+            {targetMode === 'new_folder' ? (
+                <label className="flex flex-col gap-1 text-xs">{t('settings.projectTransfer.newFolder')}
+                    <input className="input" value={folder} onChange={e => setFolder(e.target.value)} data-testid="project-transfer-folder" />
+                    <span className="text-text-muted">{t('settings.projectTransfer.newFolderHint')}</span>
+                </label>
+            ) : (
+                <label className="flex flex-col gap-1 text-xs">{t('settings.projectTransfer.mode.targetDir')}
+                    <input className="input" value={targetDir} onChange={e => setTargetDir(e.target.value)} data-testid="project-transfer-target-dir" />
+                    <span className="text-text-muted">{t('settings.projectTransfer.mode.targetDirHint')}</span>
+                </label>
+            )}
 
             {fromWs && (
                 <div className="rounded-xl border border-border-subtle bg-bg-glass p-3" data-testid="project-transfer-browser">
@@ -306,7 +354,21 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
                 <div className="rounded-xl border border-border-subtle bg-bg-glass p-3 flex flex-col gap-2" data-testid="project-transfer-preview-panel">
                     <div className="text-sm font-medium">{t('settings.projectTransfer.previewTitle')}</div>
                     <div className="text-xs">{t('settings.projectTransfer.previewSummary', { files: preview.fileCount, size: formatBytes(preview.totalBytes) })}</div>
-                    <div className="text-xs text-text-muted">{t('settings.projectTransfer.destination', { machine: toMachine?.name ?? toId, project: toMachine?.workspaces.find(w => w.id === toWs)?.label ?? toWs, folder: preview.finalName })}</div>
+                    <div className="text-xs text-text-muted">{t('settings.projectTransfer.destination', { machine: toMachine?.name ?? toId, project: toMachine?.workspaces.find(w => w.id === toWs)?.label ?? toWs, folder: preview.overwrite ? (preview.overwrite.targetDir || '/') : preview.finalName })}</div>
+                    {preview.overwrite && (
+                        <div className="text-xs flex flex-col gap-1" data-testid="project-transfer-overwrite">
+                            <span>{t('settings.projectTransfer.overwrite.newCount', { count: preview.overwrite.newCount })} · {t('settings.projectTransfer.overwrite.replacedCount', { count: preview.overwrite.replacedCount })}</span>
+                            {preview.overwrite.replacedCount > 0 && (
+                                <details open data-testid="project-transfer-replaced">
+                                    <summary className="cursor-pointer">{t('settings.projectTransfer.overwrite.replacedTitle')}</summary>
+                                    <ul className="m-0 p-0 list-none max-h-32 overflow-auto text-2xs font-mono">
+                                        {preview.overwrite.replaced.slice(0, 200).map(r => <li key={r.path}>{r.path} <span className="text-text-muted">{formatBytes(r.size)}</span></li>)}
+                                    </ul>
+                                </details>
+                            )}
+                            <span className="text-2xs text-text-muted">{t('settings.projectTransfer.overwrite.backupNote')}</span>
+                        </div>
+                    )}
                     <ul className="m-0 p-0 list-none max-h-40 overflow-auto text-2xs font-mono">
                         {preview.entries.filter(e => e.kind === 'file').slice(0, 200).map(e => <li key={e.path}>{e.path} <span className="text-text-muted">{formatBytes(e.size ?? 0)}</span></li>)}
                     </ul>
@@ -336,10 +398,13 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
                     return (
                         <div key={tr.id} className="px-3.5 py-3 rounded-xl border border-border-subtle bg-bg-glass flex flex-col gap-1" data-testid={`project-transfer-row-${tr.id}`}>
                             <div className="flex items-start justify-between gap-2 text-xs">
-                                <span className="min-w-0 break-words">{tr.role === 'source' ? t('settings.projectTransfer.roleSource') : t('settings.projectTransfer.roleTarget')} · {tr.finalName} · {byId.get(tr.peerDaemonId)?.name ?? tr.peerDaemonId}
+                                <span className="min-w-0 break-words" data-testid={`project-transfer-title-${tr.id}`}>{t(`settings.projectTransfer.${transferTitleKey(tr.role, tr.state)}`)} · {tr.finalName} · {byId.get(tr.peerDaemonId)?.name ?? tr.peerDaemonId}
+                                    {tr.requestedBy && <span className="ml-1.5 text-2xs text-text-muted border border-border-subtle rounded px-1" data-testid={`project-transfer-requested-by-${tr.id}`}>{t(`settings.projectTransfer.agent.${tr.requestedBy.role}`)}</span>}
                                     {tr.path === 'relay' && <span className="ml-1.5 text-2xs text-text-muted border border-border-subtle rounded px-1" data-testid={`project-transfer-path-${tr.id}`}>{t('settings.projectTransfer.relay.chip')}</span>}
                                 </span>
-                                <span className={`font-mono shrink-0 ${tr.state === 'failed' ? 'text-status-error' : tr.state === 'paused' ? 'text-status-warning' : ''}`} data-testid={`project-transfer-state-${tr.id}`}>{t(`settings.projectTransfer.state.${tr.state}`, { defaultValue: tr.state })}</span>
+                                {!TITLE_SAYS_OUTCOME.has(tr.state) && (
+                                    <span className={`font-mono shrink-0 ${tr.state === 'paused' ? 'text-status-warning' : ''}`} data-testid={`project-transfer-state-${tr.id}`}>{t(`settings.projectTransfer.state.${tr.state}`, { defaultValue: tr.state })}</span>
+                                )}
                             </div>
                             {!done && (
                                 <div className="h-1.5 rounded bg-border-subtle overflow-hidden" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
@@ -357,6 +422,13 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
                                     {' '}<span className="font-mono text-3xs opacity-70" title={t('settings.projectTransfer.errorCode', { code: tr.errorCode })}>{tr.errorCode}</span>
                                 </div>
                             )}
+                            {tr.overwrite?.revertible && (
+                                <div className="flex gap-2">
+                                    <Button variant="secondary" size="sm" onClick={() => { void revertTransfer(tr) }} data-testid={`project-transfer-revert-${tr.id}`}>{t('settings.projectTransfer.overwrite.revert')}</Button>
+                                    <span className="text-2xs text-text-muted self-center">{t('settings.projectTransfer.overwrite.backupNote')}</span>
+                                </div>
+                            )}
+                            {tr.overwrite?.reverted && <div className="text-2xs text-text-muted" data-testid={`project-transfer-reverted-${tr.id}`}>{t('settings.projectTransfer.overwrite.reverted')}</div>}
                             {!done && (
                                 <div className="flex gap-2">
                                     {needsMe && tr.role === 'target' && (

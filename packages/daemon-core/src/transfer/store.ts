@@ -9,6 +9,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { TRANSFER_RETENTION_MS } from './limits.js';
 import type { ContentManifest, SelectionManifest } from './manifest.js';
+import type { ReplacedFile } from './overwrite.js';
 
 export type TransferRole = 'source' | 'target';
 
@@ -24,6 +25,22 @@ export interface ApprovalStamp {
   at: number;
   ownerAuthGeneration: string;
   restartEpoch: string;
+}
+
+/** Who asked for a transfer when an agent (not the owner's dashboard) created it. */
+export interface TransferRequester {
+  role: 'coordinator' | 'assistant';
+  sessionId?: string;
+}
+
+/** `existing_path` preview, computed by the TARGET machine and bound into the owner approval. */
+export interface OverwriteInfo {
+  targetDir: string;
+  newFiles: string[];
+  replaced: ReplacedFile[];
+  digest: string;
+  reverted?: boolean;
+  revertConflicts?: number;
 }
 
 export interface TransferRecord {
@@ -51,6 +68,12 @@ export interface TransferRecord {
   publishedName?: string;
   /** Network path of the most recent established link (direct, or through a TURN relay). */
   path?: 'direct' | 'relay';
+  /** Present when a coordinator or assistant (not the owner) requested this transfer. */
+  requestedBy?: TransferRequester;
+  /** existing_path transfers: what is new and what would be replaced on the target. */
+  overwrite?: OverwriteInfo;
+  /** This (source-side) agent request is waiting for an owner decision with this id. */
+  decision?: { meshId: string; itemId: string };
 }
 
 export interface TransferReceipt {
@@ -69,6 +92,9 @@ export class TransferStore {
 
   private p(...parts: string[]): string { return path.join(this.baseDir, ...parts); }
   spoolDir(id: string): string { return this.p('spool', id); }
+  /** Originals replaced by an existing_path transfer (kept like receipts: 7 days). */
+  backupDir(id: string): string { return this.p('backups', id); }
+  removeBackup(id: string): void { fs.rmSync(this.backupDir(id), { recursive: true, force: true }); }
 
   private ensure(sub: string): string {
     const dir = this.p(sub);
@@ -108,6 +134,7 @@ export class TransferStore {
   remove(id: string): void {
     fs.rmSync(this.p('records', `${id}.json`), { force: true });
     this.removeSpool(id);
+    this.removeBackup(id);
   }
 
   removeSpool(id: string): void {
@@ -124,13 +151,22 @@ export class TransferStore {
 
   // ── relay option (owner decision 2026-11-02) ────────────────────────────────
 
-  /** Per-machine opt-out; relay fallback is ON unless the owner switched it off. */
-  readRelayAllowed(): boolean {
-    try { return JSON.parse(fs.readFileSync(this.p('settings.json'), 'utf8')).allowRelay !== false; } catch { return true; }
+  private readSettings(): { allowRelay?: boolean; allowAgentTransferAutoApprove?: boolean } {
+    try { return JSON.parse(fs.readFileSync(this.p('settings.json'), 'utf8')) ?? {}; } catch { return {}; }
   }
 
+  /** Per-machine opt-out; relay fallback is ON unless the owner switched it off. */
+  readRelayAllowed(): boolean { return this.readSettings().allowRelay !== false; }
+
   writeRelayAllowed(allowed: boolean): void {
-    this.atomicWrite(this.p('settings.json'), JSON.stringify({ allowRelay: allowed }));
+    this.atomicWrite(this.p('settings.json'), JSON.stringify({ ...this.readSettings(), allowRelay: allowed }));
+  }
+
+  /** Per-machine opt-in (default OFF): agent-requested transfers may be approved without the owner (never when they replace files). */
+  readAgentAutoApprove(): boolean { return this.readSettings().allowAgentTransferAutoApprove === true; }
+
+  writeAgentAutoApprove(allowed: boolean): void {
+    this.atomicWrite(this.p('settings.json'), JSON.stringify({ ...this.readSettings(), allowAgentTransferAutoApprove: allowed }));
   }
 
   private static dayKey(now: number): string { return new Date(now).toISOString().slice(0, 10); }
@@ -172,6 +208,13 @@ export class TransferStore {
         try { return now - (JSON.parse(l).t as number) <= TRANSFER_RETENTION_MS.audit; } catch { return false; }
       });
       this.atomicWrite(file, kept.length ? `${kept.join('\n')}\n` : '');
+    } catch { /* none */ }
+    try {
+      const known = new Set(this.list().map((r) => r.id));
+      for (const n of fs.readdirSync(this.p('backups'))) {
+        const f = this.p('backups', n);
+        if (!known.has(n) && now - fs.statSync(f).mtimeMs > TRANSFER_RETENTION_MS.receipt) fs.rmSync(f, { recursive: true, force: true });
+      }
     } catch { /* none */ }
     const staleTempIds: string[] = [];
     for (const rec of this.list()) {

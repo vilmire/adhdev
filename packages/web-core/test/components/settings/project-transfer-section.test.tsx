@@ -92,9 +92,11 @@ describe('ProjectTransferSection — states and failures', () => {
     it('explains a failed transfer in plain words and keeps the code visible', async () => {
         await act(async () => { root.render(<ProjectTransferSection machines={MACHINES} sendCommand={sendWith({ ...baseTransfer, state: 'failed', errorCode: 'DIRECT_UNAVAILABLE' })} pollMs={60_000} />); await flush() })
         const err = q('project-transfer-error-tx1')
-        expect(err.textContent).toContain("can't connect directly")
+        expect(err.textContent).toContain("couldn't connect directly")
         expect(err.textContent).toContain('DIRECT_UNAVAILABLE')
-        expect(q('project-transfer-state-tx1').textContent).toBe('Failed')
+        // the title already says the outcome, so the state word is not repeated
+        expect(q('project-transfer-title-tx1').textContent).toContain('Send failed')
+        expect(container.querySelector('[data-testid="project-transfer-state-tx1"]')).toBeNull()
     })
 
     it('falls back to a generic line for an unknown failure code, still showing the code', async () => {

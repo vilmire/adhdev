@@ -17,6 +17,7 @@
  * mesh-mission-decision-delivery.ts sends it exactly once) and notifies the
  * live dashboard. Nothing here is reachable from a coordinator/worker tool.
  */
+import { transferIdFromDecisionKey } from '../transfer/agent-decision-key.js';
 import {
     MISSION_LIMITS,
     isCarryOverMissionRecord,
@@ -118,6 +119,11 @@ export function answerMissionDecision(
             return fail('decision_not_found', `no decision item '${req.itemId}' on this mesh`);
         }
         const d = item.decision;
+        // A transfer-approval decision is answered from the dashboard only: the assistant and the push
+        // relay must never stand in for the owner (the dashboard also sends the real approvals).
+        if (transferIdFromDecisionKey(item.dedupeKey) && (actor.via === 'assistant' || actor.via === 'push')) {
+            return fail('transfer_decision_dashboard_only', 'a file-transfer approval can only be answered from the dashboard');
+        }
         if (item.state !== 'open' && item.state !== 'answered') {
             return fail('decision_not_open', `decision is ${item.state} — it can no longer be answered`);
         }
@@ -240,6 +246,8 @@ export interface OwnerDecisionEntry {
     /** True when the item sits in the mesh's carry-over mission. */
     carryOver?: true;
     remindedAt?: string;
+    /** Set on a file-transfer approval (agent request): the dashboard renders the preview card and sends the approvals. */
+    transferId?: string;
 }
 
 function sourceOf(createdBy: string | undefined): OwnerDecisionEntry['source'] {
@@ -285,6 +293,7 @@ function toEntry(item: MissionItemRecord, missionTitle: string, carryOver: boole
         createdAt: item.createdAt,
         ...(carryOver ? { carryOver: true as const } : {}),
         ...(d.remindedAt ? { remindedAt: d.remindedAt } : {}),
+        ...(transferIdFromDecisionKey(item.dedupeKey) ? { transferId: transferIdFromDecisionKey(item.dedupeKey)! } : {}),
     };
 }
 

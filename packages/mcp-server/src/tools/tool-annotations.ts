@@ -204,6 +204,8 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   mesh_release_record_deploy: WRITE_LOCAL_SAFE,
   // Overwrites the stored draft of the release (regenerated from missions each time).
   mesh_release_changelog_draft: WRITE_LOCAL_SAFE,
+  // File transfer requests (design 2026-11-02): creates a preview + owner approval; never approves or deletes.
+  mesh_file_transfer: WRITE_LOCAL_SAFE,
   mesh_review_inbox: READ_LOCAL,
   // Reads that cross to a (possibly remote) node.
   mesh_read_chat: READ_REMOTE,
@@ -369,6 +371,7 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   decision_answer: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   decision_request: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   // Stops / restarts / switches a coordinator, worker or assistant session (status is read-only); stages a card when the target is busy.
+  file_transfer: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   session_control: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
 };
 

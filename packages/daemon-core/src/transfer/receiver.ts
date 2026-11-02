@@ -14,6 +14,7 @@ import { TRANSFER_LIMITS } from './limits.js';
 import { requireFreeDisk } from './spool.js';
 import { SECRET_SNIFF_BYTES, sniffSecretContent } from './secret-exclusion.js';
 import { blockCount, type ContentManifest, type SelectionManifest } from './manifest.js';
+import { applyOverwrite, type ApplyResult, type OverwritePlan } from './overwrite.js';
 
 export const STAGING_DIR_NAME = '.adhdev-transfer-staging';
 
@@ -313,6 +314,19 @@ export class TransferReceiver {
       }
     }
     throw new ReceiverError('PUBLISH_CONFLICT', 'target folder name is taken');
+  }
+
+  /**
+   * `existing_path` publish: back up replaced originals, then replace per file into the existing
+   * target directory (see overwrite.ts). The staging tree is removed afterwards.
+   */
+  publishExisting(plan: OverwritePlan, backupDir: string): ApplyResult {
+    this.closeCur();
+    fullFsync(this.stageH!);
+    const newSha256 = new Map(this.files.map((f) => [f.path, f.sha256] as const));
+    const result = applyOverwrite({ rootH: this.rootH!, stageH: this.stageH!, selection: this.selection, plan, newSha256, backupDir });
+    try { this.abort(); } catch { /* staging cleanup is best effort */ }
+    return result;
   }
 
   /** Remove the staging tree handle-relatively and release all handles. */

@@ -4301,6 +4301,37 @@
             },
             "roleSource": "Enviando",
             "roleTarget": "Recibiendo",
+            "roleTitle": {
+                "sourceDone": "Enviado",
+                "targetDone": "Recibido",
+                "sourceFailed": "Error al enviar",
+                "targetFailed": "Error al recibir",
+                "cancelled": "Cancelado",
+                "expired": "Caducado"
+            },
+            "agent": {
+                "toggle": "Aprobar automáticamente las transferencias de agentes en {{machine}}",
+                "hint": "Permite que el coordinador o el asistente inicien sin preguntarte transferencias que no reemplazan nada. Ambas máquinas deben permitirlo. Las que reemplazan archivos existentes siempre te preguntan.",
+                "setFailed": "No se pudo cambiar la aprobación automática de agentes",
+                "coordinator": "Solicitado por el coordinador",
+                "assistant": "Solicitado por el asistente"
+            },
+            "mode": {
+                "newFolder": "Carpeta nueva (no se reemplaza nada)",
+                "existingPath": "Escribir en una carpeta existente (puede reemplazar archivos)",
+                "targetDir": "Carpeta del proyecto de destino (vacío = raíz del proyecto)",
+                "targetDirHint": "Los archivos se escriben en las mismas rutas relativas. Los archivos que solo existen en el destino nunca se borran."
+            },
+            "overwrite": {
+                "newCount": "{{count}} archivos nuevos",
+                "replacedCount": "Se reemplazarán {{count}} archivos",
+                "replacedTitle": "Archivos que se reemplazarán",
+                "backupNote": "Los originales se copian en la máquina de destino durante 7 días y se pueden restaurar.",
+                "revert": "Revertir",
+                "reverted": "Revertido",
+                "revertConflicts": "{{count}} archivos cambiaron después y se dejaron como están",
+                "revertFailed": "No se pudo revertir"
+            },
             "errorCode": "Motivo: {{code}}",
             "loadingProjects": "Cargando proyectos…",
             "noProjects": "No se encontraron proyectos en esta máquina",
@@ -4310,7 +4341,15 @@
             "progressPercent": "{{percent}}%",
             "errorGeneric": "La transferencia falló",
             "errors": {
-                "DIRECT_UNAVAILABLE": "Estas dos máquinas no pueden conectarse directamente (cortafuegos o NAT) y el envío mediante relé no está activado en ambas. Activa la opción de relé en esta sección para cada máquina para enviar igualmente.",
+                "DIRECT_UNAVAILABLE": "Estas dos máquinas no pudieron conectarse directamente (cortafuegos o NAT) y no se usó un relé en esta transferencia. Revisa la opción de relé de arriba.",
+                "TARGET_CHANGED": "La carpeta de destino cambió tras la vista previa. Genera otra vista previa y apruébala.",
+                "TARGET_DIR_MISSING": "La carpeta no existe en el proyecto de destino.",
+                "TARGET_PATH_UNSAFE": "Un archivo del destino es un enlace o no se puede reemplazar de forma segura.",
+                "TARGET_CONFLICT": "En el destino hay una carpeta y un archivo con el mismo nombre.",
+                "SECRET_PATH_REJECTED": "Esa ubicación está protegida (secretos o .git) y no se puede escribir.",
+                "REVERT_UNAVAILABLE": "No hay nada que revertir en esta transferencia.",
+                "ALREADY_REVERTED": "Esta transferencia ya se revirtió.",
+                "PEER_UNSUPPORTED": "Hay que actualizar la otra máquina para reemplazar archivos.",
                 "RELAY_LIMIT_EXCEEDED": "Se alcanzó el límite del relé (500 MB por transferencia, 2 GB por máquina al día). Inténtalo mañana o reduce la selección.",
                 "LINK_UNAVAILABLE": "No se pudo establecer la conexión directa entre las máquinas. Comprueba que ambas estén en línea e inténtalo de nuevo.",
                 "LINK_LOST": "La conexión directa se cortó y no se pudo recuperar.",
@@ -4822,6 +4861,18 @@
         "soundEffectsDesc": "Reproducir un sonido cuando el agente completa o necesita aprobación"
     },
     "needsYou": {
+        "transfer": {
+            "title": "Transferencia de archivos",
+            "summary": "{{files}} archivos, {{size}}, de {{from}} a {{to}}",
+            "replacedTitle": "Se reemplazarán estos {{count}} archivos existentes",
+            "newOnly": "{{count}} archivos nuevos; no se reemplaza nada",
+            "approve": "Aprobar transferencia",
+            "reject": "Rechazar",
+            "loading": "Cargando la vista previa…",
+            "gone": "Esta transferencia ya no está pendiente.",
+            "failed": "No se pudo completar: {{code}}",
+            "requestedBy": "Solicitado por {{who}}"
+        },
         "pageTitle": "Pendientes",
         "pageSubtitle": "Decisiones, aprobaciones y comprobaciones en vivo que esperan por ti.",
         "openTitle": "Pendientes ({{count}} en espera)",

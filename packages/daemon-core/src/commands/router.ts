@@ -83,6 +83,7 @@ import { assistantActionSpecs } from './high-family/assistant-action.js';
 import { assistantThreadSpecs } from './high-family/assistant-threads.js';
 import { assistantProjectSpecs } from './high-family/assistant.js';
 import { assistantDecisionSpecs } from './high-family/assistant-decisions.js';
+import { assistantFileTransferSpecs } from './high-family/assistant-file-transfer.js';
 import { assistantSessionControlSpecs } from './high-family/assistant-session-control.js';
 import { meshHostHandoffSpecs } from './high-family/mesh-host-handoff.js';
 import { assistantRemoteSpecs } from './high-family/assistant-remote.js';
@@ -350,6 +351,7 @@ export function getDaemonCommandRegistry(): CommandRegistry {
             ...artifactSpecs,
             ...assistantProjectSpecs,
             ...assistantDecisionSpecs,
+            ...assistantFileTransferSpecs,
             ...assistantSessionControlSpecs,
             ...meshHostHandoffSpecs,
             ...assistantActionSpecs,

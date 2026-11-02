@@ -11,11 +11,13 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
-import { getBindingInfo, probeRoot, TransferFsError } from '../transfer-fs/index.js';
+import { findWorkspace } from './workspace-lookup.js';
+import { close as nativeClose, getBindingInfo, openRoot, probeRoot, TransferFsError } from '../transfer-fs/index.js';
+import { OverwriteError, revertOverwrite, scanOverwriteTargets, type OverwritePlan, type RevertResult } from './overwrite.js';
 import { TRANSFER_LIMITS, TRANSFER_RETENTION_MS } from './limits.js';
 import {
   ManifestError, blockCount, isTransferId, selectionDigest, selectionTotalBytes, validateContentManifest,
-  validateFinalName, validateSelectionManifest, type SelectionManifest,
+  validateFinalName, validateSelectionManifest, validateTargetDir, type SelectionManifest, type TransferTargetMode,
 } from './manifest.js';
 import type { TransferLink, TransferLinkFactory, TransferSignal } from './link.js';
 import { ReceiverSession, SenderSession, SessionError, safeTransferCode } from './link-session.js';
@@ -24,7 +26,7 @@ import { TransferRateLimiter } from './rate-limit.js';
 import { TransferReceiver, removeStagingFor } from './receiver.js';
 import { freezeSelection, requireFreeDisk } from './spool.js';
 import { browseDirectory, scanSelection } from './source-scan.js';
-import { ACTIVE_STATES, TERMINAL_STATES, TransferStore, type TransferRecord, type TransferRole, type TransferState } from './store.js';
+import { ACTIVE_STATES, TERMINAL_STATES, TransferStore, type OverwriteInfo, type TransferRecord, type TransferRequester, type TransferRole, type TransferState } from './store.js';
 
 export interface WorkspaceRef { id: string; path: string; label?: string }
 
@@ -99,6 +101,45 @@ export class ProjectTransferEngine {
   /** Per-machine option (default ON): may this daemon's transfers fall back to a TURN relay? */
   relayAllowed(): boolean { return this.store.readRelayAllowed(); }
   setRelayAllowed(allowed: boolean): void { this.store.writeRelayAllowed(allowed === true); }
+
+  /** Per-machine option (default OFF): may agent-requested transfers that replace nothing be approved without the owner? */
+  agentAutoApproveAllowed(): boolean { return this.store.readAgentAutoApprove(); }
+  setAgentAutoApprove(allowed: boolean): void { this.store.writeAgentAutoApprove(allowed === true); }
+
+  /** Control-plane gate shared by peer ops that are not about one transfer. */
+  isPeerAllowed(peerId: string): boolean { return !!peerId && this.ports.isPeerAuthorized(peerId); }
+
+  /** Ask the target machine which of its registered workspaces a loose name (id / label / path) means. */
+  async resolveTargetWorkspace(peerId: string, query: string): Promise<{ workspaceId: string; label?: string } | null> {
+    if (!this.ports.isPeerAuthorized(peerId)) return null;
+    let reply: Awaited<ReturnType<TransferHostPorts['dispatchPeer']>>;
+    try { reply = await this.ports.dispatchPeer(peerId, { op: 'resolve_workspace', query }); } catch { return null; }
+    if (!reply?.ok || typeof reply.workspaceId !== 'string' || !reply.workspaceId) return null;
+    return { workspaceId: reply.workspaceId, ...(typeof reply.label === 'string' ? { label: reply.label.slice(0, 80) } : {}) };
+  }
+
+  /** Remember which owner decision is waiting on this (agent-requested) transfer. */
+  setDecision(id: string, decision: { meshId: string; itemId: string }): void {
+    const rec = this.records.get(id);
+    if (!rec) return;
+    rec.decision = decision;
+    this.persist(rec);
+  }
+
+  private terminalListeners: Array<(rec: TransferRecord) => void> = [];
+  /** Observe terminal transitions (used to withdraw the owner decision of an agent request). */
+  onTerminal(cb: (rec: TransferRecord) => void): void { this.terminalListeners.push(cb); }
+  private notifyTerminal(rec: TransferRecord): void {
+    for (const cb of this.terminalListeners) { try { cb(rec); } catch { /* listener errors never affect the transfer */ } }
+  }
+
+  /** Scan the target project of an existing_path selection (handle-relative, symlink-safe). */
+  private scanTarget(selection: SelectionManifest): OverwritePlan {
+    const ws = this.ports.resolveWorkspace(selection.targetWorkspaceId);
+    if (!ws) throw new OverwriteError('TARGET_DIR_MISSING', 'target workspace is not registered');
+    const root = openRoot(ws.path);
+    try { return scanOverwriteTargets(root, selection); } finally { try { nativeClose(root); } catch { /* ignore */ } }
+  }
 
   // ── lifecycle ────────────────────────────────────────────────────────────────
 
@@ -191,6 +232,7 @@ export class ProjectTransferEngine {
       excluded: rec.selection.excluded,
     });
     if (notifyPeer) void this.ports.dispatchPeer(rec.peerDaemonId, { op: 'cancel', transferId: rec.id, code }).catch(() => {});
+    this.notifyTerminal(rec);
   }
 
   private teardownRun(id: string, cleanStaging: boolean): void {
@@ -207,11 +249,11 @@ export class ProjectTransferEngine {
 
   // ── capabilities ─────────────────────────────────────────────────────────────
 
-  capabilities(): { supported: boolean; reasons: string[]; platform: string; arch: string; relayAllowed: boolean } {
+  capabilities(): { supported: boolean; reasons: string[]; platform: string; arch: string; relayAllowed: boolean; agentAutoApprove: boolean } {
     const reasons: string[] = [];
     try { getBindingInfo(); } catch { reasons.push('NATIVE_HELPER_UNAVAILABLE'); }
     if (!this.ports.linkFactory) reasons.push('LINK_UNAVAILABLE');
-    return { supported: reasons.length === 0, reasons, platform: process.platform, arch: process.arch, relayAllowed: this.relayAllowed() };
+    return { supported: reasons.length === 0, reasons, platform: process.platform, arch: process.arch, relayAllowed: this.relayAllowed(), agentAutoApprove: this.agentAutoApproveAllowed() };
   }
 
   private requireSupport(): TransferFailure | null {
@@ -239,7 +281,10 @@ export class ProjectTransferEngine {
 
   get(id: string): TransferRecord | null { return this.records.get(id) ?? null; }
 
-  async create(input: { workspaceId: string; selected: string[]; targetDaemonId: string; targetWorkspaceId: string; finalName: string }): Promise<EngineResult<{ transferId: string; record: TransferRecord }>> {
+  async create(input: {
+    workspaceId: string; selected: string[]; targetDaemonId: string; targetWorkspaceId: string; finalName: string;
+    targetMode?: TransferTargetMode; targetDir?: string; requestedBy?: TransferRequester;
+  }): Promise<EngineResult<{ transferId: string; record: TransferRecord; peerAllowsAgentAutoApprove?: boolean }>> {
     const unsupported = this.requireSupport();
     if (unsupported) return unsupported;
     const ws = this.ports.resolveWorkspace(input.workspaceId);
@@ -249,14 +294,25 @@ export class ProjectTransferEngine {
     if (!this.ports.isPeerAuthorized(input.targetDaemonId)) return fail('PEER_UNAUTHORIZED');
     if ([...this.records.values()].filter((r) => !TERMINAL_STATES.has(r.state)).length >= MAX_OPEN_TRANSFERS) return fail('TOO_MANY_TRANSFERS');
     let finalName: string;
-    try { finalName = validateFinalName(input.finalName); } catch (e) { return fail((e as ManifestError).code ?? 'INVALID_FINAL_NAME', (e as Error).message); }
+    const existingPath = input.targetMode === 'existing_path';
+    let targetDir = '';
+    try {
+      if (input.targetMode !== undefined && input.targetMode !== 'new_folder' && !existingPath) return fail('INVALID_TARGET_MODE');
+      if (existingPath) {
+        targetDir = validateTargetDir(input.targetDir ?? '');
+        finalName = validateFinalName(input.finalName || (targetDir ? targetDir.split('/').pop()! : 'project-root'));
+      } else finalName = validateFinalName(input.finalName);
+    } catch (e) { return fail((e as ManifestError).code ?? 'INVALID_FINAL_NAME', (e as Error).message); }
+    const requestedBy = normalizeRequester(input.requestedBy);
     if (!Array.isArray(input.selected) || input.selected.length === 0 || input.selected.length > TRANSFER_LIMITS.maxEntries) return fail('MANIFEST_INVALID', 'selection required');
     let manifest: SelectionManifest;
     try {
       const scan = scanSelection(ws.path, input.selected.map(String));
       manifest = validateSelectionManifest({
         v: 1, transferId: randomBytes(16).toString('hex'), sourceDaemonId: self, targetDaemonId: input.targetDaemonId,
-        sourceWorkspaceId: ws.id, targetWorkspaceId: input.targetWorkspaceId, finalName, entries: scan.entries, excluded: scan.excluded,
+        sourceWorkspaceId: ws.id, targetWorkspaceId: input.targetWorkspaceId, finalName,
+        ...(existingPath ? { targetMode: 'existing_path' as const, targetDir } : {}),
+        entries: scan.entries, excluded: scan.excluded,
       });
     } catch (e) {
       if (e instanceof ManifestError) return fail(e.code, e.message);
@@ -269,21 +325,29 @@ export class ProjectTransferEngine {
       v: 1, id: manifest.transferId, role: 'source', peerDaemonId: input.targetDaemonId, selection: manifest, selectionDigest: digest,
       state: 'previewed', createdAt: t, updatedAt: t, activityAt: t, previewExpiresAt: t + TRANSFER_RETENTION_MS.preview,
       linkGen: 0, blocksDone: [], bytesDone: 0, totalBytes: selectionTotalBytes(manifest),
+      ...(requestedBy ? { requestedBy } : {}),
     };
     let reply: Awaited<ReturnType<TransferHostPorts['dispatchPeer']>>;
-    try { reply = await this.ports.dispatchPeer(input.targetDaemonId, { op: 'offer', transferId: manifest.transferId, selection: manifest, selectionDigest: digest }); }
+    try { reply = await this.ports.dispatchPeer(input.targetDaemonId, { op: 'offer', transferId: manifest.transferId, selection: manifest, selectionDigest: digest, ...(requestedBy ? { requestedBy } : {}) }); }
     catch (e) { return fail('PEER_UNREACHABLE', (e as Error).message); }
     if (!reply?.ok) return fail(safeTransferCode(reply?.code ?? 'OFFER_REFUSED'));
+    if (existingPath) {
+      const ov = parsePeerOverwrite(reply.overwrite, targetDir);
+      if (!ov) { void this.ports.dispatchPeer(input.targetDaemonId, { op: 'cancel', transferId: rec.id, code: 'PROTOCOL_ERROR' }).catch(() => {}); return fail('PEER_UNSUPPORTED', 'the target machine cannot overwrite existing files (update it)'); }
+      rec.overwrite = ov;
+    }
     this.persist(rec, 'previewed');
-    return { ok: true, transferId: rec.id, record: rec };
+    return { ok: true, transferId: rec.id, record: rec, peerAllowsAgentAutoApprove: reply.agentAutoApprove === true };
   }
 
   /** Owner approval on THIS machine. `digest` must be the selection digest the owner saw. */
-  async approve(id: string, digest: string): Promise<EngineResult<{ record: TransferRecord }>> {
+  async approve(id: string, digest: string, replaceDigest?: string): Promise<EngineResult<{ record: TransferRecord }>> {
     const rec = this.records.get(id);
     if (!rec) return fail('NOT_FOUND');
     if (TERMINAL_STATES.has(rec.state)) return fail('TRANSFER_FINISHED');
     if (digest !== rec.selectionDigest) return fail('APPROVAL_MISMATCH');
+    const ovProblem = this.checkOverwriteApproval(rec, replaceDigest);
+    if (ovProblem) return ovProblem;
     const first = rec.state === 'previewed' || rec.state === 'offered';
     if (first && this.now() > rec.previewExpiresAt) { this.terminate(rec, 'expired', 'PREVIEW_EXPIRED', true); return fail('PREVIEW_EXPIRED'); }
     if (!first && rec.state !== 'needs_reapproval') return fail('ALREADY_APPROVED');
@@ -296,6 +360,88 @@ export class ProjectTransferEngine {
     try { await this.ports.dispatchPeer(rec.peerDaemonId, { op: 'approval', transferId: id, selectionDigest: digest, approved: true }); } catch { /* peer learns on next contact */ }
     void this.maybeStart(rec);
     return { ok: true, record: rec };
+  }
+
+  /**
+   * existing_path: the approval must carry the digest of the target state the owner previewed, and the
+   * TARGET machine re-inspects its own project right now. A changed target ends the transfer with
+   * TARGET_CHANGED (returning the refreshed preview); the owner approves a fresh transfer.
+   */
+  private checkOverwriteApproval(rec: TransferRecord, replaceDigest: string | undefined): TransferFailure | null {
+    if (rec.selection.targetMode !== 'existing_path') return null;
+    if (!rec.overwrite || replaceDigest !== rec.overwrite.digest) return fail('APPROVAL_MISMATCH', 'approval does not match the previewed overwrite');
+    if (rec.role !== 'target') return null;
+    let plan: OverwritePlan;
+    try { plan = this.scanTarget(rec.selection); } catch (e) { return fail(e instanceof OverwriteError ? e.code : 'TARGET_PATH_UNSAFE'); }
+    if (plan.digest !== rec.overwrite.digest) {
+      // Fail closed: the previewed state is gone. The refreshed preview is returned; a new transfer needs a new approval.
+      rec.overwrite = { ...plan };
+      const view = this.overwriteView(rec);
+      this.terminate(rec, 'failed', 'TARGET_CHANGED', true);
+      return { ok: false, code: 'TARGET_CHANGED', overwrite: view };
+    }
+    return null;
+  }
+
+  private overwriteView(rec: TransferRecord): Record<string, unknown> | undefined {
+    const o = rec.overwrite;
+    if (!o) return undefined;
+    return {
+      targetDir: o.targetDir, digest: o.digest, newCount: o.newFiles.length, replacedCount: o.replaced.length,
+      replaced: o.replaced.map((r) => ({ path: r.path, size: r.size })),
+      ...(o.reverted ? { reverted: true } : {}),
+    };
+  }
+
+  /**
+   * Agent-requested transfer: auto-approve (daemon side, no owner) when BOTH machines allow it and the
+   * transfer replaces nothing. The target decides with its OWN setting; nothing the requester says
+   * about itself is trusted.
+   */
+  async tryAgentAutoApprove(id: string, peerAllowsAgentAutoApprove: boolean): Promise<boolean> {
+    const rec = this.records.get(id);
+    if (!rec || rec.role !== 'source' || !rec.requestedBy) return false;
+    if (!this.agentAutoApproveAllowed() || !peerAllowsAgentAutoApprove) return false;
+    if ((rec.overwrite?.replaced.length ?? 0) > 0) return false;
+    let reply: Awaited<ReturnType<TransferHostPorts['dispatchPeer']>>;
+    try {
+      reply = await this.ports.dispatchPeer(rec.peerDaemonId, {
+        op: 'agent_approve', transferId: id, selectionDigest: rec.selectionDigest, ...(rec.overwrite ? { replaceDigest: rec.overwrite.digest } : {}),
+      });
+    } catch { return false; }
+    if (!reply?.ok) return false;
+    const mine = await this.approve(id, rec.selectionDigest, rec.overwrite?.digest);
+    return mine.ok;
+  }
+
+  /** Target side of {@link tryAgentAutoApprove}: only ever honours this machine's own setting. */
+  private async onAgentApprove(rec: TransferRecord, args: Record<string, any>): Promise<{ ok: boolean; code?: string; [k: string]: unknown }> {
+    if (rec.role !== 'target' || !rec.requestedBy) return fail('AUTO_APPROVE_NOT_ALLOWED');
+    if (!this.agentAutoApproveAllowed()) return fail('AUTO_APPROVE_NOT_ALLOWED');
+    if ((rec.overwrite?.replaced.length ?? 0) > 0) return fail('AUTO_APPROVE_NOT_ALLOWED');
+    if (args.selectionDigest !== rec.selectionDigest) return fail('APPROVAL_MISMATCH');
+    const r = await this.approve(rec.id, rec.selectionDigest, rec.overwrite?.digest);
+    return r.ok ? { ok: true } : fail(r.code);
+  }
+
+  /** Owner-only: put the backed-up originals of a completed overwrite transfer back. */
+  revert(id: string): EngineResult<{ result: RevertResult; record: TransferRecord }> {
+    const rec = this.records.get(id);
+    if (!rec) return fail('NOT_FOUND');
+    if (rec.role !== 'target') return fail('NOT_TARGET');
+    if (rec.state !== 'completed' || !rec.overwrite || rec.overwrite.replaced.length === 0) return fail('REVERT_UNAVAILABLE');
+    if (rec.overwrite.reverted) return fail('ALREADY_REVERTED');
+    const ws = this.ports.resolveWorkspace(rec.selection.targetWorkspaceId);
+    if (!ws) return fail('WORKSPACE_NOT_REGISTERED');
+    let result: RevertResult;
+    const root = openRoot(ws.path);
+    try { result = revertOverwrite(root, rec.selection, this.store.backupDir(rec.id)); }
+    catch (e) { return fail(e instanceof OverwriteError ? e.code : 'REVERT_FAILED'); }
+    finally { try { nativeClose(root); } catch { /* ignore */ } }
+    if (result.conflicts.length === 0) rec.overwrite.reverted = true;
+    rec.overwrite.revertConflicts = result.conflicts.length;
+    this.persist(rec, 'reverted');
+    return { ok: true, result, record: rec };
   }
 
   async revokeApproval(id: string): Promise<EngineResult<object>> {
@@ -490,6 +636,12 @@ export class ProjectTransferEngine {
 
   async handlePeerOp(sender: string, args: Record<string, any>): Promise<{ ok: boolean; code?: string; [k: string]: unknown }> {
     const op = String(args?.op ?? '');
+    if (op === 'resolve_workspace') {
+      // Which of MY registered workspaces does this loose name mean? Id and label only: no paths leave this machine.
+      if (!sender || !this.ports.isPeerAuthorized(sender)) return fail('PEER_UNAUTHORIZED');
+      const w = findWorkspace(String(args?.query ?? '').slice(0, 1024));
+      return w ? { ok: true, workspaceId: w.id, ...(w.label ? { label: w.label } : {}) } : fail('WORKSPACE_NOT_REGISTERED');
+    }
     const id = args?.transferId;
     if (!isTransferId(id)) return fail('PROTOCOL_ERROR');
     if (!sender || !this.ports.isPeerAuthorized(sender)) return fail('PEER_UNAUTHORIZED');
@@ -500,6 +652,7 @@ export class ProjectTransferEngine {
       if (!daemonIdsEquivalent(rec.peerDaemonId, sender)) return fail('PEER_UNAUTHORIZED');
       switch (op) {
         case 'approval': return this.onPeerApproval(rec, args);
+        case 'agent_approve': return await this.onAgentApprove(rec, args);
         case 'content': return await this.onContent(rec, args);
         case 'signal': return this.onSignal(rec, args);
         case 'cancel': this.terminate(rec, 'cancelled', 'PEER_CANCELLED', false); return { ok: true };
@@ -512,7 +665,7 @@ export class ProjectTransferEngine {
     }
   }
 
-  private onOffer(sender: string, id: string, args: Record<string, any>): { ok: boolean; code?: string } {
+  private onOffer(sender: string, id: string, args: Record<string, any>): { ok: boolean; code?: string; [k: string]: unknown } {
     const unsupported = this.requireSupport();
     if (unsupported) return unsupported;
     if (this.records.has(id)) return fail('DUPLICATE');
@@ -525,13 +678,26 @@ export class ProjectTransferEngine {
     if (!ws) return fail('WORKSPACE_NOT_REGISTERED');
     try { probeRoot(ws.path, { requireAtomicNoReplace: true }); } catch { return fail('ATOMIC_NOREPLACE_UNSUPPORTED'); }
     try { requireFreeDisk(ws.path, selectionTotalBytes(selection)); } catch (e) { return fail((e as ManifestError).code ?? 'DISK_SPACE_EXHAUSTED'); }
+    let overwrite: OverwriteInfo | undefined;
+    if (selection.targetMode === 'existing_path') {
+      try { overwrite = { ...this.scanTarget(selection) }; } catch (e) { return fail(e instanceof OverwriteError ? e.code : 'TARGET_PATH_UNSAFE'); }
+    }
+    const requestedBy = normalizeRequester(args.requestedBy);
     const t = this.now();
     this.persist({
       v: 1, id, role: 'target', peerDaemonId: sender, selection, selectionDigest: args.selectionDigest, state: 'offered',
       createdAt: t, updatedAt: t, activityAt: t, previewExpiresAt: t + TRANSFER_RETENTION_MS.preview,
       linkGen: 0, blocksDone: [], bytesDone: 0, totalBytes: selectionTotalBytes(selection),
+      ...(requestedBy ? { requestedBy } : {}),
+      ...(overwrite ? { overwrite } : {}),
     }, 'offered');
-    return { ok: true };
+    const rec = this.records.get(id)!;
+    return {
+      ok: true,
+      // The requester learns this machine's OWN setting; it is only ever a hint, the target re-checks on `agent_approve`.
+      agentAutoApprove: !!requestedBy && this.agentAutoApproveAllowed(),
+      ...(overwrite ? { overwrite: this.overwriteView(rec) } : {}),
+    };
   }
 
   private onPeerApproval(rec: TransferRecord, args: Record<string, any>): { ok: boolean; code?: string } {
@@ -549,6 +715,8 @@ export class ProjectTransferEngine {
     this.guard(rec);
     if (args.selectionDigest !== rec.selectionDigest) return fail('APPROVAL_MISMATCH');
     const content = validateContentManifest(args.content, rec.selection);
+    const ovProblem = this.checkOverwriteApproval(rec, rec.overwrite?.digest);
+    if (ovProblem) return ovProblem;
     if (!Number.isInteger(args.linkGen) || args.linkGen <= rec.linkGen) return fail('PROTOCOL_ERROR');
     const relay = args.relay === true;
     if (relay) {
@@ -629,7 +797,11 @@ export class ProjectTransferEngine {
       run.receiver!.verifyAll();
       this.guard(rec); // consent may have lapsed / authority changed while data was flowing
       this.setState(rec, 'publishing');
-      rec.publishedName = run.receiver!.publish(rec.selection.finalName);
+      if (rec.selection.targetMode === 'existing_path') {
+        if (!rec.overwrite) throw new OverwriteError('TARGET_CHANGED', 'overwrite plan missing');
+        run.receiver!.publishExisting({ targetDir: rec.overwrite.targetDir, newFiles: rec.overwrite.newFiles, replaced: rec.overwrite.replaced, digest: rec.overwrite.digest }, this.store.backupDir(rec.id));
+        rec.publishedName = rec.overwrite.targetDir || undefined;
+      } else rec.publishedName = run.receiver!.publish(rec.selection.finalName);
       run.receiver!.dispose();
       run.receiver = undefined;
       this.completeRecord(rec);
@@ -652,12 +824,34 @@ export class ProjectTransferEngine {
       id: rec.id, role: rec.role, outcome: 'completed', finishedAt: this.now(), publishedName: rec.publishedName,
       files: (rec.content?.files ?? []).map((f) => ({ path: f.path, size: f.size, sha256: f.sha256 })), excluded: rec.selection.excluded,
     });
+    this.notifyTerminal(rec);
   }
 
   /** Remove everything (tests / shutdown). */
   shutdown(): void {
     for (const id of [...this.runs.keys()]) this.teardownRun(id, false);
   }
+}
+
+function normalizeRequester(v: unknown): TransferRequester | undefined {
+  const r = v as { role?: unknown; sessionId?: unknown } | null;
+  if (!r || typeof r !== 'object' || (r.role !== 'coordinator' && r.role !== 'assistant')) return undefined;
+  const sid = typeof r.sessionId === 'string' && /^[A-Za-z0-9_.:-]{1,80}$/.test(r.sessionId) ? r.sessionId : undefined;
+  return { role: r.role, ...(sid ? { sessionId: sid } : {}) };
+}
+
+/** The target machine's overwrite preview as received by the source (no content hashes of foreign files). */
+function parsePeerOverwrite(raw: unknown, targetDir: string): OverwriteInfo | null {
+  const o = raw as { targetDir?: unknown; digest?: unknown; replaced?: unknown; newCount?: unknown } | null;
+  if (!o || typeof o !== 'object' || o.targetDir !== targetDir || typeof o.digest !== 'string' || !/^[0-9a-f]{64}$/.test(o.digest) || !Array.isArray(o.replaced)) return null;
+  const replaced: OverwriteInfo['replaced'] = [];
+  for (const r of o.replaced.slice(0, TRANSFER_LIMITS.maxEntries)) {
+    const x = r as { path?: unknown; size?: unknown };
+    if (typeof x?.path !== 'string' || !Number.isSafeInteger(x.size)) return null;
+    replaced.push({ path: x.path, size: x.size as number, sha256: '' });
+  }
+  const newCount = Number.isSafeInteger(o.newCount) ? (o.newCount as number) : 0;
+  return { targetDir, digest: o.digest, replaced, newFiles: Array.from({ length: Math.min(newCount, TRANSFER_LIMITS.maxEntries) }, () => '') };
 }
 
 export type { TransferRole };
