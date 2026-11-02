@@ -24,7 +24,7 @@ beforeAll(async () => {
   ({ createSessionLifecycleBus } = await import('../../daemon-core/src/sessions/lifecycle-bus.js'));
   ({ createStatusEventEmitter } = await import('../../daemon-core/src/status/status-event.js'));
   ({ createStandaloneHostTransport } = await import('../src/standalone-host-transport.js'));
-});
+}, 60_000); // transforms daemon-core sources on first import, which exceeds the default 10 s under CI load
 
 const OPEN = 1;
 const CLOSED = 3;
