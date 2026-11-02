@@ -14,6 +14,96 @@ afterEach(() => w?.cleanup());
 const phase = (d: { journal: { get(i: string, r: 'source' | 'target'): { phase: string } | null } }, id: string, role: 'source' | 'target') => d.journal.get(id, role)?.phase;
 const start = (extra: Record<string, unknown> = {}) => w.src.source.start({ meshId: MESH, targetDaemonId: DST, targetNodeId: `node-${DST}`, ...extra });
 
+describe('v2 single authority failure injection', () => {
+    beforeEach(() => { w = makeWorld({ sqliteJournal: true }); });
+
+    it('persists a fence before stop, never activates on unconfirmed exit, and retries after restart', async () => {
+        w.src.stopFailure = new Error('runtime census unavailable');
+        const r = await start() as { handoffId: string };
+        await settle(w);
+        expect(phase(w.src, r.handoffId, 'source')).toBe('acked');
+        expect(w.src.mesh.read(MESH)?.role).toBe('member');
+        expect(w.net.sentVerbs('mesh_host_handoff_activate')).toHaveLength(0);
+        expect(w.dst.coordinatorLaunches).toEqual([]);
+        w.src.buildEngines();
+        await w.src.source.resume();
+        expect(phase(w.src, r.handoffId, 'source')).toBe('acked');
+        w.src.stopFailure = null;
+        await w.src.source.retry(r.handoffId);
+        await settle(w);
+        expect(phase(w.src, r.handoffId, 'source')).toBe('committed');
+        expect(w.src.journal.getCertificate(r.handoffId)?.sourceStopped).toBe(true);
+    });
+
+    it('never clears the fence when the target loses its journal after applying authority', async () => {
+        w.net.faults.push({ verb: 'mesh_host_handoff_activate', mode: 'response', times: 1 });
+        const r = await start() as { handoffId: string };
+        await settle(w);
+        const { MemoryHandoffJournal } = await import('../../../src/mesh/host-handoff/journal.js');
+        w.dst.journal = new MemoryHandoffJournal();
+        w.dst.buildEngines();
+        await w.src.source.retry(r.handoffId);
+        expect(phase(w.src, r.handoffId, 'source')).toBe('uncertain');
+        expect(await w.src.source.abort(r.handoffId)).toMatchObject({ success: false, code: 'abort_requires_target_confirmation' });
+        expect(w.src.mesh.read(MESH)?.role).toBe('member');
+        expect(w.dst.mesh.read(MESH)?.role).toBe('host');
+    });
+
+    it('requires actual source stop when recovering a legacy pending intent without a v2 certificate', async () => {
+        w.net.faults.push({ verb: 'mesh_host_handoff_activate', mode: 'response', times: 1 });
+        const r = await start() as { handoffId: string };
+        await settle(w);
+        const { MemoryHandoffJournal } = await import('../../../src/mesh/host-handoff/journal.js');
+        const legacy = new MemoryHandoffJournal();
+        for (const record of w.src.journal.list()) legacy.put(record);
+        w.src.journal = legacy; // v1 retained intent has no persisted stop certificate
+        w.src.coordinatorStops = [];
+        w.src.stopFailure = new Error('legacy source still alive');
+        w.src.buildEngines();
+        await w.src.source.resume();
+        expect(phase(w.src, r.handoffId, 'source')).toBe('uncertain');
+        expect(w.src.mesh.read(MESH)?.role).toBe('member');
+        expect(await w.src.source.abort(r.handoffId)).toMatchObject({ success: false, code: 'coordinator_not_quiescent' });
+        w.src.stopFailure = null;
+        await w.src.source.retry(r.handoffId);
+        expect(phase(w.src, r.handoffId, 'source')).toBe('committed');
+        expect(w.src.coordinatorStops).toEqual([MESH]);
+    });
+
+    it('serializes concurrent starts and binds an idempotency key to the full request', async () => {
+        w.net.holdAcks();
+        const [first, second] = await Promise.all([start({ handoffId: 'same' }), start({ handoffId: 'other' })]);
+        expect(first.success).toBe(true);
+        expect(second).toMatchObject({ success: false, code: 'handoff_in_progress' });
+        expect(await start({ handoffId: 'same', targetDaemonId: OTH })).toMatchObject({ success: false, code: 'invalid_args' });
+        w.net.releaseAcks();
+        await settle(w);
+    });
+
+    it('rejects a correctly signed legacy certificate without source stop proof', async () => {
+        w.net.holdAcks();
+        const r = await start() as { handoffId: string };
+        const certificate = signHostTransferCertificate({ meshId: MESH, newHostDaemonId: DST, hostEpoch: 1,
+            newHostPublicKey: w.dst.publicKey, handoffId: r.handoffId, previousHostDaemonId: SRC, issuedAt: w.clock.now }, w.src.keys.privateKey);
+        expect(await w.dst.target.activate({ handoffId: r.handoffId, meshId: MESH, epoch: 1, certificate }, SRC))
+            .toMatchObject({ success: false, code: 'certificate_invalid', applied: false });
+        expect(w.dst.applyCalls).toBe(0);
+        w.net.releaseAcks();
+        await settle(w);
+    });
+
+    it('does not report readiness on an active duplicate after failed target launch', async () => {
+        w.dst.launchReady = false;
+        const r = await start() as { handoffId: string };
+        await settle(w);
+        const certificate = w.src.journal.getCertificate(r.handoffId)!;
+        expect(await w.dst.target.activate({ handoffId: r.handoffId, meshId: MESH, epoch: 1, certificate }, SRC))
+            .toMatchObject({ success: true, applied: true, coordinatorReady: false });
+        expect(w.dst.coordinatorLaunches).toHaveLength(1);
+        expect(w.src.coordinatorStops).toEqual([MESH]);
+    });
+});
+
 describe('acceptance 9: normal handoff', () => {
     beforeEach(() => { w = makeWorld(); });
 
@@ -37,7 +127,7 @@ describe('acceptance 9: normal handoff', () => {
         expect((w.src.meshRecord.meshHost as { handedOffTo: { retainUntil: number; at: number } }).handedOffTo.retainUntil - (w.src.meshRecord.meshHost as { handedOffTo: { at: number } }).handedOffTo.at).toBe(HOST_HANDOFF_RETENTION_MS);
         expect(w.src.dump()).toEqual(before);
         expect(w.src.handedOffRows).toHaveLength(1);
-        // hold released, old coordinator stopped only after the new one was ready, new coordinator launched once
+        // hold released, old coordinator stopped before activation, new coordinator launched once
         expect(w.src.holds.size).toBe(0);
         expect(w.src.coordinatorStops).toEqual([MESH]);
         expect(w.dst.coordinatorLaunches).toEqual([MESH]);
@@ -65,7 +155,7 @@ describe('acceptance 9: normal handoff', () => {
         await settle(w);
         expect(readHostEpoch(w.dst.meshRecord)).toBe(1);
         // hand it back: dst is now host, src a member of the handed-off mesh
-        w.src.meshRecord.meshHost = { role: 'member', hostDaemonId: DST, hostEpoch: 1 };
+        w.src.meshRecord.meshHost = { role: 'member', hostDaemonId: DST, hostEpoch: 1, originGrantPublicKey: w.dst.publicKey };
         const back = await w.dst.source.start({ meshId: MESH, targetDaemonId: SRC });
         expect(back).toMatchObject({ success: true });
         await settle(w);
@@ -221,12 +311,12 @@ describe('acceptance 12: ACTIVE lost -> uncertain, never two hosts', () => {
         const id = r.handoffId;
         expect(phase(w.src, id, 'source')).toBe('uncertain');
         expect(phase(w.dst, id, 'target')).toBe('active');
-        // the source did not release or finalise anything yet
+        // The source is stopped and fenced even when ACTIVE is lost.
         expect(w.src.holds.has(MESH)).toBe(true);
-        expect(w.src.coordinatorStops).toEqual([]);
+        expect(w.src.coordinatorStops).toEqual([MESH]);
         // never two writers: the source is frozen and its epoch is below the new host's, so a request that carries the new epoch is refused by it
         expect(w.src.source.isFrozen(MESH)).toBe(true);
-        expect(checkHostOwnedWrite(w.src.meshRecord, { localDaemonId: SRC, requestEpoch: 1 })).toMatchObject({ ok: false, code: 'stale_host_epoch', direction: 'local_stale' });
+        expect(checkHostOwnedWrite(w.src.meshRecord, { localDaemonId: SRC, requestEpoch: 1 })).toMatchObject({ ok: false, code: 'mesh_host_required' });
         expect(checkHostOwnedWrite(w.dst.meshRecord, { localDaemonId: DST, requestEpoch: 0 })).toMatchObject({ ok: false, code: 'stale_host_epoch', direction: 'client_stale' });
         expect(checkHostOwnedWrite(w.dst.meshRecord, { localDaemonId: DST, requestEpoch: 1 })).toMatchObject({ ok: true, epoch: 1 });
         // backoff: an immediate tick does not probe again
@@ -332,7 +422,7 @@ describe('acceptance 13: crash and restart resume to the same final state', () =
         expect(w.dst.applyCalls).toBe(1);
         // a duplicate activate reaches the active target: success, no second apply
         const rec = w.src.journal.get(r.handoffId, 'source')!;
-        const again = await handlePeerVerb({ target: w.dst.target }, 'mesh_host_handoff_activate', { handoffId: r.handoffId, meshId: MESH, epoch: rec.epoch, certificate: w.src.broadcasts[0] }, SRC);
+        const again = await handlePeerVerb({ target: w.dst.target }, 'mesh_host_handoff_activate', { handoffId: r.handoffId, meshId: MESH, epoch: rec.epoch, certificate: w.src.journal.getCertificate(r.handoffId) }, SRC);
         expect(again).toMatchObject({ success: true, applied: true, duplicate: true });
         expect(w.dst.applyCalls).toBe(1);
         // restarting again changes nothing
@@ -362,7 +452,8 @@ describe('acceptance 13: crash and restart resume to the same final state', () =
         const r = await start() as { handoffId: string };
         await settle(w);
         expect(phase(w.dst, r.handoffId, 'target')).toBe('acked');
-        // the target journalled `activating` and died before applying anything
+        // The target verified and persisted the certificate before journalling activation.
+        w.dst.journal.putCertificate(r.handoffId, w.src.journal.getCertificate(r.handoffId)!);
         w.dst.journal.update(r.handoffId, 'target', { phase: 'activating' });
         w.dst.buildEngines();
         await w.dst.target.resume();
@@ -378,15 +469,20 @@ describe('acceptance 13: crash and restart resume to the same final state', () =
         expect(w.dst.mesh.read(MESH)).toMatchObject({ role: 'host', hostEpoch: 1 });
     });
 
-    it('a table apply that fails is a definitive "not applied": the source aborts and nothing is half-switched', async () => {
+    it('an apply failure keeps the source fenced until forward recovery confirms target authority', async () => {
         w = makeWorld();
         w.dst.applyFailure = new Error('disk full');
         const r = await start() as { handoffId: string };
         await settle(w);
-        expect(w.src.journal.get(r.handoffId, 'source')).toMatchObject({ phase: 'aborted' });
-        expect(w.src.mesh.read(MESH)).toMatchObject({ role: 'host', hostEpoch: 0 });
+        expect(w.src.journal.get(r.handoffId, 'source')).toMatchObject({ phase: 'uncertain' });
+        expect(w.src.mesh.read(MESH)).toMatchObject({ role: 'member', hostEpoch: 0 });
         expect(w.dst.mesh.read(MESH)).toMatchObject({ role: 'member', hostEpoch: 0 });
-        expect(phase(w.dst, r.handoffId, 'target')).toBe('acked');
+        expect(phase(w.dst, r.handoffId, 'target')).toBe('activating');
+        expect(await w.src.source.abort(r.handoffId)).toMatchObject({ success: false, code: 'abort_requires_target_confirmation' });
+        w.dst.applyFailure = null;
+        await w.src.source.retry(r.handoffId);
+        await settle(w);
+        expect(phase(w.src, r.handoffId, 'source')).toBe('committed');
     });
 });
 

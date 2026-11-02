@@ -17,6 +17,7 @@ export interface HostMeshView {
     /** The origin-grant public key this daemon has pinned for `hostDaemonId` (member side). */
     hostPublicKey?: string;
     handedOff: boolean;
+    handoffFence?: { handoffId: string; epoch: number };
     /** Daemons on the mesh roster (nodes), excluding nobody — callers filter self. */
     memberDaemonIds: string[];
     /** Raw mesh config entry (sanitised by the exporter). */
@@ -35,6 +36,8 @@ export interface HostMetaWrite {
 
 export interface HandoffMeshPort {
     read(meshId: string): HostMeshView | null;
+    /** Persist before source stop. Absence of a response never releases this fence. */
+    setFence(meshId: string, fence: { handoffId: string; epoch: number } | null, expectedHandoffId?: string): void;
     /** Durable write of the host fields of the mesh's meshHost metadata. */
     writeHost(meshId: string, meta: HostMetaWrite): void;
     /** Target: merge the (sanitised) snapshot config into the local mesh entry, keeping local pairing/secrets. */
@@ -66,7 +69,7 @@ export interface HandoffFreezePort {
 }
 
 export interface SourceCoordinatorPort {
-    /** After commit and only once the successor coordinator is ready. */
+    /** Resolve only after the trusted runtime census proves all project coordinators stopped. */
     stopSource(meshId: string): Promise<void>;
 }
 

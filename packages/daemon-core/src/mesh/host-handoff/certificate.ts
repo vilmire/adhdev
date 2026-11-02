@@ -18,6 +18,7 @@ export function certificatePayload(c: Unsigned): Buffer {
     return Buffer.from([
         'adhdev.host-transfer.v1', c.meshId, c.newHostDaemonId, c.newHostNodeId ?? '', String(c.hostEpoch),
         c.newHostPublicKey, c.handoffId, c.previousHostDaemonId, String(c.issuedAt),
+        ...(c.sourceStopped === true ? ['source-stopped-v2'] : []),
     ].join('\0'), 'utf8');
 }
 

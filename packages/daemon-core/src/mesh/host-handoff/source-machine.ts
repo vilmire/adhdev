@@ -4,8 +4,8 @@
  * with `aborted` reachable until `activate` has been sent, and `uncertain`
  * (probe, never guess) when `ACTIVE` cannot be confirmed. Phases are journalled
  * BEFORE the effect they announce. A late or foreign ACK never changes state
- * (`handoff_aborted` NACK); two hosts are impossible because the old host stays
- * host until the target is observed `active`.
+ * (`handoff_aborted` NACK). The source is durably fenced and its coordinator's
+ * exit must be proved before target activation is sent.
  */
 
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
@@ -34,6 +34,8 @@ export interface SourceDeps {
     clock: HandoffClock;
     log?: HandoffLog;
     metrics?: HandoffMetrics;
+    /** Production must prove the complete preservation boundary before any freeze. */
+    preservationCheck?: (meshId: string) => PreflightCheck;
 }
 
 export interface StartInput { meshId: string; targetDaemonId: string; targetNodeId?: string; handoffId?: string }
@@ -49,6 +51,8 @@ export class HostHandoffSource {
     private snapshots = new Map<string, ExportedSnapshot>();
     private readonly inflight = new Set<Promise<unknown>>();
     private busy = new Set<string>();
+    private starting = new Set<string>();
+    private activating = new Set<string>();
     constructor(private readonly d: SourceDeps) {}
 
     /** Await background work (tests). */
@@ -78,6 +82,7 @@ export class HostHandoffSource {
         const active = this.d.journal.findActive(input.meshId, 'source');
         add('no_other_handoff', !active || active.handoffId === opts.allowOwnActive, 'handoff_in_progress', active?.handoffId);
         add('target_online', this.d.peerOnline(input.targetDaemonId), 'target_offline');
+        if (this.d.preservationCheck) checks.push(this.d.preservationCheck(input.meshId));
         let targetPublicKey: string | undefined;
         let estimateBytes: number | undefined;
         if (checks.every(c => c.ok)) {
@@ -105,9 +110,20 @@ export class HostHandoffSource {
     // ── start ────────────────────────────────────────────────────────────────
 
     async start(input: StartInput): Promise<StartResult> {
+        if (this.starting.has(input.meshId)) return refuse('handoff_in_progress', 'another start is checking this project');
+        this.starting.add(input.meshId);
+        try { return await this.startLocked(input); }
+        finally { this.starting.delete(input.meshId); }
+    }
+
+    private async startLocked(input: StartInput): Promise<StartResult> {
         if (input.handoffId) {
             const existing = this.d.journal.get(input.handoffId, 'source');
-            if (existing) return { success: true, handoffId: existing.handoffId, phase: existing.phase as SourcePhase };
+            if (existing) {
+                if (existing.meshId !== input.meshId || !daemonIdsEquivalent(existing.peerDaemonId, input.targetDaemonId)
+                    || existing.targetNodeId !== input.targetNodeId) return refuse('invalid_args', 'handoffId belongs to a different request');
+                return { success: true, handoffId: existing.handoffId, phase: existing.phase as SourcePhase };
+            }
         }
         const handoffId = input.handoffId ?? this.d.clock.newId();
         const pre = await this.preflight({ ...input, handoffId });
@@ -229,14 +245,31 @@ export class HostHandoffSource {
     // ── activate / commit ────────────────────────────────────────────────────
 
     private async activate(handoffId: string): Promise<void> {
+        if (this.activating.has(handoffId)) return;
+        this.activating.add(handoffId);
+        try { await this.activateLocked(handoffId); }
+        finally { this.activating.delete(handoffId); }
+    }
+
+    private async activateLocked(handoffId: string): Promise<void> {
         let rec = this.d.journal.get(handoffId, 'source');
         if (!rec || (rec.phase !== 'acked' && rec.phase !== 'uncertain')) return;
         const view = this.d.mesh.read(rec.meshId);
         if (!view || !rec.targetPublicKey) { await this.abortInternal(rec, 'certificate_unavailable'); return; }
-        const cert = this.d.certificate.sign({
+        // Fence FIRST. The config-backed admission fence also prevents restore
+        // if this daemon dies during stop or while the activate reply is lost.
+        this.d.mesh.setFence(rec.meshId, { handoffId, epoch: rec.epoch });
+        try { await this.d.coordinator.stopSource(rec.meshId); }
+        catch (e) {
+            this.log(`source stop unconfirmed: ${(e as Error)?.message ?? e}`);
+            return; // no activate byte leaves; owner can retry or abort this fenced ACK
+        }
+        const cert = this.d.journal.getCertificate(handoffId) ?? this.d.certificate.sign({
+            sourceStopped: true,
             meshId: rec.meshId, newHostDaemonId: rec.peerDaemonId, ...(rec.targetNodeId ? { newHostNodeId: rec.targetNodeId } : {}),
             hostEpoch: rec.epoch, newHostPublicKey: rec.targetPublicKey, handoffId, previousHostDaemonId: this.d.selfDaemonId, issuedAt: this.d.clock.now(),
         });
+        this.d.journal.putCertificate(handoffId, cert);
         // Durable commit intent BEFORE the first byte of `activate` leaves: from here on, abort is no longer free.
         rec = this.move(handoffId, 'activating', { commitIntentAt: this.d.clock.now() });
         let res: Awaited<ReturnType<HandoffPeerClient['activate']>>;
@@ -260,19 +293,39 @@ export class HostHandoffSource {
         });
         this.d.data.markHandedOff({ meshId: rec.meshId, handoffId, newHostDaemonId: rec.peerDaemonId, epoch: rec.epoch, handedOffAt: now, retainUntil });
         this.move(handoffId, 'committed');
+        this.d.mesh.setFence(rec.meshId, null, handoffId);
         this.snapshots.delete(handoffId);
         this.d.hold.release(rec.meshId, handoffId);
         const view = this.d.mesh.read(rec.meshId);
-        if (cert) void this.d.certificate.broadcast(rec.meshId, cert, [this.d.selfDaemonId, rec.peerDaemonId]).catch(() => undefined);
+        const certificate = cert ?? this.d.journal.getCertificate(handoffId);
+        if (certificate) void this.d.certificate.broadcast(rec.meshId, certificate, [this.d.selfDaemonId, rec.peerDaemonId]).catch(() => undefined);
         void view;
-        if (info.coordinatorReady) { try { await this.d.coordinator.stopSource(rec.meshId); } catch (e) { this.log(`old coordinator stop failed: ${(e as Error)?.message ?? e}`); } }
+        // Source stop was proved BEFORE activate. A target launch failure never
+        // permits automatic source resurrection after target authority was granted.
+        void info;
     }
 
     // ── abort ────────────────────────────────────────────────────────────────
 
+    /** An inherited v1 intent may have activated the target before stopping the
+     * source. Never infer v2 stop proof from that journal's phase alone. */
+    private async verifyRecoveredSourceStop(rec: HandoffRecord): Promise<boolean> {
+        if (this.d.journal.getCertificate(rec.handoffId)?.sourceStopped === true) return true;
+        try {
+            this.d.mesh.setFence(rec.meshId, { handoffId: rec.handoffId, epoch: rec.epoch });
+            await this.d.coordinator.stopSource(rec.meshId);
+            return true;
+        } catch (e) {
+            this.log(`legacy source stop unconfirmed: ${(e as Error)?.message ?? e}`);
+            return false;
+        }
+    }
+
     private async abortInternal(rec: HandoffRecord, reason: string, targetAlreadyDiscarded = false): Promise<void> {
         const cur = this.d.journal.get(rec.handoffId, 'source');
         if (!cur || cur.phase === 'aborted' || cur.phase === 'committed') return;
+        if (!targetAlreadyDiscarded && (cur.commitIntentAt !== undefined || this.activating.has(rec.handoffId))) return;
+        this.d.mesh.setFence(rec.meshId, null, rec.handoffId);
         this.move(rec.handoffId, 'aborted', { abortReason: reason });
         this.snapshots.delete(rec.handoffId);
         this.d.hold.release(rec.meshId, rec.handoffId);
@@ -283,13 +336,15 @@ export class HostHandoffSource {
     async abort(handoffId: string, reason = 'owner_abort'): Promise<PeerResult> {
         const rec = this.d.journal.get(handoffId, 'source');
         if (!rec) return { success: false, code: 'handoff_unknown' };
+        if (this.activating.has(handoffId) || this.busy.has(handoffId)) return { success: false, code: 'handoff_in_progress', error: 'source transfer, stop or activation is in progress' };
         if (rec.phase === 'committed') return { success: false, code: 'already_committed' };
         if (rec.phase === 'aborted') return { success: true, duplicate: true };
         if (rec.phase === 'activating' || rec.phase === 'uncertain') {
+            if (!await this.verifyRecoveredSourceStop(rec)) return { success: false, code: 'coordinator_not_quiescent' };
             let status: Awaited<ReturnType<HandoffPeerClient['status']>> | undefined;
             try { status = await this.d.peer(rec.peerDaemonId).status({ handoffId, meshId: rec.meshId }); } catch { status = undefined; }
-            if (status?.success && status.phase === 'active') { await this.commit(handoffId, { coordinatorReady: false }); return { success: false, code: 'already_committed' }; }
-            if (!(status?.success && status.phase === 'discarded')) return { success: false, code: 'abort_requires_target_confirmation', error: 'the target must be reachable and report the handoff discarded' };
+            if (status?.success && status.phase === 'active' && status.epoch === rec.epoch && status.unknown !== true) { await this.commit(handoffId, { coordinatorReady: false }); return { success: false, code: 'already_committed' }; }
+            if (!(status?.success && status.phase === 'discarded' && status.epoch === rec.epoch && status.unknown !== true)) return { success: false, code: 'abort_requires_target_confirmation', error: 'the target must be reachable and prove this exact handoff was discarded' };
             await this.abortInternal(rec, reason, true);
             return { success: true };
         }
@@ -304,7 +359,7 @@ export class HostHandoffSource {
         for (const rec of this.d.journal.list().filter(r => r.role === 'source')) {
             if (rec.phase === 'freezing') await this.advance(rec.handoffId);
             else if (rec.phase === 'awaiting_ack' && now - rec.updatedAt >= HOST_HANDOFF_ACK_TIMEOUT_MS) await this.abortInternal(rec, 'ack_timeout');
-            else if (rec.phase === 'uncertain' || (rec.phase === 'activating' && !this.busy.has(rec.handoffId) && rec.commitIntentAt)) await this.probe(rec.handoffId, false);
+            else if (rec.phase === 'uncertain' || (rec.phase === 'activating' && !this.activating.has(rec.handoffId) && rec.commitIntentAt)) await this.probe(rec.handoffId, false);
         }
     }
 
@@ -313,6 +368,7 @@ export class HostHandoffSource {
         const rec = this.d.journal.get(handoffId, 'source');
         if (!rec) return { success: false, code: 'handoff_unknown' };
         if (rec.phase !== 'uncertain' && rec.phase !== 'activating') return { success: true, phase: rec.phase };
+        if (!await this.verifyRecoveredSourceStop(rec)) return { success: false, phase: rec.phase, code: 'coordinator_not_quiescent' };
         const count = rec.probeCount ?? 0;
         const wait = Math.min(HOST_HANDOFF_PROBE_BASE_MS * 2 ** count, HOST_HANDOFF_PROBE_MAX_MS);
         if (!force && rec.lastProbeAt !== undefined && this.d.clock.now() - rec.lastProbeAt < wait) return { success: true, phase: rec.phase, waiting: true };
@@ -321,8 +377,9 @@ export class HostHandoffSource {
         try { status = await this.d.peer(rec.peerDaemonId).status({ handoffId, meshId: rec.meshId }); }
         catch { return { success: true, phase: 'uncertain', unreachable: true }; }
         if (!status.success) return { success: true, phase: 'uncertain', unreachable: true };
-        if (status.phase === 'active') { await this.commit(handoffId, { coordinatorReady: false }); return { success: true, phase: 'committed' }; }
-        if (status.phase === 'discarded') { await this.abortInternal(this.d.journal.get(handoffId, 'source')!, 'target_discarded', true); return { success: true, phase: 'aborted' }; }
+        if (status.phase === 'active' && status.epoch === rec.epoch && status.unknown !== true) { await this.commit(handoffId, { coordinatorReady: false }); return { success: true, phase: 'committed' }; }
+        if (status.phase === 'discarded' && status.epoch === rec.epoch && status.unknown !== true) { await this.abortInternal(this.d.journal.get(handoffId, 'source')!, 'target_discarded', true); return { success: true, phase: 'aborted' }; }
+        if (status.unknown === true || status.epoch !== rec.epoch) return { success: true, phase: 'uncertain', unverified: true };
         // still staged / verified / acked: re-send activate (idempotent on the target)
         if (rec.phase === 'activating') this.move(handoffId, 'uncertain');
         await this.activate(handoffId);
@@ -333,6 +390,7 @@ export class HostHandoffSource {
     async resume(): Promise<void> {
         for (const rec of this.d.journal.list().filter(r => r.role === 'source')) {
             if (rec.phase === 'committed' || rec.phase === 'aborted') continue;
+            if (rec.phase === 'acked') { await this.activate(rec.handoffId); continue; }
             if (rec.phase === 'activating' || rec.phase === 'uncertain') {
                 if (rec.phase === 'activating') this.move(rec.handoffId, 'uncertain');
                 await this.probe(rec.handoffId, true);
@@ -352,6 +410,7 @@ export class HostHandoffSource {
             this.d.journal.update(handoffId, 'source', { updatedAt: this.d.clock.now() });
             return { success: true, phase: 'awaiting_ack' };
         }
+        if (rec.phase === 'acked') { await this.activate(handoffId); return { success: true, phase: this.d.journal.get(handoffId, 'source')!.phase }; }
         if (rec.phase === 'uncertain' || rec.phase === 'activating') return this.probe(handoffId, true);
         if (rec.phase === 'freezing') { await this.advance(handoffId); return { success: true, phase: this.d.journal.get(handoffId, 'source')!.phase }; }
         return { success: true, phase: rec.phase };

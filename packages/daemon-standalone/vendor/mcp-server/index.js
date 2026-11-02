@@ -43029,7 +43029,8 @@ ${error.message || ""}`;
     function resolveMeshHostStatus(mesh, opts) {
       const meshRecord2 = readObject(mesh);
       const raw = readObject(meshRecord2?.meshHost);
-      const role = normalizeMeshDaemonRole(raw?.role) ?? "host";
+      const fenced = raw?.handoffFence !== void 0;
+      const role = fenced ? "member" : normalizeMeshDaemonRole(raw?.role) ?? "host";
       const pairing = readObject(raw?.pairing);
       const normalized = {
         role,
@@ -48501,6 +48502,10 @@ ${error.message || ""}`;
         CREATE TABLE IF NOT EXISTS mesh_host_handoff_manifest (
             handoff_id TEXT PRIMARY KEY,
             manifest_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS mesh_host_handoff_certificate (
+            handoff_id TEXT PRIMARY KEY,
+            certificate_json TEXT NOT NULL
         );
 
         -- Source side after commit: host-owned rows of a handed-off mesh are read-only until retention ends.
@@ -137289,7 +137294,7 @@ ${tail}` : ""
     var init_types6 = __esm2({
       "src/mesh/host-handoff/types.ts"() {
         "use strict";
-        HOST_HANDOFF_PROTOCOL = 1;
+        HOST_HANDOFF_PROTOCOL = 2;
         HOST_HANDOFF_VERB = {
           owner: "mesh_host_handoff",
           capability: "mesh_host_handoff_capability",
@@ -142010,6 +142015,13 @@ ${grant.exp}`).digest("hex");
           getManifest(id4) {
             const r = this.db.prepare("SELECT manifest_json FROM mesh_host_handoff_manifest WHERE handoff_id = ?").get(id4);
             return r ? JSON.parse(r.manifest_json) : null;
+          }
+          putCertificate(id4, certificate) {
+            this.db.prepare("INSERT INTO mesh_host_handoff_certificate (handoff_id, certificate_json) VALUES (?, ?) ON CONFLICT(handoff_id) DO UPDATE SET certificate_json = excluded.certificate_json").run(id4, JSON.stringify(certificate));
+          }
+          getCertificate(id4) {
+            const r = this.db.prepare("SELECT certificate_json FROM mesh_host_handoff_certificate WHERE handoff_id = ?").get(id4);
+            return r ? JSON.parse(r.certificate_json) : null;
           }
           putChunk(id4, seq2, sha2563, data) {
             this.db.prepare("INSERT INTO mesh_host_handoff_stage (handoff_id, seq, sha256, data) VALUES (?,?,?,?) ON CONFLICT(handoff_id, seq) DO UPDATE SET sha256 = excluded.sha256, data = excluded.data").run(id4, seq2, sha2563, data);
@@ -148394,7 +148406,8 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         c.newHostPublicKey,
         c.handoffId,
         c.previousHostDaemonId,
-        String(c.issuedAt)
+        String(c.issuedAt),
+        ...c.sourceStopped === true ? ["source-stopped-v2"] : []
       ].join("\0"), "utf8");
     }
     function signHostTransferCertificate(unsigned, privateKey) {
@@ -148533,6 +148546,8 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           snapshots = /* @__PURE__ */ new Map();
           inflight = /* @__PURE__ */ new Set();
           busy = /* @__PURE__ */ new Set();
+          starting = /* @__PURE__ */ new Set();
+          activating = /* @__PURE__ */ new Set();
           /** Await background work (tests). */
           async idle() {
             while (this.inflight.size) await Promise.allSettled([...this.inflight]);
@@ -148561,6 +148576,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             const active = this.d.journal.findActive(input.meshId, "source");
             add("no_other_handoff", !active || active.handoffId === opts.allowOwnActive, "handoff_in_progress", active?.handoffId);
             add("target_online", this.d.peerOnline(input.targetDaemonId), "target_offline");
+            if (this.d.preservationCheck) checks.push(this.d.preservationCheck(input.meshId));
             let targetPublicKey;
             let estimateBytes2;
             if (checks.every((c) => c.ok)) {
@@ -148591,9 +148607,21 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           }
           // ── start ────────────────────────────────────────────────────────────────
           async start(input) {
+            if (this.starting.has(input.meshId)) return refuse6("handoff_in_progress", "another start is checking this project");
+            this.starting.add(input.meshId);
+            try {
+              return await this.startLocked(input);
+            } finally {
+              this.starting.delete(input.meshId);
+            }
+          }
+          async startLocked(input) {
             if (input.handoffId) {
               const existing = this.d.journal.get(input.handoffId, "source");
-              if (existing) return { success: true, handoffId: existing.handoffId, phase: existing.phase };
+              if (existing) {
+                if (existing.meshId !== input.meshId || !daemonIdsEquivalent5(existing.peerDaemonId, input.targetDaemonId) || existing.targetNodeId !== input.targetNodeId) return refuse6("invalid_args", "handoffId belongs to a different request");
+                return { success: true, handoffId: existing.handoffId, phase: existing.phase };
+              }
             }
             const handoffId = input.handoffId ?? this.d.clock.newId();
             const pre = await this.preflight({ ...input, handoffId });
@@ -148727,6 +148755,15 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           }
           // ── activate / commit ────────────────────────────────────────────────────
           async activate(handoffId) {
+            if (this.activating.has(handoffId)) return;
+            this.activating.add(handoffId);
+            try {
+              await this.activateLocked(handoffId);
+            } finally {
+              this.activating.delete(handoffId);
+            }
+          }
+          async activateLocked(handoffId) {
             let rec8 = this.d.journal.get(handoffId, "source");
             if (!rec8 || rec8.phase !== "acked" && rec8.phase !== "uncertain") return;
             const view2 = this.d.mesh.read(rec8.meshId);
@@ -148734,7 +148771,15 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
               await this.abortInternal(rec8, "certificate_unavailable");
               return;
             }
-            const cert = this.d.certificate.sign({
+            this.d.mesh.setFence(rec8.meshId, { handoffId, epoch: rec8.epoch });
+            try {
+              await this.d.coordinator.stopSource(rec8.meshId);
+            } catch (e) {
+              this.log(`source stop unconfirmed: ${e?.message ?? e}`);
+              return;
+            }
+            const cert = this.d.journal.getCertificate(handoffId) ?? this.d.certificate.sign({
+              sourceStopped: true,
               meshId: rec8.meshId,
               newHostDaemonId: rec8.peerDaemonId,
               ...rec8.targetNodeId ? { newHostNodeId: rec8.targetNodeId } : {},
@@ -148744,6 +148789,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
               previousHostDaemonId: this.d.selfDaemonId,
               issuedAt: this.d.clock.now()
             });
+            this.d.journal.putCertificate(handoffId, cert);
             rec8 = this.move(handoffId, "activating", { commitIntentAt: this.d.clock.now() });
             let res;
             try {
@@ -148778,23 +148824,34 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             });
             this.d.data.markHandedOff({ meshId: rec8.meshId, handoffId, newHostDaemonId: rec8.peerDaemonId, epoch: rec8.epoch, handedOffAt: now, retainUntil });
             this.move(handoffId, "committed");
+            this.d.mesh.setFence(rec8.meshId, null, handoffId);
             this.snapshots.delete(handoffId);
             this.d.hold.release(rec8.meshId, handoffId);
             const view2 = this.d.mesh.read(rec8.meshId);
-            if (cert) void this.d.certificate.broadcast(rec8.meshId, cert, [this.d.selfDaemonId, rec8.peerDaemonId]).catch(() => void 0);
+            const certificate = cert ?? this.d.journal.getCertificate(handoffId);
+            if (certificate) void this.d.certificate.broadcast(rec8.meshId, certificate, [this.d.selfDaemonId, rec8.peerDaemonId]).catch(() => void 0);
             void view2;
-            if (info.coordinatorReady) {
-              try {
-                await this.d.coordinator.stopSource(rec8.meshId);
-              } catch (e) {
-                this.log(`old coordinator stop failed: ${e?.message ?? e}`);
-              }
-            }
+            void info;
           }
           // ── abort ────────────────────────────────────────────────────────────────
+          /** An inherited v1 intent may have activated the target before stopping the
+           * source. Never infer v2 stop proof from that journal's phase alone. */
+          async verifyRecoveredSourceStop(rec8) {
+            if (this.d.journal.getCertificate(rec8.handoffId)?.sourceStopped === true) return true;
+            try {
+              this.d.mesh.setFence(rec8.meshId, { handoffId: rec8.handoffId, epoch: rec8.epoch });
+              await this.d.coordinator.stopSource(rec8.meshId);
+              return true;
+            } catch (e) {
+              this.log(`legacy source stop unconfirmed: ${e?.message ?? e}`);
+              return false;
+            }
+          }
           async abortInternal(rec8, reason, targetAlreadyDiscarded = false) {
             const cur = this.d.journal.get(rec8.handoffId, "source");
             if (!cur || cur.phase === "aborted" || cur.phase === "committed") return;
+            if (!targetAlreadyDiscarded && (cur.commitIntentAt !== void 0 || this.activating.has(rec8.handoffId))) return;
+            this.d.mesh.setFence(rec8.meshId, null, rec8.handoffId);
             this.move(rec8.handoffId, "aborted", { abortReason: reason });
             this.snapshots.delete(rec8.handoffId);
             this.d.hold.release(rec8.meshId, rec8.handoffId);
@@ -148809,20 +148866,22 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           async abort(handoffId, reason = "owner_abort") {
             const rec8 = this.d.journal.get(handoffId, "source");
             if (!rec8) return { success: false, code: "handoff_unknown" };
+            if (this.activating.has(handoffId) || this.busy.has(handoffId)) return { success: false, code: "handoff_in_progress", error: "source transfer, stop or activation is in progress" };
             if (rec8.phase === "committed") return { success: false, code: "already_committed" };
             if (rec8.phase === "aborted") return { success: true, duplicate: true };
             if (rec8.phase === "activating" || rec8.phase === "uncertain") {
+              if (!await this.verifyRecoveredSourceStop(rec8)) return { success: false, code: "coordinator_not_quiescent" };
               let status;
               try {
                 status = await this.d.peer(rec8.peerDaemonId).status({ handoffId, meshId: rec8.meshId });
               } catch {
                 status = void 0;
               }
-              if (status?.success && status.phase === "active") {
+              if (status?.success && status.phase === "active" && status.epoch === rec8.epoch && status.unknown !== true) {
                 await this.commit(handoffId, { coordinatorReady: false });
                 return { success: false, code: "already_committed" };
               }
-              if (!(status?.success && status.phase === "discarded")) return { success: false, code: "abort_requires_target_confirmation", error: "the target must be reachable and report the handoff discarded" };
+              if (!(status?.success && status.phase === "discarded" && status.epoch === rec8.epoch && status.unknown !== true)) return { success: false, code: "abort_requires_target_confirmation", error: "the target must be reachable and prove this exact handoff was discarded" };
               await this.abortInternal(rec8, reason, true);
               return { success: true };
             }
@@ -148835,7 +148894,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             for (const rec8 of this.d.journal.list().filter((r) => r.role === "source")) {
               if (rec8.phase === "freezing") await this.advance(rec8.handoffId);
               else if (rec8.phase === "awaiting_ack" && now - rec8.updatedAt >= HOST_HANDOFF_ACK_TIMEOUT_MS) await this.abortInternal(rec8, "ack_timeout");
-              else if (rec8.phase === "uncertain" || rec8.phase === "activating" && !this.busy.has(rec8.handoffId) && rec8.commitIntentAt) await this.probe(rec8.handoffId, false);
+              else if (rec8.phase === "uncertain" || rec8.phase === "activating" && !this.activating.has(rec8.handoffId) && rec8.commitIntentAt) await this.probe(rec8.handoffId, false);
             }
           }
           /** Probe the target for an unconfirmed activation. `force` ignores the backoff. */
@@ -148843,6 +148902,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             const rec8 = this.d.journal.get(handoffId, "source");
             if (!rec8) return { success: false, code: "handoff_unknown" };
             if (rec8.phase !== "uncertain" && rec8.phase !== "activating") return { success: true, phase: rec8.phase };
+            if (!await this.verifyRecoveredSourceStop(rec8)) return { success: false, phase: rec8.phase, code: "coordinator_not_quiescent" };
             const count2 = rec8.probeCount ?? 0;
             const wait = Math.min(HOST_HANDOFF_PROBE_BASE_MS * 2 ** count2, HOST_HANDOFF_PROBE_MAX_MS);
             if (!force && rec8.lastProbeAt !== void 0 && this.d.clock.now() - rec8.lastProbeAt < wait) return { success: true, phase: rec8.phase, waiting: true };
@@ -148854,14 +148914,15 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
               return { success: true, phase: "uncertain", unreachable: true };
             }
             if (!status.success) return { success: true, phase: "uncertain", unreachable: true };
-            if (status.phase === "active") {
+            if (status.phase === "active" && status.epoch === rec8.epoch && status.unknown !== true) {
               await this.commit(handoffId, { coordinatorReady: false });
               return { success: true, phase: "committed" };
             }
-            if (status.phase === "discarded") {
+            if (status.phase === "discarded" && status.epoch === rec8.epoch && status.unknown !== true) {
               await this.abortInternal(this.d.journal.get(handoffId, "source"), "target_discarded", true);
               return { success: true, phase: "aborted" };
             }
+            if (status.unknown === true || status.epoch !== rec8.epoch) return { success: true, phase: "uncertain", unverified: true };
             if (rec8.phase === "activating") this.move(handoffId, "uncertain");
             await this.activate(handoffId);
             return { success: true, phase: this.d.journal.get(handoffId, "source").phase };
@@ -148870,6 +148931,10 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           async resume() {
             for (const rec8 of this.d.journal.list().filter((r) => r.role === "source")) {
               if (rec8.phase === "committed" || rec8.phase === "aborted") continue;
+              if (rec8.phase === "acked") {
+                await this.activate(rec8.handoffId);
+                continue;
+              }
               if (rec8.phase === "activating" || rec8.phase === "uncertain") {
                 if (rec8.phase === "activating") this.move(rec8.handoffId, "uncertain");
                 await this.probe(rec8.handoffId, true);
@@ -148890,6 +148955,10 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
               }
               this.d.journal.update(handoffId, "source", { updatedAt: this.d.clock.now() });
               return { success: true, phase: "awaiting_ack" };
+            }
+            if (rec8.phase === "acked") {
+              await this.activate(handoffId);
+              return { success: true, phase: this.d.journal.get(handoffId, "source").phase };
             }
             if (rec8.phase === "uncertain" || rec8.phase === "activating") return this.probe(handoffId, true);
             if (rec8.phase === "freezing") {
@@ -148919,6 +148988,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         init_dist();
         init_snapshot_import();
         init_snapshot_export();
+        init_certificate();
         init_types6();
         TARGET_STAGE_TTL_MS = 30 * 6e4;
         fail10 = (code, error, extra = {}) => ({ success: false, code, ...error ? { error } : {}, ...extra });
@@ -148927,6 +148997,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             this.d = d;
           }
           inflight = /* @__PURE__ */ new Set();
+          activations = /* @__PURE__ */ new Map();
           async idle() {
             while (this.inflight.size) await Promise.allSettled([...this.inflight]);
           }
@@ -148961,7 +149032,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             if (!daemonIdsEquivalent5(m.fromDaemonId, sender) || !daemonIdsEquivalent5(m.toDaemonId, this.d.selfDaemonId)) return fail10("wrong_peer");
             const view2 = this.d.mesh.read(a.meshId);
             if (!view2 || view2.role !== "member" || !view2.hostDaemonId || !daemonIdsEquivalent5(view2.hostDaemonId, sender)) return fail10("wrong_peer");
-            if (m.nextEpoch !== view2.hostEpoch + 1 && m.nextEpoch <= view2.hostEpoch) return fail10("stale_epoch");
+            if (m.nextEpoch !== view2.hostEpoch + 1 || m.hostEpoch !== view2.hostEpoch) return fail10("stale_epoch");
             const existing = this.d.journal.get(a.handoffId, "target");
             if (existing) {
               if (existing.phase === "discarded") return fail10("handoff_aborted");
@@ -149057,11 +149128,37 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             this.discardInternal(rec8, `ack_refused:${res.code ?? "unknown"}`);
           }
           async activate(a, sender) {
+            const pending = this.activations.get(a.handoffId);
+            if (pending) return fail10("handoff_in_progress");
+            const run4 = this.activateLocked(a, sender);
+            this.activations.set(a.handoffId, run4);
+            try {
+              return await run4;
+            } finally {
+              this.activations.delete(a.handoffId);
+            }
+          }
+          async activateLocked(a, sender) {
             const rec8 = this.d.journal.get(a.handoffId, "target");
             if (!rec8) return fail10("not_staged", "no staged snapshot", { applied: false });
             const wrong = this.requireSource(rec8, sender);
             if (wrong) return { ...wrong, applied: false };
-            if (rec8.phase === "active") return { success: true, applied: true, duplicate: true, coordinatorReady: true };
+            if (a.meshId !== rec8.meshId || a.epoch !== rec8.epoch) return fail10("invalid_args");
+            const saved = this.d.journal.getCertificate(a.handoffId);
+            if (rec8.phase === "active" || rec8.phase === "activating") {
+              if (!saved || saved.signature !== a.certificate?.signature) return fail10("certificate_invalid");
+            } else {
+              const view2 = this.d.mesh.read(rec8.meshId);
+              const cert = a.certificate;
+              const valid = cert && cert.sourceStopped === true && cert.handoffId === rec8.handoffId && cert.hostEpoch === rec8.epoch && daemonIdsEquivalent5(cert.newHostDaemonId, this.d.selfDaemonId) && cert.newHostPublicKey === this.d.certificate.ownPublicKey() && view2?.hostPublicKey && verifyHostTransferCertificate(cert, {
+                meshId: rec8.meshId,
+                pinnedHostDaemonId: rec8.peerDaemonId,
+                pinnedHostPublicKey: view2.hostPublicKey,
+                heldEpoch: view2.hostEpoch
+              }).ok;
+              if (!valid) return fail10("certificate_invalid", "verified source stop certificate required", { applied: false });
+            }
+            if (rec8.phase === "active") return { success: true, applied: true, duplicate: true, coordinatorReady: false };
             if (rec8.phase === "discarded") return fail10("handoff_aborted", void 0, { applied: false });
             if (a.epoch !== rec8.epoch) return fail10("stale_epoch", void 0, { applied: false });
             if (rec8.phase !== "verified" && rec8.phase !== "acked" && rec8.phase !== "activating") return fail10("not_staged", `phase ${rec8.phase}`, { applied: false });
@@ -149072,9 +149169,10 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
               this.discardInternal(rec8, `reverify:${verified.code}`);
               return fail10(verified.code, verified.detail, { applied: false });
             }
-            const before = rec8.phase === "activating" ? "verified" : rec8.phase;
+            this.d.journal.putCertificate(a.handoffId, a.certificate);
             this.move(a.handoffId, "activating");
             try {
+              this.d.mesh.setFence(rec8.meshId, { handoffId: rec8.handoffId, epoch: rec8.epoch });
               this.d.data.applySnapshot(rec8.meshId, verified.payload);
               this.d.mesh.applyConfig(rec8.meshId, verified.payload.config);
               this.d.mesh.writeHost(rec8.meshId, {
@@ -149085,14 +149183,14 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
               });
             } catch (e) {
               this.log(`apply failed: ${e?.message ?? e}`);
-              this.move(a.handoffId, before);
-              return fail10("activate_failed", e?.message, { applied: false });
+              return fail10("activate_failed", e?.message);
             }
             return this.finishActivation(a.handoffId, a.certificate);
           }
           async finishActivation(handoffId, cert) {
             const rec8 = this.d.journal.get(handoffId, "target");
             this.move(handoffId, "active");
+            this.d.mesh.setFence(rec8.meshId, null, handoffId);
             this.d.journal.clearStage(handoffId);
             let launched = { success: false, ready: false };
             try {
@@ -149108,9 +149206,10 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           }
           status(a, sender) {
             const rec8 = this.d.journal.get(a.handoffId, "target");
-            if (!rec8) return { success: true, phase: "discarded", epoch: 0, unknown: true };
+            if (!rec8) return { success: true, phase: "unknown", unknown: true };
             const wrong = this.requireSource(rec8, sender);
             if (wrong) return wrong;
+            if (a.meshId !== rec8.meshId) return fail10("invalid_args");
             return { success: true, phase: rec8.phase, epoch: rec8.epoch };
           }
           discard(a, sender) {
@@ -149118,6 +149217,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             if (!rec8) return { success: true, duplicate: true };
             const wrong = this.requireSource(rec8, sender);
             if (wrong) return wrong;
+            if (a.meshId !== rec8.meshId) return fail10("invalid_args");
             if (rec8.phase === "active") return fail10("already_committed");
             if (rec8.phase === "activating") return fail10("already_committed", "activation in progress");
             this.discardInternal(rec8, "source_discard");
@@ -149132,14 +149232,23 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           /** Resume after a restart: an interrupted activation is finished; stale staging is dropped. */
           async resume() {
             for (const rec8 of this.d.journal.list().filter((r) => r.role === "target")) {
+              if (rec8.phase === "active") {
+                const view2 = this.d.mesh.read(rec8.meshId);
+                if (view2?.handoffFence?.handoffId === rec8.handoffId && view2.hostEpoch === rec8.epoch && view2.hostDaemonId && daemonIdsEquivalent5(view2.hostDaemonId, this.d.selfDaemonId) && this.d.journal.getCertificate(rec8.handoffId)?.sourceStopped) {
+                  this.d.mesh.setFence(rec8.meshId, null, rec8.handoffId);
+                }
+              }
               if (rec8.phase === "activating") {
+                const certificate = this.d.journal.getCertificate(rec8.handoffId);
+                if (!certificate?.sourceStopped) continue;
                 const manifest = this.d.journal.getManifest(rec8.handoffId);
                 const verified = manifest && verifyStagedSnapshot(manifest, this.d.journal.getChunks(rec8.handoffId), (t) => this.d.data.localColumns(t));
                 if (verified && verified.ok) {
+                  this.d.mesh.setFence(rec8.meshId, { handoffId: rec8.handoffId, epoch: rec8.epoch });
                   this.d.data.applySnapshot(rec8.meshId, verified.payload);
                   this.d.mesh.applyConfig(rec8.meshId, verified.payload.config);
                   this.d.mesh.writeHost(rec8.meshId, { role: "host", hostDaemonId: this.d.selfDaemonId, ...this.d.selfNodeId?.(rec8.meshId) ? { hostNodeId: this.d.selfNodeId(rec8.meshId) } : {}, hostEpoch: rec8.epoch });
-                  await this.finishActivation(rec8.handoffId);
+                  await this.finishActivation(rec8.handoffId, certificate);
                 }
               }
             }
@@ -149171,8 +149280,24 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             hostEpoch: status.hostEpoch ?? 0,
             handedOff: !!status.handedOffTo,
             config: mesh,
+            hostPublicKey: mesh.meshHost?.originGrantPublicKey,
+            handoffFence: mesh.meshHost?.handoffFence,
             memberDaemonIds: (mesh.nodes ?? []).map((n) => String(n.daemonId ?? "")).filter(Boolean)
           };
+        },
+        setFence(meshId, fence, expectedHandoffId) {
+          withStrictMeshConfigWriteLock(() => {
+            const config = readMeshConfigFromDisk();
+            const mesh = config?.meshes.find((m) => m.id === meshId);
+            if (!config || !mesh) throw new Error("handoff fence storage unavailable");
+            const prior = mesh.meshHost?.handoffFence;
+            if (fence && prior && prior.handoffId !== fence.handoffId) throw new Error("another handoff holds the source fence");
+            if (!fence && prior && prior.handoffId !== expectedHandoffId) throw new Error("handoff fence identity changed");
+            mesh.meshHost = { ...mesh.meshHost ?? { role: "host" }, ...fence ? { handoffFence: fence } : {} };
+            if (!fence) delete mesh.meshHost.handoffFence;
+            const saved = saveMeshConfigDurable(config);
+            if (!saved.ok) throw new Error("handoff fence persistence failed");
+          });
         },
         writeHost(meshId, meta2) {
           withMeshConfigWriteLock(() => {
@@ -149290,6 +149415,15 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       const certificate = liveCertificatePort(host);
       const log = (line) => host.log(line);
       const sourceDeps = {
+        // The inherited snapshot contract omits ledger, pending-event and file
+        // approval state. Fail closed even if the experimental flag is enabled;
+        // the v2 protocol hardening alone is not a complete live migration.
+        preservationCheck: () => ({
+          id: "state_preservation",
+          ok: false,
+          code: "state_preservation_unverified",
+          detail: "Ledger, pending events, approval files and write-freeze coverage require verified transfer adapters before live handoff."
+        }),
         selfDaemonId: host.selfDaemonId,
         journal: journal2,
         mesh,
@@ -149331,6 +149465,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         init_dist();
         init_config();
         init_mesh_config_store();
+        init_mesh_config_store();
         init_mesh_config();
         init_origin_grant_keypair();
         init_mesh_runtime_store();
@@ -149344,6 +149479,54 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         init_snapshot_export();
         init_snapshot_import();
         HOLD_TTL_MS = 30 * 6e4;
+      }
+    });
+    async function stopProjectCoordinators(meshId, ports) {
+      const now = ports.now ?? Date.now;
+      const deadline = now() + (ports.timeoutMs ?? 3e4);
+      const wait = ports.wait ?? (() => new Promise((r) => setTimeout(r, 100)));
+      const bounded2 = async (effect, label2) => {
+        let timer;
+        try {
+          return await Promise.race([effect(), new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`source ${label2} timed out`)), Math.max(1, deadline - now()));
+          })]);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      };
+      const census2 = async () => {
+        const rows = await bounded2(() => ports.list(), "runtime census");
+        if (!Array.isArray(rows) || rows.some((r) => !r || typeof r.sessionId !== "string")) throw new Error("source runtime census invalid");
+        return rows;
+      };
+      const terminal = (row2) => ["stopped", "exited"].includes(row2.lifecycle ?? "") && row2.surfaceKind !== "live_runtime";
+      const initial = await census2();
+      const sessions = new Map(ports.registered().map((c) => [c.sessionId, c.cliType ?? ""]));
+      for (const row2 of initial) {
+        if (!sessions.has(row2.sessionId)) continue;
+        if (row2.meta?.meshCoordinatorFor && row2.meta.meshCoordinatorFor !== meshId) throw new Error("source coordinator project identity conflict");
+        const registeredType = sessions.get(row2.sessionId);
+        if (registeredType && row2.providerType && registeredType !== row2.providerType) throw new Error("source coordinator provider identity conflict");
+      }
+      for (const row2 of initial) if (row2.meta?.meshCoordinatorFor === meshId) sessions.set(row2.sessionId, row2.providerType ?? sessions.get(row2.sessionId) ?? "");
+      for (const [id4, type2] of sessions) {
+        const row2 = initial.find((r) => r.sessionId === id4);
+        if (!row2 || terminal(row2)) continue;
+        if (!type2) throw new Error("source coordinator provider identity unavailable");
+        if ((await bounded2(() => ports.stop(id4, type2), "coordinator stop")).success !== true) throw new Error("source coordinator stop refused");
+      }
+      for (; ; ) {
+        const rows = await census2();
+        const pending = rows.filter((r) => (sessions.has(r.sessionId) || r.meta?.meshCoordinatorFor === meshId) && !terminal(r));
+        if (!pending.length) return;
+        if (now() >= deadline) throw new Error("source coordinator exit unconfirmed");
+        await wait();
+      }
+    }
+    var init_coordinator_stop = __esm2({
+      "src/mesh/host-handoff/coordinator-stop.ts"() {
+        "use strict";
       }
     });
     var mesh_host_handoff_exports = {};
@@ -149379,10 +149562,12 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         peerOnline: (daemonId) => ctx.deps.getMeshPeerConnectionStatus ? !!ctx.deps.getMeshPeerConnectionStatus(daemonId) : !!ctx.deps.dispatchMeshCommand,
         coordinatorState: (meshId) => listLocalCoordinatorSessions(ctx.deps, meshId),
         stopCoordinators: async (meshId) => {
-          for (const c of listLocalCoordinatorSessions(ctx.deps, meshId)) {
-            const cliType = getCoordinatorForSession(c.sessionId)?.cliType ?? str18(ctx.deps.instanceManager.getInstance(c.sessionId)?.getState?.()?.type);
-            await host.exec("stop_cli", { cliType, targetSessionId: c.sessionId, mode: "hard", reason: "host_handoff" });
-          }
+          if (!ctx.deps.sessionHostControl?.listSessions) throw new Error("trusted runtime census unavailable");
+          await stopProjectCoordinators(meshId, {
+            list: () => ctx.deps.sessionHostControl.listSessions(),
+            registered: () => listCoordinatorsForMesh(meshId),
+            stop: (targetSessionId, cliType) => host.exec("stop_cli", { cliType, targetSessionId, mode: "hard", reason: "host_handoff" })
+          });
         },
         canLaunchCoordinator: (meshId) => {
           const mesh = createLiveMeshPort().read(meshId);
@@ -149491,6 +149676,9 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         init_coordinator_registry();
         init_coordinator_handoff_brief();
         init_assistant_session_control();
+        init_coordinator_stop();
+        init_coordinator_registry();
+        init_command_args();
         disabled = () => ({ success: false, code: "host_handoff_disabled", error: "Host handoff is an experimental feature; turn on experimental.hostHandoff in the daemon config." });
         HANDOFF_PEER_VERBS = [
           HOST_HANDOFF_VERB.capability,
@@ -149503,6 +149691,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         ];
         engines = null;
         ownerVerb = async (ctx, args) => {
+          if (!isTrustedOwnerIngress(args)) return { success: false, code: "owner_auth_required", error: "Host handoff requires verified owner ingress." };
           if (!hostHandoffEnabled()) {
             return str18(args?.op) === "status" && !str18(args?.meshId) ? { success: true, enabled: false } : disabled();
           }
@@ -224508,6 +224697,8 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
     init_binding_owner();
     init_coordinator_registry();
     init_logger();
+    init_mesh_config_store();
+    init_mesh_host_ownership();
     function refuseCoordinatorRestore(reason) {
       throw Object.assign(new Error("coordinator_identity_conflict: " + reason), { code: "coordinator_identity_conflict" });
     }
@@ -224561,6 +224752,12 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         return void 0;
       }
       if (!exact && !meshId) return void 0;
+      const projectConfig = readMeshConfigFromDisk();
+      if (!projectConfig) refuseCoordinatorRestore("project host authority unavailable");
+      const project2 = projectConfig?.meshes.find((m) => m.id === (meshId || exact.meshId));
+      if (!project2 || !resolveMeshHostStatus(project2).canOwnCoordinator) {
+        refuseCoordinatorRestore("project host authority was fenced or transferred");
+      }
       const evidence = readCoordinatorEvidence(record7.runtimeId);
       if (evidence.some((e) => e.namespace === owner?.namespace && e.terminal)) refuseCoordinatorRestore("terminated coordinator runtime");
       if (exact && (meshId && meshId !== exact.meshId || exact.cliType && exact.cliType !== record7.cliType || exact.workspace && exact.workspace !== record7.workspace)) refuseCoordinatorRestore("registry and runtime identity disagree");

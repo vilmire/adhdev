@@ -92,6 +92,7 @@ export class FakeDaemon {
     holdLog: string[] = [];
     freezeResult: FreezeCheck = { ready: true };
     coordinatorStops: string[] = [];
+    stopFailure: Error | null = null;
     coordinatorLaunches: string[] = [];
     launchable = true;
     launchReady = true;
@@ -125,12 +126,19 @@ export class FakeDaemon {
     get id(): string { return this.opts.id; }
 
     mesh: HandoffMeshPort = {
+        setFence: (_meshId, fence, expectedHandoffId) => {
+            const host = this.meshRecord.meshHost as Record<string, unknown>;
+            const prior = host.handoffFence as { handoffId: string } | undefined;
+            if (prior && prior.handoffId !== (fence?.handoffId ?? expectedHandoffId)) throw new Error('handoff fence identity changed');
+            if (fence) host.handoffFence = fence; else delete host.handoffFence;
+        },
         read: () => {
             const status = resolveMeshHostStatus(this.meshRecord);
             return {
                 role: status.role, hostDaemonId: status.hostDaemonId, hostNodeId: status.hostNodeId, hostEpoch: status.hostEpoch ?? 0,
                 hostPublicKey: (this.meshRecord.meshHost as { originGrantPublicKey?: string }).originGrantPublicKey,
                 handedOff: !!status.handedOffTo, config: this.meshRecord,
+                handoffFence: (this.meshRecord.meshHost as { handoffFence?: { handoffId: string; epoch: number } }).handoffFence,
                 memberDaemonIds: (this.meshRecord.nodes as Array<{ daemonId: string }>).map(n => n.daemonId),
             };
         },
@@ -138,6 +146,10 @@ export class FakeDaemon {
             const prev = this.meshRecord.meshHost as Record<string, unknown>;
             this.meshRecord.meshHost = { ...prev, role: meta.role, hostDaemonId: meta.hostDaemonId, hostEpoch: meta.hostEpoch,
                 ...(meta.hostNodeId ? { hostNodeId: meta.hostNodeId } : {}), ...(meta.hostPublicKey ? { originGrantPublicKey: meta.hostPublicKey } : {}), ...(meta.handedOffTo ? { handedOffTo: meta.handedOffTo } : {}) };
+            if (meta.role === 'host') {
+                const host = this.meshRecord.meshHost as Record<string, unknown>;
+                delete host.handedOffTo; delete host.originGrantPublicKey;
+            }
         },
         applyConfig: (_meshId, config) => {
             if (config) this.meshRecord = { ...config, meshHost: this.meshRecord.meshHost };
@@ -165,7 +177,10 @@ export class FakeDaemon {
             hold: { acquire: (m, h) => { if (this.holds.has(m)) return { ok: false, error: 'held' }; this.holds.add(m); this.holdLog.push(`acquire:${h}`); return { ok: true }; },
                 release: (m, h) => { this.holds.delete(m); this.holdLog.push(`release:${h}`); } },
             freeze: { check: async () => this.freezeResult },
-            coordinator: { stopSource: async (m) => { this.coordinatorStops.push(m); } },
+            coordinator: { stopSource: async (m) => {
+                if (this.stopFailure) throw this.stopFailure;
+                this.coordinatorStops.push(m);
+            } },
             certificate,
             peer: (t) => createWirePeerClient(net.dispatcher(this.id), t),
             peerOnline: (d) => !net.offline.has(d) && net.daemons.has(d),

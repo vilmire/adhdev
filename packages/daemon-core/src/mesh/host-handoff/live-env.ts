@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { getConfigDir } from '../../config/config.js';
 import { loadMeshConfig, saveMeshConfig, withMeshConfigWriteLock } from '../../config/mesh-config-store.js';
+import { readMeshConfigFromDisk, saveMeshConfigDurable, withStrictMeshConfigWriteLock } from '../../config/mesh-config-store.js';
 import { getMesh } from '../../config/mesh-config.js';
 import { getOrCreateHostKeyPair } from '../origin-grant-keypair.js';
 import { MeshRuntimeStore } from '../mesh-runtime-store.js';
@@ -52,8 +53,24 @@ export function createLiveMeshPort(): HandoffMeshPort {
             return {
                 role: status.role, hostDaemonId: status.hostDaemonId, hostNodeId: status.hostNodeId, hostEpoch: status.hostEpoch ?? 0,
                 handedOff: !!status.handedOffTo, config: mesh,
+                hostPublicKey: mesh.meshHost?.originGrantPublicKey,
+                handoffFence: mesh.meshHost?.handoffFence,
                 memberDaemonIds: (mesh.nodes ?? []).map(n => String((n as { daemonId?: string }).daemonId ?? '')).filter(Boolean),
             };
+        },
+        setFence(meshId, fence, expectedHandoffId) {
+            withStrictMeshConfigWriteLock(() => {
+                const config = readMeshConfigFromDisk();
+                const mesh = config?.meshes.find(m => m.id === meshId);
+                if (!config || !mesh) throw new Error('handoff fence storage unavailable');
+                const prior = mesh.meshHost?.handoffFence;
+                if (fence && prior && prior.handoffId !== fence.handoffId) throw new Error('another handoff holds the source fence');
+                if (!fence && prior && prior.handoffId !== expectedHandoffId) throw new Error('handoff fence identity changed');
+                mesh.meshHost = { ...(mesh.meshHost ?? { role: 'host' }), ...(fence ? { handoffFence: fence } : {}) };
+                if (!fence) delete mesh.meshHost.handoffFence;
+                const saved = saveMeshConfigDurable(config);
+                if (!saved.ok) throw new Error('handoff fence persistence failed');
+            });
         },
         writeHost(meshId, meta: HostMetaWrite) {
             withMeshConfigWriteLock(() => {
@@ -163,6 +180,11 @@ export function createLiveHandoffEngines(host: LiveHandoffHost): LiveHandoffEngi
     const certificate = liveCertificatePort(host);
     const log = (line: string) => host.log(line);
     const sourceDeps: SourceDeps = {
+        // The inherited snapshot contract omits ledger, pending-event and file
+        // approval state. Fail closed even if the experimental flag is enabled;
+        // the v2 protocol hardening alone is not a complete live migration.
+        preservationCheck: () => ({ id: 'state_preservation', ok: false, code: 'state_preservation_unverified',
+            detail: 'Ledger, pending events, approval files and write-freeze coverage require verified transfer adapters before live handoff.' }),
         selfDaemonId: host.selfDaemonId, journal, mesh, data, hold: createLiveHoldPort(), freeze: { check: liveFreezeCheck(host) },
         coordinator: { stopSource: (meshId) => host.stopCoordinators(meshId) }, certificate,
         peer: (target) => createWirePeerClient(host.dispatch, target), peerOnline: (d) => host.peerOnline(d), clock, log,

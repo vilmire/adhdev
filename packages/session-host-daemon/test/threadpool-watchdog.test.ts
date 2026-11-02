@@ -1,7 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
+import { mkdtempSync, readFileSync } from 'node:fs'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { exitWithoutThreadpoolJoin, startThreadpoolWatchdog } from '../src/threadpool-watchdog.js'
 
 // A wedged libuv pool left a live host acknowledging send_input while no PTY
@@ -115,4 +117,23 @@ test('a SIGKILL exit ends a process whose exit handlers would otherwise run', ()
   const r = spawnSync(process.execPath, ['-e', "process.on('exit',()=>console.log('ran'));process.kill(process.pid,'SIGKILL');setTimeout(()=>{},5000)"], { encoding: 'utf8', timeout: 4000, windowsHide: true })
   assert.equal(r.signal, 'SIGKILL')
   assert.equal(r.stdout, '')
+})
+
+// Synthetic mechanism test, not a claim about the original production trigger.
+// Only these fixture children are terminated; no daemon or shared host is used.
+test('shutdown deadline exits a child with a blocked pool; process.exit alone cannot', { skip: process.platform === 'win32' }, () => {
+  const dir = mkdtempSync(join(tmpdir(), 'session-host-exit-pool-'))
+  const fifo = join(dir, 'blocked-open')
+  execFileSync('mkfifo', [fifo], { timeout: 5_000, windowsHide: true })
+  const prefix = `const fs=require('node:fs');fs.open(${JSON.stringify(fifo)},'r',()=>{});`
+  const env = { ...process.env, ADHDEV_CONFIG_DIR: dir, UV_THREADPOOL_SIZE: '1' }
+  const ordinary = spawnSync(process.execPath, ['-e', prefix + "setTimeout(()=>{fs.writeSync(1,'deadline fired');process.exit(0)},100)"],
+    { env, encoding: 'utf8', timeout: 1_000, killSignal: 'SIGKILL', windowsHide: true })
+  assert.equal(ordinary.stdout, 'deadline fired')
+  assert.equal((ordinary.error as NodeJS.ErrnoException | undefined)?.code, 'ETIMEDOUT', 'fixture must reproduce the join hang')
+  const forced = spawnSync(process.execPath, ['-e', prefix + `setTimeout(()=>{fs.writeSync(1,'flushed');(${exitWithoutThreadpoolJoin.toString()})()},100)`],
+    { env, encoding: 'utf8', timeout: 2_000, killSignal: 'SIGKILL', windowsHide: true })
+  assert.equal(forced.error, undefined)
+  assert.equal(forced.signal, 'SIGKILL')
+  assert.equal(forced.stdout, 'flushed')
 })

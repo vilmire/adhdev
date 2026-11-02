@@ -85,6 +85,8 @@ export interface RepoMeshHostMetadata {
      * lower-epoch writer is refused.
      */
     hostEpoch?: number;
+    /** Durable source fence. Never expires; only a confirmed abort or commit clears it. */
+    handoffFence?: { handoffId: string; epoch: number };
     /** Set on the OLD host after a committed handoff: host-owned data is read-only until `retainUntil`. */
     handedOffTo?: { daemonId: string; epoch: number; handoffId: string; at: number; retainUntil: number };
 }

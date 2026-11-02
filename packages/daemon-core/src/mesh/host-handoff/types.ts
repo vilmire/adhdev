@@ -3,11 +3,12 @@
  *
  * The canonical host role plus host-owned data move from a SOURCE daemon to a
  * TARGET daemon of the same mesh behind a verified snapshot and a positive ACK.
- * Both sides keep a durable phase journal; at no instant are there zero or two
- * hosts (the larger `hostEpoch` wins, and the old host refuses writes after commit).
+ * Both sides keep a durable phase journal. Source stop precedes target admission;
+ * an unavailable interval is allowed, but uncertainty never revives the source.
  */
 
-export const HOST_HANDOFF_PROTOCOL = 1;
+// v2 requires a source-stop attestation; v1 peers could activate before source stop.
+export const HOST_HANDOFF_PROTOCOL = 2;
 
 /** Peer verbs (daemon <-> daemon, mesh source only). The owner verb is `mesh_host_handoff`. */
 export const HOST_HANDOFF_VERB = {
@@ -98,7 +99,7 @@ export type HandoffErrorCode =
     | 'writer_checkpoint_pending' | 'freeze_timeout' | 'coordinator_not_quiescent'
     | 'chunk_hash_mismatch' | 'manifest_mismatch' | 'ack_mismatch' | 'ack_timeout' | 'verify_failed'
     | 'handoff_aborted' | 'handoff_unknown' | 'wrong_peer' | 'stale_epoch' | 'abort_requires_target_confirmation'
-    | 'already_committed' | 'not_staged' | 'activate_failed' | 'invalid_args' | 'hold_failed';
+    | 'already_committed' | 'not_staged' | 'activate_failed' | 'invalid_args' | 'hold_failed' | 'state_preservation_unverified';
 
 export interface PreflightCheck { id: string; ok: boolean; code?: HandoffErrorCode; detail?: string }
 
@@ -121,6 +122,8 @@ export interface PeerResult {
 }
 
 export interface HostTransferCertificate {
+    /** Signed assertion made only after the source's trusted runtime census proved stop. */
+    sourceStopped?: true;
     meshId: string;
     newHostDaemonId: string;
     newHostNodeId?: string;

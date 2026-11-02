@@ -62,6 +62,7 @@ beforeEach(() => {
     process.env.ADHDEV_CONFIG_DIR = config;
     mkdirSync(join(config, 'daemon'), { recursive: true });
     writeFileSync(join(config, 'daemon', 'mesh-coordinators.json'), '[]');
+    writeFileSync(join(config, 'meshes.json'), JSON.stringify({ meshes: ['mesh-test', 'mesh-other'].map(id => ({ id, meshHost: { role: 'host' } })) }));
     loadMeshCoordinatorRegistry();
     inventory.records = [runtime()];
     assistant = new AssistantRegistry({ configDir: config });
@@ -76,6 +77,22 @@ afterEach(() => {
 });
 
 describe('exact persisted coordinator identity recovery', () => {
+    it.each(['fenced', 'transferred', 'missing', 'unreadable'])('refuses coordinator authority when project is %s without stopping unrelated runtimes', async kind => {
+        const record = runtime(); persist(record);
+        const ordinary = runtime('ordinary'); delete ordinary.meta.meshCoordinatorFor; delete ordinary.meta.launchRecord; persist(ordinary);
+        inventory.records = [record, ordinary];
+        const project = { id: 'mesh-test', meshHost: kind === 'fenced'
+            ? { role: 'host', handoffFence: { handoffId: 'transfer', epoch: 1 } }
+            : { role: 'member', hostDaemonId: 'successor', hostEpoch: 1 } };
+        writeFileSync(join(config, 'meshes.json'), kind === 'unreadable' ? '{invalid'
+            : JSON.stringify({ meshes: kind === 'missing' ? [] : [project] }));
+        const h = host();
+        expect(await restoreHostedSessions(h)).toBe(2);
+        const attached = vi.mocked(h.registerCliInstance).mock.calls;
+        expect(attached.map(c => c[0])).toEqual(['coordinator', 'ordinary']);
+        expect(attached.every(c => c[6].meshCoordinatorFor === undefined)).toBe(true);
+        expect(getCoordinatorForSession('coordinator')).toBeUndefined();
+    });
     // Reuse the independent review's four-record probe shape: old retained
     // candidate without a row, exact current owner, ordinary worker, assistant.
     function reviewedBatch(legacy: boolean | 'mismatched' = false) {

@@ -12,6 +12,7 @@ import type { HandoffAckClient } from './peer.js';
 import type { CertificatePort, HandoffClock, HandoffDataPort, HandoffLog, HandoffMeshPort, TargetCoordinatorPort } from './ports.js';
 import { verifyStagedSnapshot } from './snapshot-import.js';
 import { sha256Hex } from './snapshot-export.js';
+import { verifyHostTransferCertificate } from './certificate.js';
 import { HOST_HANDOFF_PROTOCOL, type HandoffAck, type HandoffManifest, type HandoffRecord, type HostTransferCertificate, type PeerResult, type TargetPhase } from './types.js';
 
 export interface TargetDeps {
@@ -34,6 +35,7 @@ const fail = (code: string, error?: string, extra: Record<string, unknown> = {})
 
 export class HostHandoffTarget {
     private readonly inflight = new Set<Promise<unknown>>();
+    private readonly activations = new Map<string, Promise<PeerResult>>();
     constructor(private readonly d: TargetDeps) {}
 
     async idle(): Promise<void> { while (this.inflight.size) await Promise.allSettled([...this.inflight]); }
@@ -67,7 +69,7 @@ export class HostHandoffTarget {
         if (!daemonIdsEquivalent(m.fromDaemonId, sender) || !daemonIdsEquivalent(m.toDaemonId, this.d.selfDaemonId)) return fail('wrong_peer');
         const view = this.d.mesh.read(a.meshId);
         if (!view || view.role !== 'member' || !view.hostDaemonId || !daemonIdsEquivalent(view.hostDaemonId, sender)) return fail('wrong_peer');
-        if (m.nextEpoch !== view.hostEpoch + 1 && m.nextEpoch <= view.hostEpoch) return fail('stale_epoch');
+        if (m.nextEpoch !== view.hostEpoch + 1 || m.hostEpoch !== view.hostEpoch) return fail('stale_epoch');
         const existing = this.d.journal.get(a.handoffId, 'target');
         if (existing) {
             if (existing.phase === 'discarded') return fail('handoff_aborted');
@@ -147,10 +149,34 @@ export class HostHandoffTarget {
     }
 
     async activate(a: { handoffId: string; meshId: string; epoch: number; certificate: HostTransferCertificate }, sender: string): Promise<PeerResult & { applied?: boolean; coordinatorReady?: boolean; coordinatorSessionId?: string }> {
+        const pending = this.activations.get(a.handoffId);
+        if (pending) return fail('handoff_in_progress');
+        const run = this.activateLocked(a, sender);
+        this.activations.set(a.handoffId, run);
+        try { return await run; }
+        finally { this.activations.delete(a.handoffId); }
+    }
+
+    private async activateLocked(a: { handoffId: string; meshId: string; epoch: number; certificate: HostTransferCertificate }, sender: string): Promise<PeerResult & { applied?: boolean; coordinatorReady?: boolean; coordinatorSessionId?: string }> {
         const rec = this.d.journal.get(a.handoffId, 'target');
         if (!rec) return fail('not_staged', 'no staged snapshot', { applied: false });
         const wrong = this.requireSource(rec, sender); if (wrong) return { ...wrong, applied: false };
-        if (rec.phase === 'active') return { success: true, applied: true, duplicate: true, coordinatorReady: true };
+        if (a.meshId !== rec.meshId || a.epoch !== rec.epoch) return fail('invalid_args');
+        const saved = this.d.journal.getCertificate(a.handoffId);
+        if (rec.phase === 'active' || rec.phase === 'activating') {
+            if (!saved || saved.signature !== a.certificate?.signature) return fail('certificate_invalid');
+        } else {
+            const view = this.d.mesh.read(rec.meshId);
+            const cert = a.certificate;
+            const valid = cert && cert.sourceStopped === true && cert.handoffId === rec.handoffId
+                && cert.hostEpoch === rec.epoch && daemonIdsEquivalent(cert.newHostDaemonId, this.d.selfDaemonId)
+                && cert.newHostPublicKey === this.d.certificate.ownPublicKey() && view?.hostPublicKey
+                && verifyHostTransferCertificate(cert, { meshId: rec.meshId, pinnedHostDaemonId: rec.peerDaemonId,
+                    pinnedHostPublicKey: view.hostPublicKey, heldEpoch: view.hostEpoch }).ok;
+            if (!valid) return fail('certificate_invalid', 'verified source stop certificate required', { applied: false });
+        }
+        // An active authority is not evidence of a ready coordinator process.
+        if (rec.phase === 'active') return { success: true, applied: true, duplicate: true, coordinatorReady: false };
         if (rec.phase === 'discarded') return fail('handoff_aborted', undefined, { applied: false });
         if (a.epoch !== rec.epoch) return fail('stale_epoch', undefined, { applied: false });
         if (rec.phase !== 'verified' && rec.phase !== 'acked' && rec.phase !== 'activating') return fail('not_staged', `phase ${rec.phase}`, { applied: false });
@@ -158,20 +184,20 @@ export class HostHandoffTarget {
         if (!manifest) return fail('not_staged', 'manifest missing', { applied: false });
         const verified = verifyStagedSnapshot(manifest, this.d.journal.getChunks(a.handoffId), t => this.d.data.localColumns(t));
         if (!verified.ok) { this.discardInternal(rec, `reverify:${verified.code}`); return fail(verified.code, verified.detail, { applied: false }); }
-        const before: TargetPhase = rec.phase === 'activating' ? 'verified' : rec.phase as TargetPhase;
+        this.d.journal.putCertificate(a.handoffId, a.certificate);
         this.move(a.handoffId, 'activating');
         try {
+            this.d.mesh.setFence(rec.meshId, { handoffId: rec.handoffId, epoch: rec.epoch });
             this.d.data.applySnapshot(rec.meshId, verified.payload);
             this.d.mesh.applyConfig(rec.meshId, verified.payload.config);
             this.d.mesh.writeHost(rec.meshId, {
                 role: 'host', hostDaemonId: this.d.selfDaemonId, ...(this.d.selfNodeId?.(rec.meshId) ? { hostNodeId: this.d.selfNodeId(rec.meshId)! } : {}), hostEpoch: rec.epoch,
             });
         } catch (e) {
-            // Definitive "not applied": the table apply is one transaction and the host fields are written last,
-            // so roll the phase back to where it was (`verified` / `acked`). The source may then abort without ever creating a second host.
             this.log(`apply failed: ${(e as Error)?.message ?? e}`);
-            this.move(a.handoffId, before);
-            return fail('activate_failed', (e as Error)?.message, { applied: false });
+            // SQLite and config are separate durable stores. Once activation
+            // begins a failure may have applied either; only forward recovery is safe.
+            return fail('activate_failed', (e as Error)?.message);
         }
         return this.finishActivation(a.handoffId, a.certificate);
     }
@@ -179,6 +205,7 @@ export class HostHandoffTarget {
     private async finishActivation(handoffId: string, cert?: HostTransferCertificate): Promise<PeerResult & { applied?: boolean; coordinatorReady?: boolean; coordinatorSessionId?: string }> {
         const rec = this.d.journal.get(handoffId, 'target')!;
         this.move(handoffId, 'active');
+        this.d.mesh.setFence(rec.meshId, null, handoffId);
         this.d.journal.clearStage(handoffId);
         let launched: { success: boolean; sessionId?: string; ready: boolean } = { success: false, ready: false };
         try { launched = await this.d.coordinator.launch(rec.meshId, handoffId); } catch (e) { this.log(`coordinator launch failed: ${(e as Error)?.message ?? e}`); }
@@ -191,8 +218,9 @@ export class HostHandoffTarget {
 
     status(a: { handoffId: string; meshId: string }, sender: string): PeerResult & { phase?: string; epoch?: number } {
         const rec = this.d.journal.get(a.handoffId, 'target');
-        if (!rec) return { success: true, phase: 'discarded', epoch: 0, unknown: true };
+        if (!rec) return { success: true, phase: 'unknown', unknown: true };
         const wrong = this.requireSource(rec, sender); if (wrong) return wrong;
+        if (a.meshId !== rec.meshId) return fail('invalid_args');
         return { success: true, phase: rec.phase, epoch: rec.epoch };
     }
 
@@ -200,6 +228,7 @@ export class HostHandoffTarget {
         const rec = this.d.journal.get(a.handoffId, 'target');
         if (!rec) return { success: true, duplicate: true };
         const wrong = this.requireSource(rec, sender); if (wrong) return wrong;
+        if (a.meshId !== rec.meshId) return fail('invalid_args');
         if (rec.phase === 'active') return fail('already_committed');
         if (rec.phase === 'activating') return fail('already_committed', 'activation in progress');
         this.discardInternal(rec, 'source_discard');
@@ -216,14 +245,26 @@ export class HostHandoffTarget {
     /** Resume after a restart: an interrupted activation is finished; stale staging is dropped. */
     async resume(): Promise<void> {
         for (const rec of this.d.journal.list().filter(r => r.role === 'target')) {
+            if (rec.phase === 'active') {
+                const view = this.d.mesh.read(rec.meshId);
+                if (view?.handoffFence?.handoffId === rec.handoffId && view.hostEpoch === rec.epoch
+                    && view.hostDaemonId && daemonIdsEquivalent(view.hostDaemonId, this.d.selfDaemonId)
+                    && this.d.journal.getCertificate(rec.handoffId)?.sourceStopped) {
+                    this.d.mesh.setFence(rec.meshId, null, rec.handoffId);
+                }
+            }
             if (rec.phase === 'activating') {
+                // Old journals without a verified v2 stop attestation cannot gain authority.
+                const certificate = this.d.journal.getCertificate(rec.handoffId);
+                if (!certificate?.sourceStopped) continue;
                 const manifest = this.d.journal.getManifest(rec.handoffId);
                 const verified = manifest && verifyStagedSnapshot(manifest, this.d.journal.getChunks(rec.handoffId), t => this.d.data.localColumns(t));
                 if (verified && verified.ok) {
+                    this.d.mesh.setFence(rec.meshId, { handoffId: rec.handoffId, epoch: rec.epoch });
                     this.d.data.applySnapshot(rec.meshId, verified.payload);
                     this.d.mesh.applyConfig(rec.meshId, verified.payload.config);
                     this.d.mesh.writeHost(rec.meshId, { role: 'host', hostDaemonId: this.d.selfDaemonId, ...(this.d.selfNodeId?.(rec.meshId) ? { hostNodeId: this.d.selfNodeId(rec.meshId)! } : {}), hostEpoch: rec.epoch });
-                    await this.finishActivation(rec.handoffId);
+                    await this.finishActivation(rec.handoffId, certificate);
                 }
             }
         }

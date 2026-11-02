@@ -41,6 +41,10 @@ export function ensureHostHandoffSchema(db: HandoffSchemaDb): void {
             handoff_id TEXT PRIMARY KEY,
             manifest_json TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS mesh_host_handoff_certificate (
+            handoff_id TEXT PRIMARY KEY,
+            certificate_json TEXT NOT NULL
+        );
 
         -- Source side after commit: host-owned rows of a handed-off mesh are read-only until retention ends.
         CREATE TABLE IF NOT EXISTS mesh_host_handed_off (

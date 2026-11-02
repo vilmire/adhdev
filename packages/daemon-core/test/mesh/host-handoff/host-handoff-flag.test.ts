@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { issueTrustedOwnerIngressProof, markTrustedOwnerIngress } from '../../../src/commands/command-args.js';
+const ownerArgs = (args: Record<string, unknown>) => markTrustedOwnerIngress(args, issueTrustedOwnerIngressProof({ source: 'standalone', ownerVerified: true }));
 
 const flag = { on: false };
 vi.mock('../../../src/config/config.js', async (orig) => ({
@@ -11,6 +13,10 @@ import { HOST_HANDOFF_VERB } from '../../../src/mesh/host-handoff/types.js';
 import { meshHostHandoffHandlers, hostHandoffEnabled } from '../../../src/commands/high-family/mesh-host-handoff.js';
 
 describe('host handoff is experimental and off by default (owner decision H2)', () => {
+    it('refuses a source label or caller supplied owner flag without a private ingress proof', async () => {
+        expect(await meshHostHandoffHandlers.mesh_host_handoff!({} as never, { op: 'start', meshId: 'm', targetDaemonId: 'd', ownerVerified: true }))
+            .toMatchObject({ success: false, code: 'owner_auth_required' });
+    });
     it('the owner verb is dashboard-only and every peer verb is mesh-only with a roster sender', () => {
         const reg = getDaemonCommandRegistry();
         expect(reg.get('mesh_host_handoff')?.sources).toEqual(['p2p', 'ws', 'standalone']);
@@ -23,8 +29,8 @@ describe('host handoff is experimental and off by default (owner decision H2)', 
         flag.on = false;
         expect(hostHandoffEnabled()).toBe(false);
         const owner = meshHostHandoffHandlers.mesh_host_handoff!;
-        expect(await owner({} as never, { op: 'start', meshId: 'm', targetDaemonId: 'd' })).toMatchObject({ success: false, code: 'host_handoff_disabled' });
-        expect(await owner({} as never, { op: 'status' })).toEqual({ success: true, enabled: false });
+        expect(await owner({} as never, ownerArgs({ op: 'start', meshId: 'm', targetDaemonId: 'd' }))).toMatchObject({ success: false, code: 'host_handoff_disabled' });
+        expect(await owner({} as never, ownerArgs({ op: 'status' }))).toEqual({ success: true, enabled: false });
         const probe = meshHostHandoffHandlers.mesh_host_handoff_capability!;
         expect(await probe({} as never, { handoffId: 'h', meshId: 'm', _meshSenderDaemonId: 'daemon_x' })).toMatchObject({ success: false, code: 'peer_capability_unconfirmed' });
     });
@@ -34,16 +40,24 @@ describe('host handoff is experimental and off by default (owner decision H2)', 
         // no engines needed for the bare status answer path beyond the live journal; use a missing-args refusal instead
         const owner = meshHostHandoffHandlers.mesh_host_handoff!;
         const ctx = { deps: { statusInstanceId: 'daemon_mach_aaaaaaaaaaaaaaaa' }, components: () => ({}), execute: async () => ({}) } as never;
-        expect(await owner(ctx, { op: 'abort' })).toMatchObject({ success: false, code: 'invalid_args' });
+        expect(await owner(ctx, ownerArgs({ op: 'abort' }))).toMatchObject({ success: false, code: 'invalid_args' });
         flag.on = false;
     });
 });
 
-import { createLiveHoldPort, liveFreezeCheck } from '../../../src/mesh/host-handoff/live-env.js';
+import { createLiveHandoffEngines, createLiveHoldPort, liveFreezeCheck } from '../../../src/mesh/host-handoff/live-env.js';
 import { evaluateNewWorkHold, releaseNewWorkHold } from '../../../src/maintenance/new-work-hold.js';
 import { MeshRuntimeStore } from '../../../src/mesh/mesh-runtime-store.js';
 
 describe('acceptance 17 (live modules): the freeze really blocks new work for exactly that mesh', () => {
+    it('blocks production handoff until the complete preservation adapter is verified', async () => {
+        const dispatch = vi.fn();
+        const engines = createLiveHandoffEngines({ selfDaemonId: 'source', peerOnline: () => true, dispatch, log: () => {} } as never);
+        const preflight = await engines.source.preflight({ meshId: 'missing-project', targetDaemonId: 'target' });
+        expect(preflight.ok).toBe(false);
+        expect(preflight.checks).toContainEqual(expect.objectContaining({ id: 'state_preservation', ok: false, code: 'state_preservation_unverified' }));
+        expect(dispatch).not.toHaveBeenCalled();
+    });
     it('the live hold port holds the mesh scope and releases it; a second holder is refused', () => {
         const port = createLiveHoldPort();
         expect(evaluateNewWorkHold({ meshId: 'mesh-frozen' }).held).toBe(false);

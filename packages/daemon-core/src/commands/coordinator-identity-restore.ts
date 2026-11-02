@@ -7,6 +7,8 @@ import { getCoordinatorForSession, listCoordinatorsForMesh, loadMeshCoordinatorR
 import { readCoordinatorMeshAssociation } from '../session-host/coordinator-association.js';
 import { LOG } from '../logging/logger.js';
 import { shouldRestoreHostedRuntime } from './hosted-runtime-restore.js';
+import { readMeshConfigFromDisk } from '../config/mesh-config-store.js';
+import { resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
 
 function refuseCoordinatorRestore(reason: string): never {
     throw Object.assign(new Error('coordinator_identity_conflict: ' + reason), { code: 'coordinator_identity_conflict' });
@@ -90,6 +92,12 @@ function planCoordinatorRestore(record: HostedCliRuntimeDescriptor, owner: Hoste
         return undefined;
     }
     if (!exact && !meshId) return undefined;
+    const projectConfig = readMeshConfigFromDisk();
+    if (!projectConfig) refuseCoordinatorRestore('project host authority unavailable');
+    const project = projectConfig?.meshes.find(m => m.id === (meshId || exact!.meshId));
+    if (!project || !resolveMeshHostStatus(project).canOwnCoordinator) {
+        refuseCoordinatorRestore('project host authority was fenced or transferred');
+    }
     const evidence = readCoordinatorEvidence(record.runtimeId);
     if (evidence.some(e => e.namespace === owner?.namespace && e.terminal)) refuseCoordinatorRestore('terminated coordinator runtime');
     if (exact && ((meshId && meshId !== exact.meshId) || (exact.cliType && exact.cliType !== record.cliType)

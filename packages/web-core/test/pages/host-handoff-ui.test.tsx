@@ -24,6 +24,7 @@ describe('host-handoff parsing', () => {
         for (const p of ['freezing', 'exporting', 'awaiting_ack', 'acked']) expect(canAbortHandoff(p)).toBe(true)
         for (const p of ['activating', 'uncertain', 'committed', 'aborted']) expect(canAbortHandoff(p)).toBe(false)
         expect(canRetryHandoff('uncertain')).toBe(true)
+        expect(canRetryHandoff('acked')).toBe(true)
         expect(canRetryHandoff('exporting')).toBe(false)
     })
     it('reads answers defensively (cloud wrapper, older daemon, refusals)', () => {

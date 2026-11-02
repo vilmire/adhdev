@@ -91,4 +91,4 @@ export const isHandoffTerminal = (phase: string): boolean => phase === 'committe
 export function canAbortHandoff(phase: string): boolean {
     return !isHandoffTerminal(phase) && phase !== 'activating' && phase !== 'uncertain'
 }
-export const canRetryHandoff = (phase: string): boolean => phase === 'awaiting_ack' || phase === 'uncertain' || phase === 'activating'
+export const canRetryHandoff = (phase: string): boolean => phase === 'acked' || phase === 'awaiting_ack' || phase === 'uncertain' || phase === 'activating'

@@ -25,6 +25,9 @@ import { getCoordinatorForSession } from '../../mesh/coordinator-registry.js';
 import { buildCoordinatorHandoffBrief } from '../../assistant/coordinator-handoff-brief.js';
 import type { HighFamilyContext, HighFamilyHandler } from './types.js';
 import { collectBriefData, controlHostOf } from './assistant-session-control.js';
+import { stopProjectCoordinators } from '../../mesh/host-handoff/coordinator-stop.js';
+import { listCoordinatorsForMesh } from '../../mesh/coordinator-registry.js';
+import { isTrustedOwnerIngress } from '../command-args.js';
 
 function str(v: unknown): string { return typeof v === 'string' ? v.trim() : ''; }
 
@@ -52,10 +55,12 @@ function liveHost(ctx: HighFamilyContext): LiveHandoffHost {
         peerOnline: (daemonId) => (ctx.deps.getMeshPeerConnectionStatus ? !!ctx.deps.getMeshPeerConnectionStatus(daemonId) : !!ctx.deps.dispatchMeshCommand),
         coordinatorState: (meshId) => listLocalCoordinatorSessions(ctx.deps as never, meshId),
         stopCoordinators: async (meshId) => {
-            for (const c of listLocalCoordinatorSessions(ctx.deps as never, meshId)) {
-                const cliType = getCoordinatorForSession(c.sessionId)?.cliType ?? str(ctx.deps.instanceManager.getInstance(c.sessionId)?.getState?.()?.type);
-                await host.exec('stop_cli', { cliType, targetSessionId: c.sessionId, mode: 'hard', reason: 'host_handoff' });
-            }
+            if (!ctx.deps.sessionHostControl?.listSessions) throw new Error('trusted runtime census unavailable');
+            await stopProjectCoordinators(meshId, {
+                list: () => ctx.deps.sessionHostControl!.listSessions(),
+                registered: () => listCoordinatorsForMesh(meshId),
+                stop: (targetSessionId, cliType) => host.exec('stop_cli', { cliType, targetSessionId, mode: 'hard', reason: 'host_handoff' }),
+            });
         },
         canLaunchCoordinator: (meshId) => {
             const mesh = createLiveMeshPort().read(meshId);
@@ -109,6 +114,7 @@ export async function startHostHandoff(ctx: HighFamilyContext, input: { meshId: 
 }
 
 const ownerVerb: HighFamilyHandler = async (ctx, args) => {
+    if (!isTrustedOwnerIngress(args)) return { success: false, code: 'owner_auth_required', error: 'Host handoff requires verified owner ingress.' };
     if (!hostHandoffEnabled()) {
         return str(args?.op) === 'status' && !str(args?.meshId) ? { success: true, enabled: false } : disabled() as never;
     }

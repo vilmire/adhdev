@@ -6,7 +6,7 @@
  * because the test keeps the object while discarding the engine).
  */
 
-import type { HandoffManifest, HandoffRecord, HandoffRole } from './types.js';
+import type { HandoffManifest, HandoffRecord, HandoffRole, HostTransferCertificate } from './types.js';
 
 export interface HandoffJournal {
     get(handoffId: string, role: HandoffRole): HandoffRecord | null;
@@ -18,6 +18,8 @@ export interface HandoffJournal {
     /** Target staging. */
     putManifest(handoffId: string, manifest: HandoffManifest): void;
     getManifest(handoffId: string): HandoffManifest | null;
+    putCertificate(handoffId: string, certificate: HostTransferCertificate): void;
+    getCertificate(handoffId: string): HostTransferCertificate | null;
     putChunk(handoffId: string, seq: number, sha256: string, data: string): void;
     getChunks(handoffId: string): Array<{ seq: number; sha256: string; data: string }>;
     clearStage(handoffId: string): void;
@@ -35,6 +37,7 @@ export function isTerminalPhase(role: HandoffRole, phase: string): boolean {
 export class MemoryHandoffJournal implements HandoffJournal {
     private readonly records = new Map<string, HandoffRecord>();
     private readonly manifests = new Map<string, HandoffManifest>();
+    private readonly certificates = new Map<string, HostTransferCertificate>();
     private readonly chunks = new Map<string, Map<number, { sha256: string; data: string }>>();
     private key(id: string, role: HandoffRole): string { return `${id}\0${role}`; }
     get(id: string, role: HandoffRole) { const r = this.records.get(this.key(id, role)); return r ? { ...r } : null; }
@@ -53,6 +56,8 @@ export class MemoryHandoffJournal implements HandoffJournal {
     list(meshId?: string) { return [...this.records.values()].filter(r => !meshId || r.meshId === meshId).map(r => ({ ...r })); }
     putManifest(id: string, m: HandoffManifest) { this.manifests.set(id, structuredClone(m)); }
     getManifest(id: string) { const m = this.manifests.get(id); return m ? structuredClone(m) : null; }
+    putCertificate(id: string, certificate: HostTransferCertificate) { this.certificates.set(id, structuredClone(certificate)); }
+    getCertificate(id: string) { const c = this.certificates.get(id); return c ? structuredClone(c) : null; }
     putChunk(id: string, seq: number, sha256: string, data: string) {
         let m = this.chunks.get(id); if (!m) this.chunks.set(id, m = new Map());
         m.set(seq, { sha256, data });
@@ -125,6 +130,13 @@ export class SqliteHandoffJournal implements HandoffJournal {
     getManifest(id: string) {
         const r = this.db.prepare('SELECT manifest_json FROM mesh_host_handoff_manifest WHERE handoff_id = ?').get(id) as { manifest_json: string } | undefined;
         return r ? JSON.parse(r.manifest_json) as HandoffManifest : null;
+    }
+    putCertificate(id: string, certificate: HostTransferCertificate) {
+        this.db.prepare('INSERT INTO mesh_host_handoff_certificate (handoff_id, certificate_json) VALUES (?, ?) ON CONFLICT(handoff_id) DO UPDATE SET certificate_json = excluded.certificate_json').run(id, JSON.stringify(certificate));
+    }
+    getCertificate(id: string) {
+        const r = this.db.prepare('SELECT certificate_json FROM mesh_host_handoff_certificate WHERE handoff_id = ?').get(id) as { certificate_json: string } | undefined;
+        return r ? JSON.parse(r.certificate_json) as HostTransferCertificate : null;
     }
     putChunk(id: string, seq: number, sha256: string, data: string) {
         this.db.prepare('INSERT INTO mesh_host_handoff_stage (handoff_id, seq, sha256, data) VALUES (?,?,?,?) ON CONFLICT(handoff_id, seq) DO UPDATE SET sha256 = excluded.sha256, data = excluded.data').run(id, seq, sha256, data);

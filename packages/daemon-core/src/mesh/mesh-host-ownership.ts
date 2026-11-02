@@ -48,7 +48,10 @@ interface ResolveMeshHostOptions {
 export function resolveMeshHostStatus(mesh: unknown, opts?: ResolveMeshHostOptions): RepoMeshHostStatus {
     const meshRecord = readObject(mesh);
     const raw = readObject(meshRecord?.meshHost);
-    const role = normalizeMeshDaemonRole(raw?.role) ?? 'host';
+    // A source loses admission BEFORE stopping its runtime. This survives daemon
+    // restart and feature-flag changes; an expiring maintenance hold is insufficient.
+    const fenced = raw?.handoffFence !== undefined;
+    const role = fenced ? 'member' : normalizeMeshDaemonRole(raw?.role) ?? 'host';
     const pairing = readObject(raw?.pairing);
     const normalized: RepoMeshHostStatus = {
         role,
