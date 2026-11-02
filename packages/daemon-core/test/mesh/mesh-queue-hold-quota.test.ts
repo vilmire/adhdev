@@ -6,8 +6,10 @@ const state = vi.hoisted(() => ({ dir: '', notify: vi.fn((_notice: any) => true)
 vi.mock('../../src/config/config.js', () => ({ getConfigDir: () => state.dir, getMachineId: () => 'hold-test', loadConfig: () => ({ machineId: 'hold-test' }) }));
 vi.mock('../../src/mesh/turn-ledger/deliver.js', () => ({ notifyMeshCoordinator: state.notify }));
 import { enqueueTask, getQueueEntryById, __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.js';
+import { projectTurnTopicEntry } from '../../src/seqscribe/mesh-publisher.js';
+import type { MeshTopicEntry } from '@adhdev/mesh-shared';
 import { QUEUE_HOLD_NOTICE_AFTER_MS } from '../../src/mesh/mesh-queue-hold.js';
-import { recordQueueTaskHold, notifyHeldQueueTasks } from '../../src/mesh/mesh-queue-hold-store.js';
+import { recordQueueTaskHold, notifyHeldQueueTasks, holdReasonIdPart } from '../../src/mesh/mesh-queue-hold-store.js';
 import { __markAutoLaunchForTests } from '../../src/mesh/mesh-queue-autolaunch.js';
 import { noteQuotaGateEvidence, resetQuotaGateEvidenceForTests } from '../../src/mesh/mesh-quota-override.js';
 
@@ -60,5 +62,17 @@ describe('quota-gated holds notify the coordinator', () => {
         notifyHeldQueueTasks(mesh);
         expect(state.notify).toHaveBeenCalledTimes(1);
         expect(state.notify.mock.calls[0][0].event).toBe('mesh:queue_held');
+    });
+});
+
+describe('hold notice event id', () => {
+    it('keeps the id identifier-shaped when the reason is free-form', () => {
+        const part = holdReasonIdPart('all_providers_quota_gated: claude-cli: provider_quota_weekly_low');
+        expect(part).toMatch(/^all_providers_quota_gated-[0-9a-f]{12}$/);
+        expect(holdReasonIdPart('review_input_unavailable')).toBe('review_input_unavailable');
+        // The real publish guard: a raw free-form reason parks the notice as local-only.
+        const entry = (reason: string) => ({ v: 2, at: 1, k: 'turn.notify', notify: 'mesh_event', targetDaemonId: 'standalone_mach_x', taskId: 't', eventId: `queue-hold:m:t:2026-11-02T07:27:01.686Z:${reason}:none` }) as MeshTopicEntry;
+        expect(projectTurnTopicEntry(entry('all_providers_quota_gated: claude-cli: provider_quota_weekly_low'))).toBeNull();
+        expect(projectTurnTopicEntry(entry(part))).not.toBeNull();
     });
 });

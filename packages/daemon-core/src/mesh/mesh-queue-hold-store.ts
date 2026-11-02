@@ -41,6 +41,13 @@ export function recordQueueTaskHold(meshId: string, taskId: string, reason: stri
  * `turn.notify` topic identifier (<=256 chars); embedding the full id list overflowed
  * it once a task was blocked by ~7+ others and the mesh publisher refused the entry.
  */
+/** Event ids are published and must stay identifier-shaped; a free-form reason (quota detail) goes in as a digest. */
+export function holdReasonIdPart(reason: string): string {
+    if (/^[\w.-]+$/.test(reason)) return reason;
+    const family = /^[\w.-]+/.exec(reason)?.[0] ?? 'reason';
+    return `${family}-${createHash('sha1').update(reason).digest('hex').slice(0, 12)}`;
+}
+
 export function blockerDigest(ids: readonly string[]): string {
     if (ids.length === 0) return 'none';
     return `${ids.length}-${createHash('sha1').update([...ids].sort().join(',')).digest('hex').slice(0, 12)}`;
@@ -64,7 +71,7 @@ export function notifyHeldQueueTasks(meshId: string, now = Date.now()): void {
         store.transaction(() => {
             const task = store.findQueueEntryById(meshId, snapshot.id);
             if (!task || task.status !== 'pending' || task.holdNoticeId || JSON.stringify(task.hold) !== JSON.stringify(snapshot.hold)) return;
-            const eventId = `queue-hold:${meshId}:${task.id}:${view.since}:${view.reason}:${blockerDigest(view.blockingTaskIds)}`;
+            const eventId = `queue-hold:${meshId}:${task.id}:${view.since}:${holdReasonIdPart(view.reason)}:${blockerDigest(view.blockingTaskIds)}`;
             const blockers = view.blockingTasks.map(b => `${b.taskId} (${b.title})`).join(', ');
             const coordinatorMessage = isQuotaGateHoldReason(view.reason)
                 ? quotaHoldCoordinatorMessage(task, view.reason, view.ageMs, readQuotaGateEvidence(meshId, task.id))
