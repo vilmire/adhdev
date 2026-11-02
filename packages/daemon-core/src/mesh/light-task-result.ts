@@ -22,6 +22,7 @@ import { lightGit, lightGitOk } from './light-git.js';
 import { lightRepoHash, lightTaskKey } from './light-workspace.js';
 import { getLightWorkspace, setLightWorkspaceState, type LightWorkspaceRow } from './mesh-light-workspace-store.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
+import { stopLightWorkerSession } from './light-session-stop.js';
 import { commitTaskTerminal } from './mesh-task-terminal.js';
 import { withQueueLock } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue-types.js';
@@ -32,28 +33,7 @@ const DEP_SECTIONS = ['dependencies', 'devDependencies', 'peerDependencies', 'op
 
 export interface LightReportInput { outcome: string; testsRun?: LightTestRun[] }
 
-/**
- * Ends the light worker's session once its task is terminal and the result is captured. Installed at boot with the
- * daemon's operator session-stop path (`cleanupMeshSessions` mode 'stop', which records an intentional stop). The
- * workspace stays — it holds the branch until land/discard; only the session ends.
- */
-export type LightSessionStopper = (input: { meshId: string; taskId: string; sessionId: string }) => Promise<void>;
-let lightSessionStopper: LightSessionStopper | null = null;
-export function setLightSessionStopper(fn: LightSessionStopper | null): void { lightSessionStopper = fn; }
-
-/** Best-effort: a failed stop leaves the session to the idle reaper (it can never claim other work anyway). */
-export async function stopLightWorkerSession(meshId: string, taskId: string): Promise<boolean> {
-    try {
-        const task = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
-        const sessionId = task?.light ? (task.targetSessionId || task.assignedSessionId) : undefined;
-        if (!sessionId || !lightSessionStopper) return false;
-        await lightSessionStopper({ meshId, taskId, sessionId });
-        return true;
-    } catch (e: any) {
-        LOG.warn('LightTask', `could not stop the light session of ${taskId}: ${e?.message || e}`);
-        return false;
-    }
-}
+export { setLightSessionStopper, stopLightWorkerSession, type LightSessionStopper } from './light-session-stop.js';
 
 /** Fire-and-forget hook called by the worker-report accept path (one line there). */
 export function captureLightResultInBackground(meshId: string, taskId: string, report: LightReportInput): void {

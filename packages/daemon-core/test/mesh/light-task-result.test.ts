@@ -42,7 +42,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
   listMeshes: meshConfigMocks.listMeshes,
 }))
 
-import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, recordDirectDispatchTask } from '../../src/mesh/mesh-work-queue.js'
+import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, cancelTask, recordDirectDispatchTask } from '../../src/mesh/mesh-work-queue.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 
 const NODE_A = 'node_alpha'
@@ -150,6 +150,32 @@ describe('LIGHT-TASK result capture (real git)', () => {
       expect(resultOf(store, row.id).lightResult?.landing).toBe('ready')
       expect(getLightWorkspace(store.db, ws.workspaceId)?.state).toBe('result_ready')
       expect(fs.existsSync(ws.path)).toBe(true)
+    } finally { setLightSessionStopper(null) }
+  })
+
+  it('cancelling a light task stops its worker session (no capture ever runs); cancelling a plain task does not', async () => {
+    const stopped: Array<{ meshId: string; taskId: string; sessionId: string }> = []
+    setLightSessionStopper(async (input) => { stopped.push(input) })
+    try {
+      const { row, store } = await setup()
+      const plain = enqueueTask(meshId, 'plain work', { taskMode: 'code_change', difficulty: 'easy' } as any)
+      store.updateQueueEntry({ ...store.findQueueEntryById(meshId, plain.id)!, status: 'assigned', assignedSessionId: 'sess_plain' } as any)
+      cancelTask(meshId, plain.id, { reason: 'operator_cancel' })
+      cancelTask(meshId, row.id, { reason: 'operator_cancel' })
+      await vi.waitFor(() => expect(stopped).toHaveLength(1))
+      expect(stopped[0]).toEqual({ meshId, taskId: row.id, sessionId: `sess_${row.id}` })
+      expect(resultOf(store, row.id).status).toBe('cancelled')
+      await new Promise(r => setTimeout(r, 50))
+      expect(stopped).toHaveLength(1)
+    } finally { setLightSessionStopper(null) }
+  })
+
+  it('a stopper failure on cancel never breaks the cancel', async () => {
+    setLightSessionStopper(async () => { throw new Error('host_unavailable') })
+    try {
+      const { row, store } = await setup()
+      expect(() => cancelTask(meshId, row.id, { reason: 'operator_cancel' })).not.toThrow()
+      expect(resultOf(store, row.id).status).toBe('cancelled')
     } finally { setLightSessionStopper(null) }
   })
 

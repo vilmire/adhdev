@@ -31,6 +31,7 @@ import { discardWorkerMailboxForTask } from './worker-mailbox.js';
 import { canonicalJson } from './mesh-untrusted-evidence.js';
 import { sha256Hex } from '../system/hash.js';
 import { isStageImplReport, shouldHoldStageTerminal } from './stage-state.js';
+import { stopLightWorkerSession } from './light-session-stop.js';
 import { notifyStageChildTerminal, notifyStageImplCompleted } from './stage-hooks.js';
 
 /** Terminal statuses the choke point accepts. */
@@ -110,7 +111,7 @@ export function commitTaskTerminal(terminal: MeshTerminalCommitInput): MeshTermi
     }
     // Idempotent post-commit cleanup: the replay fence re-enters with
     // duplicate:true for an already-terminal row, so this may run more than once.
-    if (result.committed) afterBridgeCommit(store.db, () => afterTaskTerminalCommitted(terminal.meshId, terminal.taskId));
+    if (result.committed) afterBridgeCommit(store.db, () => afterTaskTerminalCommitted(terminal.meshId, terminal.taskId, terminal.sessionId));
     return result;
 }
 
@@ -219,10 +220,14 @@ export function applyTaskTerminalInTxn(input: MeshLedgerTerminalInput): { entry:
  * cannot outlive the task it authorizes, and an undelivered memo for a terminal
  * task can never be delivered. Best-effort and idempotent.
  */
-export function afterTaskTerminalCommitted(meshId: string, taskId: string): void {
+export function afterTaskTerminalCommitted(meshId: string, taskId: string, sessionIdHint?: string): void {
     try { expireWorkerTaskTokensForTask(meshId, taskId); } catch { /* a stale token still fails the causal checks */ }
     try { discardWorkerMailboxForTask(meshId, taskId); } catch { /* best-effort */ }
     notifyStageChildTerminal(meshId, taskId);
+    // A cancelled light task never reaches result capture, which is what normally ends its worker session.
+    try {
+        if (MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId)?.status === 'cancelled') void stopLightWorkerSession(meshId, taskId, sessionIdHint);
+    } catch { /* best-effort: the idle reaper is the backstop */ }
 }
 
 /** Insert the next immutable output version for this task. */
