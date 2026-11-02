@@ -48,6 +48,7 @@ import {
     CHAT_COMMIT_KEY,
     CHAT_COMMIT_KIND,
     CHAT_DEL_KIND,
+    CHAT_LIVE_BUBBLES_MAX,
     CHAT_LIVE_BYTES_MAX,
     CHAT_META_KEY,
     CHAT_META_KIND,
@@ -513,7 +514,7 @@ export class KeyedChatSessionState {
             windowRetained.clear();
         }
 
-        // ── §11 Q1 live cap: tombstone the oldest bubbles beyond CHAT_LIVE_BYTES_MAX (2 MiB) ──────
+        // ── §11 Q1 live cap: tombstone the oldest bubbles beyond CHAT_LIVE_BYTES_MAX / CHAT_LIVE_BUBBLES_MAX ──────
         const byOrd: Array<{ id: string; ord: string; bytes: number }> = [
             ...observed.map((b) => ({ id: b.id, ord: b.ord, bytes: b.bytes })),
             ...Array.from(retained, (id) => {
@@ -523,9 +524,9 @@ export class KeyedChatSessionState {
         ];
         let total = byOrd.reduce((sum, b) => sum + b.bytes, 0);
         const capped = new Set<string>();
-        if (total > CHAT_LIVE_BYTES_MAX) {
+        if (total > CHAT_LIVE_BYTES_MAX || byOrd.length > CHAT_LIVE_BUBBLES_MAX) {
             byOrd.sort((a, b) => (a.ord < b.ord ? -1 : a.ord > b.ord ? 1 : a.id < b.id ? -1 : 1));
-            for (let i = 0; i < byOrd.length - 1 && total > CHAT_LIVE_BYTES_MAX; i += 1) {
+            for (let i = 0; i < byOrd.length - 1 && (total > CHAT_LIVE_BYTES_MAX || byOrd.length - i > CHAT_LIVE_BUBBLES_MAX); i += 1) {
                 capped.add(byOrd[i].id);
                 total -= byOrd[i].bytes;
             }

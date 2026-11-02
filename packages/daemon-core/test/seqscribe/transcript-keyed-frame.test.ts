@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     CHAT_COMMIT_KIND,
     CHAT_DEL_KIND,
+    CHAT_LIVE_BUBBLES_MAX,
     CHAT_LIVE_BYTES_MAX,
     CHAT_META_KIND,
     CHAT_MSG_KIND,
@@ -124,6 +125,20 @@ describe('KeyedChatSessionState — live cap (§11 Q1)', () => {
         const meta = frame.rows.find((r) => r.kind === CHAT_META_KIND)!.payload as { coverage: { omittedBefore: boolean } };
         expect(meta.coverage.omittedBefore).toBe(true);
         expect(driver.state.liveBytes()).toBeLessThanOrEqual(CHAT_LIVE_BYTES_MAX);
+    }, 30_000);
+
+    it('a chat of many short messages is capped by count, keeping the newest bubbles', () => {
+        const driver = new FrameDriver();
+        const total = CHAT_LIVE_BUBBLES_MAX + 25;
+        const specs = Array.from({ length: total }, (_, i) => ({ id: `d.c.${i + 1}`, ord: ordOf(i), text: `short ${i}` }));
+        const frame = driver.step(observation(specs))!;
+        expect(frame.capped).toBe(true);
+        expect(frame.commit.liveCount).toBe(CHAT_LIVE_BUBBLES_MAX);
+        expect(frame.rows.some((r) => r.kind === CHAT_MSG_KIND && r.key === chatMessageKey('d.c.25'))).toBe(false);
+        expect(frame.rows.some((r) => r.kind === CHAT_MSG_KIND && r.key === chatMessageKey('d.c.26'))).toBe(true);
+        expect(frame.rows.some((r) => r.kind === CHAT_MSG_KIND && r.key === chatMessageKey(`d.c.${total}`))).toBe(true);
+        const meta = frame.rows.find((r) => r.kind === CHAT_META_KIND)!.payload as { coverage: { omittedBefore: boolean } };
+        expect(meta.coverage.omittedBefore).toBe(true);
     }, 30_000);
 });
 

@@ -92,7 +92,7 @@ export const CHAT_PART_MAX_JCS_BYTES = 24 * 1024;
 
 /**
  * Live bytes kept per session (owner decision Q1, §11; lowered 16 MiB -> 2 MiB
- * on 2026-10-29, then 2 MiB -> 512 KiB on 2026-11-01). Beyond it the oldest bubbles are tombstoned and
+ * on 2026-10-29, 2 MiB -> 512 KiB on 2026-11-01, 512 -> 256 KiB on 2026-11-02). Beyond it the oldest bubbles are tombstoned and
  * `coverage.omittedBefore` turns true; the full record stays in the provider's
  * own history file (dashboards page older rows through `chat_history`).
  *
@@ -117,8 +117,13 @@ export const CHAT_PART_MAX_JCS_BYTES = 24 * 1024;
  * what a pane shows first, and compatibility is unchanged — it only changes
  * how many bubbles the producer keeps live; older and newer readers fold it
  * exactly like any other `omittedBefore` transcript.
+ *
+ * Why 256 KiB and 200 bubbles (2026-11-02, owner): a pane shows about 80 bubbles first, yet a chat of
+ * short messages still sent ~990 bubbles on every open (10-20 s over a relay). The live set exists to draw
+ * the current screen; everything older is one "load earlier" away through `chat_history`.
  */
-export const CHAT_LIVE_BYTES_MAX = 512 * 1024;
+export const CHAT_LIVE_BYTES_MAX = 256 * 1024;
+export const CHAT_LIVE_BUBBLES_MAX = 200;
 
 /** Presentation strings in `meta` are bounded so the entry stays far below 64 KiB. */
 export const CHAT_META_TEXT_MAX = 16 * 1024;

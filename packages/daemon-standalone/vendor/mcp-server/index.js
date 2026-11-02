@@ -114137,6 +114137,7 @@ ${result.stderr}`, result.code);
     var CHAT_COMMIT_KEY;
     var CHAT_PART_MAX_JCS_BYTES;
     var CHAT_LIVE_BYTES_MAX;
+    var CHAT_LIVE_BUBBLES_MAX;
     var CHAT_META_TEXT_MAX;
     var CHAT_META_LABEL_MAX;
     var CHAT_META_LIST_MAX;
@@ -114161,7 +114162,8 @@ ${result.stderr}`, result.code);
         CHAT_META_KEY = "meta";
         CHAT_COMMIT_KEY = "commit";
         CHAT_PART_MAX_JCS_BYTES = 24 * 1024;
-        CHAT_LIVE_BYTES_MAX = 512 * 1024;
+        CHAT_LIVE_BYTES_MAX = 256 * 1024;
+        CHAT_LIVE_BUBBLES_MAX = 200;
         CHAT_META_TEXT_MAX = 16 * 1024;
         CHAT_META_LABEL_MAX = 1024;
         CHAT_META_LIST_MAX = 32;
@@ -114467,9 +114469,9 @@ ${result.stderr}`, result.code);
             ];
             let total = byOrd.reduce((sum, b) => sum + b.bytes, 0);
             const capped = /* @__PURE__ */ new Set();
-            if (total > CHAT_LIVE_BYTES_MAX) {
+            if (total > CHAT_LIVE_BYTES_MAX || byOrd.length > CHAT_LIVE_BUBBLES_MAX) {
               byOrd.sort((a, b) => a.ord < b.ord ? -1 : a.ord > b.ord ? 1 : a.id < b.id ? -1 : 1);
-              for (let i = 0; i < byOrd.length - 1 && total > CHAT_LIVE_BYTES_MAX; i += 1) {
+              for (let i = 0; i < byOrd.length - 1 && (total > CHAT_LIVE_BYTES_MAX || byOrd.length - i > CHAT_LIVE_BUBBLES_MAX); i += 1) {
                 capped.add(byOrd[i].id);
                 total -= byOrd[i].bytes;
               }
