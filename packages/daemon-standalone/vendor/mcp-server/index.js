@@ -80015,15 +80015,18 @@ ${asText(streams.stderr)}
             }
             return out;
           },
-          enqueueReviewChild: (parent, spec) => enqueueTask(parent.meshId, spec.message, {
-            stageChild: { parentTaskId: parent.id, round: spec.round, review: { sourceTaskId: parent.id, independence: spec.independence }, ...spec.reviewerWorkspace ? { reviewerWorkspace: spec.reviewerWorkspace } : {} },
-            difficulty: parent.difficulty === "difficult" ? "difficult" : "medium",
-            ...parent.missionId ? { missionId: parent.missionId } : {},
-            inputArtifactIds: spec.inputArtifactIds,
-            inheritArtifacts: false,
-            ...spec.targetSessionId ? { targetSessionId: spec.targetSessionId } : {},
-            ...parent.sourceCoordinatorSessionId ? { sourceCoordinatorSessionId: parent.sourceCoordinatorSessionId } : {}
-          }),
+          enqueueReviewChild: (parent, spec) => {
+            if (!spec.reviewerWorkspace && !parent.ownershipScope && parent.ownedPaths?.paths.length) attestStageParentScope(parent);
+            return enqueueTask(parent.meshId, spec.message, {
+              stageChild: { parentTaskId: parent.id, round: spec.round, review: { sourceTaskId: parent.id, independence: spec.independence }, ...spec.reviewerWorkspace ? { reviewerWorkspace: spec.reviewerWorkspace } : {} },
+              difficulty: parent.difficulty === "difficult" ? "difficult" : "medium",
+              ...parent.missionId ? { missionId: parent.missionId } : {},
+              inputArtifactIds: spec.inputArtifactIds,
+              inheritArtifacts: false,
+              ...spec.targetSessionId ? { targetSessionId: spec.targetSessionId } : {},
+              ...parent.sourceCoordinatorSessionId ? { sourceCoordinatorSessionId: parent.sourceCoordinatorSessionId } : {}
+            });
+          },
           cancel: (meshId, taskId, reason) => {
             cancelTask(meshId, taskId, { reason, stageManaged: true });
           },
@@ -80121,6 +80124,26 @@ ${report}`;
         pipelineCeilingMs: () => resolveStagePipelineCeilingMs()
       };
     }
+    function attestStageParentScope(parent) {
+      const nodeId = parent.assignedNodeId ?? parent.targetNodeId;
+      const mesh = getMesh(parent.meshId);
+      const workspace = mesh?.nodes?.find((n) => (n.id ?? n.nodeId) === nodeId)?.workspace;
+      const machineId = getMachineId();
+      if (!nodeId || !workspace || !mesh?.repoIdentity || !machineId) return;
+      try {
+        const scope2 = attestLocalOwnership({ repoIdentity: mesh.repoIdentity, machineId, nodeId, workspace, phase: "source", paths: parent.ownedPaths });
+        withQueueLock(parent.meshId, () => {
+          const e = MeshRuntimeStore.getInstance().findQueueEntryById(parent.meshId, parent.id);
+          if (!e || e.ownershipScope) return;
+          e.ownershipScope = scope2;
+          e.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+          MeshRuntimeStore.getInstance().updateQueueEntry(e);
+        });
+        parent.ownershipScope = scope2;
+      } catch (e) {
+        LOG.warn("StagePipeline", `could not attest the source scope of ${parent.id} for its read-lease review: ${e?.message || e}`);
+      }
+    }
     function getInstalledStagePipeline() {
       return installed;
     }
@@ -80188,6 +80211,7 @@ ${report}`;
         init_refine_profile_run();
         init_light_workspace();
         init_light_workspace_config();
+        init_mesh_physical_ownership();
         SELF_CHECK_LOG_MAX2 = 6e4;
         execFileAsync4 = (0, import_node_util7.promisify)(import_node_child_process17.execFile);
         MAX_FINGERPRINT_OTHER_FILES = 3e5;

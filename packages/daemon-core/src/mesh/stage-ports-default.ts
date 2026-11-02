@@ -17,7 +17,7 @@ import { enqueueTask } from './mesh-work-queue-enqueue.js';
 import { cancelTask } from './mesh-work-queue.js';
 import { commitTaskTerminal } from './mesh-task-terminal.js';
 import { endTaskDispatchInFlight } from './mesh-task-inflight.js';
-import { getConfigDir } from '../config/config.js';
+import { getConfigDir, getMachineId } from '../config/config.js';
 import { getMesh, listMeshes } from '../config/mesh-config.js';
 import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 import { meshRecord } from './mesh-record.js';
@@ -34,6 +34,7 @@ import type { StageGitPort, StageRuntimePorts, SelfCheckRunner, SelfCheckResult,
 import { runMeshRefineValidationProfile } from './refine-profile-run.js';
 import { prepareLightWorkspace, removeLightWorkspace } from './light-workspace.js';
 import { loadLightWorkspaceConfig } from './light-workspace-config.js';
+import { attestLocalOwnership } from './mesh-physical-ownership.js';
 
 const SELF_CHECK_LOG_MAX = 60_000;
 
@@ -250,14 +251,20 @@ export function createProductionStagePorts(components: Pick<DaemonComponents, 's
                 }
                 return out;
             },
-            enqueueReviewChild: (parent, spec) => enqueueTask(parent.meshId, spec.message, {
+            enqueueReviewChild: (parent, spec) => {
+                // A read-lease reviewer may only read the implementer's checkout once the parent proves where its
+                // owned paths physically live (review routing refuses review_input_unavailable otherwise). Ordinary
+                // code_change rows carry no ownershipScope, so attest it here, once, before the round is queued.
+                if (!spec.reviewerWorkspace && !parent.ownershipScope && parent.ownedPaths?.paths.length) attestStageParentScope(parent);
+                return enqueueTask(parent.meshId, spec.message, {
                 stageChild: { parentTaskId: parent.id, round: spec.round, review: { sourceTaskId: parent.id, independence: spec.independence }, ...(spec.reviewerWorkspace ? { reviewerWorkspace: spec.reviewerWorkspace } : {}) },
                 difficulty: parent.difficulty === 'difficult' ? 'difficult' : 'medium',
                 ...(parent.missionId ? { missionId: parent.missionId } : {}),
                 inputArtifactIds: spec.inputArtifactIds, inheritArtifacts: false,
                 ...(spec.targetSessionId ? { targetSessionId: spec.targetSessionId } : {}),
                 ...(parent.sourceCoordinatorSessionId ? { sourceCoordinatorSessionId: parent.sourceCoordinatorSessionId } : {}),
-            }),
+            });
+            },
             cancel: (meshId, taskId, reason) => { cancelTask(meshId, taskId, { reason, stageManaged: true }); },
             setChildIndependence: (meshId, childId, independence) => {
                 withQueueLock(meshId, () => {
@@ -328,6 +335,29 @@ export function createProductionStagePorts(components: Pick<DaemonComponents, 's
         },
         pipelineCeilingMs: () => resolveStagePipelineCeilingMs(),
     };
+}
+
+
+/** Attest the stage parent's physical ownership scope on this machine and persist it (best-effort). */
+function attestStageParentScope(parent: MeshWorkQueueEntry): void {
+    const nodeId = parent.assignedNodeId ?? parent.targetNodeId;
+    const mesh = getMesh(parent.meshId) as { repoIdentity?: string; nodes?: Array<{ id?: string; nodeId?: string; workspace?: string }> } | undefined;
+    const workspace = mesh?.nodes?.find(n => (n.id ?? n.nodeId) === nodeId)?.workspace;
+    const machineId = getMachineId();
+    if (!nodeId || !workspace || !mesh?.repoIdentity || !machineId) return;
+    try {
+        const scope = attestLocalOwnership({ repoIdentity: mesh.repoIdentity, machineId, nodeId, workspace, phase: 'source', paths: parent.ownedPaths! });
+        withQueueLock(parent.meshId, () => {
+            const e = MeshRuntimeStore.getInstance().findQueueEntryById(parent.meshId, parent.id);
+            if (!e || e.ownershipScope) return;
+            e.ownershipScope = scope;
+            e.updatedAt = new Date().toISOString();
+            MeshRuntimeStore.getInstance().updateQueueEntry(e);
+        });
+        parent.ownershipScope = scope;
+    } catch (e: any) {
+        LOG.warn('StagePipeline', `could not attest the source scope of ${parent.id} for its read-lease review: ${e?.message || e}`);
+    }
 }
 
 let installed: StagePipelineHandle | null = null;
