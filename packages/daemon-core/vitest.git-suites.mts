@@ -98,4 +98,7 @@ export const GIT_HEAVY_SUITES: string[] = [
   // common-dir parent that grok keys trust by.
   'test/providers/grok-workspace-trust.test.ts',
   'test/providers/trust-provenance-ledger.test.ts',
+  // Driver result artifacts: real repos to prove the generated files never dirty the checkout.
+  'test/drivers/driver-artifacts.test.ts',
+  'test/commands/driver-artifacts-e2e.test.ts',
 ];

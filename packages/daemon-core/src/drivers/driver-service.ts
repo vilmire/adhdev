@@ -11,6 +11,7 @@ import type { DriverMcpClient } from './mcp-client.js';
 import { DriverActionStaging, type DriverWorkerIdentity, type DriverOwnerSource } from './staged-action.js';
 import { deriveDriverRiskClass } from './risk-class.js';
 import { readDriverInputSchema, validateDriverArgs } from './input-schema.js';
+import { captureDriverArtifacts, type DriverArtifactPort } from './driver-artifacts.js';
 
 export type DriverInstanceState = 'discovered' | 'validated' | 'installed' | 'approved' | 'ready' | 'running' | 'stopped' | 'failed' | 'removed';
 type ManagedClient = DriverMcpClient & { start(): Promise<void>; state: string };
@@ -21,6 +22,7 @@ export interface DriverInvocationRecord {
     caller: ({ kind: 'worker' } & DriverWorkerIdentity) | { kind: 'owner'; source: DriverOwnerSource; stagedRequestId: string; resolvedAt: number };
     resourceKeys: string[]; startedAt: number; completedAt?: number;
     status: 'running' | 'completed' | 'failed'; output?: unknown; error?: string;
+    artifacts?: Array<{ type: string; artifactId: string; digest: string }>; artifactError?: { code: string; message: string };
 }
 export interface DriverServicePorts {
     registry: Pick<ProviderRegistry, 'getByCategory'>;
@@ -33,6 +35,8 @@ export interface DriverServicePorts {
     bus?: SessionLifecycleBus | null;
     now?: () => number;
     createProcess?: (installed: Installed) => ManagedClient;
+    /** Registers driver files (screenshots, large results) as session artifacts. Absent = inline only. */
+    artifacts?: DriverArtifactPort;
 }
 const refused = (code: string): DriverReply => ({ success: false, code });
 const LEASE_MS = 30 * 60_000;
@@ -211,9 +215,17 @@ export class DriverService {
             await instance.process.start(); instance.state = 'running';
             const output = await instance.process.callTool(action.tool, (input.args ?? {}) as Record<string, unknown>);
             record.status = output.isError ? 'failed' : 'completed';
-            const json = JSON.stringify(output);
-            record.output = json.length <= 64_000 ? output : { truncated: true, text: json.slice(0, 64_000) };
-            return { success: !output.isError, invocationId: record.invocationId, status: record.status, output: record.output };
+            // Registration failure never fails the action: it is reported as artifactError.
+            const captured = await captureDriverArtifacts({ result: output, identity, invocationId: record.invocationId,
+                title: `${input.type}.${input.action}`, ...(this.ports.artifacts ? { port: this.ports.artifacts } : {}) })
+                .catch(error => ({ output: { truncated: true, note: 'Result could not be processed for artifact registration' }, artifacts: [],
+                    artifactError: { code: 'artifact_register_failed', message: error instanceof Error ? error.message : String(error) } }));
+            record.output = captured.output;
+            if (captured.artifacts.length) record.artifacts = captured.artifacts;
+            if (captured.artifactError) record.artifactError = captured.artifactError;
+            return { success: !output.isError, invocationId: record.invocationId, status: record.status, output: record.output,
+                ...(captured.artifacts.length ? { artifacts: captured.artifacts } : {}),
+                ...(captured.artifactError ? { artifactError: captured.artifactError } : {}) };
         } catch (error) {
             instance.state = instance.process?.state === 'failed' ? 'failed' : 'stopped';
             record.status = 'failed'; record.error = error instanceof Error ? error.message : String(error);

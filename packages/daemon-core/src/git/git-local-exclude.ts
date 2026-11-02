@@ -17,7 +17,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'fs';
 import * as path from 'path';
 
 /** Best-effort; returns true when the path is (now) listed. */
-export function ensureLocalGitExclude(workspace: string, filePath: string): boolean {
+export function ensureLocalGitExclude(workspace: string, filePath: string, label = 'generated MCP config'): boolean {
     try {
         const absWorkspace = path.resolve(workspace);
         const rel = path.relative(absWorkspace, path.resolve(filePath));
@@ -31,7 +31,7 @@ export function ensureLocalGitExclude(workspace: string, filePath: string): bool
         if (existing.split(/\r?\n/).some(line => line.trim() === pattern)) return true;
         mkdirSync(path.dirname(excludeFile), { recursive: true });
         const prefix = existing && !existing.endsWith('\n') ? '\n' : '';
-        appendFileSync(excludeFile, `${prefix}# adhdev: generated MCP config\n${pattern}\n`, 'utf8');
+        appendFileSync(excludeFile, `${prefix}# adhdev: ${label}\n${pattern}\n`, 'utf8');
         return true;
     } catch {
         return false;

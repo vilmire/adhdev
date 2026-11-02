@@ -21,6 +21,17 @@ createInterface({ input: process.stdin }).on('line', line => {
         if (msg.params.name === 'malformed' || flags.has('--malformed')) { process.stdout.write('{bad json\n'); return; }
         if (msg.params.name === 'cancel-count') { success(msg.id, content(cancelled)); return; }
         if (msg.params.name === 'env') { success(msg.id, content(process.env)); return; }
+        if (msg.params.name === 'image') {
+            const a = msg.params.arguments ?? {};
+            success(msg.id, { content: [{ type: 'text', text: 'shot' }, { type: 'image', data: a.data, mimeType: a.mime }] });
+            return;
+        }
+        if (msg.params.name === 'bigtext') {
+            const lines = Math.ceil(Number(msg.params.arguments?.chars ?? 100000) / 20);
+            const suffix = String(msg.params.arguments?.suffix ?? '');
+            success(msg.id, { content: [{ type: 'text', text: Array.from({ length: lines }, (_, i) => `log line ${String(i).padStart(6, '0')}\n`).join('') + suffix }] });
+            return;
+        }
         if (msg.params.name === 'write-cwd') {
             const filename = String(msg.params.arguments?.filename ?? '.playwright-mcp-trace.json');
             writeFileSync(join(process.cwd(), filename), JSON.stringify({ written: true }));

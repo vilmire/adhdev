@@ -9,11 +9,18 @@ import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 import type { ChildProcess } from 'node:child_process';
 import { DriverMcpError, type DriverCall, type DriverMcpClient } from './mcp-client.js';
 
+/**
+ * Largest single JSON-RPC line accepted from a driver. A screenshot is returned as
+ * base64 inside one message, and artifacts may be up to 4 MiB (5.6 MiB of base64),
+ * so the old 1 MiB cap closed the connection on any screenshot above ~768 KiB.
+ */
+export const MAX_DRIVER_MESSAGE_BYTES = 8 * 1024 * 1024;
+
 class ManagedStdioTransport implements Transport {
     onclose?: Transport['onclose'];
     onerror?: Transport['onerror'];
     onmessage?: Transport['onmessage'];
-    private readonly buffer = new ReadBuffer({ maxBufferSize: 1024 * 1024 });
+    private readonly buffer = new ReadBuffer({ maxBufferSize: MAX_DRIVER_MESSAGE_BYTES });
     private closed = false;
     constructor(private readonly child: ChildProcess) {}
     async start(): Promise<void> {

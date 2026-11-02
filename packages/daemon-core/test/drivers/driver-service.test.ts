@@ -198,3 +198,28 @@ describe('owner destructive approval', () => {
         expect(calls).toBe(0);
     });
 });
+
+describe('driver result artifacts', () => {
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('svc')]).toString('base64');
+    const withResult = (result: unknown, artifacts?: DriverServicePorts['artifacts']) => {
+        ports.createProcess = vi.fn(() => ({ state: 'running', start: vi.fn(async () => {}), listTools: vi.fn(async () => []),
+            callTool: vi.fn(() => Object.assign(Promise.resolve(result), { id: 'call' }) as DriverCall), cancel: vi.fn(), close: vi.fn(async () => {}) })) as never;
+        if (artifacts) ports.artifacts = artifacts;
+        service = new DriverService(ports);
+    };
+    it('a throwing artifact port never fails the action and never leaks base64', async () => {
+        withResult({ content: [{ type: 'image', data: png, mimeType: 'image/png' }] }, { resolve: async () => { throw new Error('store down'); } });
+        const result = await service.invoke(worker, input);
+        expect(result).toMatchObject({ success: true, status: 'completed', artifactError: { code: 'artifact_register_failed' } });
+        expect(JSON.stringify(result)).not.toContain(png);
+        expect(service.invocations().at(-1)).toMatchObject({ status: 'completed', artifactError: { code: 'artifact_register_failed' } });
+    });
+    it('without a port, an image is omitted (not cut off) and an ordinary result is unchanged', async () => {
+        withResult({ content: [{ type: 'image', data: png, mimeType: 'image/png' }] });
+        expect(await service.invoke(worker, input)).toMatchObject({ success: true, artifactError: { code: 'artifact_unavailable' },
+            output: { content: [{ type: 'image', omitted: true }] } });
+        withResult({ content: [{ type: 'text', text: 'plain' }] });
+        expect(await service.invoke(worker, input)).toEqual({ success: true, invocationId: expect.any(String), status: 'completed',
+            output: { content: [{ type: 'text', text: 'plain' }] } });
+    });
+});

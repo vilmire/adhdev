@@ -8,8 +8,9 @@ import { depositWorkerMailboxMessage } from '../../mesh/worker-mailbox.js';
 import { DriverService } from '../../drivers/driver-service.js';
 import { DriverActionStaging } from '../../drivers/staged-action.js';
 import { readInstalledDriver } from '../../drivers/installed-driver.js';
+import { createDriverArtifactPort } from './driver-artifact-port.js';
 
-type DriverContext = Pick<MedFamilyContext, 'deps' | 'getMeshForCommand'>;
+type DriverContext = Pick<MedFamilyContext, 'deps' | 'getMeshForCommand' | 'getCachedInlineMesh'>;
 const services = new WeakMap<CommandRouterDeps, DriverService>();
 export function getDriverService(ctx: DriverContext): DriverService {
     const existing = services.get(ctx.deps);
@@ -18,7 +19,7 @@ export function getDriverService(ctx: DriverContext): DriverService {
     if (!assistant.driverActivations || !assistant.driverStaging) throw new Error('Driver activation services unavailable');
     const service = new DriverService({ registry: ctx.deps.providerLoader,
         activations: assistant.driverActivations, activationStaging: assistant.driverStaging,
-        actions: new DriverActionStaging(), bus: ctx.deps.bus,
+        actions: new DriverActionStaging(), bus: ctx.deps.bus, artifacts: createDriverArtifactPort(ctx),
         readCurrent: type => {
             const current = readInstalledDriver(ctx.deps.providerLoader, type);
             const cwd = ctx.deps.providerLoader.findProviderDir(type);
@@ -30,7 +31,8 @@ export function getDriverService(ctx: DriverContext): DriverService {
             const text = JSON.stringify({ kind: 'driver_action_result', ...result });
             return depositWorkerMailboxMessage({ meshId: identity.meshId, taskId: identity.taskId,
                 text: text.length <= 2000 ? text : JSON.stringify({ kind: 'driver_action_result', stagedId: result.stagedId,
-                    invocationId: result.invocationId, success: result.success, code: result.code, truncated: true }) });
+                    invocationId: result.invocationId, success: result.success, code: result.code, truncated: true,
+                    ...(Array.isArray(result.artifacts) ? { artifacts: result.artifacts } : {}) }) });
         },
     });
     services.set(ctx.deps, service);

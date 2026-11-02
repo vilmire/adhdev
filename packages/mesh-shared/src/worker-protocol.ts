@@ -201,6 +201,8 @@ export function renderWorkerProtocolFooter(input: WorkerProtocolFooterInput = {}
         'Put substantial findings (a diagnosis, evidence, repro steps, review findings) in a workspace file and register it with '
             + '`artifact_register`, then cite the returned ids in `report_completion` `artifact_ids`. The next task in this mission '
             + 'inherits them as input artifacts instead of re-investigating — keep each artifact self-contained and factual.',
+        '`driver_invoke` results that carry an image or a large body arrive already registered: take `artifacts[].artifactId` from the '
+            + 'result and cite it in `artifact_ids` — do not paste the body.',
     )
     if (input.enclosedHandoffNotes && input.enclosedHandoffNotes > 0) {
         lines.push(
