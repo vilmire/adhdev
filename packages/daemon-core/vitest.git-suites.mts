@@ -84,7 +84,7 @@ export const GIT_HEAVY_SUITES: string[] = [
   'test/mesh/mesh-onboarding-plan.test.ts',
   // Mission git refs (design 2026-11-01-mission-git-refs): real bare-origin + clone topologies (merge, cherry-pick,
   // squash, rebase, shallow clone) judged by ancestry / git cherry / merge-tree residual patch.
-  // Production enqueueReviewChild attests the stage parent's source scope (real git root).
+  // Production enqueueReviewChild attests the source scope of the stage parent (real git root).
   'test/mesh/stage-ports-attest-scope.test.ts',
   'test/mesh/mission-ref-containment.test.ts',
   'test/mesh/mission-git-eval.test.ts',
