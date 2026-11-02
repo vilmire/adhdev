@@ -49671,6 +49671,24 @@ ${error.message || ""}`;
         activeLedger = null;
       }
     });
+    function isManagedStageChild(meshId, row2) {
+      if (!isStageChild(row2)) return false;
+      const parent = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, row2.parentTaskId);
+      return !!parent && !TERMINAL.has(parent.status);
+    }
+    function assertNotStageChild(meshId, taskId) {
+      const row2 = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
+      if (isManagedStageChild(meshId, row2)) throw new Error(`stage_child_managed: task '${taskId}' is a review stage of '${row2.parentTaskId}'; use mesh_task_stage_decide on the parent`);
+    }
+    var TERMINAL;
+    var init_stage_guards = __esm2({
+      "src/mesh/stage-guards.ts"() {
+        "use strict";
+        init_mesh_runtime_store();
+        init_stage_state();
+        TERMINAL = /* @__PURE__ */ new Set(["completed", "failed", "blocked", "cancelled"]);
+      }
+    });
     function key(meshId, taskId) {
       return `${meshId}::${taskId}`;
     }
@@ -52580,7 +52598,7 @@ ${rendered.join("\n\n")}`,
       if (from === "none") return false;
       if (from === "any") return true;
       if (from === "nonterminal") return NONTERMINAL.includes(state2);
-      if (from === "terminal") return TERMINAL.includes(state2);
+      if (from === "terminal") return TERMINAL2.includes(state2);
       return from.includes(state2);
     }
     var A2;
@@ -52596,7 +52614,7 @@ ${rendered.join("\n\n")}`,
     var awaitReport;
     var TRANSITIONS;
     var NONTERMINAL;
-    var TERMINAL;
+    var TERMINAL2;
     var init_transitions = __esm2({
       "src/mesh/turn-ledger/transitions.ts"() {
         "use strict";
@@ -53029,7 +53047,7 @@ ${rendered.join("\n\n")}`,
           ] }
         ];
         NONTERMINAL = [A2, D, C, G, S, F];
-        TERMINAL = ["completed", "blocked", "failed", "cancelled"];
+        TERMINAL2 = ["completed", "blocked", "failed", "cancelled"];
       }
     });
     function isTerminalTurnState(state2) {
@@ -76724,7 +76742,7 @@ ${env2.envelopes.join("\n\n")}${tail}`;
     function cancelTask(meshId, taskId, opts) {
       requireMeshHostQueueOwner(opts);
       const stageRow = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
-      if (isStageChild(stageRow) && !opts?.stageManaged) throw new Error(`stage_child_managed: task '${taskId}' is a review stage of '${stageRow.parentTaskId}'; cancel the parent or use mesh_task_stage_decide`);
+      if (isManagedStageChild(meshId, stageRow) && !opts?.stageManaged) throw new Error(`stage_child_managed: task '${taskId}' is a review stage of '${stageRow.parentTaskId}'; cancel the parent or use mesh_task_stage_decide`);
       const result = withQueueLock(meshId, () => {
         const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
         if (!entry) return null;
@@ -77078,6 +77096,7 @@ ${env2.envelopes.join("\n\n")}${tail}`;
         "use strict";
         init_mesh_host_ownership();
         init_stage_state();
+        init_stage_guards();
         init_mesh_runtime_store();
         init_mesh_config();
         init_logger();
@@ -127078,17 +127097,6 @@ ${detail.join("\n")}` : stripped;
         WRITER_UNKNOWN_ERROR = "unknown, cannot prove dead: the owning host has not confirmed session absence or exact writer quiescence; ownership remains retained";
       }
     });
-    function assertNotStageChild(meshId, taskId) {
-      const row2 = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
-      if (isStageChild(row2)) throw new Error(`stage_child_managed: task '${taskId}' is a review stage of '${row2.parentTaskId}'; use mesh_task_stage_decide on the parent`);
-    }
-    var init_stage_guards = __esm2({
-      "src/mesh/stage-guards.ts"() {
-        "use strict";
-        init_mesh_runtime_store();
-        init_stage_state();
-      }
-    });
     function revisePendingTask(meshId, taskId, expectedRevision, patch, host) {
       if (!host?.actor || !host.repoIdentity || !host.machineId) throw new Error("authenticated_host_required");
       if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new Error("invalid_expected_revision");
@@ -140309,7 +140317,7 @@ ${grant.exp}`).digest("hex");
       }
     });
     function isTerminalPhase(role, phase) {
-      return TERMINAL2[role].has(phase);
+      return TERMINAL3[role].has(phase);
     }
     function fromRow2(r) {
       return {
@@ -140331,12 +140339,12 @@ ${grant.exp}`).digest("hex");
         ...r.target_public_key ? { targetPublicKey: r.target_public_key } : {}
       };
     }
-    var TERMINAL2;
+    var TERMINAL3;
     var SqliteHandoffJournal;
     var init_journal = __esm2({
       "src/mesh/host-handoff/journal.ts"() {
         "use strict";
-        TERMINAL2 = {
+        TERMINAL3 = {
           source: /* @__PURE__ */ new Set(["committed", "aborted"]),
           target: /* @__PURE__ */ new Set(["active", "discarded"])
         };
@@ -147941,7 +147949,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       if (!inst) return "stopped";
       const state2 = inst.getState?.();
       const status = str18(state2?.status).toLowerCase();
-      if (TERMINAL3.has(status)) return "stopped";
+      if (TERMINAL4.has(status)) return "stopped";
       if (typeof inst.isModalParked === "function" && inst.isModalParked()) return "waiting";
       if (status === "waiting_approval" || status === "waiting_choice") return "waiting";
       const drain = typeof inst.getDrainStatus === "function" ? str18(inst.getDrainStatus()).toLowerCase() : "";
@@ -148178,7 +148186,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       return (0, import_node_crypto65.randomUUID)();
     }
     var import_node_crypto65;
-    var TERMINAL3;
+    var TERMINAL4;
     var sessionControlVerb;
     var ASSISTANT_QUOTA_FAILOVER_COMMAND;
     var quotaFailoverVerb;
@@ -148209,7 +148217,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         init_new_work_hold();
         init_ports();
         init_validate();
-        TERMINAL3 = /* @__PURE__ */ new Set(["exited", "stopped", "terminated"]);
+        TERMINAL4 = /* @__PURE__ */ new Set(["exited", "stopped", "terminated"]);
         sessionControlVerb = assistantVerb(ASSISTANT_VERB2.sessionControl, async (projectPorts, args, ctx) => {
           const parsed = parseSessionControlArgs(args);
           if (!parsed.ok) return fail8("invalid_args", parsed.error);
@@ -149445,7 +149453,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             complete = false;
             continue;
           }
-          const open = !!attempt && (!TERMINAL4.has(attempt.state) || attempt.terminal_at === null || opts.now < attempt.terminal_at + RELAY_QUIET_MS);
+          const open = !!attempt && (!TERMINAL5.has(attempt.state) || attempt.terminal_at === null || opts.now < attempt.terminal_at + RELAY_QUIET_MS);
           out.push({
             sessionId,
             meshId,
@@ -149465,7 +149473,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       return complete ? out : Object.assign(out, { complete: false });
     }
     var import_node_crypto66;
-    var TERMINAL4;
+    var TERMINAL5;
     var SESSION_CAP;
     var RELAY_AUDIT_RETENTION_MS;
     var init_assistant_relay_audit = __esm2({
@@ -149479,7 +149487,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         init_mesh_config();
         init_coordinator_registry();
         init_assistant_relay_format();
-        TERMINAL4 = /* @__PURE__ */ new Set(["completed", "blocked", "failed", "cancelled"]);
+        TERMINAL5 = /* @__PURE__ */ new Set(["completed", "blocked", "failed", "cancelled"]);
         SESSION_CAP = 20;
         RELAY_AUDIT_RETENTION_MS = 24 * 60 * 6e4;
       }

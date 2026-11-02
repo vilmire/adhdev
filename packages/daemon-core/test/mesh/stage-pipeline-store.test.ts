@@ -180,6 +180,16 @@ describe('child management + cancel propagation', () => {
         cancelTask(mesh, parent.id, { reason: 'operator' });
         expect(getQueueEntryById(mesh, child.id)!.status).toBe('cancelled');
     });
+
+    it('lets the coordinator cancel a review child whose parent already ended (orphan)', () => {
+        const mesh = newMesh();
+        const parent = enqueueTask(mesh, 'fix', stagey); assigned(mesh, parent.id);
+        const child = enqueueTask(mesh, 'review', { difficulty: 'medium', stageChild: { parentTaskId: parent.id, round: 1, review: { sourceTaskId: parent.id, independence: 'different_provider' } } } as any);
+        const p = store().findQueueEntryById(mesh, parent.id)!; p.status = 'completed'; store().updateQueueEntry(p);
+        expect(() => assertNotStageChild(mesh, child.id)).not.toThrow();
+        cancelTask(mesh, child.id, { reason: 'orphaned review child' });
+        expect(getQueueEntryById(mesh, child.id)!.status).toBe('cancelled');
+    });
 });
 
 describe('notice silence', () => {

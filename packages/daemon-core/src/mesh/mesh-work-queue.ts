@@ -1,5 +1,6 @@
 import { requireMeshHostQueueOwner } from './mesh-host-ownership.js';
-import { isStagePipelineParked, isStageChild, isStageParent } from './stage-state.js';
+import { isStagePipelineParked, isStageParent } from './stage-state.js';
+import { isManagedStageChild } from './stage-guards.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import type { MeshClaimRefusal } from './mesh-runtime-store.js';
 import type { MeshQueueHead } from './mesh-runtime-store-queue-reads.js';
@@ -472,7 +473,7 @@ export function cancelTask(
     requireMeshHostQueueOwner(opts);
     // Review-in-task §11: a review child belongs to the pipeline; the coordinator decides through mesh_task_stage_decide.
     const stageRow = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
-    if (isStageChild(stageRow) && !opts?.stageManaged) throw new Error(`stage_child_managed: task '${taskId}' is a review stage of '${stageRow!.parentTaskId}'; cancel the parent or use mesh_task_stage_decide`);
+    if (isManagedStageChild(meshId, stageRow) && !opts?.stageManaged) throw new Error(`stage_child_managed: task '${taskId}' is a review stage of '${stageRow!.parentTaskId}'; cancel the parent or use mesh_task_stage_decide`);
     const result = withQueueLock(meshId, () => {
         const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
         if (!entry) return null;
