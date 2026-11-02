@@ -18,7 +18,7 @@ import { loadConfig } from '../../config/config.js';
 import { LOG } from '../../logging/logger.js';
 import { listLocalCoordinatorSessions } from '../../mesh/mesh-event-forwarding.js';
 import { applyHostTransferToMember } from '../../mesh/host-handoff/member-adopt.js';
-import { createLiveHandoffEngines, createLiveMeshPort, type LiveHandoffEngines, type LiveHandoffHost } from '../../mesh/host-handoff/live-env.js';
+import { createLiveHandoffEngines, createLiveMeshPort, readLiveHandoffMesh, type LiveHandoffEngines, type LiveHandoffHost } from '../../mesh/host-handoff/live-env.js';
 import { handlePeerVerb } from '../../mesh/host-handoff/peer-protocol.js';
 import { HOST_HANDOFF_VERB, type PeerResult } from '../../mesh/host-handoff/types.js';
 import { getCoordinatorForSession } from '../../mesh/coordinator-registry.js';
@@ -30,7 +30,6 @@ import { listCoordinatorsForMesh } from '../../mesh/coordinator-registry.js';
 import { classifyCoordinatorCensus } from '../../mesh/host-handoff/coordinator-observation.js';
 import { withCoordinatorTransition } from '../../mesh/host-handoff/admission.js';
 import { resolveRoleLaunch } from '../../launch-defaults/consumer.js';
-import { getMesh } from '../../config/mesh-config.js';
 import { resolveMeshCoordinatorSetup } from '../mesh-coordinator.js';
 import { inspectTargetReadiness } from '../../mesh/host-handoff/target-readiness.js';
 import { isTrustedOwnerIngress } from '../command-args.js';
@@ -83,7 +82,7 @@ function liveHost(ctx: HighFamilyContext): LiveHandoffHost {
                 const registered = sessionId ? getCoordinatorForSession(sessionId) : undefined;
                 if (sessionId && plan) {
                     const row = live[0]!;
-                    const selectedNode = getMesh(meshId)?.nodes.find(n => n.id === plan.targetNodeId);
+                    const selectedNode = readLiveHandoffMesh(meshId, selfDaemonId)?.nodes?.find(n => n.id === plan.targetNodeId);
                     const launch = parseSessionLaunchRecord(row.meta?.launchRecord);
                     const selection = launch?.roleLaunch?.selection;
                     if (!selectedNode?.workspace || row.workspace !== selectedNode.workspace || registered?.workspace !== row.workspace
@@ -104,7 +103,7 @@ function liveHost(ctx: HighFamilyContext): LiveHandoffHost {
             return { ...resolved.selection, targetNodeId };
         },
         readiness: async (meshId, plan) => {
-            const mesh = getMesh(meshId);
+            const mesh = readLiveHandoffMesh(meshId, selfDaemonId);
             if (!mesh) return { ok: false, checks: [{ id: 'target_project', ok: false }] };
             return inspectTargetReadiness({ selfDaemonId, mesh: mesh as never, plan,
                 validateSelection: selection => {
@@ -130,7 +129,7 @@ function liveHost(ctx: HighFamilyContext): LiveHandoffHost {
             });
         },
         canLaunchCoordinator: (meshId) => {
-            const mesh = createLiveMeshPort().read(meshId);
+            const mesh = createLiveMeshPort(selfDaemonId).read(meshId);
             return !!mesh && (mesh.role === 'member' || mesh.role === 'host');
         },
         launchCoordinator: async (meshId, handoffId, plan) => {
@@ -156,7 +155,7 @@ function liveHost(ctx: HighFamilyContext): LiveHandoffHost {
             return { success: true, sessionId, ready: ready && observed.ready && observed.sessionId === sessionId };
         },
         selfNodeId: (meshId) => {
-            const mesh = createLiveMeshPort().read(meshId);
+            const mesh = createLiveMeshPort(selfDaemonId).read(meshId);
             const node = (mesh?.config as { nodes?: Array<{ id?: string; daemonId?: string }> } | undefined)?.nodes?.find(n => !!n.daemonId && daemonIdsEquivalent(n.daemonId, selfDaemonId));
             return node?.id;
         },
@@ -221,7 +220,7 @@ function peerVerb(verb: string): HighFamilyHandler {
         if (!hostHandoffEnabled()) return { success: false, code: 'peer_capability_unconfirmed' };
         const e = enginesFor(ctx);
         const sender = str((args as Record<string, unknown>)?._meshSenderDaemonId) || (await import('../mesh-sender.js')).readMeshSender(args);
-        const mesh = createLiveMeshPort();
+        const mesh = createLiveMeshPort(str(ctx.deps.statusInstanceId));
         return handlePeerVerb({
             source: e.source, target: e.target,
             certificate: (a) => applyHostTransferToMember(mesh, str(ctx.deps.statusInstanceId), a.meshId, a.certificate),

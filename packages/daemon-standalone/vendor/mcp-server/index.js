@@ -150184,15 +150184,74 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         fail11 = (detail) => ({ id: "state_preservation", ok: false, code: "state_preservation_unverified", detail });
       }
     });
+    function findHandoffMesh(meshes, protocolMeshId, selfDaemonId) {
+      const exact = meshes.find((m) => m.id === protocolMeshId);
+      if (exact) return exact;
+      const id4 = protocolMeshId.trim();
+      if (!id4 || !selfDaemonId.trim()) return void 0;
+      const hits = meshes.filter((m) => {
+        const host = m.meshHost;
+        if (!host || host.role !== "member") return false;
+        if (typeof host.hostMeshId !== "string" || host.hostMeshId.trim() !== id4) return false;
+        if (typeof host.hostDaemonId !== "string" || !host.hostDaemonId.trim()) return false;
+        if (daemonIdsEquivalent5(host.hostDaemonId, selfDaemonId)) return false;
+        return true;
+      });
+      return hits.length === 1 ? hits[0] : void 0;
+    }
+    function presentHandoffMesh(mesh, protocolMeshId, selfDaemonId) {
+      if (mesh.id === protocolMeshId || !selfDaemonId.trim()) return mesh;
+      const nodes = mesh.nodes ?? [];
+      if (nodes.some((n) => !!n.daemonId && daemonIdsEquivalent5(n.daemonId, selfDaemonId))) return mesh;
+      const blanks = nodes.filter((n) => !n.daemonId);
+      if (blanks.length !== 1) return mesh;
+      return {
+        ...mesh,
+        nodes: nodes.map((n) => n === blanks[0] ? { ...n, daemonId: selfDaemonId } : n)
+      };
+    }
+    function mergeIncomingHandoffNode(local, incoming, opts) {
+      const localId = typeof local.daemonId === "string" ? local.daemonId : "";
+      const incomingId = typeof incoming.daemonId === "string" ? incoming.daemonId : "";
+      if (localId && incomingId) {
+        if (!daemonIdsEquivalent5(localId, incomingId)) return { ok: false, error: IDENTITY_CHANGED };
+        return { ok: true, node: { ...incoming, workspace: local.workspace } };
+      }
+      if (localId || !incomingId) return { ok: false, error: IDENTITY_CHANGED };
+      if (!opts.aliased || !opts.selfDaemonId || !daemonIdsEquivalent5(incomingId, opts.selfDaemonId)) return { ok: false, error: IDENTITY_CHANGED };
+      return { ok: true, node: { ...incoming, daemonId: incomingId, workspace: local.workspace } };
+    }
+    function retargetHandoffMeshId(meshes, mesh, protocolMeshId) {
+      if (mesh.id === protocolMeshId) return { ok: true };
+      if (meshes.some((m) => m !== mesh && m.id === protocolMeshId)) return { ok: false, error: ID_COLLISION };
+      mesh.id = protocolMeshId;
+      return { ok: true };
+    }
+    var IDENTITY_CHANGED;
+    var ID_COLLISION;
+    var init_paired_member = __esm2({
+      "src/mesh/host-handoff/paired-member.ts"() {
+        "use strict";
+        init_dist();
+        IDENTITY_CHANGED = "target node identity changed during config apply";
+        ID_COLLISION = "handoff mesh id collision";
+      }
+    });
     function db2() {
       return MeshRuntimeStore.getInstance().db;
     }
-    function createLiveMeshPort() {
+    function readLiveHandoffMesh(meshId, selfDaemonId) {
+      const mesh = findHandoffMesh(loadMeshConfig().meshes, meshId, selfDaemonId);
+      return mesh ? presentHandoffMesh(mesh, meshId, selfDaemonId) : void 0;
+    }
+    function createLiveMeshPort(selfDaemonId = "") {
+      const locate = (meshes, meshId) => meshes ? findHandoffMesh(meshes, meshId, selfDaemonId) : void 0;
       return {
         read(meshId) {
-          const mesh = getMesh(meshId);
-          if (!mesh) return null;
-          const status = resolveMeshHostStatus(mesh);
+          const raw = locate(loadMeshConfig().meshes, meshId);
+          if (!raw) return null;
+          const mesh = presentHandoffMesh(raw, meshId, selfDaemonId);
+          const status = resolveMeshHostStatus(raw);
           return {
             role: status.role,
             hostDaemonId: status.hostDaemonId,
@@ -150200,15 +150259,15 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             hostEpoch: status.hostEpoch ?? 0,
             handedOff: !!status.handedOffTo,
             config: mesh,
-            hostPublicKey: mesh.meshHost?.originGrantPublicKey,
-            handoffFence: mesh.meshHost?.handoffFence,
-            memberDaemonIds: (mesh.nodes ?? []).map((n) => String(n.daemonId ?? "")).filter(Boolean)
+            hostPublicKey: raw.meshHost?.originGrantPublicKey,
+            handoffFence: raw.meshHost?.handoffFence,
+            memberDaemonIds: (raw.nodes ?? []).map((n) => String(n.daemonId ?? "")).filter(Boolean)
           };
         },
         setFence(meshId, fence, expectedHandoffId) {
           withHandoffConfigWrite(meshId, () => withStrictMeshConfigWriteLock(() => {
             const config = readMeshConfigFromDisk();
-            const mesh = config?.meshes.find((m) => m.id === meshId);
+            const mesh = locate(config?.meshes, meshId);
             if (!config || !mesh) throw new Error("handoff fence storage unavailable");
             const prior = mesh.meshHost?.handoffFence;
             if (fence && prior && prior.handoffId !== fence.handoffId) throw new Error("another handoff holds the source fence");
@@ -150224,8 +150283,12 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         writeHost(meshId, meta2) {
           withHandoffConfigWrite(meshId, () => withMeshConfigWriteLock(() => {
             const config = loadMeshConfig();
-            const mesh = config.meshes.find((m) => m.id === meshId);
+            const mesh = locate(config.meshes, meshId);
             if (!mesh) throw new Error(`mesh ${meshId} not found`);
+            if (meta2.role === "host") {
+              const moved = retargetHandoffMeshId(config.meshes, mesh, meshId);
+              if (!moved.ok) throw new Error(moved.error);
+            }
             const prev = mesh.meshHost ?? { role: "host" };
             const next = { ...prev, role: meta2.role, hostDaemonId: meta2.hostDaemonId, hostEpoch: meta2.hostEpoch };
             if (meta2.hostNodeId) next.hostNodeId = meta2.hostNodeId;
@@ -150253,8 +150316,9 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           if (!snapshotConfig) return;
           withHandoffConfigWrite(meshId, () => withMeshConfigWriteLock(() => {
             const config = loadMeshConfig();
-            const mesh = config.meshes.find((m) => m.id === meshId);
+            const mesh = locate(config.meshes, meshId);
             if (!mesh) throw new Error(`mesh ${meshId} not found`);
+            const aliased = mesh.id !== meshId;
             const localNodes = mesh.nodes ?? [];
             const keep = { id: mesh.id, meshHost: mesh.meshHost };
             const incoming = { ...snapshotConfig };
@@ -150262,10 +150326,15 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             if (Array.isArray(incoming.nodes)) incoming.nodes = incoming.nodes.map((node) => {
               const local = localNodes.find((n) => n.id === node.id);
               if (!local) return node;
-              if (!local.daemonId || !node.daemonId || !daemonIdsEquivalent5(local.daemonId, node.daemonId)) throw new Error("target node identity changed during config apply");
-              return { ...node, workspace: local.workspace };
+              const merged = mergeIncomingHandoffNode(local, node, { aliased, selfDaemonId });
+              if (!merged.ok) throw new Error(merged.error);
+              return merged.node;
             });
             Object.assign(mesh, incoming, keep);
+            if (aliased) {
+              const moved = retargetHandoffMeshId(config.meshes, mesh, meshId);
+              if (!moved.ok) throw new Error(moved.error);
+            }
             saveMeshConfig(config);
           }));
         }
@@ -150359,7 +150428,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         sign: (u) => signHostTransferCertificate(u, getOrCreateHostKeyPair(host.selfDaemonId).privateKeyObj),
         ownPublicKey: () => getOrCreateHostKeyPair(host.selfDaemonId).publicKey,
         async broadcast(meshId, cert, except) {
-          const view2 = createLiveMeshPort().read(meshId);
+          const view2 = createLiveMeshPort(host.selfDaemonId).read(meshId);
           for (const daemonId of view2?.memberDaemonIds ?? []) {
             if (except.some((e) => daemonIdsEquivalent5(e, daemonId))) continue;
             try {
@@ -150372,7 +150441,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
     }
     function createLiveHandoffEngines(host) {
       const journal2 = new SqliteHandoffJournal(MeshRuntimeStore.getInstance().db);
-      const mesh = createLiveMeshPort();
+      const mesh = createLiveMeshPort(host.selfDaemonId);
       const data = createLiveDataPort();
       const clock = { now: () => Date.now(), newId: () => (0, import_node_crypto68.randomUUID)() };
       const certificate = liveCertificatePort(host);
@@ -150424,7 +150493,6 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         init_config();
         init_mesh_config_store();
         init_mesh_config_store();
-        init_mesh_config();
         init_origin_grant_keypair();
         init_mesh_runtime_store();
         init_mesh_host_ownership();
@@ -150441,6 +150509,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         init_project_write_cut();
         init_preservation_boundary();
         init_write_fence();
+        init_paired_member();
         HOLD_TTL_MS = 30 * 6e4;
       }
     });
@@ -150766,7 +150835,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             const registered = sessionId ? getCoordinatorForSession(sessionId) : void 0;
             if (sessionId && plan) {
               const row2 = live[0];
-              const selectedNode = getMesh(meshId)?.nodes.find((n) => n.id === plan.targetNodeId);
+              const selectedNode = readLiveHandoffMesh(meshId, selfDaemonId)?.nodes?.find((n) => n.id === plan.targetNodeId);
               const launch = parseSessionLaunchRecord(row2.meta?.launchRecord);
               const selection = launch?.roleLaunch?.selection;
               if (!selectedNode?.workspace || row2.workspace !== selectedNode.workspace || registered?.workspace !== row2.workspace || row2.providerType !== plan.provider || registered?.cliType !== plan.provider || launch?.roleLaunch?.role !== "coordinator" || selection?.provider !== plan.provider || selection?.model !== plan.model || selection?.thinkingLevel !== plan.thinkingLevel) return { ready: false, runtimeVerified: false, checkedAt, liveCount: live.length };
@@ -150787,7 +150856,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           return { ...resolved.selection, targetNodeId };
         },
         readiness: async (meshId, plan) => {
-          const mesh = getMesh(meshId);
+          const mesh = readLiveHandoffMesh(meshId, selfDaemonId);
           if (!mesh) return { ok: false, checks: [{ id: "target_project", ok: false }] };
           return inspectTargetReadiness({
             selfDaemonId,
@@ -150818,7 +150887,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           });
         },
         canLaunchCoordinator: (meshId) => {
-          const mesh = createLiveMeshPort().read(meshId);
+          const mesh = createLiveMeshPort(selfDaemonId).read(meshId);
           return !!mesh && (mesh.role === "member" || mesh.role === "host");
         },
         launchCoordinator: async (meshId, handoffId, plan) => {
@@ -150846,7 +150915,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           return { success: true, sessionId, ready: ready2 && observed2.ready && observed2.sessionId === sessionId };
         },
         selfNodeId: (meshId) => {
-          const mesh = createLiveMeshPort().read(meshId);
+          const mesh = createLiveMeshPort(selfDaemonId).read(meshId);
           const node = mesh?.config?.nodes?.find((n) => !!n.daemonId && daemonIdsEquivalent5(n.daemonId, selfDaemonId));
           return node?.id;
         },
@@ -150878,7 +150947,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         if (!hostHandoffEnabled()) return { success: false, code: "peer_capability_unconfirmed" };
         const e = enginesFor(ctx);
         const sender = str18(args?._meshSenderDaemonId) || (await Promise.resolve().then(() => (init_mesh_sender(), mesh_sender_exports))).readMeshSender(args);
-        const mesh = createLiveMeshPort();
+        const mesh = createLiveMeshPort(str18(ctx.deps.statusInstanceId));
         return handlePeerVerb({
           source: e.source,
           target: e.target,
@@ -150934,7 +151003,6 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         init_coordinator_observation();
         init_admission2();
         init_consumer();
-        init_mesh_config();
         init_mesh_coordinator();
         init_target_readiness();
         init_command_args();

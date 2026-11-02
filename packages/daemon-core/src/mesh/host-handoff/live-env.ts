@@ -12,7 +12,6 @@ import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { getConfigDir } from '../../config/config.js';
 import { loadMeshConfig, saveMeshConfig, withMeshConfigWriteLock, withHandoffConfigWrite } from '../../config/mesh-config-store.js';
 import { readMeshConfigFromDisk, saveMeshConfigDurable, withStrictMeshConfigWriteLock } from '../../config/mesh-config-store.js';
-import { getMesh } from '../../config/mesh-config.js';
 import { getOrCreateHostKeyPair } from '../origin-grant-keypair.js';
 import { MeshRuntimeStore } from '../mesh-runtime-store.js';
 import { resolveMeshHostStatus } from '../mesh-host-ownership.js';
@@ -29,6 +28,7 @@ import { resolveAssistantProject } from '../../assistant/assistant-projects.js';
 import { acquireProjectFileCut } from './project-write-cut.js';
 import { adoptPendingNoticeReceipts, assessPreservationBoundary } from './preservation-boundary.js';
 import { acquireHandoffWriteFence, releaseHandoffWriteFence, withHandoffImport } from './write-fence.js';
+import { findHandoffMesh, mergeIncomingHandoffNode, presentHandoffMesh, retargetHandoffMeshId, type HandoffMeshIdentity } from './paired-member.js';
 import type { FreezeCheck, HandoffDataPort, HandoffHoldPort, HandoffMeshPort, HostMetaWrite } from './ports.js';
 import type { HandoffLaunchPlan, HostTransferCertificate } from './types.js';
 
@@ -52,24 +52,32 @@ const HOLD_TTL_MS = 30 * 60_000;
 
 function db() { return MeshRuntimeStore.getInstance().db as unknown as Parameters<typeof applySnapshotTables>[0] & Parameters<typeof exportSnapshot>[0]['db']; }
 
-export function createLiveMeshPort(): HandoffMeshPort {
+/** Protocol mesh id, or the one paired member record that stored that id as hostMeshId. */
+export function readLiveHandoffMesh(meshId: string, selfDaemonId: string) {
+    const mesh = findHandoffMesh(loadMeshConfig().meshes, meshId, selfDaemonId);
+    return mesh ? presentHandoffMesh(mesh, meshId, selfDaemonId) : undefined;
+}
+
+export function createLiveMeshPort(selfDaemonId = ''): HandoffMeshPort {
+    const locate = <T extends HandoffMeshIdentity>(meshes: readonly T[] | undefined, meshId: string) => meshes ? findHandoffMesh(meshes, meshId, selfDaemonId) : undefined;
     return {
         read(meshId) {
-            const mesh = getMesh(meshId);
-            if (!mesh) return null;
-            const status = resolveMeshHostStatus(mesh);
+            const raw = locate(loadMeshConfig().meshes, meshId);
+            if (!raw) return null;
+            const mesh = presentHandoffMesh(raw, meshId, selfDaemonId);
+            const status = resolveMeshHostStatus(raw);
             return {
                 role: status.role, hostDaemonId: status.hostDaemonId, hostNodeId: status.hostNodeId, hostEpoch: status.hostEpoch ?? 0,
                 handedOff: !!status.handedOffTo, config: mesh,
-                hostPublicKey: mesh.meshHost?.originGrantPublicKey,
-                handoffFence: mesh.meshHost?.handoffFence,
-                memberDaemonIds: (mesh.nodes ?? []).map(n => String((n as { daemonId?: string }).daemonId ?? '')).filter(Boolean),
+                hostPublicKey: raw.meshHost?.originGrantPublicKey,
+                handoffFence: raw.meshHost?.handoffFence,
+                memberDaemonIds: (raw.nodes ?? []).map(n => String(n.daemonId ?? '')).filter(Boolean),
             };
         },
         setFence(meshId, fence, expectedHandoffId) {
             withHandoffConfigWrite(meshId, () => withStrictMeshConfigWriteLock(() => {
                 const config = readMeshConfigFromDisk();
-                const mesh = config?.meshes.find(m => m.id === meshId);
+                const mesh = locate(config?.meshes, meshId);
                 if (!config || !mesh) throw new Error('handoff fence storage unavailable');
                 const prior = mesh.meshHost?.handoffFence;
                 if (fence && prior && prior.handoffId !== fence.handoffId) throw new Error('another handoff holds the source fence');
@@ -85,8 +93,12 @@ export function createLiveMeshPort(): HandoffMeshPort {
         writeHost(meshId, meta: HostMetaWrite) {
             withHandoffConfigWrite(meshId, () => withMeshConfigWriteLock(() => {
                 const config = loadMeshConfig();
-                const mesh = config.meshes.find(m => m.id === meshId);
+                const mesh = locate(config.meshes, meshId);
                 if (!mesh) throw new Error(`mesh ${meshId} not found`);
+                if (meta.role === 'host') {
+                    const moved = retargetHandoffMeshId(config.meshes, mesh, meshId);
+                    if (!moved.ok) throw new Error(moved.error);
+                }
                 const prev = (mesh.meshHost ?? { role: 'host' }) as Record<string, unknown>;
                 const next: Record<string, unknown> = { ...prev, role: meta.role, hostDaemonId: meta.hostDaemonId, hostEpoch: meta.hostEpoch };
                 if (meta.hostNodeId) next.hostNodeId = meta.hostNodeId; else delete next.hostNodeId;
@@ -109,8 +121,9 @@ export function createLiveMeshPort(): HandoffMeshPort {
             if (!snapshotConfig) return;
             withHandoffConfigWrite(meshId, () => withMeshConfigWriteLock(() => {
                 const config = loadMeshConfig();
-                const mesh = config.meshes.find(m => m.id === meshId);
+                const mesh = locate(config.meshes, meshId);
                 if (!mesh) throw new Error(`mesh ${meshId} not found`);
+                const aliased = mesh.id !== meshId;
                 // Host-owned configuration travels; this daemon's own pairing/secret state and its meshHost stay.
                 const localNodes = mesh.nodes ?? [];
                 const keep = { id: mesh.id, meshHost: mesh.meshHost };
@@ -119,10 +132,15 @@ export function createLiveMeshPort(): HandoffMeshPort {
                 if (Array.isArray(incoming.nodes)) incoming.nodes = incoming.nodes.map((node: any) => {
                     const local = localNodes.find(n => n.id === node.id);
                     if (!local) return node;
-                    if (!local.daemonId || !node.daemonId || !daemonIdsEquivalent(local.daemonId, node.daemonId)) throw new Error('target node identity changed during config apply');
-                    return { ...node, workspace: local.workspace };
+                    const merged = mergeIncomingHandoffNode(local, node, { aliased, selfDaemonId });
+                    if (!merged.ok) throw new Error(merged.error);
+                    return merged.node;
                 });
                 Object.assign(mesh, incoming, keep);
+                if (aliased) {
+                    const moved = retargetHandoffMeshId(config.meshes, mesh, meshId);
+                    if (!moved.ok) throw new Error(moved.error);
+                }
                 saveMeshConfig(config);
             }));
         },
@@ -207,7 +225,7 @@ function liveCertificatePort(host: LiveHandoffHost) {
         sign: (u: Omit<HostTransferCertificate, 'signature'>) => signHostTransferCertificate(u, getOrCreateHostKeyPair(host.selfDaemonId).privateKeyObj),
         ownPublicKey: () => getOrCreateHostKeyPair(host.selfDaemonId).publicKey,
         async broadcast(meshId: string, cert: HostTransferCertificate, except: string[]) {
-            const view = createLiveMeshPort().read(meshId);
+            const view = createLiveMeshPort(host.selfDaemonId).read(meshId);
             for (const daemonId of view?.memberDaemonIds ?? []) {
                 if (except.some(e => daemonIdsEquivalent(e, daemonId))) continue;
                 try { await host.dispatch(daemonId, 'mesh_host_handoff_certificate', { meshId, handoffId: cert.handoffId, certificate: cert }); } catch { /* offline members ask on reconnect */ }
@@ -220,7 +238,7 @@ export interface LiveHandoffEngines { source: HostHandoffSource; target: HostHan
 
 export function createLiveHandoffEngines(host: LiveHandoffHost): LiveHandoffEngines {
     const journal = new SqliteHandoffJournal(MeshRuntimeStore.getInstance().db as never);
-    const mesh = createLiveMeshPort();
+    const mesh = createLiveMeshPort(host.selfDaemonId);
     const data = createLiveDataPort();
     const clock = { now: () => Date.now(), newId: () => randomUUID() };
     const certificate = liveCertificatePort(host);
