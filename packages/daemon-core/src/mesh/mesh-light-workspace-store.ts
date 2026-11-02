@@ -94,6 +94,12 @@ export function getLightWorkspaceForTask(db: DatabaseHandle, meshId: string, tas
     return r ? fromRow(r) : undefined;
 }
 
+/** The light workspace registered at `wsPath` (removed rows included: the path still marks a light session). */
+export function findLightWorkspaceByPath(db: DatabaseHandle, wsPath: string): LightWorkspaceRow | undefined {
+    const r = db.prepare('SELECT * FROM mesh_light_workspaces WHERE path = ? ORDER BY created_at DESC LIMIT 1').get(wsPath);
+    return r ? fromRow(r) : undefined;
+}
+
 export function listLightWorkspaces(db: DatabaseHandle, opts: { states?: LightWorkspaceState[]; excludeRemoved?: boolean } = {}): LightWorkspaceRow[] {
     const rows = db.prepare('SELECT * FROM mesh_light_workspaces ORDER BY created_at ASC').all().map(fromRow);
     return rows.filter(r => (opts.states ? opts.states.includes(r.state) : true) && (opts.excludeRemoved === false ? true : r.state !== 'removed'));

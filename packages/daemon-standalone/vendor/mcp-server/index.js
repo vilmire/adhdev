@@ -47509,6 +47509,10 @@ ${error.message || ""}`;
       const r = db3.prepare("SELECT * FROM mesh_light_workspaces WHERE workspace_id = ?").get(workspaceId);
       return r ? fromRow(r) : void 0;
     }
+    function findLightWorkspaceByPath(db3, wsPath) {
+      const r = db3.prepare("SELECT * FROM mesh_light_workspaces WHERE path = ? ORDER BY created_at DESC LIMIT 1").get(wsPath);
+      return r ? fromRow(r) : void 0;
+    }
     function countLiveLightWorkspaces(db3) {
       return db3.prepare(`SELECT COUNT(*) AS n FROM mesh_light_workspaces WHERE state NOT IN ('removed')`).get().n;
     }
@@ -92637,6 +92641,14 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       }
       return { claimState };
     }
+    function lightWorkspaceIdForPath(wsPath) {
+      if (!wsPath) return void 0;
+      try {
+        return findLightWorkspaceByPath(MeshRuntimeStore.getInstance().db, wsPath)?.workspaceId;
+      } catch {
+        return void 0;
+      }
+    }
     function buildClaimOptions(p) {
       const { components, meshId, nodeId, sessionId, providerType, node, mesh } = p;
       const nodeSlotsForCap = resolveNodeCapabilitySlots(node, meshId);
@@ -92658,7 +92670,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         void maybeAutoFastForwardIdleNode(components, { meshId, nodeId, sessionId, providerType }).catch(() => {
         });
       }
-      const lightWorkspaceId = readText(p.claimState?.settings?.lightWorkspaceId) || void 0;
+      const lightWorkspaceId = readText(p.claimState?.settings?.lightWorkspaceId) || lightWorkspaceIdForPath(readText(components.cliManager?.adapters?.get(sessionId)?.workingDir) || readText(p.claimState?.workspace)) || void 0;
       return {
         capabilityTags: buildMeshNodeCapabilityTags2(node, providerType),
         assignedTranscriptProfile,
@@ -93007,6 +93019,7 @@ ${continuationNotice}` } : dispatchTask,
         init_mesh_work_queue();
         init_transcript_evidence();
         init_mesh_runtime_store();
+        init_mesh_light_workspace_store();
         init_mesh_claim_refusal();
         init_repo_mesh_types();
         init_dist();

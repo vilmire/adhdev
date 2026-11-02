@@ -11,6 +11,7 @@ import { buildMeshNodeCapabilityTags, claimNextTask, updateTaskStatus } from './
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { resolveTranscriptAuthorityProfile } from '../providers/transcript-evidence.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
+import { findLightWorkspaceByPath } from './mesh-light-workspace-store.js';
 import { clearClaimDeferralForNode, noteClaimDeferredForNode, noteSessionClaimRefusal, type MeshClaimRefusal } from './mesh-claim-refusal.js';
 import { resolveProviderMaxParallel, resolveSlotMaxParallel, resolveCoordinatorIdlePushPolicy, resolveMeshPolicy } from '../repo-mesh-types.js';
 import { meshNodeIdMatches, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, type MeshNodeIdentified, readText } from '@adhdev/mesh-shared';
@@ -240,6 +241,11 @@ function resolveClaimingSessionState(components: DaemonComponents, nodeId: strin
 }
 
 /** The atomic claim's filter inputs for this (node, session, provider). */
+function lightWorkspaceIdForPath(wsPath: string): string | undefined {
+    if (!wsPath) return undefined;
+    try { return findLightWorkspaceByPath(MeshRuntimeStore.getInstance().db, wsPath)?.workspaceId; } catch { return undefined; }
+}
+
 function buildClaimOptions(p: {
     components: DaemonComponents;
     meshId: string;
@@ -301,7 +307,11 @@ function buildClaimOptions(p: {
     }
     // LIGHT-TASK: a session launched into a light workspace claims only its own pinned light row
     // (light-claim-rule.ts) and is physically anchored to that workspace, not to the base node's checkout.
-    const lightWorkspaceId = readText((p.claimState?.settings as Record<string, unknown> | undefined)?.lightWorkspaceId) || undefined;
+    // The settings marker can be missing on a session reattached after a daemon restart, so a session
+    // whose working directory is a registered light workspace is a light session all the same.
+    const lightWorkspaceId = readText((p.claimState?.settings as Record<string, unknown> | undefined)?.lightWorkspaceId)
+        || lightWorkspaceIdForPath(readText((components.cliManager?.adapters?.get(sessionId) as { workingDir?: string } | undefined)?.workingDir) || readText(p.claimState?.workspace))
+        || undefined;
     return {
         capabilityTags: buildMeshNodeCapabilityTags(node, providerType),
         assignedTranscriptProfile,
