@@ -16,7 +16,8 @@
   },
   "actions": [
     { "id": "navigate", "tool": "browser_navigate", "risk": "write", "inputSchema": "./schemas/navigate.input.json" },
-    { "id": "snapshot", "tool": "browser_snapshot", "risk": "read" }
+    { "id": "snapshot", "tool": "browser_snapshot", "risk": "read" },
+    { "id": "screenshot", "tool": "browser_take_screenshot", "risk": "read", "inputSchema": "./schemas/screenshot.input.json" }
   ],
   "resources": [{ "key": "profile", "lease": "session" }],
   "guidance": "./guidance/usage.md",
