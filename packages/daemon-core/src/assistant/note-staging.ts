@@ -17,6 +17,7 @@
 import { readdirSync, readFileSync, existsSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { randomBytes } from 'crypto';
+import { withProjectApprovalWrite } from '../mesh/host-handoff/project-write-cut.js';
 import { getConfigDir } from '../config/config.js';
 import { writeFileAtomic600, type StoreWriteOrigin } from './store-guards.js';
 
@@ -46,10 +47,12 @@ const ID_RE = /^note-[A-Za-z0-9-]+$/;
 
 export class AssistantNoteStaging {
     readonly dir: string;
+    private readonly configDir: string;
     private readonly now: () => Date;
 
     constructor(opts: { configDir?: string; now?: () => Date } = {}) {
-        this.dir = join(opts.configDir ?? getConfigDir(), 'assistant', 'staged');
+        this.configDir = opts.configDir ?? getConfigDir();
+        this.dir = join(this.configDir, 'assistant', 'staged');
         this.now = opts.now ?? (() => new Date());
     }
 
@@ -60,7 +63,7 @@ export class AssistantNoteStaging {
     write(rec: Omit<StagedNoteWrite, 'kind' | 'id' | 'createdAt'>): string {
         const id = `note-${this.now().getTime()}-${randomBytes(4).toString('hex')}`;
         const full: StagedNoteWrite = { kind: 'note', id, createdAt: this.now().toISOString(), ...rec };
-        writeFileAtomic600(this.path(id), JSON.stringify(full, null, 2));
+        withProjectApprovalWrite(this.configDir, rec.meshId, () => writeFileAtomic600(this.path(id), JSON.stringify(full, null, 2)));
         return id;
     }
 
@@ -85,8 +88,20 @@ export class AssistantNoteStaging {
     }
 
     remove(id: string): void {
-        if (!ID_RE.test(id)) return;
+        const rec = this.read(id);
+        if (!rec) return;
+        withProjectApprovalWrite(this.configDir, rec.meshId, () => this.removeUnlocked(id));
+    }
+    private removeUnlocked(id: string): void {
         try { unlinkSync(this.path(id)); } catch { /* already gone */ }
+    }
+    async withResolution<T>(id: string, operation: (record: StagedNoteWrite, remove: () => void) => Promise<T>): Promise<T | null> {
+        const rec = this.read(id);
+        if (!rec) return null;
+        return withProjectApprovalWrite(this.configDir, rec.meshId, async () => {
+            const current = this.read(id);
+            return current ? operation(current, () => this.removeUnlocked(id)) : null;
+        });
     }
 
     /** Drop staged notes older than maxAgeMs. Returns ids dropped. */
@@ -95,8 +110,7 @@ export class AssistantNoteStaging {
         const dropped: string[] = [];
         for (const rec of this.list()) {
             if (Date.parse(rec.createdAt) < cutoff) {
-                this.remove(rec.id);
-                dropped.push(rec.id);
+                try { this.remove(rec.id); dropped.push(rec.id); } catch { /* retain frozen originals */ }
             }
         }
         return dropped;

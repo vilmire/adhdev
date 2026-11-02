@@ -38,6 +38,7 @@ export const HOST_SNAPSHOT_TABLES: readonly TableSpec[] = [
         scopeSql: 'attempt_id IN (SELECT attempt_id FROM assistant_relays WHERE mesh_id = ?)' },
     { table: 'assistant_decision_answer_log', meshColumn: 'mesh_id', orderBy: 'item_id' },
     { table: 'assistant_procedure_signals', meshColumn: 'mesh_id', orderBy: 'id' },
+    { table: 'assistant_memory_entry', meshColumn: 'project_ref', scopeSql: "scope = 'project' AND project_ref = ?", orderBy: 'seq' },
     { table: 'assistant_metric_daily', meshColumn: 'mesh_id', orderBy: 'day' },
 ];
 

@@ -4,6 +4,7 @@
  * provider roles → capability slots, repo identity normalization) that bring an
  * older file up to the current shape. The CRUD modules build on this.
  */
+import { projectHasDurableWriteCut } from '../mesh/host-handoff/project-write-cut.js';
 import { dirname, join } from 'path';
 import { getConfigDir } from './config.js';
 import { statSync, existsSync, readFileSync, writeFileSync, renameSync, copyFileSync, openSync, closeSync, fsyncSync, unlinkSync } from 'fs';
@@ -32,6 +33,32 @@ const MESH_CONFIG_LOCK_WAIT_MS = 2000;
 export const STRICT_MESH_CONFIG_LOCK_WAIT_MS = 300;
 let heldMutex: { path: string; mutex: MeshConfigMutex } | undefined;
 let strictMeshWriteDepth = 0;
+const handoffConfigPermits = new Set<string>();
+/** Internal synchronous handoff effect only; no wire argument confers this permit. */
+export function withHandoffConfigWrite<T>(meshId: string, operation: () => T): T {
+    if (handoffConfigPermits.has(meshId)) return operation();
+    handoffConfigPermits.add(meshId);
+    try {
+        const result = operation();
+        if (result && typeof (result as any).then === 'function') throw new Error('handoff_config_sync_write_required');
+        return result;
+    } finally { handoffConfigPermits.delete(meshId); }
+}
+function assertHandoffConfigCut(config: LocalMeshConfig): void {
+    let current = readMeshConfigFromDisk();
+    if (!current && existsSync(getMeshConfigPath())) throw new MeshConfigStrictLockError('project_storage_unavailable');
+    if (!current) current = { meshes: [] };
+    const ids = new Set([...current.meshes, ...config.meshes].map(m => m.id));
+    for (const id of ids) {
+        if (handoffConfigPermits.has(id)) continue;
+        const project = current.meshes.find(m => m.id === id);
+        const next = config.meshes.find(m => m.id === id);
+        if (JSON.stringify(next) === JSON.stringify(project)) continue;
+        if (project?.meshHost?.handoffFence !== undefined || projectHasDurableWriteCut(getConfigDir(), id, project?.meshHost?.hostEpoch ?? 0, false)) {
+            throw Object.assign(new Error('project_host_handoff_fenced'), { code: 'project_host_handoff_fenced' });
+        }
+    }
+}
 function assertMeshConfigMutex(): void {
     if (!heldMutex || heldMutex.path !== getMeshConfigPath()) throw new MeshConfigStrictLockError('project_storage_unavailable');
     heldMutex.mutex.assertHeld();
@@ -70,6 +97,7 @@ export function saveMeshConfigDurable(config: LocalMeshConfig):
     { ok: true; durable: true } | { ok: false; reason: string; committed: boolean } {
     if (!strictMeshWriteDepth) return { ok: false, reason: 'strict_write_lock_required', committed: false };
     assertMeshConfigMutex();
+    assertHandoffConfigCut(config);
     const path = getMeshConfigPath();
     const temp = `${path}.tmp-${process.pid}-${randomUUID()}`;
     let committed = false;
@@ -467,6 +495,7 @@ export function saveMeshConfig(config: LocalMeshConfig): void {
     // must also hold the outer lock, so their snapshot cannot overwrite a peer.
     if (!heldMutex) return withMeshConfigWriteLock(() => saveMeshConfig(config));
     assertMeshConfigMutex();
+    assertHandoffConfigCut(config);
     const path = getMeshConfigPath();
     // Atomic publish: write a per-process tmp sibling, then rename over the
     // target — a concurrent reader never sees a torn, half-written file.

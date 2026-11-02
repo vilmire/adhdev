@@ -1,3 +1,4 @@
+import { withProjectApprovalWrite } from '../../mesh/host-handoff/project-write-cut.js';
 /**
  * Assistant memory store — MEMORY.md / USER.md, the `memory` write operations,
  * the write journal, staged (owner-approval) writes, and the frozen snapshot.
@@ -685,6 +686,11 @@ export class AssistantMemoryStore {
      */
     resolveStaged(id: string, decision: 'apply' | 'discard'): StagedResolveResult {
         const rec = this.readStaged(id);
+        return withProjectApprovalWrite(this.configDir, rec && 'scope' in rec.op && rec.op.scope === 'project' ? rec.op.projectRef : undefined,
+            () => this.resolveStagedUnlocked(id, decision));
+    }
+    private resolveStagedUnlocked(id: string, decision: 'apply' | 'discard'): StagedResolveResult {
+        const rec = this.readStaged(id);
         if (!rec) return { result: 'staged_not_found', usage: this.usage() };
         if (decision === 'discard') {
             this.dropStaged(rec, 'owner');
@@ -702,8 +708,10 @@ export class AssistantMemoryStore {
         for (const rec of this.listStaged()) {
             const t = Date.parse(rec.createdAt);
             if (Number.isFinite(t) && t < cutoff) {
-                this.dropStaged(rec, 'expiry');
-                dropped.push(rec.id);
+                try {
+                    withProjectApprovalWrite(this.configDir, 'scope' in rec.op && rec.op.scope === 'project' ? rec.op.projectRef : undefined, () => this.dropStaged(rec, 'expiry'));
+                    dropped.push(rec.id);
+                } catch { /* retain frozen originals */ }
             }
         }
         return dropped;
@@ -900,7 +908,7 @@ export class AssistantMemoryStore {
     private stage(op: MemoryOperation, origin: StoreWriteOrigin, reviewTurnId: string | undefined): string {
         const id = `mem-${this.now().getTime()}-${randomBytes(4).toString('hex')}`;
         const rec: StagedMemoryWrite = { kind: 'memory', id, createdAt: this.now().toISOString(), origin, op, ...(reviewTurnId ? { reviewTurnId } : {}) };
-        writeFileAtomic600(this.stagedPath(id), JSON.stringify(rec, null, 2));
+        withProjectApprovalWrite(this.configDir, 'scope' in op && op.scope === 'project' ? op.projectRef : undefined, () => writeFileAtomic600(this.stagedPath(id), JSON.stringify(rec, null, 2)));
         return id;
     }
 

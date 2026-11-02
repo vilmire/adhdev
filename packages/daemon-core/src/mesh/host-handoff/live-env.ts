@@ -10,7 +10,7 @@ import { statfsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { getConfigDir } from '../../config/config.js';
-import { loadMeshConfig, saveMeshConfig, withMeshConfigWriteLock } from '../../config/mesh-config-store.js';
+import { loadMeshConfig, saveMeshConfig, withMeshConfigWriteLock, withHandoffConfigWrite } from '../../config/mesh-config-store.js';
 import { readMeshConfigFromDisk, saveMeshConfigDurable, withStrictMeshConfigWriteLock } from '../../config/mesh-config-store.js';
 import { getMesh } from '../../config/mesh-config.js';
 import { getOrCreateHostKeyPair } from '../origin-grant-keypair.js';
@@ -26,6 +26,7 @@ import { exportSnapshot } from './snapshot-export.js';
 import { applySnapshotTables, localTableColumns, approvalProjectResolver } from './snapshot-import.js';
 import { exportProjectApprovalFiles, importProjectApprovalFiles } from './project-files.js';
 import { resolveAssistantProject } from '../../assistant/assistant-projects.js';
+import { acquireProjectFileCut } from './project-write-cut.js';
 import { acquireHandoffWriteFence, releaseHandoffWriteFence, withHandoffImport } from './write-fence.js';
 import type { FreezeCheck, HandoffDataPort, HandoffHoldPort, HandoffMeshPort, HostMetaWrite } from './ports.js';
 import type { HandoffLaunchPlan, HostTransferCertificate } from './types.js';
@@ -65,7 +66,7 @@ export function createLiveMeshPort(): HandoffMeshPort {
             };
         },
         setFence(meshId, fence, expectedHandoffId) {
-            withStrictMeshConfigWriteLock(() => {
+            withHandoffConfigWrite(meshId, () => withStrictMeshConfigWriteLock(() => {
                 const config = readMeshConfigFromDisk();
                 const mesh = config?.meshes.find(m => m.id === meshId);
                 if (!config || !mesh) throw new Error('handoff fence storage unavailable');
@@ -78,10 +79,10 @@ export function createLiveMeshPort(): HandoffMeshPort {
                 if (!fence) delete mesh.meshHost.handoffFence;
                 const saved = saveMeshConfigDurable(config);
                 if (!saved.ok) throw new Error('handoff fence persistence failed');
-            });
+            }));
         },
         writeHost(meshId, meta: HostMetaWrite) {
-            withMeshConfigWriteLock(() => {
+            withHandoffConfigWrite(meshId, () => withMeshConfigWriteLock(() => {
                 const config = loadMeshConfig();
                 const mesh = config.meshes.find(m => m.id === meshId);
                 if (!mesh) throw new Error(`mesh ${meshId} not found`);
@@ -101,11 +102,11 @@ export function createLiveMeshPort(): HandoffMeshPort {
                 }
                 mesh.updatedAt = new Date().toISOString();
                 saveMeshConfig(config);
-            });
+            }));
         },
         applyConfig(meshId, snapshotConfig) {
             if (!snapshotConfig) return;
-            withMeshConfigWriteLock(() => {
+            withHandoffConfigWrite(meshId, () => withMeshConfigWriteLock(() => {
                 const config = loadMeshConfig();
                 const mesh = config.meshes.find(m => m.id === meshId);
                 if (!mesh) throw new Error(`mesh ${meshId} not found`);
@@ -122,14 +123,18 @@ export function createLiveMeshPort(): HandoffMeshPort {
                 });
                 Object.assign(mesh, incoming, keep);
                 saveMeshConfig(config);
-            });
+            }));
         },
     };
 }
 
 export function createLiveDataPort(): HandoffDataPort {
     return {
-        freezeWrites: (meshId, handoffId, epoch) => acquireHandoffWriteFence(MeshRuntimeStore.getInstance().db as never, meshId, handoffId, epoch),
+        freezeWrites: (meshId, handoffId, epoch) => {
+            const cut = acquireProjectFileCut(getConfigDir(), meshId);
+            try { acquireHandoffWriteFence(MeshRuntimeStore.getInstance().db as never, meshId, handoffId, epoch); }
+            finally { cut.release(); }
+        },
         exportSnapshot: (a) => {
             const config = readMeshConfigFromDisk();
             if (!config) throw new Error('project inventory unavailable during approval snapshot');

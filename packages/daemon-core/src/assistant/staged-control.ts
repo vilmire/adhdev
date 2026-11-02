@@ -17,6 +17,7 @@
 import { randomBytes } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { withProjectApprovalWrite } from '../mesh/host-handoff/project-write-cut.js';
 import { getConfigDir } from '../config/config.js';
 
 export const STAGED_CONTROL_TTL_MS = 60 * 60_000;
@@ -66,16 +67,25 @@ function syncDir(dir: string): void {
 
 export class StagedControlStore {
     readonly dir: string;
+    private readonly configDir: string;
     private readonly now: () => number;
 
     constructor(opts: { configDir?: string; now?: () => number } = {}) {
-        this.dir = join(opts.configDir ?? getConfigDir(), 'assistant', 'staged-control');
+        this.configDir = opts.configDir ?? getConfigDir();
+        this.dir = join(this.configDir, 'assistant', 'staged-control');
         this.now = opts.now ?? Date.now;
+    }
+
+    private projectReference(record: StagedControlProposal): string | undefined {
+        return record.kind === 'session_control' && record.role === 'assistant' ? undefined : record.meshId;
     }
 
     private path(id: string): string { return join(this.dir, `${id}.json`); }
 
     write(proposal: StagedControlProposal): StagedControlRecord {
+        return withProjectApprovalWrite(this.configDir, this.projectReference(proposal), () => this.writeUnlocked(proposal));
+    }
+    private writeUnlocked(proposal: StagedControlProposal): StagedControlRecord {
         const at = this.now();
         const id = `ctl-${randomBytes(12).toString('hex')}`;
         const record: StagedControlRecord = { version: 1, id, createdAt: at, expiresAt: at + STAGED_CONTROL_TTL_MS, ...proposal };
@@ -107,13 +117,18 @@ export class StagedControlStore {
             const id = name.slice(0, -5);
             const read = this.read(id);
             if (!read) continue;
-            if (read.expired) { this.remove(id); continue; }
+            if (read.expired) { try { this.remove(id); } catch { /* retain frozen originals */ } continue; }
             out.push(read.record);
         }
         return out.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
     }
 
     remove(id: string): void {
+        const value = this.read(id);
+        if (!value) return;
+        withProjectApprovalWrite(this.configDir, this.projectReference(value.record), () => this.removeUnlocked(id));
+    }
+    private removeUnlocked(id: string): void {
         try { unlinkSync(this.path(id)); } catch { /* already gone */ }
     }
 
@@ -122,7 +137,36 @@ export class StagedControlStore {
         return this.list().find(match);
     }
 
-    async resolve(
+    async resolve(id: string, decision: 'apply' | 'discard',
+        apply: (record: StagedControlRecord) => Promise<{ success: boolean } & Record<string, unknown>>): Promise<StagedControlResolveResult> {
+        const value = this.read(id);
+        if (!value) return { success: false, code: 'staged_not_found', error: 'Control proposal not found.' };
+        // Handoff itself acquires the project cut. Consume this consent durably
+        // under that cut, then release it before invoking the state machine.
+        // A retained receipt prevents a crashed caller from replaying consent.
+        if (value.record.kind === 'host_handoff' && decision === 'apply') {
+            let accepted: StagedControlRecord | undefined;
+            try {
+                const early = withProjectApprovalWrite(this.configDir, value.record.meshId, () => {
+                    const current = this.read(id);
+                    if (!current) return { success: false as const, code: 'staged_not_found' as const, error: 'Control proposal not found.' };
+                    if (current.expired) return { success: false as const, code: 'staged_expired' as const, error: 'Control proposal expired (1 hour); ask again.' };
+                    renameSync(this.path(id), `${this.path(id)}.consumed`);
+                    syncDir(this.dir);
+                    accepted = current.record;
+                    return undefined;
+                });
+                if (early) return early;
+                const applied = await apply(accepted!);
+                if (applied.success === true) return { success: true, result: 'applied', applied };
+                return { success: false, code: 'staged_apply_failed', error: String(applied.error ?? applied.code ?? 'apply failed'), applied };
+            } catch (e) { return { success: false, code: 'staged_apply_failed', error: (e as Error).message }; }
+        }
+        try { return await withProjectApprovalWrite(this.configDir, this.projectReference(value.record), () => this.resolveUnlocked(id, decision, apply)); }
+        catch (e) { return { success: false, code: 'staged_apply_failed', error: (e as Error).message }; }
+    }
+
+    private async resolveUnlocked(
         id: string,
         decision: 'apply' | 'discard',
         apply: (record: StagedControlRecord) => Promise<{ success: boolean } & Record<string, unknown>>,
@@ -131,15 +175,15 @@ export class StagedControlStore {
         const read = this.read(id);
         if (!read) return { success: false, code: 'staged_not_found', error: 'Control proposal not found.' };
         if (read.expired) {
-            this.remove(id);
+            this.removeUnlocked(id);
             return { success: false, code: 'staged_expired', error: 'Control proposal expired (1 hour); ask again.' };
         }
         if (decision === 'discard') {
-            this.remove(id);
+            this.removeUnlocked(id);
             return { success: true, result: 'discarded' };
         }
         // Remove first: a crash between apply and cleanup must not re-apply on retry.
-        this.remove(id);
+        this.removeUnlocked(id);
         let applied: { success: boolean } & Record<string, unknown>;
         try { applied = await apply(read.record); }
         catch (e) { applied = { success: false, error: (e as Error)?.message ?? String(e) }; }

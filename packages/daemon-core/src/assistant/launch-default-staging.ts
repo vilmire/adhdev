@@ -7,6 +7,7 @@ import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, re
 import { join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import type { LaunchDefaultsProposal, LaunchDefaultsSetResponse } from '@adhdev/mesh-shared';
+import { withProjectApprovalWrite } from '../mesh/host-handoff/project-write-cut.js';
 import { getConfigDir } from '../config/config.js';
 import { hasOnlyKeys, isLaunchDefaultsDocument, isLaunchRole, isRecord, selectionSchemaIssue } from '../launch-defaults/index.js';
 import { acquireOwnedLock, type OwnedLockOptions } from '../launch-defaults/owned-lock.js';
@@ -60,6 +61,9 @@ export class AssistantLaunchDefaultStaging {
 
     /** Return an id only after the Inbox record and its directory are durable. */
     write(proposal: LaunchDefaultsProposal, binding?: { documentRevision: number }): string {
+        return withProjectApprovalWrite(this.configDir, proposal.project, () => this.writeUnlocked(proposal, binding));
+    }
+    private writeUnlocked(proposal: LaunchDefaultsProposal, binding?: { documentRevision: number }): string {
         if (!validProposal(proposal)) throw new Error('Invalid launch-default proposal.');
         const documentRevision = binding?.documentRevision ?? (proposal.project ? undefined : proposal.expectedRevision);
         if (!Number.isSafeInteger(documentRevision) || documentRevision! < 0
@@ -118,6 +122,14 @@ export class AssistantLaunchDefaultStaging {
     /** Only call after the existing owner-source gate. No consent/modal token
      * can substitute for that gate or alter this immutable proposal's scope. */
     async resolve(id: string, decision: 'apply' | 'discard',
+        apply: (proposal: LaunchDefaultsProposal, documentRevision: number) => Promise<LaunchDefaultsSetResponse>) {
+        const rec = this.read(id);
+        if (!rec) return failure('staged_not_found', 'Launch-default proposal not found.');
+        try { return await withProjectApprovalWrite(this.configDir, rec.project, () => this.resolveUnlocked(id, decision, apply)); }
+        catch (error) { return failure('project_host_handoff_fenced', (error as Error).message); }
+    }
+
+    private async resolveUnlocked(id: string, decision: 'apply' | 'discard',
         apply: (proposal: LaunchDefaultsProposal, documentRevision: number) => Promise<LaunchDefaultsSetResponse>) {
         if (decision !== 'apply' && decision !== 'discard') return failure('invalid_args', 'Invalid proposal decision.');
         if (!ID.test(id)) return failure('staged_not_found', 'Launch-default proposal not found.');

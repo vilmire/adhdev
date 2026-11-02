@@ -62,6 +62,7 @@ export function verifyStagedSnapshot(
         const scopeIndex = t.columns.indexOf(spec.meshColumn);
         if (scopeIndex < 0) return { ok: false, code: 'verify_failed', detail: `${spec.table}: scope column missing` };
         if (!spec.parentTable && t.rows.some(row => row[scopeIndex] !== manifest.meshId)) return { ok: false, code: 'verify_failed', detail: `${spec.table}: row belongs to another project` };
+        if (spec.table === 'assistant_memory_entry' && t.rows.some(row => row[t.columns.indexOf('scope')] !== 'project')) return { ok: false, code: 'verify_failed', detail: 'global memory cannot travel with a project' };
         rowCounts[spec.table] = t.rows.length;
     }
     for (const spec of HOST_SNAPSHOT_TABLES.filter(s => s.parentTable)) {

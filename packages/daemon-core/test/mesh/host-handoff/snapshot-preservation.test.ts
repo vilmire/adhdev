@@ -40,6 +40,22 @@ describe('complete logical project snapshot preservation', () => {
         expect(world.dst.dump()).toEqual(before);
     });
 
+    it('preserves project memory stable IDs/text and its FTS index while global memory stays on its machine', () => {
+        world = makeWorld();
+        insert('assistant_memory_entry', { id: 'global-source', scope: 'global', project_ref: null, kind: 'rule', text: 'global source preference', origin: 'owner', created_at: 1, updated_at: 1 });
+        insert('assistant_memory_entry', { id: 'project-memory', scope: 'project', project_ref: MESH, kind: 'lesson', text: 'preserved project lesson', origin: 'owner', created_at: 1, updated_at: 1 });
+        world.dst.db.prepare("INSERT INTO assistant_memory_entry (id,scope,kind,text,origin,created_at,updated_at) VALUES ('global-target','global','rule','global target preference','owner',1,1)").run();
+        const result = verify(snapshot()); if (!result.ok) throw new Error(result.detail);
+        applySnapshotTables(world.dst.db as never, MESH, result.payload);
+        expect(world.dst.db.prepare("SELECT id,text FROM assistant_memory_entry WHERE scope='project'").all()).toEqual([{ id: 'project-memory', text: 'preserved project lesson' }]);
+        expect(world.dst.db.prepare("SELECT id FROM assistant_memory_entry WHERE scope='global'").all()).toEqual([{ id: 'global-target' }]);
+        expect(world.dst.db.prepare("SELECT text FROM assistant_memory_fts WHERE assistant_memory_fts MATCH 'lesson'").all()).toEqual([{ text: 'preserved project lesson' }]);
+        const globalInjection = structuredClone(result.payload);
+        const memory = globalInjection.tables.assistant_memory_entry!;
+        memory.rows[0]![memory.columns.indexOf('scope')] = 'global';
+        expect(verify(repack(snapshot(), globalInjection))).toMatchObject({ ok: false, code: 'verify_failed', detail: 'global memory cannot travel with a project' });
+    });
+
     it('rejects rehashed foreign rows and children outside the project snapshot', () => {
         world = makeWorld();
         const original = snapshot();

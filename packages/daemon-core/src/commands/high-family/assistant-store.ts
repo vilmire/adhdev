@@ -38,7 +38,7 @@ import { getAssistantProjectPorts, type AssistantProjectPorts } from '../../assi
 import type { RemoteCallOutcome, RemoteHostView } from '../../assistant/assistant-remote-host.js';
 import { reviewTurnVerbDecision } from '../../assistant/assistant-review.js';
 import { projectSlugs, resolveAssistantProject } from '../../assistant/assistant-projects.js';
-import { PROJECT_NOTE_CATEGORIES, type ProjectNoteCategory, type ProjectNoteOp, type StagedNoteWrite } from '../../assistant/note-staging.js';
+import { PROJECT_NOTE_CATEGORIES, type ProjectNoteCategory, type ProjectNoteOp } from '../../assistant/note-staging.js';
 import { detectCredential, isReviewOrigin, mustStage, scanWriteContent, type StoreWriteOrigin } from '../../assistant/store-guards.js';
 import { scanHermesHome, importFromHermes, type HermesImportRequest } from '../../assistant/skills/hermes-import.js';
 import type { MemoryOperation, MemoryScope, MemoryTarget } from '../../assistant/memory/memory-store.js';
@@ -759,10 +759,9 @@ async function resolveReviewBatch(ctx: HighFamilyContext, svc: AssistantServices
 }
 
 async function resolveStagedNote(ctx: HighFamilyContext, svc: AssistantServices, id: string, decision: 'apply' | 'discard'): Promise<CommandRouterResult> {
-    const rec: StagedNoteWrite | null = svc.notes.read(id);
-    if (!rec) return respond({ result: 'staged_not_found' });
+    const result = await svc.notes.withResolution(id, async (rec, remove) => {
     if (decision === 'discard') {
-        svc.notes.remove(id);
+        remove();
         return respond({ result: 'discarded' });
     }
     // Re-check against the current inventory and text; a failure keeps the staged file.
@@ -775,14 +774,16 @@ async function resolveStagedNote(ctx: HighFamilyContext, svc: AssistantServices,
         // A host that cannot store it now keeps the staged file here (retry later).
         const remote = await applyRemoteNote(project, rec.op, 'owner', rec.callerSessionId);
         if (remote.result !== 'applied') return respond(remote, wrap);
-        svc.notes.remove(id);
+        remove();
         creditReview(svc, rec.reviewTurnId, remote.result, 'approved');
         return respond(remote, wrap);
     }
     const applied = await applyNote(svc, rec.meshId, rec.op, 'owner', rec.callerSessionId);
-    svc.notes.remove(id);
+    remove();
     creditReview(svc, rec.reviewTurnId, applied.result, 'approved');
     return respond(applied, wrap);
+    });
+    return result ?? respond({ result: 'staged_not_found' });
 }
 
 function applyMemoryLimitsUpdate(svc: AssistantServices, args: any): CommandRouterResult {

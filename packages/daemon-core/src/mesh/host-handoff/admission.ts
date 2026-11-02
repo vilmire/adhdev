@@ -23,6 +23,9 @@ export function durableHandoffAdmissionFailure(meshId: string): { success: false
         // is supplied. Missing storage never implies permission to duplicate.
         const fence = MeshRuntimeStore.getInstance().db.prepare('SELECT 1 FROM mesh_host_write_fences WHERE mesh_id=?').get(meshId);
         if (fence) throw new Error('durable project write fence is held');
+        const pending = MeshRuntimeStore.getInstance().db.prepare("SELECT epoch,phase FROM mesh_host_handoff WHERE mesh_id=? AND role='source' ORDER BY epoch DESC LIMIT 1").get(meshId) as { epoch: number; phase: string } | undefined;
+        if (pending && ['frozen', 'exporting', 'exported', 'awaiting_ack', 'acked', 'activating', 'uncertain', 'committed'].includes(pending.phase)
+            && (!project || (project.meshHost?.hostEpoch ?? 0) <= pending.epoch)) throw new Error('durable source authority intent is held');
         return null;
     } catch {
         return { success: false, code: 'mesh_host_handoff_fenced', error: 'Persisted project host authority is unavailable, fenced or transferred.' };

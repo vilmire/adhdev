@@ -24,6 +24,8 @@ function readProposal(file: ProjectApprovalFile): { value: Record<string, any>; 
     if (!value || value.id !== file.name.slice(0, -5)) throw new Error('approval file identity mismatch');
     const allowed = file.area === 'staged-control' ? ['session_control', 'host_handoff'] : ['note', 'memory', 'launch_defaults'];
     if (!allowed.includes(value.kind)) throw new Error('unsupported project approval kind');
+    if (value.kind === 'memory' && value.op?.scope !== 'project'
+        || value.kind === 'session_control' && value.role === 'assistant') throw new Error('global approval cannot migrate with a project');
     const reference = value.meshId ?? value.op?.projectRef ?? value.project;
     if (typeof reference !== 'string' || !reference) throw new Error('project approval has no stable project reference');
     return { value, reference };
@@ -75,7 +77,9 @@ export function exportProjectApprovalFiles(configDir: string, meshId: string, re
             const data = readFileSync(path, 'utf8');
             const value = record(JSON.parse(data));
             if (!value) throw new Error('approval record is unreadable');
-            // Global memory/provider/driver proposals remain on their machine.
+            // Global memory and global assistant controls remain on their machine.
+            if (value.kind === 'memory' && value.op?.scope !== 'project'
+                || value.kind === 'session_control' && value.role === 'assistant') continue;
             const ref = value.meshId ?? value.op?.projectRef ?? value.project;
             if (typeof ref !== 'string' || resolveProject(ref) !== meshId) continue;
             const file: ProjectApprovalFile = { area, name, meshId, sha256: digest(data), data };
