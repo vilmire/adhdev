@@ -58,6 +58,9 @@ describe('preview-freshness F15 gate', () => {
       recordPath: '.adhdev/preview-deploy.json',
     }))
     expect(freshness?.nextAction).toContain('deploy:preview')
+    expect(freshness?.nextAction).toContain('done criteria')
+    expect(freshness?.nextAction).not.toContain('origin/main')
+    expect(freshness?.nextAction).not.toContain('smoke')
   })
 
   it('treats a repo with a preview-deploy record as configured and preserves the existing surface', async () => {
@@ -81,6 +84,8 @@ describe('preview-freshness F15 gate', () => {
       recordPath: '.adhdev/preview-deploy.json',
       lastTarget: 'all',
     }))
+    expect(freshness?.nextAction).toContain('origin/main')
+    expect(freshness?.nextAction).toContain('smoke preview')
   })
 
   it('treats a repo with the preview-freshness driver script as configured', async () => {
@@ -89,6 +94,16 @@ describe('preview-freshness F15 gate', () => {
     await writeFile(join(repoRoot, 'scripts', 'preview-freshness.mjs'), '// driver\n')
 
     expect(isPreviewPipelineConfigured(repoRoot)).toBe(true)
-    expect(buildPreviewFreshness(repoRoot)).not.toBeNull()
+    expect(buildPreviewFreshness(repoRoot)?.nextAction).toContain('npm run deploy:preview')
+    expect(buildPreviewFreshness(repoRoot)?.nextAction).toContain('smoke preview')
+  })
+
+  it('keeps the deploy sentence for a repo that only has the preview deploy driver', async () => {
+    const repoRoot = await createTempGitRepo('preview-freshness-deploy-driver-')
+    await mkdir(join(repoRoot, 'scripts'))
+    await writeFile(join(repoRoot, 'scripts', 'deploy-preview-local.mjs'), '// driver\n')
+
+    expect(isPreviewPipelineConfigured(repoRoot)).toBe(true)
+    expect(buildPreviewFreshness(repoRoot)?.nextAction).toContain('npm run deploy:preview')
   })
 })

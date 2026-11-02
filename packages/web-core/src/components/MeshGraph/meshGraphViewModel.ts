@@ -66,8 +66,8 @@ export function getMeshGraphAttentionBadge(node: MeshGraphNode): { label: string
     // refine is the more actionable signal for an otherwise-idle worktree.
     if (node.refineJobStatus === 'failed') return { label: 'refine failed', tone: 'danger' }
     if (node.refineJobStatus === 'running' || node.refineJobStatus === 'accepted') return { label: 'refining…', tone: 'info' }
-    if (convergence?.status === 'pushed_feature_branch_needs_merge') return { label: 'needs merge', tone: 'warn' }
-    if (convergence?.status === 'cleanup_candidate') return { label: 'refine worktree', tone: 'info' }
+    if (convergence?.status === 'pushed_feature_branch_needs_merge') return { label: 'feature branch', tone: 'info' }
+    if (convergence?.status === 'cleanup_candidate') return { label: 'feature worktree', tone: 'info' }
     if (node.isOrphan) return { label: 'needs follow-up', tone: 'warn' }
     if (node.health === 'offline') return { label: 'offline', tone: 'danger' }
     return null

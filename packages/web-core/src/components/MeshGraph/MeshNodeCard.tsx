@@ -210,7 +210,9 @@ const ATTENTION_LABEL_KEYS: Record<string, string> = {
     'working': 'mesh.attention.working',
     'refining…': 'mesh.attention.refining',
     'needs merge': 'mesh.attention.needsMerge',
+    'feature branch': 'mesh.attention.needsMerge',
     'refine worktree': 'mesh.attention.refineWorktree',
+    'feature worktree': 'mesh.attention.refineWorktree',
     'needs follow-up': 'mesh.attention.needsFollowUp',
     'offline': 'mesh.attention.offline',
 }

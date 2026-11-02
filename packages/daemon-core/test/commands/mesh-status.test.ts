@@ -908,6 +908,9 @@ describe('mesh_status', () => {
         recordPath: '.adhdev/preview-deploy.json',
       }))
       expect(result.deployFreshness).toEqual(result.previewFreshness)
+      expect(result.previewFreshness.nextAction).toContain('done criteria')
+      expect(result.previewFreshness.nextAction).not.toContain('origin/main')
+      expect(result.previewFreshness.nextAction).not.toContain('smoke')
     } finally {
       await cleanupTempDir(dir)
     }

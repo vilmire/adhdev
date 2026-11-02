@@ -2439,11 +2439,14 @@ test('mesh_status surfaces branch convergence follow-up for clean non-main branc
   // Compact mode drops branchConvergence.nextStep once the identical sentence is
   // already present in nextStepHints[] (mesh-compact.ts dedup) — assert on the
   // hint instead of the now-elided duplicate copy.
-  assert.match(feature.nextStepHints.join(' '), /do not report the task as fully complete/);
+  assert.match(feature.nextStepHints.join(' '), /Merging is the next step only when the request or the done criteria include landing/);
+  assert.doesNotMatch(feature.nextStepHints.join(' '), /do not report the task as fully complete/);
+  assert.doesNotMatch(feature.nextStepHints.join(' '), /mesh_refine_node/);
   assert.equal(feature.branchConvergence.nextStep, undefined);
   assert.equal(worktree.branchConvergence.status, 'cleanup_candidate');
   assert.equal(worktree.branchConvergence.needsConvergence, true);
-  assert.match(worktree.nextStepHints.join(' '), /mesh_refine_node/);
+  assert.match(worktree.nextStepHints.join(' '), /Report cleanup_candidate/);
+  assert.doesNotMatch(worktree.nextStepHints.join(' '), /mesh_refine_node/);
   assert.equal(worktree.branchConvergence.nextStep, undefined);
 
   assert.equal(status.branchConvergenceSummary.needsFollowUp, true);
@@ -2455,8 +2458,8 @@ test('mesh_status surfaces branch convergence follow-up for clean non-main branc
       ['node-worktree', 'cleanup_candidate'],
     ],
   );
-  assert.ok(feature.nextStepHints.some((hint: string) => hint.includes('merge branch')));
-  assert.ok(worktree.nextStepHints.some((hint: string) => hint.includes('mesh_refine_node')));
+  assert.ok(feature.nextStepHints.some((hint: string) => hint.includes('pushed_feature_branch_needs_merge')));
+  assert.ok(worktree.nextStepHints.some((hint: string) => hint.includes('done criteria include landing')));
 });
 
 test('mesh_status blocks convergence when the held upstream freshness is unverified — without a live git probe', async () => {

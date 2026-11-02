@@ -204,4 +204,46 @@ describe('meshGraphViewModel', () => {
     expect(getMeshGraphAttentionBadge(notMergeable)).toEqual({ label: 'conflicts present', tone: 'danger' })
   })
 
+  it('reports a clean feature branch and worktree without a merge order', () => {
+    const feature = graphNode({
+      id: 'n-feature',
+      branch: 'fix/pr',
+      branchConvergence: {
+        status: 'pushed_feature_branch_needs_merge',
+        needsConvergence: true,
+        reason: 'clean_non_default_branch',
+        nextStep: 'Report pushed_feature_branch_needs_merge.',
+        branch: 'fix/pr',
+        defaultBranch: 'main',
+        upstream: 'origin/fix/pr',
+        upstreamStatus: 'fresh',
+        ahead: 0,
+        behind: 0,
+        dirty: false,
+        hasConflicts: false,
+      },
+    })
+    const worktree = graphNode({
+      id: 'n-worktree',
+      branch: 'fix/local',
+      branchConvergence: {
+        status: 'cleanup_candidate',
+        needsConvergence: true,
+        reason: 'clean_non_default_worktree_branch',
+        nextStep: 'Report cleanup_candidate.',
+        branch: 'fix/local',
+        defaultBranch: 'main',
+        upstream: null,
+        upstreamStatus: 'no_upstream',
+        ahead: 0,
+        behind: 0,
+        dirty: false,
+        hasConflicts: false,
+      },
+    })
+    expect(getMeshGraphAttentionBadge(feature)).toEqual({ label: 'feature branch', tone: 'info' })
+    expect(getMeshGraphAttentionBadge(worktree)).toEqual({ label: 'feature worktree', tone: 'info' })
+    expect(getMeshGraphAttentionBadge(feature)?.label).not.toMatch(/needs merge|ready to merge|refine worktree/)
+  })
+
 })

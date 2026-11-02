@@ -11,9 +11,13 @@
  *   1. `<mesh base workspace>/.adhdev/coordinator-rules.md` when present and
  *      non-trivial — the repo is the source of truth, merged rules apply on
  *      the next coordinator launch with no deploy in between.
- *   2. Otherwise the bundled default (default-coordinator-rules.ts, generated
- *      from this monorepo's own .adhdev/coordinator-rules.md and kept in
- *      sync by check:coordinator-rules-sync).
+ *   2. Otherwise the bundled generic default (default-coordinator-rules.ts,
+ *      generated from generic-coordinator-rules.md). That fallback follows
+ *      the user's requested done criteria. It is not this monorepo's
+ *      next-RC policy. check:coordinator-rules-sync keeps the bundle equal
+ *      to the generic source and checks that .adhdev/coordinator-rules.md
+ *      still carries this repo's landing and release markers. The two
+ *      texts are not required to match. Repo file wins wholesale.
  *
  * Fail-open by design: an unreadable/empty/gutted repo file falls back to the
  * bundled default — a coordinator launching with no rules at all is strictly

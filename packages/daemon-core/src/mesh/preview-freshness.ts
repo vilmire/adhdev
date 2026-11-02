@@ -25,10 +25,12 @@ interface PreviewFreshness {
 const PREVIEW_DEPLOY_RECORD = '.adhdev/preview-deploy.json';
 
 // Repo-relative driver scripts that indicate this repository actually ships the
-// preview-deploy pipeline. Presence of any one of these (or the deploy record,
-// or a `deploy:preview` npm script) means the private release-pipeline guidance
-// carried by buildPreviewFreshness is relevant here. In every other repo the
-// pipeline is not configured and the guidance must NOT leak (F15).
+// preview-deploy pipeline. A deploy record or one of these scripts keeps the
+// existing "deploy from origin/main, then smoke" sentences. A package.json
+// script named deploy:preview, with none of those files, still marks the
+// surface configured but must not prescribe origin/main or a smoke step.
+// In every other repo the pipeline is not configured and the guidance must
+// NOT leak (F15).
 const PREVIEW_PIPELINE_SCRIPTS = [
     'scripts/preview-freshness.mjs',
     'scripts/smoke-preview-web.mjs',
@@ -55,13 +57,17 @@ function hasDeployPreviewNpmScript(repoRoot: string): boolean {
  * mesh must not have that guidance leak into its coordinator prompt, so this
  * gate keeps the surface off unless a concrete pipeline artifact is present.
  */
-export function isPreviewPipelineConfigured(repoRoot: string): boolean {
-    // Strongest signal: the repo has produced a preview-deploy record before.
+function hasPreviewDriverEvidence(repoRoot: string): boolean {
     if (existsSync(resolve(repoRoot, PREVIEW_DEPLOY_RECORD))) return true;
-    // Otherwise the pipeline's own driver scripts are enough.
-    if (PREVIEW_PIPELINE_SCRIPTS.some((rel) => existsSync(resolve(repoRoot, rel)))) return true;
-    // Or the `deploy:preview` npm script that fronts the pipeline.
-    return hasDeployPreviewNpmScript(repoRoot);
+    return PREVIEW_PIPELINE_SCRIPTS.some((rel) => existsSync(resolve(repoRoot, rel)));
+}
+
+export function isPreviewPipelineConfigured(repoRoot: string): boolean {
+    // Strongest signal: the repo has produced a preview-deploy record before,
+    // or it ships a driver script. A deploy:preview npm script name alone is
+    // enough to show the surface, but not enough to prescribe this repo's
+    // origin/main smoke sentence (see buildPreviewFreshness).
+    return hasPreviewDriverEvidence(repoRoot) || hasDeployPreviewNpmScript(repoRoot);
 }
 
 function runGit(repoRoot: string, args: readonly string[]): string {
@@ -139,14 +145,19 @@ export function buildPreviewFreshness(repoRoot: string): PreviewFreshness | null
     const lastPreviewCommit = normalizeCommit(record?.lastPreviewCommit);
     const targets = readTargetFreshness(record, current.currentMainCommit);
     let status: PreviewFreshnessStatus = 'unknown';
-    let nextAction = 'Run npm run deploy:preview from the current main commit, then smoke preview.';
+    const scriptOnly = !hasPreviewDriverEvidence(repoRoot);
+    let nextAction = scriptOnly
+        ? 'package.json defines deploy:preview. Run that script only when a preview deploy is in the done criteria.'
+        : 'Run npm run deploy:preview from the current main commit, then smoke preview.';
 
-    if (lastPreviewCommit && current.currentMainCommit) {
+    // A script name alone is not this repo's preview pipeline, so it keeps the
+    // done-criteria sentence above and does not prescribe origin/main or smoke.
+    if (!scriptOnly && lastPreviewCommit && current.currentMainCommit) {
         status = lastPreviewCommit === current.currentMainCommit ? 'fresh' : 'stale';
         nextAction = status === 'fresh'
             ? 'No preview deploy action needed.'
             : 'Run npm run deploy:preview from origin/main, then smoke preview.';
-    } else if (!current.currentMainCommit) {
+    } else if (!scriptOnly && !current.currentMainCommit) {
         nextAction = 'Resolve the current main commit before judging preview freshness.';
     }
 

@@ -148,7 +148,7 @@ function buildInlineMeshBranchConvergence(args: {
             status: 'cleanup_candidate',
             needsConvergence: true,
             reason: 'clean_non_default_worktree_branch',
-            nextStep: `Run mesh_refine_node(node_id: "${nodeLabel}") or explicitly classify this worktree as blocked_review/not_mergeable before ending the task.`,
+            nextStep: `Branch '${branch}' is a clean worktree off ${defaultBranch}. Report cleanup_candidate. Merging is the next step only when the request or the done criteria include landing.`,
         };
     }
 
@@ -177,7 +177,7 @@ function buildInlineMeshBranchConvergence(args: {
         status: 'pushed_feature_branch_needs_merge',
         needsConvergence: true,
         reason: 'clean_non_default_branch',
-        nextStep: `Review and merge branch '${branch}' into ${defaultBranch}; do not report the task as fully complete while it remains off main.`,
+        nextStep: `Branch '${branch}' is even with its upstream and off ${defaultBranch}. Report pushed_feature_branch_needs_merge. Merging is the next step only when the request or the done criteria include landing.`,
     };
 }
 

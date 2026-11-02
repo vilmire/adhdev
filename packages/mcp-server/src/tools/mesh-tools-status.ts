@@ -382,8 +382,8 @@ export function applyNodeSchedulingAndHints(entry: any, node: LocalMeshNodeEntry
     if (entry.degradedReason === 'worktree_launch_failed') {
         nextStepHints.push(`Retry mesh_launch_session(node_id: "${node.id}") after daemon mesh transport/P2P is healthy.`);
         nextStepHints.push(`If retry is not desired, cleanup the orphan worktree node with mesh_remove_node(node_id: "${node.id}").`);
-    } else if (entry.health === 'online' && node.isLocalWorktree) {
-        nextStepHints.push(`Merge worktree to base via mesh_refine_node(node_id: "${node.id}")`);
+    } else if (entry.health === 'online' && node.isLocalWorktree && !entry.branchConvergence?.nextStep) {
+        nextStepHints.push(`Clean worktree is off the default branch. Report that state. Merge only when the done criteria include landing.`);
     } else if (entry.health === 'dirty') {
         nextStepHints.push(`Commit changes via mesh_checkpoint(node_id: "${node.id}", message: "...")`);
     } else if (entry.health === 'degraded' && entry.error?.includes('git')) {

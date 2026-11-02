@@ -62,6 +62,21 @@ describe('resolveCoordinatorRules', () => {
         expect(r.text).toContain('Omit provider tags and model/thinking overrides');
         expect(r.text).toContain('Same-issue continuation');
         expect(r.text).toContain('stale quota is not evidence of exhaustion');
+        expect(r.text).toContain('not an order to merge');
+        expect(r.text).not.toContain('RELEASE/DEPLOY runs here');
+        expect(r.text).not.toContain('npm run deploy:preview');
+        expect(r.text).not.toContain('A clean worktree branch →');
+    });
+
+    it('keeps this repo next-RC rules ahead of the generic bundle', () => {
+        const repoRoot = path.resolve(path.join(import.meta.dirname, '../../../../../'));
+        const r = resolveCoordinatorRules(repoRoot);
+        expect(r.source).toBe('repo');
+        expect(r.differsFromBundled).toBe(true);
+        expect(r.text).toContain('A clean worktree branch → `mesh_refine_node`');
+        expect(r.text).toContain('RELEASE/DEPLOY runs here');
+        expect(r.text).toContain('publish through the requested release track');
+        expect(r.text).not.toContain('not an order to merge');
     });
 
     it('reads the repo file when present and meaningful', () => {

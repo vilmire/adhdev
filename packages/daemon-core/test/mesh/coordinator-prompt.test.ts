@@ -1,6 +1,10 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { CANONICAL_MESH_TOOL_NAMES, CANONICAL_MESH_TOOL_COUNT, RETIRED_MESH_TOOLS, WORKER_TOOLS, renderCoordinatorWorkerSection } from '@adhdev/mesh-shared'
 import { buildCoordinatorSystemPrompt } from '../../src/mesh/coordinator-prompt.js'
+
+const THIS_REPO_RULES = readFileSync(join(import.meta.dirname, '../../../../../.adhdev/coordinator-rules.md'), 'utf8')
 
 describe('Repo Mesh coordinator prompt', () => {
   it('uses default policy for cloud inline meshes that omit policy/coordinator fields', () => {
@@ -254,7 +258,7 @@ describe('Repo Mesh coordinator prompt', () => {
     // The applicability condition must be explicit — "2+ siblings", not just the
     // tool name floating in a table.
     expect(prompt).toContain('use `mesh_refine_batch` for two or more')
-    expect(prompt).toContain('when 2+ sibling worktrees share a base, converge them with `mesh_refine_batch`')
+    expect(prompt).toContain('When landing was requested and 2+ sibling worktrees share a base, converge them with `mesh_refine_batch`')
 
     // Only the capabilities the implementation actually has may be claimed:
     // conflict-aware ordering, per-node re-resolve + auto-rebase, base_locked
@@ -638,12 +642,10 @@ describe('Repo Mesh coordinator prompt', () => {
     // (5) Don't reopen already-done work after compaction/resume.
     expect(prompt).toContain('Before reopening a reported issue after context compaction or session resume')
     expect(prompt).toContain('continue from the existing diff/commit instead of starting a duplicate investigation')
-    // (6) Stuck-but-verified → stop polling, verify with git, land.
+    // (6) Stuck-but-verified → stop polling and verify with git. Landing is not implied.
     expect(prompt).toContain('If a delegated session appears stuck but has already delivered a `report_completion` summary')
-    // (7) Manual strict fast-forward convergence bypass when Refinery falsely blocks a clean branch.
-    expect(prompt).toContain('converge by strict fast-forward')
-    expect(prompt).toContain("rebase the submodule commit onto the submodule's `origin/<default-branch>`")
-    expect(prompt).toContain('NEVER force-push or reset; abort and report on any non-fast-forward')
+    expect(prompt).not.toContain('proceed to landing')
+    expect(prompt).not.toContain('converge by strict fast-forward')
   })
 
   it('requires a branch convergence final state before reporting completion', () => {
@@ -670,6 +672,14 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('Converge branches')
     expect(prompt).toContain('branchConvergenceSummary')
     expect(prompt).toContain('`mesh_refine_node`')
+    expect(prompt).toContain('not an order to merge')
+    expect(prompt).toContain('only when the request, the done criteria, or a repo rules file asks for landing or a release')
+    expect(prompt).not.toContain('A clean worktree branch →')
+    expect(prompt).not.toContain('is not complete unless the final report')
+    expect(prompt).not.toContain('RELEASE/DEPLOY runs here')
+    expect(prompt).not.toContain('npm run deploy:preview')
+    expect(prompt).toContain('When the request or the done criteria include landing, land it with `mesh_light_land`')
+    expect(prompt).not.toContain('worker-reported tests). Land it with `mesh_light_land`')
     expect(prompt).toContain('`merged_to_main`')
     expect(prompt).toContain('`pushed_feature_branch_needs_merge`')
     expect(prompt).toContain('`blocked_review`')
@@ -697,6 +707,7 @@ describe('Repo Mesh coordinator prompt', () => {
         createdAt: '2026-01-01T00:00:00Z',
         updatedAt: '2026-01-01T00:00:00Z',
       } as any,
+      repoRules: { text: THIS_REPO_RULES, source: 'repo', differsFromBundled: true },
     })
 
     expect(prompt).toContain('require each submodule commit to be reachable from the configured submodule remote main branch')
@@ -705,6 +716,11 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain("ask the user for explicit approval to push/publish the unreachable submodule commit(s) to the submodule's default branch")
     expect(prompt).toContain('then rerun `mesh_refine_node`')
     expect(prompt).toContain('Submodule reachability = publish-needed')
+    expect(prompt).toContain('A clean worktree branch → `mesh_refine_node`')
+    expect(prompt).toContain('RELEASE/DEPLOY runs here')
+    expect(prompt).toContain('publish through the requested release track')
+    expect(prompt).toContain('converge by strict fast-forward')
+    expect(prompt).not.toContain('not an order to merge')
   })
 
   it('M3-4: instructs mission upsert + mission_id enqueue for multi-task work', () => {
