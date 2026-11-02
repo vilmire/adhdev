@@ -229,3 +229,17 @@ describe('renderWorkerProtocolFooter — light workspace', () => {
         expect(renderWorkerProtocolFooter({ taskId: 't1' })).not.toContain('light workspace')
     })
 })
+
+describe('footer: commit on the current branch', () => {
+    const RULE = 'Commit your change on the branch that is currently checked out'
+    it('renders only when asked, in both the tool and the no-tools variants', () => {
+        expect(renderWorkerProtocolFooter({ taskId: 't1' })).not.toContain(RULE)
+        expect(renderWorkerProtocolFooter({ taskId: 't1', commitOnCurrentBranch: true })).toContain(RULE)
+        expect(renderWorkerProtocolFooter({ taskId: 't1', commitOnCurrentBranch: true, workerMcp: false })).toContain(RULE)
+        expect(renderWorkerProtocolFooter({ commitOnCurrentBranch: true })).toContain('do not create or switch'.replace('do', 'Do'))
+    })
+    it('yields to the light-workspace variant', () => {
+        const light = { workspace: '/w', baseSha: 'abc', ownedPaths: [] }
+        expect(renderWorkerProtocolFooter({ light, commitOnCurrentBranch: true })).not.toContain(RULE)
+    })
+})

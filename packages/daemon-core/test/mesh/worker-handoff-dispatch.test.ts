@@ -74,14 +74,36 @@ describe('resolveDispatchMessage — worker protocol footer', () => {
     expect(hasWorkerProtocolFooter(body)).toBe(true)
     expect(countMarkers(body)).toBe(1)
     // The footer is the tail of the body — nothing rides after it.
-    expect(body.trimEnd().endsWith(renderWorkerProtocolFooter({ taskId: 'task_off', taskMode: 'code_change', difficulty: 'medium' }))).toBe(true)
+    expect(body.trimEnd().endsWith(renderWorkerProtocolFooter({ taskId: 'task_off', taskMode: 'code_change', difficulty: 'medium', commitOnCurrentBranch: true }))).toBe(true)
   })
 
   it('renders the no-tools footer when the target session did not receive the worker MCP', () => {
     const body = resolveDispatchMessage({ id: 'task_nomcp', message: 'Fix the thing.' }, MESH, null, { workerMcp: false })
-    expect(body.trimEnd().endsWith(renderWorkerProtocolFooter({ taskId: 'task_nomcp', workerMcp: false }))).toBe(true)
+    expect(body.trimEnd().endsWith(renderWorkerProtocolFooter({ taskId: 'task_nomcp', workerMcp: false, commitOnCurrentBranch: true }))).toBe(true)
     expect(body).not.toContain('call `report_completion`')
     expect(body).toContain('plain final summary')
+  })
+
+  describe('commit-on-current-branch rule (code changes on a base node)', () => {
+    const RULE = 'Commit your change on the branch that is currently checked out'
+    const footerOf = (body: string) => body.slice(body.indexOf(WORKER_PROTOCOL_FOOTER_MARKER))
+
+    it('is present for a code_change on a base node, and for an unset mode', () => {
+      expect(footerOf(resolveDispatchMessage({ id: 't1', message: 'x', taskMode: 'code_change' }, MESH, { id: 'node_base' }))).toContain(RULE)
+      expect(footerOf(resolveDispatchMessage({ id: 't2', message: 'x' }, MESH, null))).toContain(RULE)
+    })
+
+    it('is absent for worktree nodes, read-only / non-code modes and light tasks', () => {
+      expect(footerOf(resolveDispatchMessage({ id: 't3', message: 'x', taskMode: 'code_change' }, MESH, { worktreeBranch: 'wt/feature' }))).not.toContain(RULE)
+      expect(footerOf(resolveDispatchMessage({ id: 't4', message: 'x', taskMode: 'code_change' }, MESH, { clonedFromNodeId: 'node_base' }))).not.toContain(RULE)
+      expect(footerOf(resolveDispatchMessage({ id: 't5', message: 'x', taskMode: 'validation' }, MESH, null))).not.toContain(RULE)
+      expect(footerOf(resolveDispatchMessage({ id: 't6', message: 'x', taskMode: 'live_debug_readonly' }, MESH, null))).not.toContain(RULE)
+      expect(footerOf(resolveDispatchMessage({ id: 't7', message: 'x', taskMode: 'code_change', readonly: true } as any, MESH, null))).not.toContain(RULE)
+    })
+
+    it('never appears in a light task footer (it has its own branch rules)', () => {
+      expect(renderWorkerProtocolFooter({ light: { workspace: '/w', baseSha: 'abc', ownedPaths: [] }, commitOnCurrentBranch: true })).not.toContain(RULE)
+    })
   })
 
   it('keeps the tool footer when delivery is confirmed or unknown', () => {

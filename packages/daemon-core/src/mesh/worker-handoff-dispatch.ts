@@ -87,6 +87,18 @@ export interface DispatchableTask {
 }
 
 /**
+ * A code-changing, non-light task on a base (non-worktree) node: its worker commits on the checked-out branch. Worktree
+ * nodes (`worktreeBranch` / `clonedFromNodeId`) own a dedicated branch already, and read-only tasks commit nothing.
+ */
+function commitsOnCurrentBranch(task: DispatchableTask, node: unknown): boolean {
+    if (task.light || isTaskReadonly(task)) return false;
+    const mode = readNonEmpty(task.taskMode);
+    if (mode && mode.trim() !== 'code_change') return false;
+    const n = node as { worktreeBranch?: unknown; clonedFromNodeId?: unknown } | null;
+    return !readNonEmpty(n?.worktreeBranch) && !readNonEmpty(n?.clonedFromNodeId);
+}
+
+/**
  * The body to actually send for this task:
  *
  *   1. `task.message` — the coordinator's authored text, verbatim;
@@ -212,6 +224,7 @@ export function resolveDispatchMessage(
         ...(missionBrief ? { missionBrief } : {}),
         ...(typeof target.workerMcp === 'boolean' ? { workerMcp: target.workerMcp } : {}),
         ...(task.light ? { light: resolveLightFooterInput(task) } : {}),
+        ...(commitsOnCurrentBranch(task, node) ? { commitOnCurrentBranch: true } : {}),
         ...(stageFooterInput(task) ? { stage: stageFooterInput(task)! } : {}),
     });
 }

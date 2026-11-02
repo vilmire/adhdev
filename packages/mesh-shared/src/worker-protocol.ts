@@ -92,6 +92,11 @@ export interface WorkerProtocolFooterInput {
      */
     light?: { workspace: string; baseSha: string; ossBaseSha?: string; ownedPaths: string[] }
     /**
+     * Code-changing task on a shared (non-worktree) node checkout, not a light task: the worker commits on the
+     * branch that is currently checked out. Renders the "do not create or switch branches" rule.
+     */
+    commitOnCurrentBranch?: boolean
+    /**
      * Review-in-task (docs/design/2026-11-01-review-in-task.md §9.3): present when this
      * dispatch is one stage of a stage pipeline. `workspace` is the reviewer's pinned
      * workspace path when the daemon prepared one.
@@ -114,6 +119,11 @@ export function renderLightWorkspaceRules(light: NonNullable<WorkerProtocolFoote
             : 'Stay inside the paths the task names; if you must touch more, say why in the summary.',
     ]
 }
+
+/** Base-node code changes land on the branch the coordinator and review expect: the one already checked out. */
+export const WORKER_CURRENT_BRANCH_RULE =
+    'Commit your change on the branch that is currently checked out in this workspace. Do not create or switch '
+    + 'branches (no `git checkout -b` / `git switch`) unless the task explicitly says to; report the branch you committed on.'
 
 export function hasWorkerProtocolFooter(body: string): boolean {
     return typeof body === 'string' && body.includes(WORKER_PROTOCOL_FOOTER_MARKER)
@@ -151,6 +161,7 @@ export function renderWorkerProtocolFooter(input: WorkerProtocolFooterInput = {}
     if (scope.length) lines.push(`You are a delegated worker (${scope.join(', ')}).`)
     else lines.push('You are a delegated worker.')
     if (input.light) lines.push(...renderLightWorkspaceRules(input.light))
+    else if (input.commitOnCurrentBranch) lines.push(WORKER_CURRENT_BRANCH_RULE)
     if (input.workerMcp === false) {
         lines.push(
             'This session has NO adhdev worker tools (`report_completion`, `progress_update`, `peer_context_pull`, '
