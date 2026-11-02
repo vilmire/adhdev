@@ -152,7 +152,7 @@ const NEW_WORK_HOLD_CMDS = [
 ]
 
 describe('low-family registry', () => {
-  it('registers all 129 LOW family commands once, no overlap', () => {
+  it('registers all 130 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,
@@ -178,8 +178,8 @@ describe('low-family registry', () => {
     // commands added in rc33 were removed again, mission e6d4293c, so they net out.)
     // rc.37: + mesh_direct_cancel = 125; + 2 machine quota reserve commands
     // (quota_reserve_get/set, 2026-11-01) = 127; + light_land/light_discard
-    // (same-machine light tasks, 2026-11-01) = 129.
-    expect(all).toHaveLength(129)
+    // (same-machine light tasks, 2026-11-01) = 129, +1 project_transfer_set_relay (2026-11-02) = 130.
+    expect(all).toHaveLength(130)
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
     expect(lowFamilyNames()).toHaveLength(all.length)
