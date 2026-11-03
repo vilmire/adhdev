@@ -12,7 +12,7 @@ import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared'
 import {
     HANDOFF_STEPS, HOST_HANDOFF_COMMAND, canAbortHandoff, canRetryHandoff, isHandoffTerminal, parseHandoffStatus, parsePreflight, parseStartResult, phaseToStep,
-    unwrapHandoffAnswer, canaryProbeRefusal, type HandoffRecordView, type HandoffEvidenceView, type PreflightCheckView,
+    unwrapHandoffAnswer, canaryProbeRefusal, canaryProbeSucceeded, type HandoffRecordView, type HandoffEvidenceView, type PreflightCheckView,
 } from './host-handoff'
 
 type SendCommand = (daemonId: string, command: string, payload?: any) => Promise<any>
@@ -138,6 +138,11 @@ export function MeshHostHandoffDialog({ open, onClose, meshId, hostDaemonId, dae
                             <AlertBanner variant="warning">
                                 <span data-handoff-canary-unsupported>{t('mesh.handoff.canaryUnsupported')}</span>
                                 <span className="block text-xs" data-handoff-canary-detail>{canaryProbeRefusal(checks)}</span>
+                            </AlertBanner>
+                        )}
+                        {checks && canaryProbeSucceeded(checks) && (
+                            <AlertBanner variant="info">
+                                <span data-handoff-canary-host-bound>{t('mesh.handoff.canaryHostBound')}</span>
                             </AlertBanner>
                         )}
                         {checks && (

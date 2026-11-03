@@ -1,6 +1,9 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { validateProviderDefinition } from '../../src/providers/provider-schema.js'
 import { validateCliProviderManifest } from '../../src/providers/sdk/v1/validators/manifest.js'
+import cliSchema from '../../src/providers/sdk/v1/schemas/cli/provider.schema.json'
+import { HANDOFF_CANARY_HOST_MAX_OUTPUT_BYTES, HANDOFF_CANARY_HOST_TIMEOUT_MS, describeCanaryContract } from '../../src/shared/host-handoff-canary-contract.js'
 
 describe('validateProviderDefinition', () => {
   const baseCapabilities = {
@@ -130,14 +133,27 @@ describe('validateProviderDefinition', () => {
     const base = { type: 'foo-cli', name: 'Foo CLI', category: 'cli', binary: 'foo', spawn: { command: 'foo' }, modelLaunchArgs: ['--model', '{{model}}'], thinkingLaunchArgs: ['--effort', '{{level}}'] }
     expect(validateProviderDefinition(base).errors).toEqual([])
     expect(validateCliProviderManifest(base).ok).toBe(true)
-    const complete = { ...base, hostHandoffCanary: { version: 1, privateContextDisabled: true, toolsDisabled: true, args: ['--prompt', '{{prompt}}', '--turns', '{{maxTurns}}', '--max-tokens', '{{maxOutputTokens}}', '--model', '{{model}}', '--effort', '{{thinkingLevel}}'] } }
+    const bound = { version: 1, enforcement: 'host', hostTimeoutMs: 15000, hostMaxOutputBytes: 16384, nativeTurnCap: false, nativeOutputTokenCap: false, privateContextDisabled: true, toolsDisabled: true }
+    const complete = { ...base, hostHandoffCanary: { ...bound, args: ['--prompt', '{{prompt}}', '--model', '{{model}}'], thinkingArgs: ['--effort', '{{thinkingLevel}}'] } }
     expect(validateProviderDefinition(complete).errors).toEqual([])
     expect(validateCliProviderManifest(complete).ok).toBe(true)
-    const missingToken = { ...base, hostHandoffCanary: { version: 1, privateContextDisabled: true, toolsDisabled: true, args: ['{{prompt}}', '{{maxTurns}}', '{{model}}', '{{thinkingLevel}}'] } }
-    expect(validateProviderDefinition(missingToken).errors.join('\n')).toContain('missing_max_output_tokens_binding')
-    expect(validateCliProviderManifest(missingToken).ok).toBe(true)
+    const placeholder = { ...base, hostHandoffCanary: { ...bound, args: ['{{prompt}}', '--turns', '{{maxTurns}}', '{{model}}'], thinkingArgs: ['{{thinkingLevel}}'] } }
+    expect(validateProviderDefinition(placeholder).errors.join('\n')).toContain('native_cap_placeholder')
+    expect(validateCliProviderManifest(placeholder).ok).toBe(true)
     expect(validateProviderDefinition({ ...base, hostHandoffCanary: { version: 1 } }).errors.join('\n')).toContain('declaration_incomplete')
-    expect(validateCliProviderManifest({ ...base, hostHandoffCanary: { version: 1, privateContextDisabled: false, toolsDisabled: true, args: ['{{prompt}}'] } }).ok).toBe(false)
+    expect(validateCliProviderManifest({ ...base, hostHandoffCanary: { ...bound, nativeTurnCap: true, args: ['{{prompt}}', '{{model}}'], thinkingArgs: ['{{thinkingLevel}}'] } }).ok).toBe(false)
+    const canarySchema = cliSchema.properties.hostHandoffCanary.properties
+    expect(canarySchema.hostTimeoutMs.const).toBe(HANDOFF_CANARY_HOST_TIMEOUT_MS)
+    expect(canarySchema.hostMaxOutputBytes.const).toBe(HANDOFF_CANARY_HOST_MAX_OUTPUT_BYTES)
+    expect(canarySchema.nativeTurnCap.const).toBe(false)
+    expect(canarySchema.nativeOutputTokenCap.const).toBe(false)
+    const codex = JSON.parse(readFileSync(new URL('../../../../../adhdev-providers/cli/codex-cli/provider.v1.json', import.meta.url), 'utf8'))
+    expect(codex.providerVersion).toBe('1.1.39')
+    expect(codex.hostHandoffCanary.args.join('\n')).not.toMatch(/maxTurns|maxOutputTokens/)
+    expect(codex.hostHandoffCanary.thinkingArgs.join('\n')).toContain('{{thinkingLevel}}')
+    expect(describeCanaryContract(codex, { provider: 'codex-cli', model: 'gpt-6.1-sol' })).toBeUndefined()
+    expect(describeCanaryContract(codex, { provider: 'codex-cli', model: 'gpt-6.1-sol', thinkingLevel: 'low' })).toBeUndefined()
+    expect(describeCanaryContract(codex, { provider: 'codex-cli' })).toBe('canary_contract_unsupported: missing_model_selection')
   })
 
   it('accepts a valid CLI provider with typed controls and explicit capabilities', () => {

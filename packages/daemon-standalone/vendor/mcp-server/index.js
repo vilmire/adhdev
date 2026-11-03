@@ -112416,17 +112416,28 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             hostHandoffCanary: {
               type: "object",
               additionalProperties: false,
-              required: ["version", "privateContextDisabled", "toolsDisabled", "args"],
-              description: "Optional bounded host-handoff auth probe. Absence means this provider is explicitly unsupported for that probe and readiness must refuse before the current source is stopped. Declare it only when the installed CLI has real arguments for the fixed prompt, one turn, 32 output tokens, and the selected model and thinking level, with tools and private context disabled. A placeholder in an unused flag is not a declaration.",
+              required: ["version", "enforcement", "hostTimeoutMs", "hostMaxOutputBytes", "nativeTurnCap", "nativeOutputTokenCap", "privateContextDisabled", "toolsDisabled", "args"],
+              description: "Optional host-enforced handoff auth probe. Absence is a valid refusal and readiness must not stop the current source. The host enforces exactly 15000 ms and 16384 output bytes around a fixed prompt, with tools and private context disabled. Native billable turn and output-token caps are not guaranteed. A {{maxTurns}} or {{maxOutputTokens}} placeholder is not a declaration.",
               properties: {
                 version: { const: 1 },
+                enforcement: { const: "host" },
+                hostTimeoutMs: { const: 15e3 },
+                hostMaxOutputBytes: { const: 16384 },
+                nativeTurnCap: { const: false },
+                nativeOutputTokenCap: { const: false },
                 privateContextDisabled: { const: true },
                 toolsDisabled: { const: true },
                 args: {
                   type: "array",
                   minItems: 1,
                   items: { type: "string", minLength: 1 },
-                  description: "Argv template. The loader also requires the substitutions {{prompt}}, {{maxTurns}}, and {{maxOutputTokens}}, plus {{model}} or {{thinkingLevel}} when that selection axis exists."
+                  description: "Real argv template. The loader requires {{prompt}}, and {{model}} when a model is selected. It rejects {{maxTurns}} and {{maxOutputTokens}}. {{thinkingLevel}} belongs in thinkingArgs, not here."
+                },
+                thinkingArgs: {
+                  type: "array",
+                  minItems: 1,
+                  items: { type: "string", minLength: 1 },
+                  description: "Real argv inserted before the prompt only when a non-empty thinking level is selected. Must bind {{thinkingLevel}}. Omitted entirely when thinking is absent."
                 }
               }
             },
@@ -114001,24 +114012,38 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         _driverValidator = null;
       }
     });
+    function argvTemplate(value) {
+      return Array.isArray(value) && value.length > 0 && value.every((arg) => typeof arg === "string" && arg.length > 0 && !arg.includes("\0"));
+    }
     function describeCanaryContract(provider, selection) {
       const spec = provider.hostHandoffCanary;
       const fail15 = (reason) => `canary_contract_unsupported: ${reason}`;
       if (provider.type !== selection.provider) return fail15("provider_mismatch");
       if (!spec) return fail15(`missing_declaration:${selection.provider || "unknown"}`);
-      if (spec.version !== 1 || spec.privateContextDisabled !== true || spec.toolsDisabled !== true || !Array.isArray(spec.args) || spec.args.some((a) => typeof a !== "string" || a.includes("\0")) || !provider.spawn?.command) {
+      const thinkingArgs = spec.thinkingArgs;
+      if (spec.version !== 1 || spec.enforcement !== "host" || spec.hostTimeoutMs !== HANDOFF_CANARY_HOST_TIMEOUT_MS || spec.hostMaxOutputBytes !== HANDOFF_CANARY_HOST_MAX_OUTPUT_BYTES || spec.nativeTurnCap !== false || spec.nativeOutputTokenCap !== false || spec.privateContextDisabled !== true || spec.toolsDisabled !== true || !argvTemplate(spec.args) || thinkingArgs !== void 0 && !argvTemplate(thinkingArgs) || !provider.spawn?.command) {
         return fail15("declaration_incomplete");
       }
-      if (!spec.args.some((a) => a.includes("{{prompt}}"))) return fail15("missing_prompt_binding");
-      if (!spec.args.some((a) => a.includes("{{maxTurns}}"))) return fail15("missing_max_turns_binding");
-      if (!spec.args.some((a) => a.includes("{{maxOutputTokens}}"))) return fail15("missing_max_output_tokens_binding");
-      if (selection.model !== void 0 && !spec.args.some((a) => a.includes("{{model}}"))) return fail15("missing_model_binding");
-      if (selection.thinkingLevel !== void 0 && !spec.args.some((a) => a.includes("{{thinkingLevel}}"))) return fail15("missing_thinking_binding");
+      const declared = [...spec.args, ...thinkingArgs ?? []];
+      if (declared.some((arg) => NATIVE_CAP_PLACEHOLDERS.some((token) => arg.includes(token)))) return fail15("native_cap_placeholder");
+      if (spec.args.some((arg) => arg.includes("{{thinkingLevel}}"))) return fail15("thinking_binding_in_base_args");
+      if (!spec.args.some((arg) => arg.includes("{{prompt}}"))) return fail15("missing_prompt_binding");
+      const modelBound = spec.args.some((arg) => arg.includes("{{model}}"));
+      if (selection.model !== void 0 && selection.model !== "" && !modelBound) return fail15("missing_model_binding");
+      if (modelBound && (selection.model === void 0 || selection.model === "")) return fail15("missing_model_selection");
+      if (thinkingArgs !== void 0 && !thinkingArgs.some((arg) => arg.includes("{{thinkingLevel}}"))) return fail15("declaration_incomplete");
+      if (typeof selection.thinkingLevel === "string" && selection.thinkingLevel.length > 0 && !thinkingArgs?.some((arg) => arg.includes("{{thinkingLevel}}"))) return fail15("missing_thinking_binding");
       return void 0;
     }
+    var HANDOFF_CANARY_HOST_TIMEOUT_MS;
+    var HANDOFF_CANARY_HOST_MAX_OUTPUT_BYTES;
+    var NATIVE_CAP_PLACEHOLDERS;
     var init_host_handoff_canary_contract = __esm2({
       "src/shared/host-handoff-canary-contract.ts"() {
         "use strict";
+        HANDOFF_CANARY_HOST_TIMEOUT_MS = 15e3;
+        HANDOFF_CANARY_HOST_MAX_OUTPUT_BYTES = 16384;
+        NATIVE_CAP_PLACEHOLDERS = ["{{maxTurns}}", "{{maxOutputTokens}}"];
       }
     });
     var native_history_jsonpath_exports = {};
@@ -150675,8 +150700,28 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         "use strict";
       }
     });
+    function substituteCanaryArgs(spec, selection, workspace, config) {
+      const level = selection.thinkingLevel;
+      const templates = [...spec.args];
+      if (typeof level === "string" && level.length > 0) {
+        const promptAt = templates.findIndex((arg) => arg.includes("{{prompt}}"));
+        templates.splice(promptAt < 0 ? templates.length : promptAt, 0, ...spec.thinkingArgs ?? []);
+      }
+      const substitutions = {
+        prompt: HANDOFF_CANARY_PROMPT,
+        model: selection.model ?? "",
+        thinkingLevel: level ?? "",
+        workspace,
+        configDir: config
+      };
+      return templates.map((arg) => arg.replace(/\{\{([A-Za-z]+)\}\}/g, (_, key6) => {
+        if (!Object.prototype.hasOwnProperty.call(substitutions, key6)) throw new Error("unknown registered canary substitution");
+        return substitutions[key6];
+      }));
+    }
     async function runTargetCanary(provider, selection, options = {}) {
       const startedAt = Date.now(), canaryId = (0, import_node_crypto69.randomUUID)();
+      const bounds = { enforcement: "host", hostTimeoutMs: HANDOFF_CANARY_HOST_TIMEOUT_MS, hostMaxOutputBytes: HANDOFF_CANARY_HOST_MAX_OUTPUT_BYTES, nativeTurnCap: false, nativeOutputTokenCap: false };
       const result = (ok, terminated, code, detail) => ({
         ok,
         terminated,
@@ -150687,8 +150732,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         selection,
         startedAt,
         finishedAt: Date.now(),
-        maxTurns: 1,
-        maxOutputTokens: 32
+        ...bounds
       });
       if (process.platform === "win32") return result(false, true, "canary_process_group_unsupported");
       const refusal2 = describeCanaryContract(provider, selection);
@@ -150698,19 +150742,12 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       const config = (0, import_node_path43.join)(root, "config"), workspace = (0, import_node_path43.join)(root, "workspace");
       (0, import_node_fs51.mkdirSync)(config, { mode: 448 });
       (0, import_node_fs51.mkdirSync)(workspace, { mode: 448 });
-      const substitutions = {
-        prompt: HANDOFF_CANARY_PROMPT,
-        maxTurns: "1",
-        maxOutputTokens: "32",
-        model: selection.model ?? "",
-        thinkingLevel: selection.thinkingLevel ?? "",
-        workspace,
-        configDir: config
-      };
-      const args = spec.args.map((arg) => arg.replace(/\{\{([A-Za-z]+)\}\}/g, (_, key6) => {
-        if (!(key6 in substitutions)) throw new Error("unknown registered canary substitution");
-        return substitutions[key6];
-      }));
+      let args;
+      try {
+        args = substituteCanaryArgs(spec, selection, workspace, config);
+      } catch {
+        return result(false, true, "canary_contract_unsupported", "canary_contract_unsupported: unknown_substitution");
+      }
       const env2 = Object.fromEntries(Object.entries(options.env ?? process.env).filter(([key6]) => !key6.startsWith("ADHDEV_")));
       Object.assign(env2, { ADHDEV_CONFIG_DIR: config, ADHDEV_SESSION_HOST_NAME: `canary-${canaryId}`, PWD: workspace, INIT_CWD: workspace });
       return new Promise((resolve74) => {
@@ -150739,7 +150776,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         }, Math.max(1, Math.min(options.timeoutMs ?? HANDOFF_CANARY_TIMEOUT_MS, HANDOFF_CANARY_TIMEOUT_MS)));
         const read2 = (data, capture) => {
           bytes += data.length;
-          if (bytes > 16 * 1024) {
+          if (bytes > HANDOFF_CANARY_HOST_MAX_OUTPUT_BYTES) {
             failure8 = "canary_output_limit";
             terminate();
           } else if (capture) output += data.toString("utf8");
@@ -150805,7 +150842,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         init_host_handoff_canary_contract();
         HANDOFF_CANARY_PROMPT = "Reply exactly ADHDEV_HANDOFF_READY. Do not use tools, read files, run commands, or modify any state.";
         HANDOFF_CANARY_OUTPUT = "ADHDEV_HANDOFF_READY";
-        HANDOFF_CANARY_TIMEOUT_MS = 15e3;
+        HANDOFF_CANARY_TIMEOUT_MS = HANDOFF_CANARY_HOST_TIMEOUT_MS;
       }
     });
     async function inspectTargetReadiness(p) {
@@ -150858,7 +150895,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       if (checks.every((c) => c.ok) && provider && plan) {
         try {
           const evidence = await runTargetCanary(provider, plan);
-          add("provider_auth_canary", evidence.ok && evidence.terminated, evidence.ok ? `canary ${evidence.canaryId}; terminated` : evidence.detail ?? evidence.code);
+          add("provider_auth_canary", evidence.ok && evidence.terminated, evidence.ok ? `host-enforced ${evidence.hostTimeoutMs}ms ${evidence.hostMaxOutputBytes} output bytes; nativeTurnCap false; nativeOutputTokenCap false; canary ${evidence.canaryId}; terminated` : evidence.detail ?? evidence.code);
         } catch {
           add("provider_auth_canary", false, "Canary could not be verified.");
         }

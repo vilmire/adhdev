@@ -13,8 +13,9 @@ function fixture(): ReadinessPorts {
         nodes: [{ id: 'target-node', daemonId: 'target', workspace }] },
         plan: { provider: 'fixture-cli', targetNodeId: 'target-node' }, validateSelection: () => true,
         coordinatorCapable: () => true, census: async () => [],
-        provider: () => ({ type: 'fixture-cli', spawn: { command: process.execPath }, hostHandoffCanary: { version: 1,
-            privateContextDisabled: true, toolsDisabled: true, args: ['-e', "process.stdout.write('ADHDEV_HANDOFF_READY')", '{{prompt}}', '{{maxTurns}}', '{{maxOutputTokens}}'] } }) };
+        provider: () => ({ type: 'fixture-cli', spawn: { command: process.execPath }, hostHandoffCanary: { version: 1, enforcement: 'host',
+            hostTimeoutMs: 15_000, hostMaxOutputBytes: 16 * 1024, nativeTurnCap: false, nativeOutputTokenCap: false,
+            privateContextDisabled: true, toolsDisabled: true, args: ['-e', "process.stdout.write('ADHDEV_HANDOFF_READY')", '{{prompt}}'] } }) };
 }
 
 describe('exact target readiness without release/deployment prerequisites', () => {

@@ -61,7 +61,9 @@ export async function inspectTargetReadiness(p: ReadinessPorts): Promise<{ ok: b
     if (checks.every(c => c.ok) && provider && plan) {
         try {
             const evidence = await runTargetCanary(provider, plan);
-            add('provider_auth_canary', evidence.ok && evidence.terminated, evidence.ok ? `canary ${evidence.canaryId}; terminated` : (evidence.detail ?? evidence.code));
+            add('provider_auth_canary', evidence.ok && evidence.terminated, evidence.ok
+                ? `host-enforced ${evidence.hostTimeoutMs}ms ${evidence.hostMaxOutputBytes} output bytes; nativeTurnCap false; nativeOutputTokenCap false; canary ${evidence.canaryId}; terminated`
+                : (evidence.detail ?? evidence.code));
         } catch { add('provider_auth_canary', false, 'Canary could not be verified.'); }
     } else add('provider_auth_canary', false, 'Prerequisites must pass before running a canary.');
     return { ok: checks.every(c => c.ok), checks };

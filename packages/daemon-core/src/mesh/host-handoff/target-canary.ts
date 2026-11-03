@@ -1,18 +1,18 @@
 /** A canary is a registered provider invocation, never a command supplied by
  * a peer. Auth stays in the target's native context; no credential is exported.
- * Providers without a reviewed private-context/one-turn budget contract refuse. */
+ * The host kills the private process group at 15s and at the output-byte limit.
+ * Evidence must not claim a native turn or output-token cap. */
 import { spawn } from 'node:child_process';
 import { mkdtempSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { describeCanaryContract, type HostHandoffCanarySpec } from '../../shared/host-handoff-canary-contract.js';
+import { describeCanaryContract, HANDOFF_CANARY_HOST_MAX_OUTPUT_BYTES, HANDOFF_CANARY_HOST_TIMEOUT_MS, type HostHandoffCanarySpec } from '../../shared/host-handoff-canary-contract.js';
 
 export { describeCanaryContract };
 export const HANDOFF_CANARY_PROMPT = 'Reply exactly ADHDEV_HANDOFF_READY. Do not use tools, read files, run commands, or modify any state.';
 export const HANDOFF_CANARY_OUTPUT = 'ADHDEV_HANDOFF_READY';
-export const HANDOFF_CANARY_TIMEOUT_MS = 15_000;
-export const HANDOFF_CANARY_MAX_OUTPUT_TOKENS = 32;
+export const HANDOFF_CANARY_TIMEOUT_MS = HANDOFF_CANARY_HOST_TIMEOUT_MS;
 export interface CanarySelection { provider: string; model?: string; thinkingLevel?: string }
 export interface RegisteredCanaryProvider {
     type: string;
@@ -31,15 +31,35 @@ export interface CanaryEvidence {
     terminated: boolean;
     startedAt: number;
     finishedAt: number;
-    maxTurns: 1;
-    maxOutputTokens: 32;
+    enforcement: 'host';
+    hostTimeoutMs: typeof HANDOFF_CANARY_HOST_TIMEOUT_MS;
+    hostMaxOutputBytes: typeof HANDOFF_CANARY_HOST_MAX_OUTPUT_BYTES;
+    nativeTurnCap: false;
+    nativeOutputTokenCap: false;
+}
+
+function substituteCanaryArgs(spec: HostHandoffCanarySpec, selection: CanarySelection, workspace: string, config: string): string[] {
+    const level = selection.thinkingLevel;
+    const templates = [...spec.args];
+    if (typeof level === 'string' && level.length > 0) {
+        const promptAt = templates.findIndex(arg => arg.includes('{{prompt}}'));
+        templates.splice(promptAt < 0 ? templates.length : promptAt, 0, ...(spec.thinkingArgs ?? []));
+    }
+    const substitutions: Record<string, string> = {
+        prompt: HANDOFF_CANARY_PROMPT, model: selection.model ?? '', thinkingLevel: level ?? '', workspace, configDir: config,
+    };
+    return templates.map(arg => arg.replace(/\{\{([A-Za-z]+)\}\}/g, (_, key: string) => {
+        if (!Object.prototype.hasOwnProperty.call(substitutions, key)) throw new Error('unknown registered canary substitution');
+        return substitutions[key]!;
+    }));
 }
 
 export async function runTargetCanary(provider: RegisteredCanaryProvider, selection: CanarySelection,
     options: { env?: NodeJS.ProcessEnv; timeoutMs?: number; parentDir?: string } = {}): Promise<CanaryEvidence> {
     const startedAt = Date.now(), canaryId = randomUUID();
+    const bounds = { enforcement: 'host', hostTimeoutMs: HANDOFF_CANARY_HOST_TIMEOUT_MS, hostMaxOutputBytes: HANDOFF_CANARY_HOST_MAX_OUTPUT_BYTES, nativeTurnCap: false, nativeOutputTokenCap: false } as const;
     const result = (ok: boolean, terminated: boolean, code?: string, detail?: string): CanaryEvidence => ({ ok, terminated, ...(code ? { code } : {}), ...(detail ? { detail } : {}),
-        canaryId, provider: selection.provider, selection, startedAt, finishedAt: Date.now(), maxTurns: 1, maxOutputTokens: 32 });
+        canaryId, provider: selection.provider, selection, startedAt, finishedAt: Date.now(), ...bounds });
     if (process.platform === 'win32') return result(false, true, 'canary_process_group_unsupported');
     const refusal = describeCanaryContract(provider, selection);
     if (refusal) return result(false, true, 'canary_contract_unsupported', refusal);
@@ -47,12 +67,9 @@ export async function runTargetCanary(provider: RegisteredCanaryProvider, select
     const root = mkdtempSync(join(options.parentDir ?? tmpdir(), 'adhdev-host-canary-'));
     const config = join(root, 'config'), workspace = join(root, 'workspace');
     mkdirSync(config, { mode: 0o700 }); mkdirSync(workspace, { mode: 0o700 });
-    const substitutions: Record<string, string> = { prompt: HANDOFF_CANARY_PROMPT, maxTurns: '1', maxOutputTokens: '32',
-        model: selection.model ?? '', thinkingLevel: selection.thinkingLevel ?? '', workspace, configDir: config };
-    const args = spec.args.map(arg => arg.replace(/\{\{([A-Za-z]+)\}\}/g, (_, key: string) => {
-        if (!(key in substitutions)) throw new Error('unknown registered canary substitution');
-        return substitutions[key]!;
-    }));
+    let args: string[];
+    try { args = substituteCanaryArgs(spec, selection, workspace, config); }
+    catch { return result(false, true, 'canary_contract_unsupported', 'canary_contract_unsupported: unknown_substitution'); }
     // Target-local auth environment remains native. Remove ADHDev routing/MCP
     // credentials so the canary cannot attach to a live daemon or agent session.
     const env = Object.fromEntries(Object.entries(options.env ?? process.env).filter(([key]) => !key.startsWith('ADHDEV_')));
@@ -74,7 +91,7 @@ export async function runTargetCanary(provider: RegisteredCanaryProvider, select
         const timer = setTimeout(() => { failure = 'canary_timeout'; terminate(); }, Math.max(1, Math.min(options.timeoutMs ?? HANDOFF_CANARY_TIMEOUT_MS, HANDOFF_CANARY_TIMEOUT_MS)));
         const read = (data: Buffer, capture: boolean) => {
             bytes += data.length;
-            if (bytes > 16 * 1024) { failure = 'canary_output_limit'; terminate(); }
+            if (bytes > HANDOFF_CANARY_HOST_MAX_OUTPUT_BYTES) { failure = 'canary_output_limit'; terminate(); }
             else if (capture) output += data.toString('utf8');
         };
         child.stdout.on('data', data => read(data, true));

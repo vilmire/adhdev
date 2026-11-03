@@ -10,7 +10,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MeshHostHandoffDialog } from '../../src/pages/repo-mesh/MeshHostHandoffDialog'
 import {
-    canAbortHandoff, canRetryHandoff, canaryProbeRefusal, parseHandoffStatus, parsePreflight, parseStartResult, phaseToStep,
+    canAbortHandoff, canRetryHandoff, canaryProbeRefusal, canaryProbeSucceeded, parseHandoffStatus, parsePreflight, parseStartResult, phaseToStep,
 } from '../../src/pages/repo-mesh/host-handoff'
 import { parseStagedList } from '../../src/components/dashboard/assistant-staged'
 import { parseFailoverModes } from '../../src/components/dashboard/AssistantControlSettings'
@@ -38,6 +38,9 @@ describe('host-handoff parsing', () => {
         const nested = JSON.stringify([{ id: 'provider_auth_canary', ok: false, detail: 'canary_contract_unsupported: missing_declaration:codex-cli' }])
         expect(canaryProbeRefusal([{ id: 'target_launchable', ok: false, code: 'target_not_launchable', detail: nested }])).toBe('canary_contract_unsupported: missing_declaration:codex-cli')
         expect(canaryProbeRefusal([{ id: 'is_host', ok: true }])).toBeNull()
+        const passed = JSON.stringify([{ id: 'provider_auth_canary', ok: true, detail: 'host-enforced 15000ms 16384 output bytes; nativeTurnCap false; nativeOutputTokenCap false; canary id; terminated' }])
+        expect(canaryProbeSucceeded([{ id: 'target_launchable', ok: true, detail: passed }])).toBe(true)
+        expect(canaryProbeSucceeded([{ id: 'target_launchable', ok: false, detail: nested }])).toBe(false)
     })
 })
 
@@ -137,7 +140,7 @@ describe('MeshHostHandoffDialog', () => {
     })
 
     it('explains an unsupported canary and keeps start disabled so the source is not stopped', async () => {
-        const nested = JSON.stringify([{ id: 'provider_auth_canary', ok: false, detail: 'canary_contract_unsupported: missing_max_output_tokens_binding' }])
+        const nested = JSON.stringify([{ id: 'provider_auth_canary', ok: false, detail: 'canary_contract_unsupported: native_cap_placeholder' }])
         const send = vi.fn(async (_d: string, _c: string, payload: Record<string, unknown>) => {
             if (payload.op === 'status') return { success: true, enabled: true, source: null }
             if (payload.op === 'preflight') return { success: false, ok: false, checks: [{ id: 'target_launchable', ok: false, code: 'target_not_launchable', detail: nested }] }
@@ -150,7 +153,7 @@ describe('MeshHostHandoffDialog', () => {
         await act(async () => { (q('[data-handoff-action="preflight"]') as HTMLButtonElement).click() })
         await flush()
         expect(q('[data-handoff-canary-unsupported]')).not.toBeNull()
-        expect(q('[data-handoff-canary-detail]')?.textContent).toContain('missing_max_output_tokens_binding')
+        expect(q('[data-handoff-canary-detail]')?.textContent).toContain('native_cap_placeholder')
         expect((q('[data-handoff-action="start"]') as HTMLButtonElement).disabled).toBe(true)
         expect(send.mock.calls.some(call => (call[2] as { op?: string }).op === 'start')).toBe(false)
     })
