@@ -31014,7 +31014,7 @@ ${renderWorkerProtocolFooter2(input)}`;
             cwd: normalizedWorkspace
           });
         }
-        await (0, import_promises.access)(normalizedWorkspace, import_node_fs2.constants.R_OK);
+        await (0, import_promises.access)(normalizedWorkspace, import_node_fs3.constants.R_OK);
       } catch (error) {
         if (error instanceof GitCommandError) throw error;
         throw new GitCommandError("invalid_args", "Workspace must be an existing directory", {
@@ -31112,7 +31112,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       });
     }
     var import_node_child_process2;
-    var import_node_fs2;
+    var import_node_fs3;
     var import_promises;
     var path3;
     var import_node_util;
@@ -31126,7 +31126,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       "src/git/git-executor.ts"() {
         "use strict";
         import_node_child_process2 = require("child_process");
-        import_node_fs2 = require("fs");
+        import_node_fs3 = require("fs");
         import_promises = require("fs/promises");
         path3 = __toESM2(require("path"));
         import_node_util = require("util");
@@ -33331,7 +33331,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         throw Error("invalid_normal_retirement_proof: current source/output/config and successful command logs required");
       };
       try {
-        const proof = JSON.parse((0, import_node_fs3.readFileSync)(proofFile || retirementProofPath(repo, layer, ref2, env2)));
+        const proof = JSON.parse((0, import_node_fs32.readFileSync)(proofFile || retirementProofPath(repo, layer, ref2, env2)));
         if (proof.version !== 1 || proof.releaseReady !== false || !proof.rootRepo || !proof.ossRepo || proof.snapshots?.[layer] !== retirementSnapshot(repo, layer, ref2, env2)) fail15();
         for (const target2 of ["root", "oss"]) {
           if (target2 !== layer && proof.snapshots[target2] !== retirementSnapshot(proof[`${target2}Repo`], target2)) fail15();
@@ -33343,7 +33343,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         }
         const specs = configuredRetirementGates(proof.rootRepo, layer === "root" ? env2 : void 0);
         if (JSON.stringify(specs) !== JSON.stringify(proof.specs) || proof.gates?.length !== specs.length) fail15();
-        const verifyLog = (receipt) => receipt?.exit === 0 && receipt.logSha256 === digest((0, import_node_fs3.readFileSync)(receipt.log));
+        const verifyLog = (receipt) => receipt?.exit === 0 && receipt.logSha256 === digest((0, import_node_fs32.readFileSync)(receipt.log));
         if (proof.generation?.command !== "npm run bundle:vendor:all" || !verifyLog(proof.generation)) fail15();
         for (const target2 of ["root", "oss"]) {
           const repo2 = proof[`${target2}Repo`];
@@ -33365,7 +33365,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
     }
     var import_node_child_process22;
-    var import_node_fs3;
+    var import_node_fs32;
     var import_node_crypto22;
     var import_node_path3;
     var import_node_os3;
@@ -33376,7 +33376,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       "src/git/normal-retirement-proof.mjs"() {
         "use strict";
         import_node_child_process22 = require("child_process");
-        import_node_fs3 = require("fs");
+        import_node_fs32 = require("fs");
         import_node_crypto22 = require("crypto");
         import_node_path3 = __toESM2(require("path"), 1);
         import_node_os3 = require("os");
@@ -110186,7 +110186,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         const config = readMeshConfigFromDisk();
         if (!config && (0, import_node_fs25.existsSync)(getMeshConfigPath())) throw new Error("project authority unavailable");
         const project2 = config?.meshes.find((m) => m.id === meshId);
-        if (project2 && !resolveMeshHostStatus(project2).canOwnCoordinator) throw new Error("persisted project authority is fenced or transferred");
+        if (project2 && (project2.meshHost?.handoffFence !== void 0 || project2.meshHost?.handedOffTo !== void 0)) throw new Error("persisted project authority is fenced or transferred");
         const fence = MeshRuntimeStore.getInstance().db.prepare("SELECT 1 FROM mesh_host_write_fences WHERE mesh_id=?").get(meshId);
         if (fence) throw new Error("durable project write fence is held");
         const pending = MeshRuntimeStore.getInstance().db.prepare("SELECT epoch,phase FROM mesh_host_handoff WHERE mesh_id=? AND role='source' ORDER BY epoch DESC LIMIT 1").get(meshId);
@@ -110204,7 +110204,6 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         import_node_fs25 = require("fs");
         init_mesh_config_store();
         init_mesh_runtime_store();
-        init_mesh_host_ownership();
         transitions = /* @__PURE__ */ new Set();
       }
     });
@@ -130070,7 +130069,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
           callSite,
           gitArgs,
           cwd,
-          cwdExists: (0, import_node_fs32.existsSync)(cwd),
+          cwdExists: (0, import_node_fs322.existsSync)(cwd),
           code: error?.code ?? null,
           syscall: error?.syscall ?? null,
           path: error?.path ?? null,
@@ -130177,7 +130176,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       return { order: ranked.map((a) => a.nodeId), changeAreas: areaById, rationale };
     }
     var import_node_child_process24;
-    var import_node_fs32;
+    var import_node_fs322;
     var import_node_util12;
     var execFileAsync7;
     var GIT2;
@@ -130186,7 +130185,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       "src/mesh/mesh-refine-batch.ts"() {
         "use strict";
         import_node_child_process24 = require("child_process");
-        import_node_fs32 = require("fs");
+        import_node_fs322 = require("fs");
         import_node_util12 = require("util");
         init_resolve_executable();
         init_logger();
@@ -250101,6 +250100,7 @@ function LOG_DIRECT_DISPATCH_TURN_OBSERVE_FAILURE(e, stage) {
 // src/tools/mesh-tools-send-task.ts
 var import_daemon_core23 = __toESM(require_dist3());
 var import_node_crypto = require("crypto");
+var import_node_fs = require("fs");
 
 // src/tools/mesh-remote-dispatch.ts
 var import_daemon_core22 = __toESM(require_dist3());
@@ -250588,10 +250588,10 @@ function checkSendTaskNodeGates(ctx, node, args, req) {
       });
     }
   }
-  if (readonlySend) return null;
-  return directSendOwnershipRefusal(ctx, node, args, req);
+  return null;
 }
-function directSendOwnershipRefusal(ctx, node, args, req) {
+async function directSendOwnershipRefusal(ctx, node, route, target, args, req) {
+  if ((0, import_daemon_core24.isTaskReadonly)({ readonly: req.readonly, taskMode: req.taskMode })) return null;
   const declared = normalizeOwnedPaths(req.ownedPaths);
   const refuse = (unknownField, resolution) => JSON.stringify({
     success: false,
@@ -250600,13 +250600,13 @@ function directSendOwnershipRefusal(ctx, node, args, req) {
     reason: "ownership_unproven",
     unknownField,
     nodeId: args.node_id,
-    sessionId: args.session_id,
+    sessionId: target.sessionId || args.session_id,
     error: resolution,
     resolution
   });
   if (declared.declaration.paths.length === 0) return refuse("ownedPaths", "ownership_unproven: ownedPaths");
   const localDaemonId = ctx.localDaemonId || "";
-  if (!node.daemonId || !localDaemonId || !daemonIdsEquivalent(node.daemonId, localDaemonId)) {
+  if (route !== "local" || !node.daemonId || !localDaemonId || !daemonIdsEquivalent(node.daemonId, localDaemonId)) {
     return refuse("workspace", "remote target has not attested a workspace on this host");
   }
   const workspace = typeof node.workspace === "string" ? node.workspace : "";
@@ -250614,6 +250614,11 @@ function directSendOwnershipRefusal(ctx, node, args, req) {
   const repoIdentity = ctx.mesh.repoIdentity || "";
   let scope;
   try {
+    const { probe, known, source } = await readNodeRuntime(ctx, node);
+    const session = probe.sessions.find((s) => readSessionRecordId(s) === target.sessionId);
+    if (!known || source !== "local" || !target.sessionId || !session || typeof session.workspace !== "string" || import_node_fs.realpathSync.native(session.workspace) !== import_node_fs.realpathSync.native(workspace)) {
+      return refuse("workspace", "resolved session workspace is not attested to the selected local checkout");
+    }
     scope = (0, import_daemon_core24.attestLocalOwnership)({
       repoIdentity,
       machineId,
@@ -250989,6 +250994,8 @@ async function dispatchSendTaskDirect(ctx, node, route, args, req, explicitTarge
     const admission = await admitExplicitSessionDelivery(ctx, node, args, req, explicitTargetSession, target.providerType);
     if (admission !== null) return admission;
   }
+  const ownershipRefusal = await directSendOwnershipRefusal(ctx, node, route, target, args, req);
+  if (ownershipRefusal) return ownershipRefusal;
   const via = route === "remote" ? "p2p_direct" : "local_direct";
   const sessionWasIdle = explicitTargetSession ? isIdleSessionRecord(explicitTargetSession) : false;
   const taskId = (0, import_node_crypto.randomUUID)();
@@ -253562,7 +253569,7 @@ var import_node_os2 = __toESM(require("os"));
 var import_types2 = require("@modelcontextprotocol/sdk/types.js");
 
 // src/transports/local.ts
-var import_node_fs = require("fs");
+var import_node_fs2 = require("fs");
 var import_daemon_core33 = __toESM(require_dist3());
 var DEFAULT_PORT = import_daemon_core33.DEFAULT_STANDALONE_PORT;
 var STATUS_TIMEOUT_MS = 1e4;
@@ -253598,7 +253605,7 @@ var LocalTransport = class {
   readInternalToken() {
     if (!this.authFile) return null;
     try {
-      return (0, import_node_fs.readFileSync)(this.authFile, "utf8").trim() || null;
+      return (0, import_node_fs2.readFileSync)(this.authFile, "utf8").trim() || null;
     } catch {
       return null;
     }

@@ -2,7 +2,6 @@
 import { existsSync } from 'node:fs';
 import { getMeshConfigPath, readMeshConfigFromDisk } from '../../config/mesh-config-store.js';
 import { MeshRuntimeStore } from '../mesh-runtime-store.js';
-import { resolveMeshHostStatus } from '../mesh-host-ownership.js';
 
 const transitions = new Set<string>();
 /** Refuse concurrent launch/stop instead of leaving a queued late effect after
@@ -18,7 +17,7 @@ export function durableHandoffAdmissionFailure(meshId: string): { success: false
         const config = readMeshConfigFromDisk();
         if (!config && existsSync(getMeshConfigPath())) throw new Error('project authority unavailable');
         const project = config?.meshes.find(m => m.id === meshId);
-        if (project && !resolveMeshHostStatus(project).canOwnCoordinator) throw new Error('persisted project authority is fenced or transferred');
+        if (project && (project.meshHost?.handoffFence !== undefined || project.meshHost?.handedOffTo !== undefined)) throw new Error('persisted project authority is fenced or transferred');
         // Retains the cut even if meshes.json is lost or a stale inline project
         // is supplied. Missing storage never implies permission to duplicate.
         const fence = MeshRuntimeStore.getInstance().db.prepare('SELECT 1 FROM mesh_host_write_fences WHERE mesh_id=?').get(meshId);

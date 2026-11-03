@@ -38,6 +38,7 @@ import {
     SESSION_PROVIDER_METADATA_TTL_MS,
 } from './mesh-session-metadata.js';
 import { randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { resolveCoordinatorDaemonId } from './mesh-node-identity.js';
 import {
     checkDirectDispatchQuotaGate,
@@ -294,11 +295,11 @@ function checkSendTaskNodeGates(ctx: MeshContext, node: LocalMeshNodeEntry, args
             });
         }
     }
-    if (readonlySend) return null;
-    return directSendOwnershipRefusal(ctx, node, args, req);
+    return null;
 }
 
-function directSendOwnershipRefusal(ctx: MeshContext, node: LocalMeshNodeEntry, args: MeshSendTaskArgs, req: SendTaskRequest): string | null {
+async function directSendOwnershipRefusal(ctx: MeshContext, node: LocalMeshNodeEntry, route: DirectDispatchRoute, target: DirectDispatchTarget, args: MeshSendTaskArgs, req: SendTaskRequest): Promise<string | null> {
+    if (isTaskReadonly({ readonly: req.readonly, taskMode: req.taskMode })) return null;
     const declared = normalizeOwnedPaths(req.ownedPaths);
     const refuse = (unknownField: string, resolution: string) => JSON.stringify({
         success: false,
@@ -307,13 +308,13 @@ function directSendOwnershipRefusal(ctx: MeshContext, node: LocalMeshNodeEntry, 
         reason: 'ownership_unproven',
         unknownField,
         nodeId: args.node_id,
-        sessionId: args.session_id,
+        sessionId: target.sessionId || args.session_id,
         error: resolution,
         resolution,
     });
     if (declared.declaration.paths.length === 0) return refuse('ownedPaths', 'ownership_unproven: ownedPaths');
     const localDaemonId = ctx.localDaemonId || '';
-    if (!node.daemonId || !localDaemonId || !daemonIdsEquivalent(node.daemonId, localDaemonId)) {
+    if (route !== 'local' || !node.daemonId || !localDaemonId || !daemonIdsEquivalent(node.daemonId, localDaemonId)) {
         return refuse('workspace', 'remote target has not attested a workspace on this host');
     }
     const workspace = typeof node.workspace === 'string' ? node.workspace : '';
@@ -321,6 +322,16 @@ function directSendOwnershipRefusal(ctx: MeshContext, node: LocalMeshNodeEntry, 
     const repoIdentity = ctx.mesh.repoIdentity || '';
     let scope;
     try {
+        // A named session wins over `dir` in agent_command. Attesting the roster
+        // checkout alone could therefore authorize a write in another worktree.
+        // Read the selected session from this daemon, never from caller metadata.
+        const { probe, known, source } = await readNodeRuntime(ctx, node);
+        const session = probe.sessions.find(s => readSessionRecordId(s) === target.sessionId);
+        if (!known || source !== 'local' || !target.sessionId || !session
+            || typeof session.workspace !== 'string'
+            || realpathSync.native(session.workspace) !== realpathSync.native(workspace)) {
+            return refuse('workspace', 'resolved session workspace is not attested to the selected local checkout');
+        }
         scope = attestLocalOwnership({
             repoIdentity, machineId, nodeId: node.id, workspace, phase: 'source', paths: declared.declaration,
         });
@@ -897,6 +908,9 @@ async function dispatchSendTaskDirect(
         const admission = await admitExplicitSessionDelivery(ctx, node, args, req, explicitTargetSession, target.providerType);
         if (admission !== null) return admission;
     }
+
+    const ownershipRefusal = await directSendOwnershipRefusal(ctx, node, route, target, args, req);
+    if (ownershipRefusal) return ownershipRefusal;
 
     const via = route === 'remote' ? 'p2p_direct' as const : 'local_direct' as const;
     // Whether the session was idle at dispatch time: an idle session that receives the

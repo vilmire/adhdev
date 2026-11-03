@@ -179,13 +179,15 @@ test('remote BUSY session + delivery_mode interrupt on a capable provider → in
     }
 });
 
+// Idle remote transport/ledger scenarios use read-only tasks: remote physical
+// write attestation is unavailable and is separately tested as a refusal.
 test('remote IDLE session still dispatches directly (gate is a no-op), and an unrecognised delivery_mode is reported', async () => {
     const meshId = `mesh-remote-idle-${randomUUID().slice(0, 8)}`;
     cleanupMesh(meshId);
     const h = createRemoteCtx(meshId, { status: 'idle' });
     try {
         await withLedger(async () => {
-            const res = await send(h.ctx, { delivery_mode: 'imediate' });
+            const res = await send(h.ctx, { task_mode: 'live_debug_readonly', delivery_mode: 'imediate' });
             assert.equal(res.success, true, JSON.stringify(res));
             assert.equal(res.dispatched, true);
             assert.equal(h.sendChats().length, 1);
@@ -207,7 +209,7 @@ test('worker-side session_busy_with_task refusal surfaces as a typed dispatch fa
     const h = createRemoteCtx(meshId, { status: 'idle', sendChatThrows: `Refusing mesh dispatch: session ${SESSION} is busy running task task-A (${token}).` });
     try {
         await withLedger(async () => {
-            const res = await send(h.ctx);
+            const res = await send(h.ctx, { task_mode: 'live_debug_readonly' });
             assert.equal(res.success, false, JSON.stringify(res));
             assert.equal(res.dispatched, false);
             assert.equal(res.code, 'session_busy_with_task');
@@ -241,7 +243,7 @@ test('ledger-side refusal (session already holds an open attempt) → session_bu
             });
             assert.equal(held.success, true, JSON.stringify(held));
 
-            const res = await send(h.ctx);
+            const res = await send(h.ctx, { task_mode: 'live_debug_readonly' });
             assert.equal(res.success, false, JSON.stringify(res));
             assert.equal(res.dispatched, false);
             assert.equal(res.code, 'session_busy_with_task');
@@ -263,7 +265,7 @@ test('ledger UNAVAILABLE (not armed) still falls through: the dispatch is sent u
     const h = createRemoteCtx(meshId, { status: 'idle' });
     setActiveTurnLedgerForIpc(null);
     try {
-        const res = await send(h.ctx);
+        const res = await send(h.ctx, { task_mode: 'live_debug_readonly' });
         assert.equal(res.success, true, JSON.stringify(res));
         assert.equal(res.dispatched, true);
         assert.equal(h.sendChats().length, 1);

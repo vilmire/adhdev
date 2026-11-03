@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { join } from 'node:path';
-import { writeFileSync, readFileSync, unlinkSync } from 'node:fs';
+import { writeFileSync, readFileSync, unlinkSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
 
 import { IpcTransport } from '../src/transports/ipc.js';
 import { hasWorkerProtocolFooter, stripWorkerProtocolFooter } from '@adhdev/mesh-shared';
@@ -32,6 +34,13 @@ function handleRequeueMeshQueueTask(args: Record<string, unknown>): { success: b
   return { success: true, task };
 }
 
+function localWriteWorkspace(): string {
+  const workspace = mkdtempSync(join(tmpdir(), 'mcp-direct-write-'));
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: workspace });
+  writeFileSync(join(workspace, 'file.ts'), 'export {};\n');
+  return workspace;
+}
+
 test('mesh worktree tools route clone/remove to the source node daemon and refresh MCP mesh context', async () => {
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -41,6 +50,10 @@ test('mesh worktree tools route clone/remove to the source node daemon and refre
   const localCalls: Array<{ command: string; args: Record<string, unknown> }> = [];
   transport.command = async (command, args = {}) => {
     if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
+    if (command === 'remove_mesh_node') {
+      localCalls.push({ command, args });
+      return { success: true, removed: true };
+    }
     // trigger_mesh_queue (fired by the launch below) runs coordinator-local.
     if (command === 'trigger_mesh_queue') {
       localCalls.push({ command, args });
@@ -157,7 +170,8 @@ test('mesh worktree tools route clone/remove to the source node daemon and refre
   assert.ok(!ctx.mesh.nodes.some(node => node.id === 'node-worktree'));
   // launch fired trigger_mesh_queue coordinator-local (not via meshCommand),
   // so remove_mesh_node is the third meshCommand, not the fourth.
-  assert.deepEqual(localCalls.map(c => c.command), ['trigger_mesh_queue']);
+  assert.deepEqual(localCalls.map(c => c.command), ['trigger_mesh_queue', 'remove_mesh_node']);
+  assert.deepEqual(localCalls[1].args, calls[2].args, 'host roster removal uses the same supported removal contract');
   assert.equal(calls[2].daemonId, 'daemon-source');
   assert.equal(calls[2].command, 'remove_mesh_node');
 });
@@ -1414,6 +1428,7 @@ test('mesh_send_task preserves P2P relay recovery payload for coordinator feedba
   holdMemberStatusOnCoordinator(ctx.transport, ctx.mesh, (ctx as any).localDaemonId);
 
   const sendText = await meshSendTask(ctx, { node_id: 'node-remote-worker', session_id: 'session-remote', message: 'do work',
+    task_mode: 'live_debug_readonly', // Exercise relay/session behavior without claiming remote write attestation.
     difficulty: 'medium',
 });
   const send = JSON.parse(sendText);
@@ -1489,6 +1504,7 @@ test('mesh_send_task does not reuse a remote live session that lacks mesh delega
   holdMemberStatusOnCoordinator(ctx.transport, ctx.mesh, (ctx as any).localDaemonId);
 
   const send = JSON.parse(await meshSendTask(ctx as any, { node_id: 'node-remote-worker', message: 'do work',
+    task_mode: 'live_debug_readonly', // Exercise relay/session behavior without claiming remote write attestation.
     difficulty: 'medium',
 }));
 
@@ -1572,10 +1588,23 @@ test('mesh_send_task self-heals a mesh-owned remote session missing the relay an
 
   holdMemberStatusOnCoordinator(ctx.transport, ctx.mesh, (ctx as any).localDaemonId);
 
+  // The same resolved remote target cannot accept real writes without physical
+  // attestation. A read-only transport fixture below still exercises self-heal.
+  const refusedWrite = JSON.parse(await meshSendTask(ctx as any, {
+    node_id: 'node-remote-worker', session_id: 'session-legacy-live',
+    message: 'write file.ts', task_mode: 'code_change', owned_paths: ['file.ts'], difficulty: 'medium',
+  }));
+  assert.equal(refusedWrite.code, 'ownership_unproven');
+  assert.equal(refusedWrite.unknownField, 'workspace');
+  assert.equal(refusedWrite.sessionId, 'session-legacy-live');
+  assert.ok(!relayCalls.some(call => call.command === 'agent_command'), 'remote write refusal has no delivery side effect');
+  assert.equal(getQueue(meshId).length, 0, 'refused remote write does not record dispatch');
+
   const send = JSON.parse(await meshSendTask(ctx as any, {
     node_id: 'node-remote-worker',
     session_id: 'session-legacy-live',
     message: 'do work',
+    task_mode: 'live_debug_readonly', // Exercise relay/session behavior without claiming remote write attestation.
     difficulty: 'medium',
   }));
 
@@ -2947,9 +2976,11 @@ test('mesh_send_task dedupes rapid identical node/session/message dispatch retri
   holdMemberStatusOnCoordinator(ctx.transport, ctx.mesh, (ctx as any).localDaemonId);
 
   const first = JSON.parse(await meshSendTask(ctx as any, { node_id: 'node-remote', session_id: 'session-a', message: 'same task',
+    task_mode: 'live_debug_readonly', // Exercise relay/session behavior without claiming remote write attestation.
     difficulty: 'medium',
 }));
   const second = JSON.parse(await meshSendTask(ctx as any, { node_id: 'node-remote', session_id: 'session-a', message: 'same task',
+    task_mode: 'live_debug_readonly', // Exercise relay/session behavior without claiming remote write attestation.
     difficulty: 'medium',
 }));
 
@@ -3431,6 +3462,11 @@ test('mesh_git_status and mesh_remove_node refresh ctx.mesh from daemon cache wh
   const meshCommands: string[] = [];
   // Daemon has the new node in its cache (get_mesh returns it)
   transport.command = async (cmd, args = {}) => {
+    if (cmd === 'remove_mesh_node') {
+      assert.equal(args.nodeId, 'node-worktree-new');
+      assert.equal(args.meshId, 'mesh-stale');
+      return { success: true, removed: true };
+    }
     if (isTurnIpcCommand(cmd)) return answerTurnIpc(cmd, args ?? {} as Record<string, unknown>);
     if (cmd === 'get_mesh') {
       return {
@@ -3769,6 +3805,7 @@ test('mesh status and git status include explicitly configured related repo fres
 });
 
 test('local IPC mesh_send_task with explicit session resolves providerType from live status before direct dispatch when cache is cold', async () => {
+  const workspace = localWriteWorkspace();
   const meshId = `mesh-ipc-send-${Date.now()}`;
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -3784,6 +3821,7 @@ test('local IPC mesh_send_task with explicit session resolves providerType from 
         status: {
           sessions: [{
             id: 'session-hermes',
+            workspace,
             providerType: 'hermes-cli',
             providerSessionId: 'provider-1',
             settings: { meshNodeFor: meshId },
@@ -3821,19 +3859,20 @@ test('local IPC mesh_send_task with explicit session resolves providerType from 
     updatedAt: new Date().toISOString(),
     nodes: [{
       id: 'node-local',
-      workspace: '/repo',
-      repoRoot: '/repo',
+      workspace,
+      repoRoot: workspace,
       daemonId: 'daemon-local',
       userOverrides: {},
       policy: {},
     }],
   };
-  const ctx = { mesh, transport, localDaemonId: 'daemon-local' };
+  const ctx = { mesh, transport, localMachineId: 'machine-local', localDaemonId: 'daemon-local' };
 
   const text = await meshSendTask(ctx as any, {
     node_id: 'node-local',
     session_id: 'session-hermes',
     message: 'run targeted task',
+    owned_paths: ['file.ts'],
     difficulty: 'medium',
   });
   const result = JSON.parse(text);
@@ -3841,7 +3880,7 @@ test('local IPC mesh_send_task with explicit session resolves providerType from 
   assert.equal(result.dispatched, true);
   // C-W6c: get_status_metadata, then a best-effort turn_observe(dispatch_accepted)
   // opened BEFORE the inject (so its attemptRef can be threaded into meshContext),
-  // then the agent_command inject itself — 3 calls total. This fixture's
+  // then the workspace admission read and agent_command inject — 4 calls total. This fixture's
   // turn_observe answers turn_ledger_unavailable (no attemptRef), so the
   // post-inject turn_observe(delivered) short-circuits (nothing to attach the
   // delivery to) and is never sent — matching openDirectDispatchAttempt/
@@ -3851,7 +3890,8 @@ test('local IPC mesh_send_task with explicit session resolves providerType from 
   // (The route question — mesh_dispatch_route, answered by the fake daemon from its roster — is not a dispatch step.)
   const dispatchSteps = directCalls.filter(c => c.command !== 'mesh_dispatch_route' && c.command !== 'get_mesh');
   assert.equal(directCalls.filter(c => c.command === 'mesh_dispatch_route').length, 1);
-  assert.equal(dispatchSteps.length, 3);
+  assert.equal(dispatchSteps.length, 4);
+  assert.equal(dispatchSteps.filter(c => c.command === 'get_status_metadata').length, 2, 'write admission rechecks the resolved session workspace');
   assert.equal(dispatchSteps[0].command, 'get_status_metadata');
   assert.equal(directCalls.filter(c => c.command === 'turn_observe').length, 1);
   const agentCommandCall = directCalls.find(c => c.command === 'agent_command');
@@ -3945,6 +3985,7 @@ test('local IPC mesh_send_task rejects coordinator session as worker target', as
 });
 
 test('local IPC mesh_send_task preserves retryable agent busy diagnostics from direct dispatch', async () => {
+  const workspace = localWriteWorkspace();
   const meshId = `mesh-ipc-busy-${Date.now()}`;
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -3958,6 +3999,7 @@ test('local IPC mesh_send_task preserves retryable agent busy diagnostics from d
         status: {
           sessions: [{
             id: 'session-hermes',
+            workspace,
             providerType: 'hermes-cli',
             settings: { meshNodeFor: meshId },
           }],
@@ -3992,21 +4034,22 @@ test('local IPC mesh_send_task preserves retryable agent busy diagnostics from d
       updatedAt: new Date().toISOString(),
       nodes: [{
         id: 'node-local',
-        workspace: '/repo',
-        repoRoot: '/repo',
+        workspace,
+        repoRoot: workspace,
         daemonId: 'daemon-local',
         userOverrides: {},
         policy: {},
       }],
     },
     transport,
-    localDaemonId: 'daemon-local',
+    localMachineId: 'machine-local', localDaemonId: 'daemon-local',
   };
 
   const result = JSON.parse(await meshSendTask(ctx as any, {
     node_id: 'node-local',
     session_id: 'session-hermes',
     message: 'run targeted task',
+    owned_paths: ['file.ts'],
     difficulty: 'medium',
   }));
 
@@ -4208,6 +4251,7 @@ test('local direct mesh_send_task rejects coordinator session as unsafe target',
 });
 
 test('local direct mesh_send_task allows proper mesh delegate session with meshNodeFor', async () => {
+  const workspace = localWriteWorkspace();
   const meshId = `mesh-delegate-allowed-${Date.now()}`;
   const agentCommandCalls: Array<Record<string, unknown>> = [];
   const transport = new IpcTransport() as IpcTransport & {
@@ -4222,6 +4266,7 @@ test('local direct mesh_send_task allows proper mesh delegate session with meshN
         status: {
           sessions: [{
             id: 'session-worker',
+            workspace,
             providerType: 'claude-code',
             settings: { meshNodeFor: meshId },
           }],
@@ -4250,15 +4295,15 @@ test('local direct mesh_send_task allows proper mesh delegate session with meshN
       updatedAt: new Date().toISOString(),
       nodes: [{
         id: 'node-local',
-        workspace: '/repo',
-        repoRoot: '/repo',
+        workspace,
+        repoRoot: workspace,
         daemonId: 'daemon-local',
         userOverrides: {},
         policy: {},
       }],
     },
     transport,
-    localDaemonId: 'daemon-local',
+    localMachineId: 'machine-local', localDaemonId: 'daemon-local',
   };
 
   const result = JSON.parse(await meshSendTask(ctx as any, {
@@ -4266,6 +4311,7 @@ test('local direct mesh_send_task allows proper mesh delegate session with meshN
     session_id: 'session-worker',
     message: 'implement the feature',
     task_mode: 'code_change',
+    owned_paths: ['file.ts'],
     difficulty: 'medium',
   }));
 

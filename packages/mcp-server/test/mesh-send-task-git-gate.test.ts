@@ -57,9 +57,11 @@ function createLocalCtx(meshId: string, opts: {
     acceptDelivery?: boolean;
     /** Real checkout used when the send must attest ownership. */
     workspace?: string;
+    sessionWorkspace?: string | null;
 }) {
     const session = {
         id: SESSION,
+        workspace: opts.sessionWorkspace === null ? undefined : opts.sessionWorkspace ?? opts.workspace ?? '/tmp/local-repo',
         providerType: 'claude-cli',
         status: 'idle',
         settings: { meshNodeFor: meshId, meshNodeId: NODE, meshCoordinatorDaemonId: COORDINATOR, launchedByCoordinator: true },
@@ -273,3 +275,26 @@ test('a retired dirtyWorkspaceBehavior on the mesh policy changes nothing (dirty
     }
 });
 
+
+test('direct write refuses a selected session in another physical checkout or with no workspace proof', async () => {
+    const workspace = realGitWorkspace();
+    const other = realGitWorkspace();
+    try {
+        for (const sessionWorkspace of [other, null]) {
+            const meshId = `gitgate-session-workspace-${randomUUID()}`;
+            const h = createLocalCtx(meshId, { workspace, sessionWorkspace, acceptDelivery: true });
+            await withLedger(async () => {
+                const res = await send(h.ctx, { owned_paths: ['file.ts'], allow_stale_node: true });
+                assert.equal(res.code, 'ownership_unproven');
+                assert.equal(res.unknownField, 'workspace');
+                assert.equal(res.sessionId, SESSION);
+                assert.ok(!h.localCommands.some(c => c.command === 'agent_command'), 'no write is delivered');
+                assert.equal(getQueue(meshId).length, 0, 'no direct dispatch row is recorded');
+            });
+            cleanupMesh(meshId);
+        }
+    } finally {
+        rmSync(workspace, { recursive: true, force: true });
+        rmSync(other, { recursive: true, force: true });
+    }
+});
