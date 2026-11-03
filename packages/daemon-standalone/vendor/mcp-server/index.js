@@ -150928,7 +150928,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           const git11 = (args) => exec6(
             "git",
             ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args],
-            { cwd: workspace, timeout: 3e3, maxBuffer: 64 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" } }
+            { cwd: workspace, timeout: 3e3, maxBuffer: 64 * 1024, windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" } }
           );
           const root = (await git11(["rev-parse", "--show-toplevel"])).stdout.trim();
           const remote = (await git11(["config", "--get", "remote.origin.url"])).stdout.trim();

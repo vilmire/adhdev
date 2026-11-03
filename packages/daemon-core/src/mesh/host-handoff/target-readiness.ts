@@ -42,7 +42,7 @@ export async function inspectTargetReadiness(p: ReadinessPorts): Promise<{ ok: b
     if (workspace) {
         try {
             const git = (args: string[]) => exec('git', ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', ...args],
-                { cwd: workspace, timeout: 3_000, maxBuffer: 64 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' } });
+                { cwd: workspace, timeout: 3_000, maxBuffer: 64 * 1024, windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' } });
             const root = (await git(['rev-parse', '--show-toplevel'])).stdout.trim();
             const remote = (await git(['config', '--get', 'remote.origin.url'])).stdout.trim();
             add('repository_identity', realpathSync(root) === workspace && !!p.mesh.repoIdentity
