@@ -34,7 +34,7 @@ import type { StageGitPort, StageRuntimePorts, SelfCheckRunner, SelfCheckResult,
 import { runMeshRefineValidationProfile } from './refine-profile-run.js';
 import { prepareLightWorkspace, removeLightWorkspace } from './light-workspace.js';
 import { loadLightWorkspaceConfig } from './light-workspace-config.js';
-import { attestStageReviewInput, stageReviewArtifactGrants } from './stage-review-input.js';
+import { attestStageReviewInput, stageReviewArtifactGrants, currentStageReviewScope } from './stage-review-input.js';
 import { reviewInputBusy } from './mesh-task-routing-contract.js';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 
@@ -237,6 +237,7 @@ export function createProductionStagePorts(components: Pick<DaemonComponents, 's
             },
         },
         queue: {
+            reviewInputValid: (parent, child) => !!currentStageReviewScope(parent, child),
             get: (meshId, taskId) => store().findQueueEntryById(meshId, taskId) ?? null,
             mutate: (meshId, taskId, fn) => withQueueLock(meshId, () => {
                 const e = store().findQueueEntryById(meshId, taskId);

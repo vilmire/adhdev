@@ -78682,7 +78682,7 @@ ${body.replace(/<\/?\s*(untrusted_[a-z_]+)\b[^>]*>/gi, "[tag removed]")}
               if (!fresh.reviewerWorkspace && fresh.status === "completed") {
                 const workspace = this.ports.workspaceOf(parent);
                 const now = workspace ? await this.safeFingerprint(workspace) : null;
-                if (!st.reviewFingerprint || st.reviewFingerprintUnavailable || !now) {
+                if (!st.reviewFingerprint || st.reviewFingerprintUnavailable || !now || this.ports.queue.reviewInputValid?.(parent, fresh) === false) {
                   dropStageReport(meshId, childId);
                   await this.apply(meshId, parentId, { kind: "reviewer_integrity_unverifiable", childTaskId: childId, at: this.iso() });
                   return;
@@ -81063,6 +81063,7 @@ ${asText(streams.stderr)}
           }
         },
         queue: {
+          reviewInputValid: (parent, child) => !!currentStageReviewScope(parent, child),
           get: (meshId, taskId) => store5().findQueueEntryById(meshId, taskId) ?? null,
           mutate: (meshId, taskId, fn) => withQueueLock(meshId, () => {
             const e = store5().findQueueEntryById(meshId, taskId);

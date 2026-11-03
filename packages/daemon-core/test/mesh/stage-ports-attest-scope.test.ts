@@ -27,6 +27,7 @@ import { currentStageReviewScope } from '../../src/mesh/stage-review-input.js';
 import { findTaskOwnedPathsConflicts, readInFlightOwnershipMeshWide } from '../../src/mesh/mesh-runtime-store-claim.js';
 import { attestLocalOwnership } from '../../src/mesh/mesh-physical-ownership.js';
 import { StagePipelineRuntime } from '../../src/mesh/stage-pipeline-runtime.js';
+import { stashStageReport } from '../../src/mesh/stage-report-stash.js';
 import { initialStageState } from '../../src/mesh/stage-state.js';
 import { createProductionStagePorts } from '../../src/mesh/stage-ports-default.js';
 
@@ -100,6 +101,11 @@ describe('stage readonly input attestation', () => {
         expect(reviewRoutingRefusal(child, stored, 'codex-cli', ctx(ws), [stored])).toBeUndefined();
         await runtime.onImplCompleted(parent.meshId, parent.id, 'completed-attempt');
         expect(source().stageState!.reviewTaskIds).toEqual([child.id]);
+        fs.writeFileSync(path.join(ws, 'evidence.md'), 'mutated during review');
+        store.updateQueueEntry({ ...child, status: 'completed', assignedProviderType: 'codex-cli', assignedSessionId: 'reviewer' });
+        stashStageReport(parent.meshId, child.id, { outcome: 'completed', summary: 'approve', at: Date.now(), review: { verdict: 'approve', findings: [], checked: ['evidence'], notChecked: [] } });
+        await runtime.onChildTerminal(parent.meshId, child.id);
+        expect(source().stageState!.blockedReason).toBe('reviewer_integrity_unverifiable');
     });
     it('reviews exact oss declarations and clean zero-new-delta parent without writer ownership', () => {
         const { ws, live, ports, source } = setup();

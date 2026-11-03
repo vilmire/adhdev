@@ -88,7 +88,8 @@ export class StagePipelineRuntime {
             if (!fresh.reviewerWorkspace && fresh.status === 'completed') {
                 const workspace = this.ports.workspaceOf(parent);
                 const now = workspace ? await this.safeFingerprint(workspace) : null;
-                if (!st.reviewFingerprint || st.reviewFingerprintUnavailable || !now) {
+                if (!st.reviewFingerprint || st.reviewFingerprintUnavailable || !now
+                    || this.ports.queue.reviewInputValid?.(parent, fresh) === false) {
                     dropStageReport(meshId, childId);
                     await this.apply(meshId, parentId, { kind: 'reviewer_integrity_unverifiable', childTaskId: childId, at: this.iso() });
                     return;

@@ -52,6 +52,8 @@ export interface StageQueuePort {
     /** Mutate the parent row under the queue lock; returns the stored row. */
     mutate(meshId: string, taskId: string, fn: (entry: MeshWorkQueueEntry) => void): MeshWorkQueueEntry | null;
     listStageParents(): MeshWorkQueueEntry[];
+    /** Revalidate read evidence before accepting a verdict (production read lease). */
+    reviewInputValid?(parent: MeshWorkQueueEntry, child: MeshWorkQueueEntry): boolean;
     enqueueReviewChild(parent: MeshWorkQueueEntry, spec: {
         round: number; message: string; inputArtifactIds: string[];
         independence: 'different_provider' | 'fresh_session'; targetSessionId?: string;
