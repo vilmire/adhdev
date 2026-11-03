@@ -211,7 +211,8 @@ test('mesh_send_task (local direct) embeds the new-ledger attemptRef in agent_co
         const ctx: any = { mesh, transport, localDaemonId: selfDaemonId, coordinatorSessionId: 'sess-coord' };
 
         const res = JSON.parse(await meshSendTask(ctx, {
-            node_id: 'node-local', session_id: 'sess-idle', message: 'thread the attempt ref', difficulty: 'medium',
+            node_id: 'node-local', session_id: 'sess-idle', message: 'thread the attempt ref',
+            task_mode: 'live_debug_readonly', difficulty: 'medium',
         } as any));
         assert.equal(res.success, true, JSON.stringify(res));
         assert.equal(res.dispatched, true);

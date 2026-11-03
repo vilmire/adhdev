@@ -84,6 +84,7 @@ test('direct dispatch to a named antigravity-cli session reports providerType an
             node_id: NODE_REMOTE,
             session_id: AGY_SESSION,
             message: 'task for the agy session',
+            task_mode: 'live_debug_readonly',
             difficulty: 'easy',
         } as any));
         assert.equal(res.success, true, JSON.stringify(res));

@@ -121,6 +121,7 @@ async function sendUntargetedTask(ctx: any) {
     return JSON.parse(await meshSendTask(ctx, {
         node_id: NODE_REMOTE,
         message: 'do the thing on DesktopA',
+        task_mode: 'live_debug_readonly',
         difficulty: 'medium',
     } as any));
 }

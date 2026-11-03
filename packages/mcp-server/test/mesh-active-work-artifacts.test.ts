@@ -258,6 +258,7 @@ test('direct mesh_send_task projects exactly one active work row in status and a
       node_id: 'node-remote',
       session_id: 'sess-direct',
       message: 'Implement direct active work visibility',
+      task_mode: 'live_debug_readonly',
       difficulty: 'medium',
     } as any));
     assert.equal(send.success, true);
@@ -366,6 +367,7 @@ test('leak #2: compact activeWork drops the triple-echoed task prompt; verbose k
       session_id: 'sess-direct',
       message: longPrompt,
       difficulty: 'medium',
+      task_mode: 'live_debug_readonly',
     } as any));
     assert.equal(send.success, true);
 

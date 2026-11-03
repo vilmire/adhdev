@@ -50,12 +50,14 @@ import { GIT_DIFF_TOOL } from '../src/tools/git-diff.js';
 import { GIT_CHECKPOINT_TOOL } from '../src/tools/git-checkpoint.js';
 import { GIT_PUSH_TOOL } from '../src/tools/git-push.js';
 import { STANDARD_ARTIFACT_REGISTER_TOOL, ARTIFACT_LIST_TOOL, ARTIFACT_READ_TOOL } from '../src/tools/artifact-tools.js';
+import { PROJECT_HOST_HANDOFF_TOOL } from '../src/tools/project-host-handoff.js';
 
 /**
  * Every tool definition the server can publish, across all three modes.
  * Standard mode builds its list inline in server.ts, so it is reproduced here
  * from the same consts — including SCREENSHOT_TOOL, which server.ts publishes
- * only in local mode.
+ * only in local mode, and PROJECT_HOST_HANDOFF_TOOL, which server.ts publishes
+ * only to an authenticated standard local operator (canAdvertiseOwnerHandoff).
  */
 const STANDARD_MODE_TOOLS = [
   LIST_DAEMONS_TOOL, LIST_SESSIONS_TOOL, LAUNCH_SESSION_TOOL, STOP_SESSION_TOOL,
@@ -63,6 +65,7 @@ const STANDARD_MODE_TOOLS = [
   SEND_CHAT_TOOL, APPROVE_TOOL, GIT_STATUS_TOOL, GIT_LOG_TOOL, GIT_DIFF_TOOL,
   GIT_CHECKPOINT_TOOL, GIT_PUSH_TOOL, SCREENSHOT_TOOL,
   STANDARD_ARTIFACT_REGISTER_TOOL, ARTIFACT_LIST_TOOL, ARTIFACT_READ_TOOL,
+  PROJECT_HOST_HANDOFF_TOOL,
 ];
 
 const HINT_KEYS = ['readOnlyHint', 'destructiveHint', 'idempotentHint', 'openWorldHint'] as const;

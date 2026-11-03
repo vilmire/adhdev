@@ -99,6 +99,7 @@ test('idle-session direct dispatch with a successful pre-record reports NO ackno
       node_id: 'node-local',
       session_id: 'sess-idle',
       message: 'Direct task to a reused idle session',
+      task_mode: 'live_debug_readonly',
       difficulty: 'medium',
     } as any));
 
@@ -135,6 +136,7 @@ test('idle-session direct dispatch whose inject is rejected rolls back the row a
       session_id: 'sess-idle',
       message: 'Direct task whose inject the agent rejects',
       difficulty: 'medium',
+      task_mode: 'live_debug_readonly',
     } as any));
 
     // A rejected inject is a hard failure, not a success-with-warning. The pre-recorded
