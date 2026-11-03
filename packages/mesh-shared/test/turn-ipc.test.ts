@@ -532,6 +532,10 @@ describe('turn-ipc — ledger_query (C-W9b)', () => {
         }
         expect(decodeLedgerQueryResponse({ entries: [], summary })).toEqual({ entries: [], summary })
         expect(decodeLedgerQueryResponse({ entries: [], summary: { ...summary, refineFailed: -1 } })).toBeNull()
+        expect(decodeLedgerQueryResponse({ entries: [], summary: { ...summary, recentRefineFailures: 1 } })).toEqual({
+            entries: [], summary: { ...summary, recentRefineFailures: 1 },
+        })
+        expect(decodeLedgerQueryResponse({ entries: [], summary: { ...summary, recentRefineFailures: -1 } })).toBeNull()
     })
 
     it('rejects an entry missing a required field', () => {

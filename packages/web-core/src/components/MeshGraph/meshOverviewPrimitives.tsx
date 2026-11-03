@@ -82,6 +82,7 @@ export type AsyncRefineJob = {
     into?: string
     completedAt?: string
     startedAt?: string
+    lastUpdatedAt?: string
     /** Last refine lifecycle event/ledger kind — the failure code on failed jobs. */
     lastEvent?: string
     lastLedgerKind?: string

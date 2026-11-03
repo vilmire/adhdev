@@ -79,6 +79,7 @@ export type AsyncRefineJob = {
     into?: string
     completedAt?: string
     startedAt?: string
+    lastUpdatedAt?: string
 }
 
 export const EMPTY_LEDGER_SUMMARY: RepoMeshLedgerSummaryStatus = {

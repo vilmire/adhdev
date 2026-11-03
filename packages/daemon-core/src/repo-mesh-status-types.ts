@@ -511,6 +511,7 @@ export interface RepoMeshLedgerSummaryStatus {
     taskBlocked?: number;
     taskFailed: number;
     refineFailed?: number;
+    recentRefineFailures?: number;
     taskStalled: number;
     sessionLaunched: number;
     checkpointCreated: number;

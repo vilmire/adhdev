@@ -313,6 +313,29 @@ async function removeMeshNode(ctx: MedFamilyContext, args: any): Promise<Command
         const baseRefusal = refuseCoordinatorBaseNodeRemoval(ctx, node, nodeId, args);
         if (baseRefusal) return baseRefusal;
 
+        // Roster bookkeeping only. cleanup_worktree_nodes already decided whether
+        // the worktree goes; this call drops the coordinator's membership copy and
+        // must not forward, stop sessions, or delete a worktree or its data.
+        if (args?.rosterOnly === true) {
+            const removed = await removeNodeMembership(ctx, meshId, meshRecord, mesh, node, nodeId);
+            await recordNodeRemoval({
+                meshId, nodeId, node, removed, args,
+                sessionCleanupMode: 'preserve',
+                worktreeCleanup: undefined,
+                remoteForwardedResult: undefined,
+            });
+            return {
+                success: removed === true,
+                removed,
+                rosterOnly: true,
+                worktreePreserved: true,
+                ...(removed ? {} : {
+                    code: 'mesh_remove_node_roster_unremoved',
+                    error: 'Coordinator roster still lists the node. Worktree and session data were not deleted.',
+                }),
+            };
+        }
+
         // Default worktree session cleanup ON: when the caller OMITS a mode and the node
         // is a local worktree, default to 'stop_and_delete' instead of the mesh policy
         // ('preserve' by default) — a worktree's chat session has no reason to outlive

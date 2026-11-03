@@ -11,7 +11,7 @@ import { queueTaskStatusLabel } from './meshOverviewPrimitives'
 import { MeshHelpPanel, MeshHelpToggle } from './MeshHelpPanel'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import type { MeshGraphData } from './types'
-import { buildMeshGraph } from '../../utils/mesh-visualization'
+import { buildMeshGraph, countCurrentFailedRefineJobs } from '../../utils/mesh-visualization'
 import { canonicalizeRepoMeshStatus, summarizeRepoMeshCanonicalNodeDebug } from '../../utils/repo-mesh-status'
 import { MeshGraphThemeContext } from './MeshObservabilitySurface/meshSurfaceTheme'
 import { Badge, Row } from './MeshObservabilitySurface/meshSurfacePrimitives'
@@ -473,7 +473,7 @@ export default function MeshObservabilitySurface({
         ...(canonicalStatus.nodes.filter(node => node.machineStatus && node.machineStatus !== 'online').map(node => `${nodeDisplayName(node)}: ${node.machineStatus}`)),
     ]
     const hasSnapshotGaps = stats.incompleteSnapshotNodes > 0
-    const failedRefineJobs = ((canonicalStatus as any).asyncRefineJobs as AsyncRefineJob[] | undefined)?.filter(j => j.status === 'failed').length ?? 0
+    const failedRefineJobs = countCurrentFailedRefineJobs((canonicalStatus as any).asyncRefineJobs as AsyncRefineJob[] | undefined)
     const providerSkewCount = Array.isArray(canonicalStatus.providerVersionSkew) ? canonicalStatus.providerVersionSkew.length : 0
     const headlineLabel = stats.followUpNodes > 0
         ? t('mesh.obs.headlineFollowUp', { count: stats.followUpNodes })

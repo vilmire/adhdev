@@ -107,6 +107,119 @@ test('failed executions keep the node in the mirror and surface the reason', asy
     assert.equal(ctx.mesh.nodes.length, 3, 'no node spliced when its execution failed');
 });
 
+function makeRemoteCtx(opts: {
+    cleanup: any;
+    localRemove?: any;
+    localThrows?: boolean;
+    daemonId?: string;
+}) {
+    const calls: Array<{ where: string; verb: string; args?: any }> = [];
+    const daemonId = opts.daemonId ?? 'daemon-remote';
+    const nodes = [
+        { id: 'node-wt-1', daemonId, workspace: '/wt/one', isLocalWorktree: true, worktreeBranch: 'feat/a' },
+    ];
+    const ctx: any = {
+        mesh: { id: 'mesh-test', name: 'mesh-test', updatedAt: 't', nodes },
+        localDaemonId: 'daemon-local',
+        transport: {
+            supportsMeshRelay: true,
+            command: async (verb: string, args: any) => {
+                calls.push({ where: 'local', verb, args });
+                if (verb === 'get_mesh') return { success: true, mesh: { id: 'mesh-test', nodes, updatedAt: 't' } };
+                if (verb === 'mesh_node_route') return { success: false };
+                if (verb === 'remove_mesh_node') {
+                    if (opts.localThrows) throw new Error('roster down');
+                    return opts.localRemove ?? { success: true, removed: true, rosterOnly: true };
+                }
+                return opts.cleanup;
+            },
+            meshCommand: async (_daemonId: string, verb: string, args: any) => {
+                calls.push({ where: 'remote', verb, args });
+                return opts.cleanup;
+            },
+        },
+    };
+    return { ctx, calls };
+}
+
+test('a remote node_id cleanup removes the coordinator roster without deleting data', async () => {
+    const { ctx, calls } = makeRemoteCtx({
+        cleanup: {
+            success: true,
+            dryRun: false,
+            entries: [{ nodeId: 'node-wt-1', execution: { attempted: true, success: true, removed: true } }],
+        },
+    });
+    const result = JSON.parse(await meshCleanupWorktreeNodes(ctx, { node_id: 'node-wt-1', dry_run: false }));
+    const remove = calls.find(call => call.verb === 'remove_mesh_node');
+    assert.equal(remove?.where, 'local');
+    assert.equal(remove?.args.rosterOnly, true);
+    assert.equal(remove?.args.sessionCleanupMode, 'preserve');
+    assert.equal(remove?.args.force, undefined);
+    assert.deepEqual(calls.filter(call => call.verb === 'cleanup_worktree_nodes').map(call => call.where), ['remote']);
+    assert.equal(result.rosterReconcile[0].status, 'removed');
+    assert.deepEqual(ctx.mesh.nodes.map((node: any) => node.id), []);
+});
+
+test('a remote cleanup that did not delete the node is nondeleted and stays on the roster', async () => {
+    const { ctx, calls } = makeRemoteCtx({
+        cleanup: {
+            success: true,
+            dryRun: false,
+            entries: [{ nodeId: 'node-wt-1', reasonCode: 'live_session', execution: { attempted: true, success: false, removed: false } }],
+        },
+    });
+    const result = JSON.parse(await meshCleanupWorktreeNodes(ctx, { node_id: 'node-wt-1', dry_run: false }));
+    assert.equal(calls.some(call => call.verb === 'remove_mesh_node'), false);
+    assert.equal(result.rosterReconcile[0].status, 'nondeleted');
+    assert.equal(ctx.mesh.nodes.length, 1);
+});
+
+test('a failed coordinator roster removal is unremoved and does not claim the worktree was deleted', async () => {
+    const { ctx } = makeRemoteCtx({
+        localThrows: true,
+        cleanup: {
+            success: true,
+            dryRun: false,
+            entries: [{ nodeId: 'node-wt-1', execution: { attempted: true, success: true, removed: true, branchRefDeleted: true } }],
+        },
+    });
+    const result = JSON.parse(await meshCleanupWorktreeNodes(ctx, { node_id: 'node-wt-1', dry_run: false }));
+    assert.equal(result.success, false);
+    assert.equal(result.code, 'mesh_cleanup_worktree_nodes_host_membership_unremoved');
+    assert.equal(result.worktreeDeleted, false);
+    assert.equal(result.entries[0].execution.removed, false);
+    assert.equal(result.entries[0].execution.remoteRemoved, true);
+    assert.equal(result.rosterReconcile[0].status, 'unremoved');
+    assert.equal(ctx.mesh.nodes.length, 1);
+});
+
+test('a remote dry-run does not remove the coordinator roster', async () => {
+    const { ctx, calls } = makeRemoteCtx({
+        cleanup: { success: true, dryRun: true, entries: [{ nodeId: 'node-wt-1', candidate: true, reasonCode: 'candidate' }] },
+    });
+    const result = JSON.parse(await meshCleanupWorktreeNodes(ctx, { node_id: 'node-wt-1' }));
+    assert.equal(result.dryRun, true);
+    assert.equal(calls.some(call => call.verb === 'remove_mesh_node'), false);
+    assert.equal(ctx.mesh.nodes.length, 1);
+});
+
+test('a local node_id cleanup does not issue a second roster removal', async () => {
+    const { ctx, calls } = makeRemoteCtx({
+        daemonId: 'daemon-local',
+        cleanup: {
+            success: true,
+            dryRun: false,
+            entries: [{ nodeId: 'node-wt-1', execution: { attempted: true, success: true, removed: true } }],
+        },
+    });
+    const result = JSON.parse(await meshCleanupWorktreeNodes(ctx, { node_id: 'node-wt-1', dry_run: false }));
+    assert.equal(calls.some(call => call.verb === 'remove_mesh_node'), false);
+    assert.deepEqual(calls.filter(call => call.verb === 'cleanup_worktree_nodes').map(call => call.where), ['local']);
+    assert.equal(result.rosterReconcile, undefined);
+    assert.equal(ctx.mesh.nodes.length, 0);
+});
+
 test('transport failure maps to a coded failure, never a hidden success', async () => {
     const calls: Array<{ verb: string; args: any }> = [];
     const ctx = makeCtx(new Error('connection refused'), calls);

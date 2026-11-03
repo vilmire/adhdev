@@ -156,6 +156,25 @@ export interface MeshGraphNode {
 
 export type MeshGraphRefineJobStatus = 'accepted' | 'running' | 'completed' | 'failed'
 
+/** Same window as daemon-core recentFailures (30 minutes). Lifetime failed jobs stay listed; only this window is "current". */
+export const REFINE_FAILURE_CURRENT_WINDOW_MS = 30 * 60 * 1000
+
+export function countCurrentFailedRefineJobs(
+    jobs: ReadonlyArray<{ status?: string; lastUpdatedAt?: string; completedAt?: string; startedAt?: string }> | undefined,
+    nowMs: number = Date.now(),
+): number {
+    if (!jobs || jobs.length === 0) return 0
+    const cutoff = nowMs - REFINE_FAILURE_CURRENT_WINDOW_MS
+    let count = 0
+    for (const job of jobs) {
+        if (job?.status !== 'failed') continue
+        const raw = job.lastUpdatedAt || job.completedAt || job.startedAt || ''
+        const at = new Date(raw).getTime()
+        if (Number.isFinite(at) && at >= cutoff) count++
+    }
+    return count
+}
+
 /**
  * Shape of an entry in `RepoMeshStatus.asyncRefineJobs` as it reaches the browser.
  * Mirrors daemon-core `MeshAsyncRefineJobSummary` (mesh-refine-status.ts) — we only

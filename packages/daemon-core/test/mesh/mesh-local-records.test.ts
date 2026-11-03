@@ -29,7 +29,7 @@ import { sanitizeDispatchRefusalDetail } from '@adhdev/mesh-shared';
 import { meshRecord } from '../../src/mesh/mesh-record.js';
 import { seedMeshAttempt } from '../helpers/turn-attempt-seed.js';
 import { getLedgerDir } from '../../src/mesh/mesh-ledger-paths.js';
-import { seedLocalRecord } from '../helpers/local-records.js';
+import { insertLocalRecordRow, seedLocalRecord } from '../helpers/local-records.js';
 import type { MeshLedgerEntry } from '../../src/mesh/mesh-ledger.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 
@@ -286,8 +286,25 @@ describe('mesh-local-records (C-W9a: meshRecord local leg + readers)', () => {
             seedLocalRecord(testMeshId, { kind: 'task_failed', payload: {} });
             const summary = getLocalRecordSummary(testMeshId);
             expect(summary.refineFailed).toBe(2);
+            expect(summary.recentRefineFailures).toBe(2);
             expect(summary.taskFailed).toBe(1);
             expect(summary.recentFailures).toBe(1);
+        });
+
+        it('does not keep a refine failure from outside the 30 minute window as current', () => {
+            insertLocalRecordRow({
+                id: 'old-refine-fail',
+                meshId: testMeshId,
+                timestamp: new Date(Date.now() - 31 * 60 * 1000).toISOString(),
+                kind: 'task_failed',
+                payload: { source: 'refine_mesh_node_async_job', status: 'failed' },
+            });
+            seedLocalRecord(testMeshId, { kind: 'task_failed', payload: { source: 'refine_mesh_node_async_job', status: 'failed' } });
+            const summary = getLocalRecordSummary(testMeshId);
+            expect(summary.refineFailed).toBe(2);
+            expect(summary.recentRefineFailures).toBe(1);
+            expect(summary.recentFailures).toBe(0);
+            expect(summary.taskFailed).toBe(0);
         });
 
         it('task history presentation: refine failures are their own kind and leave task_failed', () => {

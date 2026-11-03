@@ -393,8 +393,10 @@ export interface MeshLedgerSummary {
     taskCompleted: number;
     taskBlocked?: number;
     taskFailed: number;
-    /** Failed Refinery (merge) jobs — recorded as `task_failed` rows without being tasks; counted here, never in `taskFailed`. */
+    /** Failed Refinery (merge) jobs — recorded as `task_failed` rows without being tasks; lifetime count, never in `taskFailed`. */
     refineFailed?: number;
+    /** Refine failures inside the same 30-minute window as `recentFailures`. Lifetime `refineFailed` is not a current signal. */
+    recentRefineFailures?: number;
     taskStalled: number;
     sessionLaunched: number;
     checkpointCreated: number;

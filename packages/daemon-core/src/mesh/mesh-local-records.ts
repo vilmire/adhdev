@@ -331,6 +331,7 @@ export function getLocalRecordSummary(meshId: string): MeshLedgerSummary {
     let taskFailed = 0;
     let taskStalled = 0;
     let refineFailed = 0;
+    let recentRefineFailures = 0;
     let recentFailures = 0;
     const failureRows = (counts.get('task_failed') || counts.get('task_stalled'))
         ? readLocalRecordHeads(meshId, ['task_failed', 'task_stalled'], CLEANUP_STOP_PROJECTION, { turnTerminals: false })
@@ -343,7 +344,10 @@ export function getLocalRecordSummary(meshId: string): MeshLedgerSummary {
         // resolved read as a red "Failed" task here. Refine results have their
         // own card (refine jobs); the failures are counted apart (`refineFailed`).
         if (isRefineJobRecord(row)) {
-            if (row.kind === 'task_failed') refineFailed++;
+            if (row.kind === 'task_failed') {
+                refineFailed++;
+                if (new Date(row.timestamp).getTime() >= recentFailureCutoff) recentRefineFailures++;
+            }
             continue;
         }
         if (row.kind === 'task_stalled') { taskStalled++; continue; }
@@ -371,6 +375,7 @@ export function getLocalRecordSummary(meshId: string): MeshLedgerSummary {
         taskBlocked,
         taskFailed,
         refineFailed,
+        recentRefineFailures,
         taskStalled,
         sessionLaunched: counts.get('session_launched') ?? 0,
         checkpointCreated: counts.get('checkpoint_created') ?? 0,

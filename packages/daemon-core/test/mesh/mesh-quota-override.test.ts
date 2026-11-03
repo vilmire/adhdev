@@ -41,6 +41,7 @@ import {
 import { escalateQuotaHeldTasks, requestQuotaOverrideDecision, resetQuotaEscalationForTests } from '../../src/mesh/mesh-quota-hold-escalation.js';
 import { notifyStuckAssignedWorkers, resetStuckApprovalNoticesForTests, UNREADABLE_APPROVAL_NOTICE_AFTER_MS } from '../../src/mesh/mesh-stuck-approval-notify.js';
 import { noteWriterStopPending, writerCancelRefusalHint, resetWriterStopDiagnosticsForTests } from '../../src/mesh/mesh-writer-stop-diagnostics.js';
+import { WRITER_UNKNOWN_ERROR } from '../../src/mesh/mesh-queue-retirement.js';
 import { stopExactMeshWriter } from '../../src/commands/mesh-writer-stop.js';
 import { resetRoutingDecisionLogForTests } from '../../src/mesh/mesh-routing-decision.js';
 import { getDaemonCommandRegistry } from '../../src/commands/router.js';
@@ -338,6 +339,7 @@ describe('cancel refusal for a worker that is alive but stuck', () => {
         const hint = writerCancelRefusalHint({ assignedSessionId: 'sess-grok', assignedNodeId: NODE_ID });
         expect(hint).toContain('sess-grok');
         expect(hint).toContain('missing_identity');
+        expect(WRITER_UNKNOWN_ERROR + hint).toMatch(/retained\. Worker session /);
         expect(hint).toContain('mesh_cleanup_sessions');
         expect(hint).toContain(`node_id:"${NODE_ID}"`);
         expect(writerCancelRefusalHint({})).toBe('');

@@ -167,20 +167,75 @@ export async function fastForwardMeshNode(args: MeshFastForwardNodeArgs): Promis
   }
 
   if (current.behind === 0) {
+    // A root that is already current still leaves pure gitlink drift untouched.
+    // updateSubmodules opted in to resolving that drift; returning already_up_to_date
+    // here made a second call a no-op. Dirty or errored submodules never reach this
+    // branch — collectPreflightBlockers rejects them first.
+    const drift = updateSubmodules ? pureGitlinkDrift(current) : [];
+    if (drift.length === 0) {
+      const result: MeshFastForwardResult = {
+        ...base,
+        success: true,
+        code: 'already_up_to_date',
+        allowed: true,
+        willRun: false,
+        executed: false,
+        blockingReasons: [],
+        current,
+        preStatus: current,
+        postStatus: current,
+        finalBranchConvergenceState: buildConvergenceState(current, 'up_to_date'),
+      };
+      await appendFastForwardLedger(result, 'noop');
+      return result;
+    }
+    if (dryRun) {
+      const result: MeshFastForwardResult = {
+        ...base,
+        success: true,
+        code: 'submodule_update_available',
+        allowed: true,
+        willRun: false,
+        executed: false,
+        blockingReasons: [],
+        current,
+        preStatus: current,
+        nextStep: 'Root is current. Re-run with update_submodules:true and execute=true to check out the recorded gitlinks (git submodule update --init --recursive).',
+        finalBranchConvergenceState: buildConvergenceState(current, 'follow_up_required'),
+      };
+      await appendFastForwardLedger(result, 'dry_run');
+      return result;
+    }
+    let postStatus = current;
+    let operationError: string | undefined;
+    try {
+      await runGit(workspace, ['submodule', 'update', '--init', '--recursive'], { timeoutMs: args.timeoutMs ?? 60_000 });
+      postStatus = await getGitRepoStatus(workspace, {
+        ...STATUS_OPTIONS,
+        submoduleIgnorePaths: args.submoduleIgnorePaths,
+        timeoutMs: args.timeoutMs ?? STATUS_OPTIONS.timeoutMs,
+      });
+    } catch (error) {
+      operationError = formatGitError(error);
+    }
+    const postBlockers = collectPostExecutionBlockers(postStatus);
+    if (operationError) postBlockers.push('submodule_update_failed');
+    const success = postBlockers.length === 0;
     const result: MeshFastForwardResult = {
       ...base,
-      success: true,
-      code: 'already_up_to_date',
+      success,
+      code: success ? 'submodule_update_applied' : operationError ? 'submodule_update_failed' : 'post_verify_failed',
       allowed: true,
-      willRun: false,
-      executed: false,
-      blockingReasons: [],
+      willRun: true,
+      executed: true,
+      blockingReasons: postBlockers,
       current,
       preStatus: current,
-      postStatus: current,
-      finalBranchConvergenceState: buildConvergenceState(current, 'up_to_date'),
+      postStatus,
+      ...(operationError ? { operationError } : {}),
+      finalBranchConvergenceState: buildConvergenceState(postStatus, success ? 'fast_forwarded' : 'post_verify_failed'),
     };
-    await appendFastForwardLedger(result, 'noop');
+    await appendFastForwardLedger(result, success ? 'executed' : 'failed');
     return result;
   }
 
@@ -276,6 +331,9 @@ export async function fastForwardMeshNode(args: MeshFastForwardNodeArgs): Promis
     preStatus: current,
     postStatus,
     ...(operationError ? { operationError } : {}),
+    ...(submoduleFollowUpRequired ? {
+      nextStep: 'Root fast-forward is applied. Re-run with update_submodules:true and execute=true to check out the recorded gitlinks (git submodule update --init --recursive).',
+    } : {}),
     finalBranchConvergenceState: buildConvergenceState(
       postStatus,
       postBlockers.length === 0 ? 'fast_forwarded' : submoduleFollowUpRequired ? 'follow_up_required' : 'post_verify_failed',
@@ -670,7 +728,7 @@ function buildPlannedSteps(mode: 'merge' | 'push', updateSubmodules: boolean, pu
   if (updateSubmodules) {
     steps.push({
       operation: 'submodule_update',
-      description: 'If the fast-forward changes gitlinks, run git submodule update --init --recursive and re-verify submodules.',
+      description: 'If the fast-forward changes gitlinks, or the root is already current and a clean submodule checkout differs from its gitlink, run git submodule update --init --recursive and re-verify submodules.',
       safe: true,
       willMutateWorktree: true,
     });
@@ -747,6 +805,12 @@ function collectPostExecutionBlockers(status: GitRepoStatus): string[] {
   if (status.stashCount > 0) blockers.push('post_stash_entries_present');
   blockers.push(...collectSubmoduleBlockers(status, 'post'));
   return blockers;
+}
+
+function pureGitlinkDrift(status: GitRepoStatus): GitSubmoduleStatus[] {
+  return (Array.isArray(status.submodules) ? status.submodules : []).filter(
+    (submodule) => submodule.outOfSync && !submodule.dirty && !submodule.error,
+  );
 }
 
 function collectSubmoduleBlockers(status: GitRepoStatus, phase: 'pre' | 'post', tolerateGitlinkDriftAlone = false): string[] {

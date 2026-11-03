@@ -26258,7 +26258,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       return true;
     }
     function isLedgerQuerySummaryWire2(value) {
-      const keys = ["meshId", "totalEntries", "taskDispatched", "taskCompleted", "taskFailed", "taskBlocked", "taskStalled", "sessionLaunched", "checkpointCreated", "lastActivityAt", "recentFailures", "taskBlocked", "refineFailed"];
+      const keys = ["meshId", "totalEntries", "taskDispatched", "taskCompleted", "taskFailed", "taskBlocked", "taskStalled", "sessionLaunched", "checkpointCreated", "lastActivityAt", "recentFailures", "taskBlocked", "refineFailed", "recentRefineFailures"];
       if (!isRecord2(value) || !hasOnlyKeys22(value, keys)) return false;
       if (!isEvidenceIdentifier2(value.meshId)) return false;
       for (const k of ["totalEntries", "taskDispatched", "taskCompleted", "taskFailed", "taskStalled", "sessionLaunched", "checkpointCreated", "recentFailures"]) {
@@ -26266,6 +26266,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       if (value.taskBlocked !== void 0 && !isNonNegativeInt2(value.taskBlocked)) return false;
       if (value.refineFailed !== void 0 && !isNonNegativeInt2(value.refineFailed)) return false;
+      if (value.recentRefineFailures !== void 0 && !isNonNegativeInt2(value.recentRefineFailures)) return false;
       if (value.lastActivityAt !== null && typeof value.lastActivityAt !== "string") return false;
       return true;
     }
@@ -87605,20 +87606,71 @@ ${includeRefs[0]}`;
         return result2;
       }
       if (current5.behind === 0) {
+        const drift = updateSubmodules ? pureGitlinkDrift(current5) : [];
+        if (drift.length === 0) {
+          const result3 = {
+            ...base,
+            success: true,
+            code: "already_up_to_date",
+            allowed: true,
+            willRun: false,
+            executed: false,
+            blockingReasons: [],
+            current: current5,
+            preStatus: current5,
+            postStatus: current5,
+            finalBranchConvergenceState: buildConvergenceState(current5, "up_to_date")
+          };
+          await appendFastForwardLedger(result3, "noop");
+          return result3;
+        }
+        if (dryRun) {
+          const result3 = {
+            ...base,
+            success: true,
+            code: "submodule_update_available",
+            allowed: true,
+            willRun: false,
+            executed: false,
+            blockingReasons: [],
+            current: current5,
+            preStatus: current5,
+            nextStep: "Root is current. Re-run with update_submodules:true and execute=true to check out the recorded gitlinks (git submodule update --init --recursive).",
+            finalBranchConvergenceState: buildConvergenceState(current5, "follow_up_required")
+          };
+          await appendFastForwardLedger(result3, "dry_run");
+          return result3;
+        }
+        let postStatus2 = current5;
+        let operationError2;
+        try {
+          await runGit(workspace, ["submodule", "update", "--init", "--recursive"], { timeoutMs: args.timeoutMs ?? 6e4 });
+          postStatus2 = await getGitRepoStatus(workspace, {
+            ...STATUS_OPTIONS,
+            submoduleIgnorePaths: args.submoduleIgnorePaths,
+            timeoutMs: args.timeoutMs ?? STATUS_OPTIONS.timeoutMs
+          });
+        } catch (error) {
+          operationError2 = formatGitError2(error);
+        }
+        const postBlockers2 = collectPostExecutionBlockers(postStatus2);
+        if (operationError2) postBlockers2.push("submodule_update_failed");
+        const success2 = postBlockers2.length === 0;
         const result2 = {
           ...base,
-          success: true,
-          code: "already_up_to_date",
+          success: success2,
+          code: success2 ? "submodule_update_applied" : operationError2 ? "submodule_update_failed" : "post_verify_failed",
           allowed: true,
-          willRun: false,
-          executed: false,
-          blockingReasons: [],
+          willRun: true,
+          executed: true,
+          blockingReasons: postBlockers2,
           current: current5,
           preStatus: current5,
-          postStatus: current5,
-          finalBranchConvergenceState: buildConvergenceState(current5, "up_to_date")
+          postStatus: postStatus2,
+          ...operationError2 ? { operationError: operationError2 } : {},
+          finalBranchConvergenceState: buildConvergenceState(postStatus2, success2 ? "fast_forwarded" : "post_verify_failed")
         };
-        await appendFastForwardLedger(result2, "noop");
+        await appendFastForwardLedger(result2, success2 ? "executed" : "failed");
         return result2;
       }
       const ancestorCheck = await verifyHeadIsAncestorOfUpstream(workspace, current5.upstream || "", args.timeoutMs);
@@ -87703,6 +87755,9 @@ ${includeRefs[0]}`;
         preStatus: current5,
         postStatus,
         ...operationError ? { operationError } : {},
+        ...submoduleFollowUpRequired ? {
+          nextStep: "Root fast-forward is applied. Re-run with update_submodules:true and execute=true to check out the recorded gitlinks (git submodule update --init --recursive)."
+        } : {},
         finalBranchConvergenceState: buildConvergenceState(
           postStatus,
           postBlockers.length === 0 ? "fast_forwarded" : submoduleFollowUpRequired ? "follow_up_required" : "post_verify_failed"
@@ -88042,7 +88097,7 @@ ${includeRefs[0]}`;
       if (updateSubmodules) {
         steps.push({
           operation: "submodule_update",
-          description: "If the fast-forward changes gitlinks, run git submodule update --init --recursive and re-verify submodules.",
+          description: "If the fast-forward changes gitlinks, or the root is already current and a clean submodule checkout differs from its gitlink, run git submodule update --init --recursive and re-verify submodules.",
           safe: true,
           willMutateWorktree: true
         });
@@ -88096,6 +88151,11 @@ ${includeRefs[0]}`;
       if (status.stashCount > 0) blockers.push("post_stash_entries_present");
       blockers.push(...collectSubmoduleBlockers(status, "post"));
       return blockers;
+    }
+    function pureGitlinkDrift(status) {
+      return (Array.isArray(status.submodules) ? status.submodules : []).filter(
+        (submodule) => submodule.outOfSync && !submodule.dirty && !submodule.error
+      );
     }
     function collectSubmoduleBlockers(status, phase, tolerateGitlinkDriftAlone = false) {
       const submodules = Array.isArray(status.submodules) ? status.submodules : [];
@@ -91928,6 +91988,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       let taskFailed = 0;
       let taskStalled = 0;
       let refineFailed = 0;
+      let recentRefineFailures = 0;
       let recentFailures = 0;
       const failureRows = counts2.get("task_failed") || counts2.get("task_stalled") ? readLocalRecordHeads(meshId, ["task_failed", "task_stalled"], CLEANUP_STOP_PROJECTION, { turnTerminals: false }) : [];
       const localTerminalTasks = /* @__PURE__ */ new Set();
@@ -91935,7 +91996,10 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         if (row2.taskId) localTerminalTasks.add(`${row2.kind}\0${row2.taskId}`);
         if (isIntentionalCleanupStopEntry(row2)) continue;
         if (isRefineJobRecord(row2)) {
-          if (row2.kind === "task_failed") refineFailed++;
+          if (row2.kind === "task_failed") {
+            refineFailed++;
+            if (new Date(row2.timestamp).getTime() >= recentFailureCutoff) recentRefineFailures++;
+          }
           continue;
         }
         if (row2.kind === "task_stalled") {
@@ -91975,6 +92039,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         taskBlocked,
         taskFailed,
         refineFailed,
+        recentRefineFailures,
         taskStalled,
         sessionLaunched: counts2.get("session_launched") ?? 0,
         checkpointCreated: counts2.get("checkpoint_created") ?? 0,
@@ -128850,7 +128915,7 @@ ${detail.join("\n")}` : stripped;
         init_dist();
         init_active_ledger();
         init_mesh_runtime_store();
-        WRITER_UNKNOWN_ERROR = "unknown, cannot prove dead: the owning host has not confirmed session absence or exact writer quiescence; ownership remains retained";
+        WRITER_UNKNOWN_ERROR = "unknown, cannot prove dead: the owning host has not confirmed session absence or exact writer quiescence; ownership remains retained.";
       }
     });
     function noteWriterStopPending(sessionId, reason) {
@@ -198432,6 +198497,29 @@ ${output}` : "";
         const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
         const baseRefusal = refuseCoordinatorBaseNodeRemoval(ctx, node, nodeId, args);
         if (baseRefusal) return baseRefusal;
+        if (args?.rosterOnly === true) {
+          const removed2 = await removeNodeMembership(ctx, meshId, meshRecord2, mesh, node, nodeId);
+          await recordNodeRemoval({
+            meshId,
+            nodeId,
+            node,
+            removed: removed2,
+            args,
+            sessionCleanupMode: "preserve",
+            worktreeCleanup: void 0,
+            remoteForwardedResult: void 0
+          });
+          return {
+            success: removed2 === true,
+            removed: removed2,
+            rosterOnly: true,
+            worktreePreserved: true,
+            ...removed2 ? {} : {
+              code: "mesh_remove_node_roster_unremoved",
+              error: "Coordinator roster still lists the node. Worktree and session data were not deleted."
+            }
+          };
+        }
         const explicitCleanupMode = args?.sessionCleanupMode ?? args?.session_cleanup_mode;
         const sessionCleanupMode = ctx.normalizeMeshSessionCleanupMode(
           explicitCleanupMode ?? (node?.isLocalWorktree === true ? "stop_and_delete" : void 0) ?? resolveMeshPolicy2(mesh?.policy).sessionCleanupOnNodeRemove
@@ -240983,7 +241071,7 @@ function isLedgerQueryEntryWire(value) {
   return true;
 }
 function isLedgerQuerySummaryWire(value) {
-  const keys = ["meshId", "totalEntries", "taskDispatched", "taskCompleted", "taskFailed", "taskBlocked", "taskStalled", "sessionLaunched", "checkpointCreated", "lastActivityAt", "recentFailures", "taskBlocked", "refineFailed"];
+  const keys = ["meshId", "totalEntries", "taskDispatched", "taskCompleted", "taskFailed", "taskBlocked", "taskStalled", "sessionLaunched", "checkpointCreated", "lastActivityAt", "recentFailures", "taskBlocked", "refineFailed", "recentRefineFailures"];
   if (!isRecord(value) || !hasOnlyKeys2(value, keys)) return false;
   if (!isEvidenceIdentifier(value.meshId)) return false;
   for (const k of ["totalEntries", "taskDispatched", "taskCompleted", "taskFailed", "taskStalled", "sessionLaunched", "checkpointCreated", "recentFailures"]) {
@@ -240991,6 +241079,7 @@ function isLedgerQuerySummaryWire(value) {
   }
   if (value.taskBlocked !== void 0 && !isNonNegativeInt(value.taskBlocked)) return false;
   if (value.refineFailed !== void 0 && !isNonNegativeInt(value.refineFailed)) return false;
+  if (value.recentRefineFailures !== void 0 && !isNonNegativeInt(value.recentRefineFailures)) return false;
   if (value.lastActivityAt !== null && typeof value.lastActivityAt !== "string") return false;
   return true;
 }
@@ -252550,9 +252639,11 @@ async function meshCleanupWorktreeNodes(ctx, args) {
     ...args?.node_id ? { nodeId: args.node_id } : {}
   };
   let result;
+  let routedRemote = false;
   try {
     if (args?.node_id) {
       const node = await findNodeWithRefresh(ctx, args.node_id);
+      routedRemote = supportsMeshRelay(ctx.transport) && !!node.daemonId && !isLocalControlPlaneNode(ctx, node);
       result = await commandForNode(ctx, node, "cleanup_worktree_nodes", wireArgs);
     } else {
       result = await ctx.transport.command("cleanup_worktree_nodes", wireArgs);
@@ -252564,6 +252655,59 @@ async function meshCleanupWorktreeNodes(ctx, args) {
       error: e?.message || String(e),
       recoveryHint: "Inspect mesh_status and retry after resolving the reported failure; per-node reasons are never hidden in a successful plan."
     }, null, 2);
+  }
+  const rosterReconcile = [];
+  if (!dryRun && routedRemote && args?.node_id && result?.success && Array.isArray(result.entries)) {
+    const entry = result.entries.find((item) => item?.nodeId === args.node_id);
+    const remoteRemoved = entry?.execution?.success === true && entry?.execution?.removed === true;
+    if (!remoteRemoved) {
+      rosterReconcile.push({ nodeId: args.node_id, status: "nondeleted" });
+    } else {
+      const removeArgs = {
+        meshId: ctx.mesh.id,
+        nodeId: args.node_id,
+        sessionCleanupMode: "preserve",
+        rosterOnly: true,
+        inlineMesh: ctx.mesh
+      };
+      let hostMembership;
+      try {
+        const local = await ctx.transport.command("remove_mesh_node", removeArgs);
+        hostMembership = {
+          removed: local?.success === true && local.removed !== false,
+          ...local?.error ? { error: local.error } : {}
+        };
+      } catch (e) {
+        hostMembership = { removed: false, error: e?.message || String(e) };
+      }
+      if (hostMembership.removed !== true) {
+        if (entry?.execution && typeof entry.execution === "object") {
+          entry.execution = {
+            ...entry.execution,
+            removed: false,
+            remoteRemoved: true,
+            worktreeDeleted: false,
+            roster: "unremoved"
+          };
+        }
+        rosterReconcile.push({
+          nodeId: args.node_id,
+          status: "unremoved",
+          hostMembership,
+          worktreeDeleted: false
+        });
+        return JSON.stringify({
+          ...result,
+          success: false,
+          removed: false,
+          code: "mesh_cleanup_worktree_nodes_host_membership_unremoved",
+          hostMembership,
+          rosterReconcile,
+          worktreeDeleted: false
+        }, null, 2);
+      }
+      rosterReconcile.push({ nodeId: args.node_id, status: "removed", hostMembership });
+    }
   }
   if (!dryRun && result?.success && Array.isArray(result.entries)) {
     let changed = false;
@@ -252578,7 +252722,11 @@ async function meshCleanupWorktreeNodes(ctx, args) {
     }
     if (changed) ctx.mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
   }
-  return JSON.stringify(result ?? { success: false, error: "no response from daemon" }, null, 2);
+  const payload = result ?? { success: false, error: "no response from daemon" };
+  if (rosterReconcile.length > 0 && payload && typeof payload === "object") {
+    return JSON.stringify({ ...payload, rosterReconcile }, null, 2);
+  }
+  return JSON.stringify(payload, null, 2);
 }
 
 // src/tools/mesh-tools-node-recovery.ts

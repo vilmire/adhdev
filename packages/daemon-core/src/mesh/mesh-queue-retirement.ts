@@ -17,4 +17,4 @@ export async function settleQueueWriter(meshId: string, taskId: string, reason: 
     await ledger.resumeStoppingWriters(attempt.attemptId);
 }
 
-export const WRITER_UNKNOWN_ERROR = 'unknown, cannot prove dead: the owning host has not confirmed session absence or exact writer quiescence; ownership remains retained';
+export const WRITER_UNKNOWN_ERROR = 'unknown, cannot prove dead: the owning host has not confirmed session absence or exact writer quiescence; ownership remains retained.';

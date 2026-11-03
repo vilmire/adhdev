@@ -674,9 +674,13 @@ export async function meshCleanupWorktreeNodes(
         ...(args?.node_id ? { nodeId: args.node_id } : {}),
     };
     let result: any;
+    let routedRemote = false;
     try {
         if (args?.node_id) {
             const node = await findNodeWithRefresh(ctx, args.node_id);
+            routedRemote = supportsMeshRelay(ctx.transport)
+                && !!node.daemonId
+                && !isLocalControlPlaneNode(ctx, node);
             result = await commandForNode(ctx, node, 'cleanup_worktree_nodes', wireArgs);
         } else {
             result = await ctx.transport.command('cleanup_worktree_nodes', wireArgs);
@@ -688,6 +692,62 @@ export async function meshCleanupWorktreeNodes(
             error: e?.message || String(e),
             recoveryHint: 'Inspect mesh_status and retry after resolving the reported failure; per-node reasons are never hidden in a successful plan.',
         }, null, 2);
+    }
+    // A remote owner's cleanup drops that daemon's copy only. The coordinator
+    // roster is a separate record. Reconcile it with rosterOnly so this step
+    // cannot delete a worktree, a session, or other data. A dry-run never does.
+    const rosterReconcile: Array<Record<string, unknown>> = [];
+    if (!dryRun && routedRemote && args?.node_id && result?.success && Array.isArray(result.entries)) {
+        const entry = result.entries.find((item: any) => item?.nodeId === args.node_id);
+        const remoteRemoved = entry?.execution?.success === true && entry?.execution?.removed === true;
+        if (!remoteRemoved) {
+            rosterReconcile.push({ nodeId: args.node_id, status: 'nondeleted' });
+        } else {
+            const removeArgs = {
+                meshId: ctx.mesh.id,
+                nodeId: args.node_id,
+                sessionCleanupMode: 'preserve',
+                rosterOnly: true,
+                inlineMesh: ctx.mesh,
+            };
+            let hostMembership: Record<string, unknown>;
+            try {
+                const local: any = await ctx.transport.command('remove_mesh_node', removeArgs);
+                hostMembership = {
+                    removed: local?.success === true && local.removed !== false,
+                    ...(local?.error ? { error: local.error } : {}),
+                };
+            } catch (e: any) {
+                hostMembership = { removed: false, error: e?.message || String(e) };
+            }
+            if (hostMembership.removed !== true) {
+                if (entry?.execution && typeof entry.execution === 'object') {
+                    entry.execution = {
+                        ...entry.execution,
+                        removed: false,
+                        remoteRemoved: true,
+                        worktreeDeleted: false,
+                        roster: 'unremoved',
+                    };
+                }
+                rosterReconcile.push({
+                    nodeId: args.node_id,
+                    status: 'unremoved',
+                    hostMembership,
+                    worktreeDeleted: false,
+                });
+                return JSON.stringify({
+                    ...result,
+                    success: false,
+                    removed: false,
+                    code: 'mesh_cleanup_worktree_nodes_host_membership_unremoved',
+                    hostMembership,
+                    rosterReconcile,
+                    worktreeDeleted: false,
+                }, null, 2);
+            }
+            rosterReconcile.push({ nodeId: args.node_id, status: 'removed', hostMembership });
+        }
     }
     // Splice executed removals out of the in-memory mesh mirror (same pattern
     // as mesh_remove_node) so follow-up tool calls see current membership.
@@ -701,5 +761,9 @@ export async function meshCleanupWorktreeNodes(
         }
         if (changed) ctx.mesh.updatedAt = new Date().toISOString();
     }
-    return JSON.stringify(result ?? { success: false, error: 'no response from daemon' }, null, 2);
+    const payload = result ?? { success: false, error: 'no response from daemon' };
+    if (rosterReconcile.length > 0 && payload && typeof payload === 'object') {
+        return JSON.stringify({ ...payload, rosterReconcile }, null, 2);
+    }
+    return JSON.stringify(payload, null, 2);
 }

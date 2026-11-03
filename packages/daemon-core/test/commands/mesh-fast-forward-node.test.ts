@@ -434,8 +434,19 @@ describe('fast_forward_mesh_node', () => {
         expect(git(work, ['rev-parse', 'HEAD:oss'])).toBe(childV2) // gitlink now points at v2
         expect(git(join(work, 'oss'), ['rev-parse', 'HEAD'])).not.toBe(childV2) // but checkout wasn't updated — drift confirmed
 
-        // Root is now fully caught up (ahead=0, behind=0) — nothing left to merge — so
-        // this call exercises the preflight path directly, not the post-merge path.
+        // Root is now fully caught up (ahead=0, behind=0). A dry-run must name the
+        // submodule update instead of claiming the tree is already current.
+        const dry: any = await fastForwardMeshNode({
+          workspace: work,
+          execute: false,
+          updateSubmodules: true,
+          nodeId: 'node-preexisting-drift',
+          meshId: 'mesh-test',
+        })
+        expect(dry.code).toBe('submodule_update_available')
+        expect(dry.executed).toBe(false)
+        expect(git(join(work, 'oss'), ['rev-parse', 'HEAD'])).not.toBe(childV2)
+
         const result: any = await fastForwardMeshNode({
           workspace: work,
           execute: true,
@@ -446,10 +457,45 @@ describe('fast_forward_mesh_node', () => {
 
         // Before the fix: code 'submodule_not_clean' (or 'dirty_worktree' via the root-level
         // 'modified' porcelain entry a gitlink mismatch also produces), allowed:false —
-        // self-blocked forever. After the fix: neither preflight signal fires on pure drift.
+        // self-blocked forever, and behind=0 returned already_up_to_date without updating.
         expect(result.allowed).toBe(true)
+        expect(result.code).toBe('submodule_update_applied')
+        expect(result.executed).toBe(true)
         expect(result.blockingReasons ?? []).not.toContain('modified_changes_present')
         expect((result.blockingReasons ?? []).some((r: string) => r.startsWith('pre_submodule_out_of_sync:'))).toBe(false)
+        expect(git(join(work, 'oss'), ['rev-parse', 'HEAD'])).toBe(childV2)
+      } finally {
+        rmSync(root, { recursive: true, force: true })
+      }
+    }, 60000)
+
+    it('names the submodule follow-up when a gitlink-moving fast-forward did not update submodules', async () => {
+      const root = mkdtempSync(join(tmpdir(), 'adhdev-mesh-ff-gitlink-next-'))
+      try {
+        const { seed, work } = createRemoteBackedRepo(root)
+        const childRepo = initSubmoduleChild(root, 'child-origin-next')
+        addSubmoduleAndCommit(seed, childRepo, 'oss')
+        git(seed, ['push', '-q', 'origin', 'main'])
+        git(work, ['fetch', '-q', 'origin'])
+        git(work, ['merge', '-q', '--ff-only', 'origin/main'])
+        git(work, ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive'])
+        commitFile(childRepo, 'child.txt', 'child v2\n', 'child v2')
+        const childV2 = git(childRepo, ['rev-parse', 'HEAD'])
+        git(join(seed, 'oss'), ['fetch', '-q', 'origin'])
+        git(join(seed, 'oss'), ['checkout', '-q', childV2])
+        git(seed, ['add', 'oss'])
+        git(seed, ['commit', '-q', '-m', 'chore(oss): bump submodule pointer'])
+        git(seed, ['push', '-q', 'origin', 'main'])
+        const result: any = await fastForwardMeshNode({
+          workspace: work,
+          execute: true,
+          updateSubmodules: false,
+          nodeId: 'node-gitlink-next',
+          meshId: 'mesh-test',
+        })
+        expect(result.code).toBe('fast_forward_applied_submodule_update_required')
+        expect(result.nextStep).toMatch(/update_submodules:true/)
+        expect(git(join(work, 'oss'), ['rev-parse', 'HEAD'])).not.toBe(childV2)
       } finally {
         rmSync(root, { recursive: true, force: true })
       }

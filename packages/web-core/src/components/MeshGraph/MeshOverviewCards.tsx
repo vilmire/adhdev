@@ -18,7 +18,7 @@ import type {
 } from '@adhdev/daemon-core';
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme';
-import type { MeshGraphSessionDetail } from '../../utils/mesh-visualization'
+import { countCurrentFailedRefineJobs, type MeshGraphSessionDetail } from '../../utils/mesh-visualization'
 import PendingApprovalsInbox, { type PendingApprovalAction, type PendingApprovalExactButton } from './PendingApprovalsInbox'
 import { nodeDisplayName, nodeHealthText, sessionElapsedLabel, sessionRoleText, sessionStatusLabel, sessionStatusText } from './MeshObservabilitySurface/meshSurfaceHelpers'
 import {
@@ -620,7 +620,7 @@ function SessionsCard({ meshTheme, entries, onSelect }: {
 
 function RefineJobsCard({ meshTheme, jobs }: { meshTheme: MeshGraphTheme; jobs: AsyncRefineJob[] }) {
     const { t } = useTranslation('common')
-    const failed = jobs.filter(j => j.status === 'failed').length
+    const failed = countCurrentFailedRefineJobs(jobs)
     return (
         <Card
             meshTheme={meshTheme}

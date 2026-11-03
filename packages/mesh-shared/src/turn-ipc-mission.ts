@@ -689,8 +689,10 @@ export interface LedgerQueryEntryWire {
 export interface LedgerQuerySummaryWire {
     /** Absent on older peers; never folded into failed by the decoder. */
     taskBlocked?: number
-    /** Failed Refinery jobs (not tasks). Absent on older peers. */
+    /** Failed Refinery jobs (not tasks). Absent on older peers. Lifetime, not the current window. */
     refineFailed?: number
+    /** Refine failures inside the 30-minute current window. Absent on older peers. */
+    recentRefineFailures?: number
     meshId: string
     totalEntries: number
     taskDispatched: number
@@ -736,7 +738,7 @@ function isLedgerQueryEntryWire(value: unknown): value is LedgerQueryEntryWire {
 }
 
 function isLedgerQuerySummaryWire(value: unknown): value is LedgerQuerySummaryWire {
-    const keys = ['meshId', 'totalEntries', 'taskDispatched', 'taskCompleted', 'taskFailed', 'taskBlocked', 'taskStalled', 'sessionLaunched', 'checkpointCreated', 'lastActivityAt', 'recentFailures', 'taskBlocked', 'refineFailed'] as const
+    const keys = ['meshId', 'totalEntries', 'taskDispatched', 'taskCompleted', 'taskFailed', 'taskBlocked', 'taskStalled', 'sessionLaunched', 'checkpointCreated', 'lastActivityAt', 'recentFailures', 'taskBlocked', 'refineFailed', 'recentRefineFailures'] as const
     if (!isRecord(value) || !hasOnlyKeys(value, keys)) return false
     if (!isEvidenceIdentifier(value.meshId)) return false
     for (const k of ['totalEntries', 'taskDispatched', 'taskCompleted', 'taskFailed', 'taskStalled', 'sessionLaunched', 'checkpointCreated', 'recentFailures'] as const) {
@@ -744,6 +746,7 @@ function isLedgerQuerySummaryWire(value: unknown): value is LedgerQuerySummaryWi
     }
     if (value.taskBlocked !== undefined && !isNonNegativeInt(value.taskBlocked)) return false
     if (value.refineFailed !== undefined && !isNonNegativeInt(value.refineFailed)) return false
+    if (value.recentRefineFailures !== undefined && !isNonNegativeInt(value.recentRefineFailures)) return false
     if (value.lastActivityAt !== null && typeof value.lastActivityAt !== 'string') return false
     return true
 }
