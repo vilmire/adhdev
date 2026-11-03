@@ -48,6 +48,30 @@ export function presentHandoffMesh<T extends HandoffMeshIdentity>(mesh: T, proto
     };
 }
 
+/** Host roster entries arrive from the snapshot. This machine's own nodes are
+ * not in that roster: dropping them would remove the workspace the launch
+ * revalidates. Matching ids still go through the identity check. */
+export function mergeHandoffNodeRoster(
+    localNodes: ReadonlyArray<Record<string, unknown>>,
+    incomingNodes: ReadonlyArray<Record<string, unknown>>,
+    opts: { aliased: boolean; selfDaemonId: string },
+): { ok: true; nodes: Record<string, unknown>[] } | { ok: false; error: string } {
+    const merged: Record<string, unknown>[] = [];
+    const incomingIds = new Set<unknown>();
+    for (const node of incomingNodes) {
+        incomingIds.add(node.id);
+        const local = localNodes.find(candidate => candidate.id === node.id);
+        if (!local) { merged.push({ ...node }); continue; }
+        const result = mergeIncomingHandoffNode(local as { daemonId?: string; workspace?: string }, node, opts);
+        if (!result.ok) return result;
+        merged.push(result.node);
+    }
+    for (const local of localNodes) {
+        if (!incomingIds.has(local.id)) merged.push({ ...local });
+    }
+    return { ok: true, nodes: merged };
+}
+
 /** Keep the local workspace. A blank local id may adopt only this daemon's id, and only on the aliased member mesh. */
 export function mergeIncomingHandoffNode(
     local: { daemonId?: string; workspace?: string },
@@ -63,6 +87,23 @@ export function mergeIncomingHandoffNode(
     if (localId || !incomingId) return { ok: false, error: IDENTITY_CHANGED };
     if (!opts.aliased || !opts.selfDaemonId || !daemonIdsEquivalent(incomingId, opts.selfDaemonId)) return { ok: false, error: IDENTITY_CHANGED };
     return { ok: true, node: { ...incoming, daemonId: incomingId, workspace: local.workspace } };
+}
+
+/** The member's launch node is often stored without a daemon id. Becoming host
+ * adopts that node as this daemon. A different daemon id stays a refusal. */
+export function assignHostLaunchNode<T extends { id?: string; daemonId?: string }>(
+    nodes: readonly T[],
+    hostNodeId: string | undefined,
+    hostDaemonId: string,
+): { ok: true; nodes: T[] } | { ok: false; error: string } {
+    if (!hostNodeId) return { ok: true, nodes: nodes.map(node => ({ ...node })) };
+    const next = nodes.map(node => ({ ...node }));
+    const node = next.find(candidate => candidate.id === hostNodeId);
+    if (!node) return { ok: false, error: 'handoff launch node is not on the adopted project' };
+    const current = typeof node.daemonId === 'string' ? node.daemonId : '';
+    if (current && !daemonIdsEquivalent(current, hostDaemonId)) return { ok: false, error: IDENTITY_CHANGED };
+    if (!current) node.daemonId = hostDaemonId;
+    return { ok: true, nodes: next };
 }
 
 /** Point the paired member record at the protocol mesh id. An existing different record with that id is a collision. */

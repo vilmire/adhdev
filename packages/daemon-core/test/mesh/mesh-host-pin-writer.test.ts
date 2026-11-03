@@ -33,7 +33,7 @@ vi.mock('../../src/config/config.js', () => ({
 }));
 
 import { createMesh, getMesh, addNode } from '../../src/config/mesh-config.js';
-import { setMeshHostPin } from '../../src/config/mesh-config-host-pairing.js';
+import { markMeshHostPairingJoined, setMeshHostPin } from '../../src/config/mesh-config-host-pairing.js';
 import { resolveMeshHostStatus, requireMeshHostQueueOwner } from '../../src/mesh/mesh-host-ownership.js';
 import { recoverMeshIdByCoordinatorAndNode } from '../../src/mesh/mesh-event-forwarding.js';
 
@@ -56,6 +56,29 @@ afterEach(() => {
 
 const HOST_DAEMON = 'daemon_mach_1b46842a15d3409d96ad33e767a916dd';
 const OTHER_DAEMON = 'daemon_mach_84407c5a5e554421b06f1a42fc4ecca9';
+
+describe('markMeshHostPairingJoined — member host pin', () => {
+    it('persists the host origin-grant public key the transfer certificate is checked against', () => {
+        writeRawMeshConfig({
+            meshes: [{
+                id: 'mesh_member',
+                name: 'm',
+                repoIdentity: 'id_a',
+                policy: {},
+                meshHost: { role: 'host', pairing: { status: 'not_configured' } },
+                nodes: [],
+            }],
+        });
+        const joined = markMeshHostPairingJoined('mesh_member', {
+            hostDaemonId: HOST_DAEMON,
+            hostMeshId: 'mesh_host',
+            originGrantPublicKey: 'member-pinned-host-key',
+        });
+        expect(joined?.meshHost.originGrantPublicKey).toBe('member-pinned-host-key');
+        expect(joined?.meshHost.role).toBe('member');
+        expect(readRawMeshConfig().meshes[0].meshHost.originGrantPublicKey).toBe('member-pinned-host-key');
+    });
+});
 
 describe('setMeshHostPin — the missing host-pin writer', () => {
     it('writes the pin when the mesh has none (the case Launch never covered)', () => {

@@ -43757,6 +43757,11 @@ ${error.message || ""}`;
         handoffConfigPermits.delete(meshId);
       }
     }
+    function handoffAdoptionOfFencedMember(project2, next) {
+      const hostMeshId = project2?.meshHost?.hostMeshId;
+      if (!project2 || typeof hostMeshId !== "string" || !handoffConfigPermits.has(hostMeshId)) return false;
+      return !next.meshes.some((mesh) => mesh.id === project2.id) && next.meshes.some((mesh) => mesh.id === hostMeshId);
+    }
     function assertHandoffConfigCut(config) {
       let current5 = readMeshConfigFromDisk();
       if (!current5 && (0, import_fs8.existsSync)(getMeshConfigPath())) throw new MeshConfigStrictLockError("project_storage_unavailable");
@@ -43767,6 +43772,7 @@ ${error.message || ""}`;
         const project2 = current5.meshes.find((m) => m.id === id4);
         const next = config.meshes.find((m) => m.id === id4);
         if (JSON.stringify(next) === JSON.stringify(project2)) continue;
+        if (handoffAdoptionOfFencedMember(project2, config)) continue;
         if (project2?.meshHost?.handoffFence !== void 0 || projectHasDurableWriteCut(getConfigDir2(), id4, project2?.meshHost?.hostEpoch ?? 0, false)) {
           throw Object.assign(new Error("project_host_handoff_fenced"), { code: "project_host_handoff_fenced" });
         }
@@ -137843,6 +137849,9 @@ ${tail}` : ""
         ...opts.hostDaemonId ? { hostDaemonId: opts.hostDaemonId } : {},
         ...opts.hostNodeId ? { hostNodeId: opts.hostNodeId } : {},
         ...opts.hostMeshId && opts.hostMeshId !== meshId ? { hostMeshId: opts.hostMeshId } : {},
+        // Activation verifies the transfer certificate against this pin. The
+        // peer-secret store is not the mesh record the handoff reader uses.
+        ...opts.originGrantPublicKey ? { originGrantPublicKey: opts.originGrantPublicKey } : {},
         pairing: {
           ...previous.pairing || {},
           status: "paired",
@@ -150071,6 +150080,8 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
               const current5 = this.d.journal.get(rec8.handoffId, "target");
               if (!current5 || current5.phase !== rec8.phase) return fail10("handoff_in_progress");
               if (!readiness.ok) {
+                const failed = readiness.checks.filter((check) => !check.ok).map((check) => check.id).join(",") || "unknown";
+                this.log(`target readiness refused: ${failed}`);
                 if (rec8.phase === "activating") return fail10("target_not_launchable", "Activation remains fenced until target readiness recovers.");
                 this.discardInternal(rec8, "target_readiness_failed");
                 return fail10("target_not_launchable", "Target readiness changed; staged authority discarded.", { applied: false, discarded: true, phase: "discarded", epoch: rec8.epoch });
@@ -150337,6 +150348,25 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         nodes: nodes.map((n) => n === blanks[0] ? { ...n, daemonId: selfDaemonId } : n)
       };
     }
+    function mergeHandoffNodeRoster(localNodes, incomingNodes, opts) {
+      const merged = [];
+      const incomingIds = /* @__PURE__ */ new Set();
+      for (const node of incomingNodes) {
+        incomingIds.add(node.id);
+        const local = localNodes.find((candidate) => candidate.id === node.id);
+        if (!local) {
+          merged.push({ ...node });
+          continue;
+        }
+        const result = mergeIncomingHandoffNode(local, node, opts);
+        if (!result.ok) return result;
+        merged.push(result.node);
+      }
+      for (const local of localNodes) {
+        if (!incomingIds.has(local.id)) merged.push({ ...local });
+      }
+      return { ok: true, nodes: merged };
+    }
     function mergeIncomingHandoffNode(local, incoming, opts) {
       const localId = typeof local.daemonId === "string" ? local.daemonId : "";
       const incomingId = typeof incoming.daemonId === "string" ? incoming.daemonId : "";
@@ -150347,6 +150377,16 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       if (localId || !incomingId) return { ok: false, error: IDENTITY_CHANGED };
       if (!opts.aliased || !opts.selfDaemonId || !daemonIdsEquivalent5(incomingId, opts.selfDaemonId)) return { ok: false, error: IDENTITY_CHANGED };
       return { ok: true, node: { ...incoming, daemonId: incomingId, workspace: local.workspace } };
+    }
+    function assignHostLaunchNode(nodes, hostNodeId, hostDaemonId) {
+      if (!hostNodeId) return { ok: true, nodes: nodes.map((node2) => ({ ...node2 })) };
+      const next = nodes.map((node2) => ({ ...node2 }));
+      const node = next.find((candidate) => candidate.id === hostNodeId);
+      if (!node) return { ok: false, error: "handoff launch node is not on the adopted project" };
+      const current5 = typeof node.daemonId === "string" ? node.daemonId : "";
+      if (current5 && !daemonIdsEquivalent5(current5, hostDaemonId)) return { ok: false, error: IDENTITY_CHANGED };
+      if (!current5) node.daemonId = hostDaemonId;
+      return { ok: true, nodes: next };
     }
     function retargetHandoffMeshId(meshes, mesh, protocolMeshId) {
       if (mesh.id === protocolMeshId) return { ok: true };
@@ -150415,6 +150455,9 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             if (meta2.role === "host") {
               const moved = retargetHandoffMeshId(config.meshes, mesh, meshId);
               if (!moved.ok) throw new Error(moved.error);
+              const assigned = assignHostLaunchNode(mesh.nodes ?? [], meta2.hostNodeId, meta2.hostDaemonId);
+              if (!assigned.ok) throw new Error(assigned.error);
+              mesh.nodes = assigned.nodes;
             }
             const prev = mesh.meshHost ?? { role: "host" };
             const next = { ...prev, role: meta2.role, hostDaemonId: meta2.hostDaemonId, hostEpoch: meta2.hostEpoch };
@@ -150450,13 +150493,11 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             const keep = { id: mesh.id, meshHost: mesh.meshHost };
             const incoming = { ...snapshotConfig };
             delete incoming.meshHost;
-            if (Array.isArray(incoming.nodes)) incoming.nodes = incoming.nodes.map((node) => {
-              const local = localNodes.find((n) => n.id === node.id);
-              if (!local) return node;
-              const merged = mergeIncomingHandoffNode(local, node, { aliased, selfDaemonId });
+            if (Array.isArray(incoming.nodes)) {
+              const merged = mergeHandoffNodeRoster(localNodes, incoming.nodes, { aliased, selfDaemonId });
               if (!merged.ok) throw new Error(merged.error);
-              return merged.node;
-            });
+              incoming.nodes = merged.nodes;
+            }
             Object.assign(mesh, incoming, keep);
             if (aliased) {
               const moved = retargetHandoffMeshId(config.meshes, mesh, meshId);
@@ -150688,6 +150729,12 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         "use strict";
       }
     });
+    function presentCoordinatorCensusRows(rows) {
+      return rows.map((row2) => {
+        if (row2.surfaceKind === "live_runtime" || row2.surfaceKind === "recovery_snapshot" || row2.surfaceKind === "inactive_record") return row2;
+        return { ...row2, surfaceKind: (0, import_session_host_core5.getSessionHostSurfaceKind)({ lifecycle: row2.lifecycle, surfaceKind: row2.surfaceKind, termination: row2.termination }) };
+      });
+    }
     function classifyCoordinatorCensus(rows, meshId, registeredIds) {
       if (!Array.isArray(rows) || rows.some((r) => !r || typeof r.sessionId !== "string")) return { verified: false, live: [] };
       const matching = rows.filter((row2) => row2.meta?.meshCoordinatorFor === meshId || registeredIds.has(row2.sessionId));
@@ -150698,6 +150745,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
     var init_coordinator_observation = __esm2({
       "src/mesh/host-handoff/coordinator-observation.ts"() {
         "use strict";
+        init_runtime_surface();
       }
     });
     function substituteCanaryArgs(spec, selection, workspace, config) {
@@ -150967,8 +151015,9 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
               timer = setTimeout(() => reject(new Error("runtime census timeout")), 3e3);
             })]);
             if (!Array.isArray(records) || records.some((r) => !r || typeof r.sessionId !== "string")) return { ready: false, runtimeVerified: false, checkedAt };
+            const presented = presentCoordinatorCensusRows(records);
             const registeredIds = new Set(listCoordinatorsForMesh(meshId).map((r) => r.sessionId));
-            const census2 = classifyCoordinatorCensus(records, meshId, registeredIds);
+            const census2 = classifyCoordinatorCensus(presented, meshId, registeredIds);
             if (!census2.verified) return { ready: false, runtimeVerified: false, checkedAt };
             const live = census2.live;
             const sessionId = live.length === 1 ? live[0].sessionId : void 0;

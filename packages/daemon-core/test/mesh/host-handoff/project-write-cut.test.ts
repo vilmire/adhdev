@@ -99,4 +99,20 @@ describe('project file/config mutation cut', () => {
         const saved = withHandoffConfigWrite('project', () => withStrictMeshConfigWriteLock(() => saveMeshConfigDurable(frozen as never)));
         expect(saved.ok).toBe(true);
     });
+
+    it('lets the protocol-id permit adopt a fenced paired member and still refuses other fenced edits', () => {
+        const dir = fixture(); vi.stubEnv('ADHDEV_CONFIG_DIR', dir);
+        const config = inventory();
+        config.meshes[0] = { id: 'mesh_local', name: 'Member', nodes: [{ id: 'node-local', workspace: '/local' }], meshHost: { role: 'member', hostMeshId: 'mesh_host', hostDaemonId: 'standalone_mach_host', handoffFence: { handoffId: 'handoff', epoch: 1 } } } as never;
+        writeFileSync(join(dir, 'meshes.json'), JSON.stringify(config));
+        const adopted = JSON.parse(JSON.stringify(config));
+        adopted.meshes[0].id = 'mesh_host';
+        adopted.meshes[0].nodes.push({ id: 'node-source', daemonId: 'standalone_mach_host' });
+        expect(() => saveMeshConfig(adopted)).toThrow('fenced');
+        const edited = JSON.parse(JSON.stringify(config));
+        edited.meshes[0].name = 'still fenced';
+        expect(() => withHandoffConfigWrite('mesh_host', () => saveMeshConfig(edited))).toThrow('fenced');
+        withHandoffConfigWrite('mesh_host', () => saveMeshConfig(adopted));
+        expect(JSON.parse(readFileSync(join(dir, 'meshes.json'), 'utf8')).meshes[0].id).toBe('mesh_host');
+    });
 });

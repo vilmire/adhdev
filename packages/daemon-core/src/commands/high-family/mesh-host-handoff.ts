@@ -27,7 +27,7 @@ import type { HighFamilyContext, HighFamilyHandler } from './types.js';
 import { collectBriefData, controlHostOf } from './assistant-session-control.js';
 import { stopProjectCoordinators } from '../../mesh/host-handoff/coordinator-stop.js';
 import { listCoordinatorsForMesh } from '../../mesh/coordinator-registry.js';
-import { classifyCoordinatorCensus } from '../../mesh/host-handoff/coordinator-observation.js';
+import { classifyCoordinatorCensus, presentCoordinatorCensusRows } from '../../mesh/host-handoff/coordinator-observation.js';
 import { withCoordinatorTransition } from '../../mesh/host-handoff/admission.js';
 import { resolveRoleLaunch } from '../../launch-defaults/consumer.js';
 import { resolveMeshCoordinatorSetup } from '../mesh-coordinator.js';
@@ -74,8 +74,9 @@ function liveHost(ctx: HighFamilyContext): LiveHandoffHost {
             try {
                 const records = await Promise.race([ctx.deps.sessionHostControl.listSessions(), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('runtime census timeout')), 3_000); })]);
                 if (!Array.isArray(records) || records.some(r => !r || typeof r.sessionId !== 'string')) return { ready: false, runtimeVerified: false, checkedAt };
+                const presented = presentCoordinatorCensusRows(records);
                 const registeredIds = new Set(listCoordinatorsForMesh(meshId).map(r => r.sessionId));
-                const census = classifyCoordinatorCensus(records, meshId, registeredIds);
+                const census = classifyCoordinatorCensus(presented, meshId, registeredIds);
                 if (!census.verified) return { ready: false, runtimeVerified: false, checkedAt };
                 const live = census.live;
                 const sessionId = live.length === 1 ? live[0]!.sessionId : undefined;

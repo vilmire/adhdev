@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findHandoffMesh, mergeIncomingHandoffNode, presentHandoffMesh, retargetHandoffMeshId } from '../../../src/mesh/host-handoff/paired-member.js';
+import { assignHostLaunchNode, findHandoffMesh, mergeHandoffNodeRoster, mergeIncomingHandoffNode, presentHandoffMesh, retargetHandoffMeshId } from '../../../src/mesh/host-handoff/paired-member.js';
 
 const SELF = 'standalone_mach_target';
 const HOST = 'standalone_mach_source';
@@ -67,6 +67,38 @@ describe('mergeIncomingHandoffNode', () => {
         expect(mergeIncomingHandoffNode({ workspace: '/local' }, { daemonId: HOST }, { aliased: true, selfDaemonId: SELF })).toEqual({ ok: false, error: changed });
         expect(mergeIncomingHandoffNode({ workspace: '/local' }, { daemonId: SELF }, { aliased: false, selfDaemonId: SELF }).ok).toBe(false);
         expect(mergeIncomingHandoffNode({ daemonId: SELF }, {}, { aliased: true, selfDaemonId: SELF }).ok).toBe(false);
+    });
+});
+
+describe('mergeHandoffNodeRoster', () => {
+    it('keeps this machine workspace when the snapshot roster uses other node ids', () => {
+        const merged = mergeHandoffNodeRoster(
+            [{ id: 'node-local', workspace: '/local' }],
+            [{ id: 'node-source', daemonId: HOST, workspace: '/source' }],
+            { aliased: true, selfDaemonId: SELF },
+        );
+        expect(merged).toEqual({ ok: true, nodes: [
+            { id: 'node-source', daemonId: HOST, workspace: '/source' },
+            { id: 'node-local', workspace: '/local' },
+        ] });
+    });
+
+    it('still refuses a matching node whose daemon id changed', () => {
+        const merged = mergeHandoffNodeRoster(
+            [{ id: 'node-local', daemonId: SELF, workspace: '/local' }],
+            [{ id: 'node-local', daemonId: HOST, workspace: '/source' }],
+            { aliased: true, selfDaemonId: SELF },
+        );
+        expect(merged).toEqual({ ok: false, error: 'target node identity changed during config apply' });
+    });
+});
+
+describe('assignHostLaunchNode', () => {
+    it('adopts the blank launch node as this daemon and refuses a different daemon', () => {
+        const adopted = assignHostLaunchNode([{ id: 'node-local' }, { id: 'node-source', daemonId: HOST }], 'node-local', SELF);
+        expect(adopted).toEqual({ ok: true, nodes: [{ id: 'node-local', daemonId: SELF }, { id: 'node-source', daemonId: HOST }] });
+        expect(assignHostLaunchNode([{ id: 'node-local', daemonId: HOST }], 'node-local', SELF)).toEqual({ ok: false, error: 'target node identity changed during config apply' });
+        expect(assignHostLaunchNode([{ id: 'other' }], 'node-local', SELF)).toEqual({ ok: false, error: 'handoff launch node is not on the adopted project' });
     });
 });
 

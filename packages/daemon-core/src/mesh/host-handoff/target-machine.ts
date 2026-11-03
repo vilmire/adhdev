@@ -195,6 +195,8 @@ export class HostHandoffTarget {
             const current = this.d.journal.get(rec.handoffId, 'target');
             if (!current || current.phase !== rec.phase) return fail('handoff_in_progress');
             if (!readiness.ok) {
+                const failed = readiness.checks.filter(check => !check.ok).map(check => check.id).join(',') || 'unknown';
+                this.log(`target readiness refused: ${failed}`);
                 if (rec.phase === 'activating') return fail('target_not_launchable', 'Activation remains fenced until target readiness recovers.');
                 this.discardInternal(rec, 'target_readiness_failed');
                 return fail('target_not_launchable', 'Target readiness changed; staged authority discarded.', { applied: false, discarded: true, phase: 'discarded', epoch: rec.epoch });

@@ -44,6 +44,15 @@ export function withHandoffConfigWrite<T>(meshId: string, operation: () => T): T
         return result;
     } finally { handoffConfigPermits.delete(meshId); }
 }
+/** The handoff permit is the protocol mesh id. A paired member is still stored
+ * under its local id, and that record is already fenced, when adoption renames
+ * it. That rename is the handoff's own write. An in-place edit, or a second
+ * fenced project, stays refused. */
+function handoffAdoptionOfFencedMember(project: LocalMeshEntry | undefined, next: LocalMeshConfig): boolean {
+    const hostMeshId = project?.meshHost?.hostMeshId;
+    if (!project || typeof hostMeshId !== 'string' || !handoffConfigPermits.has(hostMeshId)) return false;
+    return !next.meshes.some(mesh => mesh.id === project.id) && next.meshes.some(mesh => mesh.id === hostMeshId);
+}
 function assertHandoffConfigCut(config: LocalMeshConfig): void {
     let current = readMeshConfigFromDisk();
     if (!current && existsSync(getMeshConfigPath())) throw new MeshConfigStrictLockError('project_storage_unavailable');
@@ -54,6 +63,7 @@ function assertHandoffConfigCut(config: LocalMeshConfig): void {
         const project = current.meshes.find(m => m.id === id);
         const next = config.meshes.find(m => m.id === id);
         if (JSON.stringify(next) === JSON.stringify(project)) continue;
+        if (handoffAdoptionOfFencedMember(project, config)) continue;
         if (project?.meshHost?.handoffFence !== undefined || projectHasDurableWriteCut(getConfigDir(), id, project?.meshHost?.hostEpoch ?? 0, false)) {
             throw Object.assign(new Error('project_host_handoff_fenced'), { code: 'project_host_handoff_fenced' });
         }

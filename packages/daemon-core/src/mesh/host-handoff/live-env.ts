@@ -28,7 +28,7 @@ import { resolveAssistantProject } from '../../assistant/assistant-projects.js';
 import { acquireProjectFileCut } from './project-write-cut.js';
 import { adoptPendingNoticeReceipts, assessPreservationBoundary } from './preservation-boundary.js';
 import { acquireHandoffWriteFence, releaseHandoffWriteFence, withHandoffImport } from './write-fence.js';
-import { findHandoffMesh, mergeIncomingHandoffNode, presentHandoffMesh, retargetHandoffMeshId, type HandoffMeshIdentity } from './paired-member.js';
+import { assignHostLaunchNode, findHandoffMesh, mergeHandoffNodeRoster, presentHandoffMesh, retargetHandoffMeshId, type HandoffMeshIdentity } from './paired-member.js';
 import type { FreezeCheck, HandoffDataPort, HandoffHoldPort, HandoffMeshPort, HostMetaWrite } from './ports.js';
 import type { HandoffLaunchPlan, HostTransferCertificate } from './types.js';
 
@@ -98,6 +98,9 @@ export function createLiveMeshPort(selfDaemonId = ''): HandoffMeshPort {
                 if (meta.role === 'host') {
                     const moved = retargetHandoffMeshId(config.meshes, mesh, meshId);
                     if (!moved.ok) throw new Error(moved.error);
+                    const assigned = assignHostLaunchNode(mesh.nodes ?? [], meta.hostNodeId, meta.hostDaemonId);
+                    if (!assigned.ok) throw new Error(assigned.error);
+                    mesh.nodes = assigned.nodes as typeof mesh.nodes;
                 }
                 const prev = (mesh.meshHost ?? { role: 'host' }) as Record<string, unknown>;
                 const next: Record<string, unknown> = { ...prev, role: meta.role, hostDaemonId: meta.hostDaemonId, hostEpoch: meta.hostEpoch };
@@ -129,13 +132,11 @@ export function createLiveMeshPort(selfDaemonId = ''): HandoffMeshPort {
                 const keep = { id: mesh.id, meshHost: mesh.meshHost };
                 const incoming = { ...snapshotConfig };
                 delete (incoming as Record<string, unknown>).meshHost;
-                if (Array.isArray(incoming.nodes)) incoming.nodes = incoming.nodes.map((node: any) => {
-                    const local = localNodes.find(n => n.id === node.id);
-                    if (!local) return node;
-                    const merged = mergeIncomingHandoffNode(local, node, { aliased, selfDaemonId });
+                if (Array.isArray(incoming.nodes)) {
+                    const merged = mergeHandoffNodeRoster(localNodes as unknown as Array<Record<string, unknown>>, incoming.nodes as Array<Record<string, unknown>>, { aliased, selfDaemonId });
                     if (!merged.ok) throw new Error(merged.error);
-                    return merged.node;
-                });
+                    incoming.nodes = merged.nodes;
+                }
                 Object.assign(mesh, incoming, keep);
                 if (aliased) {
                     const moved = retargetHandoffMeshId(config.meshes, mesh, meshId);

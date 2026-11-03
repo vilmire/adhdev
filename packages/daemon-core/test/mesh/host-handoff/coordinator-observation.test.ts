@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyCoordinatorCensus } from '../../../src/mesh/host-handoff/coordinator-observation.js';
+import { classifyCoordinatorCensus, presentCoordinatorCensusRows } from '../../../src/mesh/host-handoff/coordinator-observation.js';
 
 describe('actual coordinator runtime observation', () => {
     it('refuses unknown/alive surfaces and conflicting project identity instead of proving absence', () => {
@@ -17,5 +17,15 @@ describe('actual coordinator runtime observation', () => {
             { sessionId: 'old', lifecycle: 'stopped', meta: { meshCoordinatorFor: 'project' } },
         ], 'project', new Set())).toEqual({ verified: true, live: [live] });
         expect(classifyCoordinatorCensus([], 'project', new Set(['absent']))).toEqual({ verified: true, live: [] });
+    });
+    it('derives a live surface for a running session-host row that has no surfaceKind yet', () => {
+        const row = { sessionId: 'actual', lifecycle: 'running', meta: { meshCoordinatorFor: 'project' } };
+        const [presented] = presentCoordinatorCensusRows([row]);
+        expect(presented?.surfaceKind).toBe('live_runtime');
+        expect(classifyCoordinatorCensus(presentCoordinatorCensusRows([row]), 'project', new Set())).toEqual({
+            verified: true,
+            live: [{ ...row, surfaceKind: 'live_runtime' }],
+        });
+        expect(presentCoordinatorCensusRows([{ sessionId: 'old', lifecycle: 'stopped', surfaceKind: 'inactive_record', meta: { meshCoordinatorFor: 'project' } }])[0]?.surfaceKind).toBe('inactive_record');
     });
 });

@@ -456,6 +456,9 @@ function markMeshHostPairingJoinedUnlocked(
         ...(opts.hostDaemonId ? { hostDaemonId: opts.hostDaemonId } : {}),
         ...(opts.hostNodeId ? { hostNodeId: opts.hostNodeId } : {}),
         ...(opts.hostMeshId && opts.hostMeshId !== meshId ? { hostMeshId: opts.hostMeshId } : {}),
+        // Activation verifies the transfer certificate against this pin. The
+        // peer-secret store is not the mesh record the handoff reader uses.
+        ...(opts.originGrantPublicKey ? { originGrantPublicKey: opts.originGrantPublicKey } : {}),
         pairing: {
             ...(previous.pairing || {}),
             status: 'paired',
