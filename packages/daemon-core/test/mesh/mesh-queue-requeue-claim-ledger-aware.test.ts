@@ -60,9 +60,10 @@ import { meshStoreIpcHandlers } from '../../src/commands/low-family/mesh-store-i
 import { meshQueueHandlers } from '../../src/commands/med-family/mesh-queue.js'
 import { TURN_IPC_PROTOCOL_VERSION } from '@adhdev/mesh-shared'
 import { findWorkerTaskTokenForSession, exchangeWorkerSessionBind, mintWorkerSessionBind, mintWorkerTaskToken } from '../../src/mesh/worker-mcp-isolation.js'
+import { physicalWriterFixture } from '../helpers/physical-writer.js'
 
 const NODE_ID = 'node_requeue_ledger_local000000000000000'
-const WS = '/repo/requeue-ledger-aware'
+const WS = path.join(testTmpDir, 'requeue-ledger-aware')
 
 function setMesh(meshId: string, policy: Record<string, unknown> = {}) {
   meshConfigMocks.getMesh.mockReturnValue({
@@ -116,6 +117,7 @@ async function requeueAfterCheckpoint(components: any, meshId: string, taskId: s
 
 /** Claim `taskId` into `sessionId` and drive its attempt to `generating` (delivered + turn_started). */
 async function claimAndStart(components: any, meshId: string, taskId: string, sessionId: string) {
+  physicalWriterFixture(WS, NODE_ID, LOCAL_MACHINE_ID).bind(row(meshId, taskId))
   expect(tryAssignQueueTask(components, meshId, NODE_ID, sessionId, 'claude-cli')).toBe(true)
   await settle()
   const attempt = attempts(meshId, taskId).at(-1)!

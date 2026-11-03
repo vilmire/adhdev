@@ -177,7 +177,8 @@ describe('AUTOLAUNCH-TASK-RACE — per-task lock serializes concurrent triggerMe
       setMesh(meshId)
       const components = createComponents({ launchDelayMs: 25 })
       const task = enqueueTask(meshId, 'pinned work', {
-        taskMode: 'code_change',
+        taskMode: 'live_debug_readonly',
+        readonly: true,
         difficulty: 'medium',
         targetNodeId: NODE_A,
       })
@@ -209,7 +210,7 @@ describe('AUTOLAUNCH-TASK-RACE — per-task lock serializes concurrent triggerMe
     try {
       setMesh(meshId)
       const components = createComponents({ launchDelayMs: 25 })
-      const task = enqueueTask(meshId, 'field work', { taskMode: 'code_change', difficulty: 'medium' })
+      const task = enqueueTask(meshId, 'field work', { taskMode: 'live_debug_readonly', readonly: true, difficulty: 'medium' })
 
       await Promise.all([
         triggerMeshQueue(components, meshId),

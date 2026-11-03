@@ -163,7 +163,7 @@ describe('DEAD-DISPATCH-BOUND — an undeliverable dispatch target must not re-d
       const components = createComponents(meshId, async () => {
         throw new Error('peer not connected: no route to daemon')
       })
-      const task = enqueueTask(meshId, 'DELTA-FOR-DEAD-NODE', { targetNodeId: NODE_ID, taskMode: 'code_change',
+      const task = enqueueTask(meshId, 'DELTA-FOR-DEAD-NODE', { targetNodeId: NODE_ID, taskMode: 'live_debug_readonly', readonly: true,
     difficulty: 'medium',
 })
 
@@ -203,7 +203,7 @@ describe('DEAD-DISPATCH-BOUND — an undeliverable dispatch target must not re-d
         err.retryRecommended = false
         throw err
       })
-      const task = enqueueTask(meshId, 'DELTA-SELFDIAL', { targetNodeId: NODE_ID, taskMode: 'code_change',
+      const task = enqueueTask(meshId, 'DELTA-SELFDIAL', { targetNodeId: NODE_ID, taskMode: 'live_debug_readonly', readonly: true,
     difficulty: 'medium',
 })
 
@@ -233,7 +233,7 @@ describe('DEAD-DISPATCH-BOUND — an undeliverable dispatch target must not re-d
         if (call === 1) throw new Error('adapter busy, try again')
         return { success: true }
       })
-      const task = enqueueTask(meshId, 'DELTA-TRANSIENT', { targetNodeId: NODE_ID, taskMode: 'code_change',
+      const task = enqueueTask(meshId, 'DELTA-TRANSIENT', { targetNodeId: NODE_ID, taskMode: 'live_debug_readonly', readonly: true,
     difficulty: 'medium',
 })
 
@@ -254,7 +254,7 @@ describe('DEAD-DISPATCH-BOUND — an undeliverable dispatch target must not re-d
     try {
       setMesh(meshId)
       const components = createComponents(meshId, async () => ({ success: true }))
-      const task = enqueueTask(meshId, 'DELTA-OK', { targetNodeId: NODE_ID, taskMode: 'code_change',
+      const task = enqueueTask(meshId, 'DELTA-OK', { targetNodeId: NODE_ID, taskMode: 'live_debug_readonly', readonly: true,
     difficulty: 'medium',
 })
 

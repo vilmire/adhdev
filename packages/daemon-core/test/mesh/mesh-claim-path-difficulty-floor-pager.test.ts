@@ -138,7 +138,8 @@ describe('claim-path difficulty-floor pager (tryAssignQueueTask → handleDiffic
       const task = enqueueTask(meshId, 'hard work pinned to an already-running sonnet session', {
         targetNodeId: NODE_ID,
         targetSessionId: 'sess-already-running',
-        taskMode: 'code_change',
+        taskMode: 'live_debug_readonly',
+        readonly: true,
         difficulty: 'difficult',
       })
 
@@ -177,7 +178,8 @@ describe('claim-path difficulty-floor pager (tryAssignQueueTask → handleDiffic
       const task = enqueueTask(meshId, 'hard work, many ticks', {
         targetNodeId: NODE_ID,
         targetSessionId: 'sess-already-running',
-        taskMode: 'code_change',
+        taskMode: 'live_debug_readonly',
+        readonly: true,
         difficulty: 'difficult',
       })
 

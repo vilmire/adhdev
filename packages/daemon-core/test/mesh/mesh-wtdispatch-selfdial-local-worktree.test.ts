@@ -57,9 +57,10 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 import { tryAssignQueueTask } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
 import { withMeshRouter } from './helpers/mesh-router-stub.js'
+import { physicalWriterFixture } from '../helpers/physical-writer.js'
 
 const WT_NODE = 'node_9c27101b6db449e78342007e3b114627'
-const WS_WT = '/repo/wt-mobile'
+const WS_WT = path.join(testTmpDir, 'wt-mobile')
 
 /**
  * The claiming session lives ONLY in instanceManager — cliManager.adapters is
@@ -129,6 +130,7 @@ describe('WTDISPATCH-SELFDIAL — local worktree node must not be dispatched as 
       const task = enqueueTask(meshId, 'MARKER-SELFDIAL', { targetNodeId: WT_NODE, taskMode: 'code_change',
     difficulty: 'medium',
 })
+      physicalWriterFixture(WS_WT, WT_NODE, LOCAL_MACHINE_ID).bind(task)
 
       expect(tryAssignQueueTask(components, meshId, WT_NODE, 'sess-wt', 'claude-cli')).toBe(true)
 
@@ -158,9 +160,10 @@ describe('WTDISPATCH-SELFDIAL — local worktree node must not be dispatched as 
         daemonId: REMOTE_DAEMON_ID, // a DIFFERENT machine
       }])
       const components = createComponents(meshId, [{ sessionId: 'sess-remote', workspace: WS_WT, meshNodeId: WT_NODE }])
-      enqueueTask(meshId, 'MARKER-REMOTE', { targetNodeId: WT_NODE, taskMode: 'code_change',
+      const task = enqueueTask(meshId, 'MARKER-REMOTE', { targetNodeId: WT_NODE, taskMode: 'code_change',
     difficulty: 'medium',
 })
+      physicalWriterFixture(WS_WT, WT_NODE, LOCAL_MACHINE_ID).bind(task)
 
       expect(tryAssignQueueTask(components, meshId, WT_NODE, 'sess-remote', 'claude-cli')).toBe(true)
 
@@ -186,9 +189,10 @@ describe('WTDISPATCH-SELFDIAL — local worktree node must not be dispatched as 
         daemonId: LOCAL_MACHINE_ID,
       }])
       const components = createComponents(meshId, [{ sessionId: 'sess-bare', workspace: WS_WT, meshNodeId: WT_NODE }])
-      enqueueTask(meshId, 'MARKER-BARE', { targetNodeId: WT_NODE, taskMode: 'code_change',
+      const task = enqueueTask(meshId, 'MARKER-BARE', { targetNodeId: WT_NODE, taskMode: 'code_change',
     difficulty: 'medium',
 })
+      physicalWriterFixture(WS_WT, WT_NODE, LOCAL_MACHINE_ID).bind(task)
 
       expect(tryAssignQueueTask(components, meshId, WT_NODE, 'sess-bare', 'claude-cli')).toBe(true)
       expect(components.dispatchMeshCommand).not.toHaveBeenCalled()

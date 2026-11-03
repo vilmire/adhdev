@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
@@ -52,6 +52,8 @@ function makeCtx(): any {
 
 beforeEach(() => {
     coordIdle = true; coordAlive = true; executed = [];
+    if (!existsSync(testConfigDir)) mkdirSync(testConfigDir, { recursive: true });
+    writeFileSync(join(testConfigDir, 'meshes.json'), JSON.stringify({ meshes: [mesh] }), 'utf-8');
     setAssistantServicesForTests(createAssistantServices({ configDir: testConfigDir, listMeshes: () => [mesh] }));
     setStagedControlStoreForTest(new StagedControlStore({ configDir: testConfigDir }));
     setAssistantProjectPortsForTests(() => ({
@@ -153,10 +155,10 @@ import { ASSISTANT_QUOTA_FAILOVER_COMMAND, ASSISTANT_SWITCH_PROVIDER_COMMAND } f
 describe('read-only status fields (ids and enums only)', () => {
     it('project_status shows an active handoff and an open quota card, nothing else', () => {
         expect(controlStatusFields(mesh.id)).toEqual({});
-        new SqliteHandoffJournal(MeshRuntimeStore.getInstance().db as never).put({ handoffId: 'h1', role: 'source', meshId: mesh.id, peerDaemonId: 'daemon_mach_x', phase: 'frozen', epoch: 1, createdAt: 5, updatedAt: 9 });
         const store = new StagedControlStore({ configDir: testConfigDir });
         setStagedControlStoreForTest(store);
         store.write({ kind: 'session_control', project: 'blog', meshId: mesh.id, trigger: 'quota_exhausted', role: 'coordinator', action: 'switch_provider', sessionId: 'c1', provider: 'codex-cli', reason: 'quota_exhausted' });
+        new SqliteHandoffJournal(MeshRuntimeStore.getInstance().db as never).put({ handoffId: 'h1', role: 'source', meshId: mesh.id, peerDaemonId: 'daemon_mach_x', phase: 'frozen', epoch: 1, createdAt: 5, updatedAt: 9 });
         const fields = controlStatusFields(mesh.id);
         expect(fields).toMatchObject({ hostHandoff: { phase: 'frozen', handoffId: 'h1', since: 9, role: 'source' }, failover: { state: 'proposed' } });
         expect(JSON.stringify(fields)).not.toContain('codex-cli');

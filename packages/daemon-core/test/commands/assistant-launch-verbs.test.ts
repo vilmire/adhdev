@@ -541,7 +541,10 @@ describe('launch_assistant', () => {
         // The session id is minted before the config write and handed to launch_cli,
         // so the MCP server entry names the session that is about to spawn.
         expect(launch.assistantSessionKey).toMatch(/^[0-9a-f-]{36}$/);
-        expect(cfg.mcpServers['adhdev-assistant'].env).toEqual({ ADHDEV_ASSISTANT_SESSION_ID: launch.assistantSessionKey });
+        expect(cfg.mcpServers['adhdev-assistant'].env).toEqual({
+            ADHDEV_ASSISTANT_SESSION_ID: launch.assistantSessionKey,
+            ADHDEV_MCP_SESSION_CREDENTIAL: expect.stringMatching(/^mcp_sess_/),
+        });
         expect(existsSync(join(dir, 'assistant'))).toBe(true);
         expect(registry.read()).toMatchObject({ sessionId: 'asst-1', cliType: 'claude-cli', mcpConfigPath: cfgPath });
     });
@@ -904,7 +907,10 @@ describe('launch_assistant', () => {
             const cfgPath = join(home, '.gemini', 'config', 'mcp_config.json');
             const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8'));
             expect(cfg.mcpServers['adhdev-assistant'].args).toContain('--assistant');
-            expect(cfg.mcpServers['adhdev-assistant'].env).toEqual({ ADHDEV_ASSISTANT_SESSION_ID: launch.assistantSessionKey });
+            expect(cfg.mcpServers['adhdev-assistant'].env).toEqual({
+                ADHDEV_ASSISTANT_SESSION_ID: launch.assistantSessionKey,
+                ADHDEV_MCP_SESSION_CREDENTIAL: expect.stringMatching(/^mcp_sess_/),
+            });
             expect(registry.read()).toMatchObject({ cliType: 'antigravity-cli', mcpConfigPath: cfgPath });
             // Nothing written to the (stand-in) real home's global MCP config.
             expect(existsSync(join(fakeHome, '.gemini', 'config'))).toBe(false);

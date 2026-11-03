@@ -117,7 +117,7 @@ describe('CLAIMSTALL — worktree node claim-time membership visibility', () => 
       const components = createComponents({ cachedInlineMesh })
 
       // A queue task pinned to the worktree node, and an idle remote session on it.
-      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'code_change',
+      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'live_debug_readonly', readonly: true,
     difficulty: 'medium',
 })
       MeshRuntimeStore.getInstance().setRemoteIdleSession(meshId, WORKTREE_NODE_ID, 'sess-wt-1', 'claude-cli', Date.now() + 60_000)
@@ -149,7 +149,7 @@ describe('CLAIMSTALL — worktree node claim-time membership visibility', () => 
       // local-config mesh verbatim, byte-for-byte the pre-fix behavior.
       const components = createComponents({ cachedInlineMesh: undefined })
 
-      const task = enqueueTask(meshId, 'do base work', { targetNodeId: BASE_NODE_ID, taskMode: 'code_change',
+      const task = enqueueTask(meshId, 'do base work', { targetNodeId: BASE_NODE_ID, taskMode: 'live_debug_readonly', readonly: true,
     difficulty: 'medium',
 })
       MeshRuntimeStore.getInstance().setRemoteIdleSession(meshId, BASE_NODE_ID, 'sess-base-1', 'claude-cli', Date.now() + 60_000)
@@ -201,7 +201,7 @@ describe('CLAIMSTALL — worktree node claim-time membership visibility', () => 
       const cachedInlineMesh = { id: meshId, name: 'Bootstrap Mesh', policy: {}, nodes: [baseNode, worktreeNodeInline] }
       const components = createComponents({ cachedInlineMesh })
 
-      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'code_change',
+      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'live_debug_readonly', readonly: true,
     difficulty: 'medium',
 })
       MeshRuntimeStore.getInstance().setRemoteIdleSession(meshId, WORKTREE_NODE_ID, 'sess-wt-bs', 'claude-cli', Date.now() + 60_000)

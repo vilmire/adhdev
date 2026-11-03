@@ -76,6 +76,7 @@ function setup(sessionStatus: string | null, opts: { otherIdle?: boolean } = {})
     targetNodeId: NODE,
     targetSessionId: SESSION,
     difficulty: 'easy',
+    readonly: true,
   })
   return { meshId, components, dispatchMeshCommand, task }
 }

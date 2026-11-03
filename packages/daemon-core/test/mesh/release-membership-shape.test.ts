@@ -26,7 +26,13 @@ describe('release membership is explicit (no daemon-initiated membership)', () =
 
     it('the store method that inserts a member row is called only from mesh-releases.ts', () => {
         expect(using(/\.addMember\(/)).toEqual(['mesh/mesh-releases.ts']);
-        expect(using(/mesh_release_missions/)).toEqual(['mesh/mesh-mission-items-store.ts', 'mesh/mesh-release-schema.ts', 'mesh/mesh-release-store.ts']);
+        expect(using(/mesh_release_missions/)).toEqual([
+            'mesh/host-handoff/snapshot-export.ts',
+            'mesh/host-handoff/snapshot-import.ts',
+            'mesh/mesh-mission-items-store.ts',
+            'mesh/mesh-release-schema.ts',
+            'mesh/mesh-release-store.ts',
+        ]);
     });
 
     it('scopeRelease is called only by the release command handler', () => {

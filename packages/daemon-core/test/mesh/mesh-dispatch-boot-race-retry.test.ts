@@ -157,7 +157,8 @@ describe('DISPATCH-BOOT-RACE — a session still booting must not exhaust the re
       })
       const task = enqueueTask(meshId, 'READ-ONLY-DIAGNOSIS-DURING-BOOT', {
         targetNodeId: NODE_ID,
-        taskMode: 'code_change',
+        taskMode: 'live_debug_readonly',
+        readonly: true,
         difficulty: 'medium',
       })
 
@@ -184,7 +185,8 @@ describe('DISPATCH-BOOT-RACE — a session still booting must not exhaust the re
       })
       const task = enqueueTask(meshId, 'DELTA-BOOT-BACKOFF', {
         targetNodeId: NODE_ID,
-        taskMode: 'code_change',
+        taskMode: 'live_debug_readonly',
+        readonly: true,
         difficulty: 'medium',
       })
 

@@ -145,6 +145,7 @@ function claimScenarioUnmet(id: string): Scenario {
 function claimScenarioSkipped(id: string): Scenario {
     const dep = enqueueTask(id, 'prerequisite', { taskMode: 'code_change', difficulty: 'medium' });
     const dependent = enqueueTask(id, 'dependent work', { taskMode: 'code_change', dependsOn: [dep.id], difficulty: 'medium' });
+    physical(id).bind(dependent);
     setEntry(dep, { status: 'skipped' });
     return { dep, dependent };
 }

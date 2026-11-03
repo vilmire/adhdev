@@ -115,6 +115,7 @@ describe('MESH-IMAGE-DISPATCH: an input envelope queued for a busy target surviv
         targetNodeId: NODE,
         targetSessionId: SESSION,
         difficulty: 'medium',
+        readonly: true,
         input: IMAGE_ENVELOPE,
       })
       expect(task.input).toEqual(IMAGE_ENVELOPE)
@@ -158,7 +159,7 @@ describe('MESH-IMAGE-DISPATCH: an input envelope queued for a busy target surviv
         nodes: [{ id: NODE, workspace: WS, repoRoot: WS, policy: {} }],
       })
       const { components, handleCliCommand } = createComponents(meshId)
-      enqueueTask(meshId, 'plain text', { targetNodeId: NODE, targetSessionId: SESSION, difficulty: 'easy' })
+      enqueueTask(meshId, 'plain text', { targetNodeId: NODE, targetSessionId: SESSION, difficulty: 'easy', readonly: true })
       expect(tryAssignQueueTask(components, meshId, NODE, SESSION, 'claude-cli')).toBe(true)
       const [, payload] = handleCliCommand.mock.calls[0] as [string, Record<string, unknown>]
       expect('input' in payload).toBe(false)

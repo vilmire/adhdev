@@ -179,7 +179,7 @@ describe('AUTOLAUNCH-DEFERRED-CLAIM — an ff-deferred claim is re-driven, not s
       // the case passes even with the fix reverted (verified: it did).
       const components = createComponents({ hideFromLocalDrain: true })
       components.__meshId = meshId
-      const task = enqueueTask(meshId, 'deferred work', { taskMode: 'code_change', difficulty: 'medium' })
+      const task = enqueueTask(meshId, 'deferred work', { taskMode: 'live_debug_readonly', readonly: true, difficulty: 'medium' })
 
       // Tick 1: the ff lease is held, exactly as at 23:34:07.780 live.
       ffMocks.inFlight = true

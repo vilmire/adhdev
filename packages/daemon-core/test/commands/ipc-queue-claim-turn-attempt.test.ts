@@ -133,7 +133,7 @@ describe('IPC-QUEUE-CLAIM-TURN-ATTEMPT — a command-path claim opens its turn a
     try {
       setMesh(meshId)
       const { router } = bootRouter(meshId)
-      const task = enqueueTask(meshId, 'IPC-CLAIMED TASK', { targetNodeId: NODE_ID, difficulty: 'medium' })
+      const task = enqueueTask(meshId, 'IPC-CLAIMED TASK', { targetNodeId: NODE_ID, difficulty: 'medium', readonly: true })
 
       const result: any = await router.execute('trigger_mesh_queue', { meshId, preferredNodeId: NODE_ID }, 'ipc')
       expect(result.success).toBe(true)
@@ -155,7 +155,7 @@ describe('IPC-QUEUE-CLAIM-TURN-ATTEMPT — a command-path claim opens its turn a
     try {
       setMesh(meshId)
       const { router } = bootRouter(meshId)
-      const task = enqueueTask(meshId, 'RELAY-CLAIMED TASK', { targetNodeId: NODE_ID, difficulty: 'medium' })
+      const task = enqueueTask(meshId, 'RELAY-CLAIMED TASK', { targetNodeId: NODE_ID, difficulty: 'medium', readonly: true })
 
       const result: any = await router.execute('mesh_forward_event', {
         event: 'agent:ready', meshId, nodeId: NODE_ID, targetSessionId: SESSION_ID, providerType: 'claude-cli', workspace: WS,
@@ -206,7 +206,7 @@ describe('IPC-QUEUE-CLAIM-TURN-ATTEMPT — a claim without a turn ledger fails c
     try {
       setMesh(meshId)
       const { components, deps } = bootRouter(meshId, { ledger: false })
-      const task = enqueueTask(meshId, 'NO-LEDGER TASK', { targetNodeId: NODE_ID, difficulty: 'medium' })
+      const task = enqueueTask(meshId, 'NO-LEDGER TASK', { targetNodeId: NODE_ID, difficulty: 'medium', readonly: true })
 
       const claimed = tryAssignQueueTask(components, meshId, NODE_ID, SESSION_ID, 'claude-cli', undefined, undefined, 'test_no_ledger')
 
@@ -234,7 +234,7 @@ describe('IPC-QUEUE-CLAIM-TURN-ATTEMPT — a claim without a turn ledger fails c
         },
       })
       components.turnLedger = throwingLedger
-      const task = enqueueTask(meshId, 'OPEN-FAIL TASK', { targetNodeId: NODE_ID, difficulty: 'medium' })
+      const task = enqueueTask(meshId, 'OPEN-FAIL TASK', { targetNodeId: NODE_ID, difficulty: 'medium', readonly: true })
 
       const claimed = tryAssignQueueTask(components, meshId, NODE_ID, SESSION_ID, 'claude-cli', undefined, undefined, 'test_open_fail')
 

@@ -41,7 +41,7 @@ function save(role: string, selection: any, revision: number) {
     document.revision = revision; document[role] = { ...selection, revision, setBy: 'owner', setAt: 1 };
     writeFileSync(path, JSON.stringify(document));
 }
-const mesh = () => ({ id: 'mesh_one', name: 'M', nodes: [{ id: 'node_one', daemonId: 'daemon_mach_here', workspace: dir,
+const mesh = (id = 'mesh_one') => ({ id, name: 'M', nodes: [{ id: 'node_one', daemonId: 'daemon_mach_here', workspace: dir,
     policy: { providerPriority: ['codex-cli'] } }], policy: {} });
 const launched = (execute: ReturnType<typeof vi.fn>) => execute.mock.calls.find(row => row[0] === 'launch_cli')?.[1] as any;
 const launch = (role: string, c: any, args = {}) => role === 'assistant'
@@ -52,7 +52,7 @@ beforeEach(() => {
     writeFileSync(join(dir, 'launch-defaults.json'), JSON.stringify({ version: 1, revision: 1, history: [] }));
     save('assistant', { provider: 'claude-cli', model: 'opus', thinkingLevel: 'high' }, 1);
     save('coordinator', { provider: 'claude-cli', model: 'sonnet', thinkingLevel: 'low' }, 1);
-    writeFileSync(join(dir, 'meshes.json'), JSON.stringify({ meshes: [mesh()] }));
+    writeFileSync(join(dir, 'meshes.json'), JSON.stringify({ meshes: [mesh('mesh_one'), mesh('mesh_two')] }));
     registry = new AssistantRegistry({ configDir: dir }); setAssistantRegistryForTests(registry);
     setAssistantServicesForTests(createAssistantServices({ configDir: dir, listMeshes: () => [] }));
     setAssistantProjectPortsForTests(() => ({ selfDaemonId: () => 'daemon_mach_here', listMeshes: () => [], isHostedHere: () => true, relay: {} }) as any);
@@ -134,7 +134,7 @@ describe('real role launch consumers', () => {
         const first = launch('coordinator', c); await snapshotReady;
         expect(ports.store.write({ role: 'coordinator', selection: { provider: 'codex-cli', model: 'gpt-new', thinkingLevel: 'low' },
             expectedRevision: 1, by: 'owner', origin: 'owner' }).ok).toBe(true);
-        const second = launch('coordinator', c); await Promise.all([first, second]);
+        const second = launch('coordinator', c, { meshId: 'mesh_two' }); await Promise.all([first, second]);
         expect(execute.mock.calls.filter(row => row[0] === 'launch_cli').map(row => row[1].roleLaunch)).toEqual(expect.arrayContaining([
             expect.objectContaining({ documentRevision: 1, selection: { provider: 'claude-cli', model: 'sonnet', thinkingLevel: 'low' } }),
             expect.objectContaining({ documentRevision: 2, selection: { provider: 'codex-cli', model: 'gpt-new', thinkingLevel: 'low' } }),

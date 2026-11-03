@@ -132,7 +132,7 @@ describe('WORKTREE-CLAIM-GATE-BYPASS — bootstrap gate in the single claim funn
       const components = createComponents(meshId, [
         { sessionId: 'sess-wt', workingDir: WORKTREE_WS, meshNodeId: WORKTREE_NODE_ID },
       ])
-      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'code_change',
+      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'live_debug_readonly', readonly: true,
     difficulty: 'medium',
 })
 
@@ -159,7 +159,7 @@ describe('WORKTREE-CLAIM-GATE-BYPASS — bootstrap gate in the single claim funn
       const components = createComponents(meshId, [
         { sessionId: 'sess-wt', workingDir: WORKTREE_WS, meshNodeId: WORKTREE_NODE_ID },
       ])
-      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'code_change',
+      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'live_debug_readonly', readonly: true,
     difficulty: 'medium',
 })
 
@@ -187,7 +187,7 @@ describe('WORKTREE-CLAIM-GATE-BYPASS — bootstrap gate in the single claim funn
       const components = createComponents(meshId, [
         { sessionId: 'sess-wt', workingDir: WORKTREE_WS, meshNodeId: WORKTREE_NODE_ID },
       ])
-      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'code_change',
+      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'live_debug_readonly', readonly: true,
     difficulty: 'medium',
 })
 

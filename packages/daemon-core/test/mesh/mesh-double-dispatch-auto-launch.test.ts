@@ -484,7 +484,7 @@ describe('AUTOLAUNCH-CLAIM-CHURN — remote-aware await-claim (no ghost respawns
     try {
       setRemoteMesh(meshId)
       const components = createRemoteComponents()
-      const taskA = enqueueTask(meshId, 'work A', { taskMode: 'code_change',
+      const taskA = enqueueTask(meshId, 'work A', { taskMode: 'live_debug_readonly', readonly: true,
     difficulty: 'medium',
 })
       seedAutoLaunch(meshId, taskA.id, 100_000) // past window

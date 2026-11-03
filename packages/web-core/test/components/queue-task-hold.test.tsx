@@ -7,7 +7,7 @@ const task = { id: 'held', status: 'pending', message: 'Fix tests', hold: { reas
 describe('held task presentation', () => {
     it('shows reason, blocker title/id and age on pending tasks', () => {
         const html = renderToStaticMarkup(<QueueTaskHold task={task} nowMs={Date.parse('2026-10-18T00:04:00Z')} />)
-        expect(html).toContain('Held: owned_paths_conflict by Broad test owner (holder-t)')
+        expect(html).toContain('Held: owned_paths_conflict by Broad test owner (holder-task-id)')
         expect(html).toContain('4 min')
     })
     it('hides a stale hold on assigned tasks', () => {

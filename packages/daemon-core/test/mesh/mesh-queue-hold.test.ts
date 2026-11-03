@@ -34,7 +34,16 @@ describe('durable queue holds', () => {
         const { store, holder, task } = conflict();
         expect(store.claimNextQueueTask(mesh, 'worker-node', 'worker-session', [], opts)).toBeNull();
         const hold = getQueueEntryById(mesh, task.id)!.hold!;
-        expect(hold).toEqual({ reason: 'owned_paths_conflict', since: '2026-10-18T00:00:00.000Z', blockingTaskIds: [holder.id], detail: { overlappingPaths: [{ taskId: holder.id, ownedPath: 'oss/packages/daemon-core/test/mesh/queue.test.ts', blockingPath: 'oss/packages/daemon-core/test/**' }] } });
+        expect(hold).toEqual({
+            reason: 'owned_paths_conflict',
+            since: '2026-10-18T00:00:00.000Z',
+            blockingTaskIds: [holder.id],
+            detail: {
+                overlappingPaths: [{ taskId: holder.id, ownedPath: 'oss/packages/daemon-core/test/mesh/queue.test.ts', blockingPath: 'oss/packages/daemon-core/test/**' }],
+                unknownField: 'ownershipScope',
+                resolution: `assigned task ${holder.id} has no host ownershipScope; concurrent non-readonly admission stays closed until that task is completed, failed, or cancelled; a pending revise cannot attach a scope while admission fails; do not stop the task to narrow it.`,
+            },
+        });
         vi.advanceTimersByTime(60_000); store.claimNextQueueTask(mesh, 'worker-node', 'worker-session', [], opts);
         expect(getQueueEntryById(mesh, task.id)?.hold?.since).toBe(hold.since);
         updateSessionTaskStatus(mesh, 'holder-session', 'completed', { taskId: holder.id });

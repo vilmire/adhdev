@@ -766,7 +766,7 @@ describe('eligible slots, preferences and launch reservations', () => {
       const components = createComponents(mesh)
       const hard = enqueueTask(meshId, 'Owner chose Pinned worker', { difficulty: 'difficult', targetNodeId: 'absent-pinned-worker', requiredTags: ['provider=claude-cli'] })
       const provider = enqueueTask(meshId, 'Owner chose Codex', { difficulty: 'medium', requiredTags: ['provider=codex-cli'] })
-      const legal = enqueueTask(meshId, 'Independent eligible Mac source', { difficulty: 'difficult', targetNodeId: NODE_WORKER })
+      const legal = enqueueTask(meshId, 'Independent eligible Mac source', { difficulty: 'difficult', targetNodeId: NODE_WORKER, readonly: true })
       expect(await maybeAutoLaunchOneQueueSession(components, meshId, mesh)).toBe(true)
       expect(components.__launchCalls).toHaveLength(1)
       expect(getQueueEntryById(meshId, hard.id)?.targetNodeId).toBe('absent-pinned-worker')

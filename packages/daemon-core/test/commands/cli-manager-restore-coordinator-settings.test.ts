@@ -80,6 +80,11 @@ describe('DaemonCliManager.restoreHostedSessions re-establishes launch settings'
     // to a temp config dir so the test never touches the real ~/.adhdev.
     prevConfigDir = process.env.ADHDEV_CONFIG_DIR;
     process.env.ADHDEV_CONFIG_DIR = configDir;
+    writeFileSync(
+      join(configDir, 'meshes.json'),
+      JSON.stringify({ meshes: ['mesh-alpha', 'mesh-coexist', 'mesh-ambig'].map(id => ({ id, meshHost: { role: 'host' } })) }),
+      'utf-8',
+    );
     testConfig = { machineProviders: {}, providerSettings: {} };
   });
 

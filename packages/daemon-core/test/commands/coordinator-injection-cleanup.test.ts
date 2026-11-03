@@ -1052,6 +1052,11 @@ describe('antigravity-cli coordinator per-turn context_file lifecycle & >24KB sp
       const { ProviderLoader } = await import('../../src/providers/provider-loader.js')
       const providerRoot = tempWorkspace('adhdev-agy-prod-providers-')
       try {
+        writeFileSync(
+          join(process.env.ADHDEV_CONFIG_DIR!, 'meshes.json'),
+          JSON.stringify({ meshes: [{ id: 'mesh-prod-restore', meshHost: { role: 'host' } }] }),
+          'utf-8',
+        )
         const binDir = join(providerRoot, 'bin')
         fs.mkdirSync(binDir, { recursive: true })
         const executable = join(binDir, 'agy')

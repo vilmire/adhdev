@@ -170,6 +170,7 @@ describe('WTDISPATCH — sibling-worktree claim node scope (instanceManager-reso
   it('(ii) target-node session absent: the task stays pending (not stolen, not vanished)', async () => {
     const meshId = `mesh_wtd_pending_${randomUUID().slice(0, 8)}`
     try {
+      const b = physicalWriterFixture(WS_B, NODE_B)
       setMesh(meshId, [node(NODE_A, WS_A, { isLocalWorktree: true }), node(NODE_B, WS_B, { isLocalWorktree: true })])
       // Only node B's session exists; node A's target task has no correctly-scoped session.
       const components = createComponents(meshId, [{ sessionId: 'sess-B', workspace: WS_B }])
@@ -179,6 +180,7 @@ describe('WTDISPATCH — sibling-worktree claim node scope (instanceManager-reso
       const taskB = enqueueTask(meshId, 'MARKER-BRAVO', { targetNodeId: NODE_B, taskMode: 'code_change',
     difficulty: 'medium',
 })
+      b.bind(taskB)
 
       // Node B's session must NOT absorb node A's task; A waits for its own node.
       expect(tryAssignQueueTask(components, meshId, NODE_A, 'sess-B', 'claude-cli')).toBe(false)
@@ -195,11 +197,13 @@ describe('WTDISPATCH — sibling-worktree claim node scope (instanceManager-reso
   it('(iii) regression: single base node — a matching session claims its fresh-enqueued task', async () => {
     const meshId = `mesh_wtd_base_${randomUUID().slice(0, 8)}`
     try {
+      const base = physicalWriterFixture(WS_BASE, BASE_NODE)
       setMesh(meshId, [node(BASE_NODE, WS_BASE)])
       const components = createComponents(meshId, [{ sessionId: 'sess-base', workspace: WS_BASE, meshNodeId: BASE_NODE }])
       const task = enqueueTask(meshId, 'do base work', { targetNodeId: BASE_NODE, taskMode: 'code_change',
     difficulty: 'medium',
 })
+      base.bind(task)
 
       expect(tryAssignQueueTask(components, meshId, BASE_NODE, 'sess-base', 'claude-cli')).toBe(true)
       expect(statusOf(meshId, task.id)?.assignedSessionId).toBe('sess-base')

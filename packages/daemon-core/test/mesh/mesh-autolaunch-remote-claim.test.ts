@@ -150,7 +150,8 @@ describe('AUTOLAUNCH-REMOTE-CLAIM — remote auto-launch claims after the ready 
       const components = createComponents()
       const task = enqueueTask(meshId, 'inject into the auto-launched remote session', {
         targetNodeId: NODE_ID,
-        taskMode: 'code_change',
+        taskMode: 'live_debug_readonly',
+        readonly: true,
         difficulty: 'medium',
       })
 
@@ -182,7 +183,8 @@ describe('AUTOLAUNCH-REMOTE-CLAIM — remote auto-launch claims after the ready 
       const components = createComponents()
       const task = enqueueTask(meshId, 'claim the difficult codex slot selected before launch', {
         targetNodeId: NODE_ID,
-        taskMode: 'code_change',
+        taskMode: 'live_debug_readonly',
+        readonly: true,
         difficulty: 'difficult',
       })
 

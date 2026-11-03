@@ -169,7 +169,7 @@ describe('QUOTA GATE (claim path, no routing decision) — judged by the live mo
       const components = createComponents(meshId, [
         { sessionId: 'sess-agy', workingDir: NODE_WS, meshNodeId: NODE_ID, providerType: 'antigravity-cli', model: 'Claude Opus 4.6 (Thinking)' },
       ])
-      enqueueTask(meshId, 'claude pool work', { targetNodeId: NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
+      enqueueTask(meshId, 'claude pool work', { targetNodeId: NODE_ID, taskMode: 'live_debug_readonly', readonly: true, difficulty: 'medium' })
       const result = await triggerMeshQueue(components, meshId)
       expect(result.claimed).toBe(true)
     } finally {
@@ -207,7 +207,7 @@ describe('queue projection operation counts', () => {
         { sessionId: 'sess-once', workingDir: NODE_WS, meshNodeId: NODE_ID, providerType: 'antigravity-cli', model },
       ])
       const inst = components.instanceManager.getInstance('sess-once')
-      const task = enqueueTask(meshId, 'live model quota', { targetNodeId: NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
+      const task = enqueueTask(meshId, 'live model quota', { targetNodeId: NODE_ID, taskMode: 'live_debug_readonly', readonly: true, difficulty: 'medium' })
       expect(tryAssignQueueTask(components, meshId, NODE_ID, 'sess-once', 'antigravity-cli')).toBe(accepted)
       expect(inst.getState).toHaveBeenCalledTimes(1)
       expect(getQueue(meshId).find(t => t.id === task.id)?.status).toBe(accepted ? 'assigned' : 'pending')
@@ -230,7 +230,7 @@ describe('queue projection operation counts', () => {
       expect(foreign.getState).not.toHaveBeenCalled()
       session.status = 'idle'
       inst.lastStatus = 'idle'
-      const task = enqueueTask(meshId, 'idle edge work', { targetNodeId: NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
+      const task = enqueueTask(meshId, 'idle edge work', { targetNodeId: NODE_ID, taskMode: 'live_debug_readonly', readonly: true, difficulty: 'medium' })
       expect((await triggerMeshQueue(components, meshId)).claimed).toBe(true)
       expect(getQueue(meshId).find(t => t.id === task.id)?.assignedSessionId).toBe(session.sessionId)
       expect(foreign.getState).not.toHaveBeenCalled()
@@ -252,7 +252,7 @@ describe('queue projection operation counts', () => {
         expect(inst.getState).not.toHaveBeenCalled()
         clock.mockReturnValue(now + 20_000)
       }
-      const task = enqueueTask(meshId, 'fallback work', { targetNodeId: NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
+      const task = enqueueTask(meshId, 'fallback work', { targetNodeId: NODE_ID, taskMode: 'live_debug_readonly', readonly: true, difficulty: 'medium' })
       expect((await triggerMeshQueue(components, meshId)).claimed).toBe(true)
       expect(getQueue(meshId).find(t => t.id === task.id)?.assignedSessionId).toBe('sess-stale')
     } finally { clock.mockRestore(); cleanup(meshId) }
@@ -285,7 +285,7 @@ describe('queue projection safety fallbacks', () => {
         if (kind === 'throw') throw new Error('unavailable')
         return { id: 'fallback', status: 'unknown' }
       }
-      enqueueTask(meshId, 'fallback work', { targetNodeId: NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
+      enqueueTask(meshId, 'fallback work', { targetNodeId: NODE_ID, taskMode: 'live_debug_readonly', readonly: true, difficulty: 'medium' })
       expect((await triggerMeshQueue(components, meshId)).claimed).toBe(true)
       expect(inst.getState).toHaveBeenCalled()
     } finally { cleanup(meshId) }

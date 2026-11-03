@@ -1,4 +1,5 @@
 import { confirmTestWriterQuiescence } from './helpers/mesh-turn-ledger-fixture.js'
+import { physicalWriterFixture } from '../helpers/physical-writer.js'
 import { describe, expect, it, vi, beforeAll, afterAll } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
@@ -462,7 +463,7 @@ describe('setupMeshEventForwarding', () => {
           executed: true,
         })
 
-      const nextTask = enqueueTask(meshId, 'next queued task', { difficulty: 'medium' })
+      const nextTask = enqueueTask(meshId, 'next queued task', { difficulty: 'medium', readonly: true })
       const { components, emit } = createComponents(meshId)
       components.cliManager = {
         handleCliCommand: vi.fn(async () => ({ success: true })),
@@ -534,7 +535,7 @@ describe('setupMeshEventForwarding', () => {
       })
       meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
 
-      const nextTask = enqueueTask(meshId, 'next queued task', { difficulty: 'medium' })
+      const nextTask = enqueueTask(meshId, 'next queued task', { difficulty: 'medium', readonly: true })
       const { components, emit } = createComponents(meshId)
       components.cliManager = {
         handleCliCommand: vi.fn(async () => ({ success: true })),
@@ -579,7 +580,7 @@ describe('setupMeshEventForwarding', () => {
         current: { ahead: 0, behind: 3, submodules: [] },
       })
 
-      const nextTask = enqueueTask(meshId, 'next queued task', { difficulty: 'medium' })
+      const nextTask = enqueueTask(meshId, 'next queued task', { difficulty: 'medium', readonly: true })
       const { components, emit } = createComponents(meshId)
       components.cliManager = {
         handleCliCommand: vi.fn(async () => ({ success: true })),
@@ -713,16 +714,18 @@ describe('setupMeshEventForwarding', () => {
     // therefore permanently killed a task the next reconcile tick would have delivered.
     // The local catch must now mirror the remote one: pending + retryable ledger.
     const meshId = `mesh_local_dispatch_retry_${Date.now()}`
+    const d1Workspace = path.join(testTmpDir, `d1-${meshId}`)
     try {
       meshConfigMocks.getMesh.mockReturnValue({
         id: meshId,
         // No daemonId on the node → tryAssignQueueTask takes the local-dispatch branch.
-        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        nodes: [{ id: 'node_child_1', workspace: d1Workspace }],
         policy: {},
       })
       meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
 
       const queued = enqueueTask(meshId, 'local task that transiently fails to dispatch', { difficulty: 'medium' })
+      physicalWriterFixture(d1Workspace, 'node_child_1').bind(queued)
 
       const components = withMeshRouter({
         instanceManager: {
@@ -992,7 +995,7 @@ const { emit } = components
         policy: { maxParallelTasks: 2, spawnedSessionVisibility: 'hidden' },
       })
       detectCliMocks.detectCLI.mockResolvedValue({ path: '/bin/hermes' })
-      const queued = enqueueTask(meshId, 'queued task', { difficulty: 'medium' })
+      const queued = enqueueTask(meshId, 'queued task', { difficulty: 'medium', readonly: true })
       const { components, cliManager } = createQueueAutoLaunchComponents()
 
       await triggerMeshQueue(components, meshId)
@@ -1180,7 +1183,7 @@ const { emit } = components
       })
       detectCliMocks.detectCLI.mockResolvedValue({ path: '/bin/antigravity' })
       // Exactly the live ledger shape: target_node_id set, requiredTags = [].
-      const queued = enqueueTask(meshId, 'queued worktree task', { targetNodeId: 'node_worktree_1', requiredTags: [],
+      const queued = enqueueTask(meshId, 'queued worktree task', { targetNodeId: 'node_worktree_1', requiredTags: [], readonly: true,
     difficulty: 'medium',
 })
       const { components, cliManager } = createQueueAutoLaunchComponents()
@@ -1280,7 +1283,7 @@ const { emit } = components
         policy: { maxParallelTasks: 2 },
       }
       meshConfigMocks.getMesh.mockReturnValue(mesh)
-      enqueueTask(meshId, 'remote queued task', { targetNodeId: 'node_remote_wt',
+      enqueueTask(meshId, 'remote queued task', { targetNodeId: 'node_remote_wt', readonly: true,
     difficulty: 'medium',
 })
 
@@ -1522,7 +1525,7 @@ const { emit } = components
         policy: { maxParallelTasks: 2, spawnedSessionVisibility: 'hidden' },
       })
       detectCliMocks.detectCLI.mockResolvedValue({ path: '/bin/hermes' })
-      const queued = enqueueTask(meshId, 'pending remote task', { difficulty: 'medium' })
+      const queued = enqueueTask(meshId, 'pending remote task', { difficulty: 'medium', readonly: true })
       const { components, cliManager } = createQueueAutoLaunchComponents()
       const dispatchMeshCommand = vi.fn(async () => ({ success: true, sessionId: 'remote-session-1' }))
       components.dispatchMeshCommand = dispatchMeshCommand
@@ -1594,7 +1597,7 @@ const { emit } = components
         policy: { maxParallelTasks: 2, spawnedSessionVisibility: 'hidden' },
       })
       detectCliMocks.detectCLI.mockResolvedValue({ path: '/bin/hermes' })
-      enqueueTask(meshId, 'pending remote task', { difficulty: 'medium' })
+      enqueueTask(meshId, 'pending remote task', { difficulty: 'medium', readonly: true })
       const { components, cliManager } = createQueueAutoLaunchComponents()
       const dispatchMeshCommand = vi.fn(async () => ({ success: true, sessionId: 'remote-session-1' }))
       components.dispatchMeshCommand = dispatchMeshCommand
@@ -1851,14 +1854,16 @@ const { emit } = components
 
   it('auto-launches at most one new session in a trigger cycle even with multiple pending tasks', async () => {
     const meshId = `mesh_auto_launch_one_${Date.now()}`
+    const ws = path.join(testTmpDir, `one-${meshId}`)
     try {
       meshConfigMocks.getMesh.mockReturnValue({
         id: meshId,
-        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a', health: 'online', policy: { providerPriority: ['hermes-cli'] } }],
+        nodes: [{ id: 'node_child_1', workspace: ws, health: 'online', policy: { providerPriority: ['hermes-cli'] } }],
         policy: { maxParallelTasks: 3 },
       })
       detectCliMocks.detectCLI.mockResolvedValue({ path: '/bin/hermes' })
-      enqueueTask(meshId, 'task 1', { difficulty: 'medium' })
+      const t1 = enqueueTask(meshId, 'task 1', { difficulty: 'medium' })
+      physicalWriterFixture(ws, 'node_child_1').bind(t1)
       enqueueTask(meshId, 'task 2', { difficulty: 'medium' })
       enqueueTask(meshId, 'task 3', { difficulty: 'medium' })
       const { components, cliManager } = createQueueAutoLaunchComponents()
@@ -1911,7 +1916,7 @@ const { emit } = components
       })
       // Both providers are detected; hermes-cli must be selected (not claude-cli)
       detectCliMocks.detectCLI.mockResolvedValue({ path: '/bin/hermes' })
-      const queued = enqueueTask(meshId, 'hermes task', { requiredTags: ['provider=hermes-cli'],
+      const queued = enqueueTask(meshId, 'hermes task', { requiredTags: ['provider=hermes-cli'], readonly: true,
     difficulty: 'medium',
 })
       const { components, cliManager } = createQueueAutoLaunchComponents()

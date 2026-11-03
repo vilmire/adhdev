@@ -287,7 +287,7 @@ describe('QUOTA-CLAIM-GATE-LEDGER — quota claim gate transitions are recorded 
       const components = createComponents(meshId, [
         { sessionId: 'sess-quota', workingDir: NODE_WS, meshNodeId: NODE_ID },
       ])
-      enqueueTask(meshId, 'do quota-gated work', { targetNodeId: NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
+      enqueueTask(meshId, 'do quota-gated work', { targetNodeId: NODE_ID, taskMode: 'live_debug_readonly', readonly: true, difficulty: 'medium' })
 
       await triggerMeshQueue(components, meshId)
       expect(getQueue(meshId).find(t => t.status === 'pending')).toBeTruthy()
@@ -312,7 +312,7 @@ describe('QUOTA-CLAIM-GATE-LEDGER — quota claim gate transitions are recorded 
       const components = createComponents(meshId, [
         { sessionId: 'sess-quota', workingDir: NODE_WS, meshNodeId: NODE_ID },
       ])
-      enqueueTask(meshId, 'ordinary work', { targetNodeId: NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
+      enqueueTask(meshId, 'ordinary work', { targetNodeId: NODE_ID, taskMode: 'live_debug_readonly', readonly: true, difficulty: 'medium' })
 
       const result = await triggerMeshQueue(components, meshId)
       expect(result.claimed).toBe(true)
@@ -335,7 +335,8 @@ describe('QUOTA-CLAIM-GATE-LEDGER — quota claim gate transitions are recorded 
       enqueueTask(meshId, 'pinned codex work', {
         id: pinnedTaskId,
         targetNodeId: NODE_ID,
-        taskMode: 'code_change',
+        taskMode: 'live_debug_readonly',
+        readonly: true,
         difficulty: 'medium',
         requiredTags: ['provider=codex-cli'],
       })

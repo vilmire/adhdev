@@ -448,6 +448,7 @@ describe('new-work hold gates (S1, S2, H1, H2, H3, F4 choke point, F6 notices, F
             difficulty: 'easy',
             priority: 'normal',
             targetNodeId: localNodeId,
+            readonly: true,
         });
 
         const ledger = createTurnLedger({ db: store.db, selfDaemonId: 'daemon-local', autoFlush: false });

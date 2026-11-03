@@ -48,13 +48,14 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 import { tryAssignQueueTask } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
 import { withMeshRouter } from './helpers/mesh-router-stub.js'
+import { physicalWriterFixture } from '../helpers/physical-writer.js'
 
 const WT_A = 'node_wta'
 const WT_B = 'node_wtb'
 const BASE_NODE = 'node_base'
-const WS_A = '/repo/wt-a'
-const WS_B = '/repo/wt-b'
-const WS_BASE = '/repo/main'
+const WS_A = path.join(testTmpDir, 'wt-a')
+const WS_B = path.join(testTmpDir, 'wt-b')
+const WS_BASE = path.join(testTmpDir, 'main')
 
 type Sess = { sessionId: string; workspace: string; meshNodeId?: string }
 
@@ -124,6 +125,7 @@ describe('WTDISPATCH-FANOUT — convergence task is base-only (worktree claim re
       const task = enqueueTask(meshId, 'MERGE+PUSH+DEPLOY', { taskMode: 'convergence',
     difficulty: 'medium',
 })
+      physicalWriterFixture(WS_BASE, BASE_NODE).bind(task)
 
       // Both worktree sessions, each driven toward its OWN node, MUST be refused — the
       // fan-out that put one convergence intent into 4 sibling worktree sessions.
@@ -154,6 +156,7 @@ describe('WTDISPATCH-FANOUT — convergence task is base-only (worktree claim re
       const task = enqueueTask(meshId, 'converge', { taskMode: 'convergence', targetNodeId: BASE_NODE,
     difficulty: 'medium',
 })
+      physicalWriterFixture(WS_BASE, BASE_NODE).bind(task)
 
       // Worktree session can never claim a base-pinned convergence task.
       expect(tryAssignQueueTask(components, meshId, WT_A, 'sess-A', 'claude-cli')).toBe(false)
@@ -174,6 +177,7 @@ describe('WTDISPATCH-FANOUT — convergence task is base-only (worktree claim re
       const task = enqueueTask(meshId, 'do work', { taskMode: 'code_change', targetNodeId: WT_A,
     difficulty: 'medium',
 })
+      physicalWriterFixture(WS_A, WT_A).bind(task)
 
       expect(tryAssignQueueTask(components, meshId, WT_A, 'sess-A', 'claude-cli')).toBe(true)
       expect(statusOf(meshId, task.id)?.assignedSessionId).toBe('sess-A')
@@ -190,6 +194,7 @@ describe('WTDISPATCH-FANOUT — convergence task is base-only (worktree claim re
       const task = enqueueTask(meshId, 'land it', { taskMode: 'convergence', targetNodeId: BASE_NODE,
     difficulty: 'medium',
 })
+      physicalWriterFixture(WS_BASE, BASE_NODE).bind(task)
 
       expect(tryAssignQueueTask(components, meshId, BASE_NODE, 'sess-base', 'claude-cli')).toBe(true)
       expect(statusOf(meshId, task.id)?.assignedSessionId).toBe('sess-base')
