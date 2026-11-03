@@ -56,6 +56,7 @@ export interface StageQueuePort {
         round: number; message: string; inputArtifactIds: string[];
         independence: 'different_provider' | 'fresh_session'; targetSessionId?: string;
         reviewerWorkspace?: { path: string; headSha: string };
+        reviewFingerprint?: string;
     }): MeshWorkQueueEntry;
     cancel(meshId: string, taskId: string, reason: string): void;
     /** Rewrite a pending review child's constraint to the fresh-session fallback (R2). */

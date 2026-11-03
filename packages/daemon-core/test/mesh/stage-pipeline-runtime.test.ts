@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { StagePipelineRuntime } from '../../src/mesh/stage-pipeline-runtime.js';
+import { StagePipelineRuntime, selectStageInputArtifacts } from '../../src/mesh/stage-pipeline-runtime.js';
 import { initialStageState } from '../../src/mesh/stage-state.js';
 import { __resetStageReportStashForTests, stashStageReport } from '../../src/mesh/stage-report-stash.js';
 import { __resetIndependenceTrackerForTests, noteReviewRefusal } from '../../src/mesh/stage-independence.js';
@@ -40,7 +40,7 @@ function harness(opts: { maxRevisions?: 0 | 1 | 2 | 3; selfChecks?: SelfCheckRes
             listStageParents: () => [...rows.values()].filter(r => r.stagePlan),
             enqueueReviewChild: (p, spec) => {
                 const id = `${p.id}:child${rows.size}`;
-                const c: MeshWorkQueueEntry = { id, meshId: MESH, message: spec.message, status: 'pending', origin: 'stage', parentTaskId: p.id, stageRole: 'review', stageRound: spec.round, readonly: true, review: { sourceTaskId: p.id, independence: spec.independence }, ...(spec.reviewerWorkspace ? { reviewerWorkspace: spec.reviewerWorkspace } : {}), createdAt: '', updatedAt: '' };
+                const c: MeshWorkQueueEntry = { id, meshId: MESH, message: spec.message, status: 'pending', origin: 'stage', parentTaskId: p.id, stageRole: 'review', stageRound: spec.round, inputArtifactIds: spec.inputArtifactIds, readonly: true, review: { sourceTaskId: p.id, independence: spec.independence }, ...(spec.reviewerWorkspace ? { reviewerWorkspace: spec.reviewerWorkspace } : {}), createdAt: '', updatedAt: '' };
                 rows.set(id, c); return c;
             },
             cancel: (_m, id, reason) => { const e = rows.get(id); if (e) { e.status = 'cancelled'; e.cancelReason = reason; } log.cancelled.push(id); },
@@ -67,12 +67,42 @@ function harness(opts: { maxRevisions?: 0 | 1 | 2 | 3; selfChecks?: SelfCheckRes
         await rt.onChildTerminal(MESH, c.id); await rt.idle();
     };
     const f = (id: string, severity: 'major' | 'nit' = 'major') => ({ id, severity, category: 'correctness' as const, claim: `claim ${id}`, evidence: 'ev' });
-    return { fp, rt, rows, log, parent: () => rows.get(PARENT)!, implDone, review, lastChild, advance: (ms: number) => { nowMs += ms; } , f };
+    return { ports, fp, rt, rows, log, parent: () => rows.get(PARENT)!, implDone, review, lastChild, advance: (ms: number) => { nowMs += ms; } , f };
 }
 
 beforeEach(() => { __resetStageReportStashForTests(); __resetIndependenceTrackerForTests(); });
 
 describe('stage pipeline runtime', () => {
+    it('grants worker evidence and registers the diff before a reviewer can be queued', async () => {
+        const h = harness();
+        h.parent().stageState!.workerArtifactIds = ['art_worker_report'];
+        await h.implDone('a1');
+        expect(h.lastChild().inputArtifactIds).toContain('art_worker_report');
+        expect(h.lastChild().inputArtifactIds).toContain(h.parent().stageState!.artifacts.diff[0]);
+        expect(selectStageInputArtifacts(h.parent().stageState!)).toEqual(h.lastChild().inputArtifactIds);
+    });
+    it('backfills a missing diff on self_checking restart before normal review enqueue', async () => {
+        const h = harness();
+        Object.assign(h.parent().stageState!, { phase: 'self_checking', baseSha: 'base0000', stageHeads: [{ round: 1, rootSha: 'head1' }] });
+        await h.rt.tick(); await h.rt.idle();
+        expect(h.lastChild().inputArtifactIds).toContain(h.parent().stageState!.artifacts.diff[0]);
+        expect(h.parent().stageState!.reviewTaskIds).toHaveLength(1);
+        await h.rt.tick(); await h.rt.idle();
+        expect(h.parent().stageState!.reviewTaskIds).toHaveLength(1);
+    });
+    it('normal resume retries failed review creation without a new API or duplicate reviewer', async () => {
+        const h = harness();
+        const enqueue = h.ports.queue.enqueueReviewChild;
+        let fail = true;
+        h.ports.queue.enqueueReviewChild = (p, spec) => { if (fail) throw new Error('review_input_unavailable'); return enqueue(p, spec); };
+        await h.implDone('a1');
+        expect(h.parent().stageState!.reviewTaskIds).toEqual([]);
+        fail = false;
+        await h.rt.tick(); await h.rt.idle();
+        expect(h.parent().stageState!.reviewTaskIds).toHaveLength(1);
+        await h.rt.tick(); await h.rt.idle();
+        expect(h.parent().stageState!.reviewTaskIds).toHaveLength(1);
+    });
     it('a review child ending after its parent already ended starts no new round', async () => {
         const h = harness();
         await h.implDone('a1');

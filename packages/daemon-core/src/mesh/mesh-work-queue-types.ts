@@ -51,6 +51,7 @@ export interface MeshWorkQueueEntry {
     /** Only host-authenticated pending revisions can install physical context. */
     routingPreferences?: import('@adhdev/mesh-shared').MeshRoutingPreferences;
     review?: import('@adhdev/mesh-shared').MeshReviewConstraint;
+    stageReviewInput?: import('./stage-review-input.js').StageReviewInput;
     reviewInputScope?: import('@adhdev/mesh-shared').PhysicalOwnershipScope;
     /**
      * Review-in-task (docs/design/2026-11-01-review-in-task.md §5.1). PARENT row: the plan the

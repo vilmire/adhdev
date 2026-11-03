@@ -1,7 +1,7 @@
 import { describe, expect, it, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { tmpdir } from 'os';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -32,6 +32,7 @@ import { sweepOrphanedUncorrelatedDispatches } from '../../src/mesh/mesh-orphane
 import { collectSessionIdsWithActiveWork } from '../../src/mesh/mesh-idle-session-reaper.js';
 import { findPriorWorkerReport, WORKER_REPORT_EVENT_KIND } from '../../src/mesh/worker-report.js';
 import { reviewRoutingRefusal } from '../../src/mesh/mesh-task-routing-contract.js';
+import { attestStageReviewInput } from '../../src/mesh/stage-review-input.js';
 import { attestLocalOwnership } from '../../src/mesh/mesh-physical-ownership.js';
 import { seedMeshAttempt } from '../helpers/turn-attempt-seed.js';
 import type { MeshWorkQueueEntry } from '../../src/mesh/mesh-work-queue-types.js';
@@ -227,16 +228,20 @@ describe('review routing (stage-aware)', () => {
     function fixture() {
         const workspace = mkdtempSync(join(tmpdir(), 'stage-review-')); dirs.push(workspace);
         execFileSync('git', ['init'], { cwd: workspace, stdio: 'pipe' }); writeFileSync(join(workspace, 'f.ts'), 'export {};');
+        execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'fixture'], { cwd: workspace, stdio: 'pipe', windowsHide: true });
+        const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: workspace, encoding: 'utf8', windowsHide: true }).trim();
         const ownedPaths = normalizeOwnedPaths(['f.ts']).declaration;
         const scope = attestLocalOwnership({ workspace, paths: ownedPaths, phase: 'source', repoIdentity: 'repo', machineId: 'machine', nodeId: 'author' });
         const parent = {
             id: 'parent', status: 'assigned', assignedProviderType: 'claude-cli', assignedSessionId: 'sess-impl', assignedNodeId: 'author',
             ownedPaths, ownershipScope: scope, stagePlan: { review: true, maxRevisions: 2, independence: 'fresh_session_ok' },
-            stageState: { phase: 'awaiting_review' },
+            stageState: { phase: 'awaiting_review', round: 1, stageHeads: [{ round: 1, rootSha: head }], reviewTaskIds: ['child'] },
         } as unknown as MeshWorkQueueEntry;
+        const file = fs.realpathSync.native(join(workspace, 'f.ts'));
+        parent.stageReviewInput = { ...attestStageReviewInput(parent, { workspace, repoIdentity: 'repo', machineId: 'machine', nodeId: 'author' }, [{ id: 'art_evidence', file, size: fs.statSync(file).size, sha256: createHash('sha256').update(fs.readFileSync(file)).digest('hex') }]), childTaskId: 'child' };
         return { workspace, parent };
     }
-    const child = (independence: 'different_provider' | 'fresh_session', extra: object = {}) => ({ readonly: true, review: { sourceTaskId: 'parent', independence }, ...extra }) as any;
+    const child = (independence: 'different_provider' | 'fresh_session', extra: object = {}) => ({ id: 'child', origin: 'stage', parentTaskId: 'parent', stageRole: 'review', stageRound: 1, inputArtifactIds: ['art_evidence'], readonly: true, review: { sourceTaskId: 'parent', independence }, ...extra }) as any;
 
     it('a parked parent is available input and never blocks its own review', () => {
         const { workspace, parent } = fixture();

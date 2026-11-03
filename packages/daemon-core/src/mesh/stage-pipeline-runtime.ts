@@ -57,11 +57,11 @@ export class StagePipelineRuntime {
                 if (base && head) hasDiff = base !== head;
             }
             const stash = peekStageReport(meshId, parentId);
+            if (workspace && hasDiff && base && head) await this.registerDiff(parentId, workspace, base, head);
             await this.apply(meshId, parentId, { kind: 'impl_completed', hasDiff, ...(attemptId ? { attemptId } : {}), ...(head ? { headSha: head } : {}), at: this.iso() }, state => {
                 if (base && !state.baseSha) state.baseSha = base;
                 if (stash?.artifactIds?.length) state.workerArtifactIds = [...new Set([...(state.workerArtifactIds ?? []), ...stash.artifactIds])].slice(-8);
             });
-            if (workspace && hasDiff && base && head) await this.registerDiff(parentId, workspace, base, head);
         });
     }
 
@@ -250,10 +250,15 @@ export class StagePipelineRuntime {
                     meshId, ...(parent.missionId ? { missionId: parent.missionId } : {}), taskId: id, kind: 'self_check',
                     title: `Self-check: ${result.status}`, ext: '.md', content: `# Self-check (${result.status})\n\n${result.log.slice(-SELF_CHECK_LOG_MAX)}\n`,
                 });
+                // A restart in self_checking may not have registered the round diff yet.
+                const head = st.stageHeads.at(-1)?.rootSha;
+                if (workspace && st.baseSha && head && !st.artifacts.diff.length) await this.registerDiff(id, workspace, st.baseSha, head);
                 await this.apply(meshId, id, { kind: 'self_check_done', status: result.status, at: this.iso() }, s => { if (art) s.artifacts.selfCheck.push(art); });
                 return;
             }
             case 'create_review_child': {
+                // A persisted child owns its original baseline; retries must never refresh a started review.
+                if (st.reviewTaskIds.some(cid => { const c = this.ports.queue.get(meshId, cid); return c?.stageRound === effect.round && (c.status === 'pending' || c.status === 'assigned'); })) return;
                 const workspace = this.ports.workspaceOf(parent);
                 const head = st.stageHeads[st.stageHeads.length - 1]?.rootSha ?? '';
                 const plan = parent.stagePlan!;
@@ -283,6 +288,7 @@ export class StagePipelineRuntime {
                     child = this.ports.queue.enqueueReviewChild(parent, {
                         round: effect.round, message: msg, inputArtifactIds: inputs,
                         independence: 'different_provider',
+                        ...(readLease && fingerprint ? { reviewFingerprint: fingerprint } : {}),
                         ...(reuse ? { targetSessionId: reuse } : {}),
                         ...(ws ? { reviewerWorkspace: { path: ws.path, headSha: ws.headSha } } : {}),
                     });
@@ -292,7 +298,8 @@ export class StagePipelineRuntime {
                 }
                 if (ws) this.reviewerWorkspaces.set(child.id, ws);
                 this.ports.queue.mutate(meshId, id, e => {
-                    e.stageState!.reviewTaskIds = [...e.stageState!.reviewTaskIds, child.id];
+                    if (e.stageState!.reviewTaskIds.includes(child.id)) return; // production persisted child + baseline atomically
+                    e.stageState!.reviewTaskIds.push(child.id);
                     delete e.stageState!.reviewFingerprint;
                     delete e.stageState!.reviewFingerprintUnavailable;
                     if (readLease) { if (fingerprint) e.stageState!.reviewFingerprint = fingerprint; else e.stageState!.reviewFingerprintUnavailable = true; }
@@ -361,11 +368,11 @@ export class StagePipelineRuntime {
     }
 }
 
-/** §7: latest diff + latest self-check + latest verdict + one previous verdict (max 4). */
+/** §7: latest diff + latest self-check + latest verdict + one previous verdict, plus named worker evidence (max 12). */
 export function selectStageInputArtifacts(st: MeshTaskStageState): string[] {
     const v = st.artifacts.verdict;
     return [...new Set([
-        ...st.artifacts.diff.slice(-1), ...st.artifacts.selfCheck.slice(-1), ...v.slice(-1), ...(v.length > 1 ? v.slice(-2, -1) : []),
+        ...st.artifacts.diff.slice(-1), ...st.artifacts.selfCheck.slice(-1), ...v.slice(-1), ...(v.length > 1 ? v.slice(-2, -1) : []), ...(st.workerArtifactIds ?? []).slice(-8),
     ])];
 }
 

@@ -1,3 +1,4 @@
+import { currentStageReviewScope } from './stage-review-input.js';
 import { sessionIsStopping } from './mesh-session-stop-fence.js';
 import { pendingLaunchReservation } from './mesh-task-routing-contract.js';
 import { lightClaimAllows } from './light-claim-rule.js';
@@ -37,7 +38,7 @@ import { dirtyWriteVerdict, describeDirtyWriteRefusal, type DirtyWriteGate } fro
 /** The MeshRuntimeStore members these functions read or call (compiler-checked; no cast). */
 export type MeshRuntimeStoreClaimHost = Pick<MeshRuntimeStore, 'activeProviderAssignmentCount' | 'activeSlotAssignmentCount' | 'assignedRowsMeshWide' | 'db' | 'getQueueEntries' | 'getQueueSchedulingGraph' | 'ensureLegacyQueueMigrated' | 'hasActiveNodeWriteAssignment' | 'hasActiveSessionAssignment' | 'maybeCheckpointWal' | 'transaction' | 'turnStore'>;
 
-export interface ScopedInFlightOwnership extends InFlightOwnership { ownershipScope?: PhysicalOwnershipScope }
+export interface ScopedInFlightOwnership extends InFlightOwnership { ownershipScope?: PhysicalOwnershipScope; readLease?: boolean }
 type OwnershipCandidate = Pick<MeshWorkQueueEntry, 'ownedPaths' | 'readonly' | 'taskMode' | 'ownershipScope'> & Partial<Pick<MeshWorkQueueEntry, 'id'>>;
 const unknownWriterPaths = { paths: [{ path: '', subtree: true }] };
 type OwnershipHost = Pick<MeshRuntimeStoreClaimHost, 'assignedRowsMeshWide'> & Partial<Pick<MeshRuntimeStore, 'getQueueEntries'>>;
@@ -55,7 +56,7 @@ export function readInFlightOwnershipMeshWide(
                 if (parsed.id === undefined) return { taskId: 'unproven_active_writer', paths: unknownWriterPaths };
                 if (isTaskReadonly(parsed)) {
                     const scope = parsed.reviewInputScope;
-                    return scope ? { taskId: parsed.id, paths: { paths: scope.declaration }, ownershipScope: scope } : null;
+                    return scope ? { taskId: parsed.id, paths: { paths: scope.declaration }, ownershipScope: scope, readLease: true } : null;
                 }
                 return { taskId: parsed.id, paths: parsed.ownedPaths ?? unknownWriterPaths, ownershipScope: parsed.ownershipScope };
             } catch { return { taskId: 'unproven_active_writer', paths: unknownWriterPaths }; }
@@ -74,7 +75,10 @@ export function findTaskOwnedPathsConflicts(
     const scope = prospectiveScope ?? currentPhysicalScope(candidate.ownershipScope, paths);
     return inFlightOwnership.flatMap(other => {
         if (other.taskId === candidate.id) return [];
-        const otherScope = currentPhysicalScope(other.ownershipScope, other.paths);
+        const current = currentPhysicalScope(other.ownershipScope, other.paths);
+        // A read lease also fences attested nested Git stores. Its empty write declaration must not erase them.
+        const otherScope = other.readLease && current && other.ownershipScope
+            ? { ...current, resources: [...current.resources, ...other.ownershipScope.resources] } : current;
         if (other.ownershipScope && !otherScope) return [{ taskId: other.taskId, overlappingPaths: ['unproven_active_physical_resource'] }];
         const comparison = comparePhysicalOwnership(paths, scope, other.paths, otherScope);
         if (!comparison.physicalConflict) return [];
@@ -634,7 +638,10 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
 
         const now = new Date().toISOString();
         entry.status = 'assigned';
-        if (entry.review && !entry.reviewerWorkspace) entry.reviewInputScope = reviewSource(entry.review.sourceTaskId)?.ownershipScope;
+        if (entry.review && !entry.reviewerWorkspace) {
+            const source = reviewSource(entry.review.sourceTaskId);
+            entry.reviewInputScope = source?.stagePlan ? currentStageReviewScope(source, entry) : source?.ownershipScope;
+        }
         entry.revision = (entry.revision ?? 0) + 1;
         if (entry.ownedPaths && entry.ownershipScope) {
             const hard = new Set(findTaskOwnedPathsConflicts(entry, inFlightOwnership).map(c => c.taskId));

@@ -1,9 +1,10 @@
 import { pinnedMeshNodeIdMatches } from './mesh-pinned-node-identity.js';
 import { realpathSync } from 'node:fs';
-import type { MeshRoutingPreferences, MeshTaskStatus } from '@adhdev/mesh-shared';
+import type { MeshRoutingPreferences, MeshTaskStatus, PhysicalOwnershipScope } from '@adhdev/mesh-shared';
 import type { MeshWorkQueueEntry } from './mesh-work-queue-types.js';
 import { currentPhysicalScope, comparePhysicalOwnership } from './mesh-physical-ownership.js';
 import { reviewIndependenceOf } from '@adhdev/mesh-shared';
+import { currentStageReviewScope } from './stage-review-input.js';
 import { isStageParent } from './stage-state.js';
 
 /** Stable preferences with a full eligible fallback; never used as an eligibility filter. */
@@ -25,7 +26,7 @@ export function normalizeRoutingPreferences(value: unknown): MeshRoutingPreferen
 
 export interface ReviewRoutingContext { workspace: string; machineId: string; repoIdentity?: string }
 /** Input availability is proven locally; a remote source needs a future verified transfer contract. */
-export function reviewRoutingRefusal(task: Pick<MeshWorkQueueEntry, 'review' | 'readonly' | 'taskMode'> & Partial<Pick<MeshWorkQueueEntry, 'reviewerWorkspace'>>, source: MeshWorkQueueEntry | undefined | null, provider: string | undefined, context: ReviewRoutingContext | undefined, active: readonly MeshWorkQueueEntry[] = [], claimingSessionId?: string): string | undefined {
+export function reviewRoutingRefusal(task: Pick<MeshWorkQueueEntry, 'review' | 'readonly' | 'taskMode'> & Partial<MeshWorkQueueEntry>, source: MeshWorkQueueEntry | undefined | null, provider: string | undefined, context: ReviewRoutingContext | undefined, active: readonly MeshWorkQueueEntry[] = [], claimingSessionId?: string): string | undefined {
     if (!task.review) return undefined;
     if (!task.readonly && task.taskMode !== 'live_debug_readonly') return 'review_requires_readonly';
     if (!source?.assignedProviderType || !provider) return 'review_independence_required';
@@ -43,17 +44,22 @@ export function reviewRoutingRefusal(task: Pick<MeshWorkQueueEntry, 'review' | '
     // so it counts as available input and is never the writer that blocks its own review.
     const stageSource = isStageParent(source) && source.status === 'assigned'
         && (source.stageState!.phase === 'awaiting_review' || source.stageState!.phase === 'reviewing');
-    const scope = source.ownedPaths && currentPhysicalScope(source.ownershipScope, source.ownedPaths);
-    if ((source.status !== 'completed' && !stageSource) || !scope || !context || context.machineId !== scope.machineId) return 'review_input_unavailable';
+    const scope = stageSource ? currentStageReviewScope(source, task) : source.ownedPaths && currentPhysicalScope(source.ownershipScope, source.ownedPaths);
+    if ((source.status !== 'completed' && !stageSource) || !scope || !context || context.machineId !== scope.machineId || (context.repoIdentity && context.repoIdentity !== scope.repoIdentity)) return 'review_input_unavailable';
     try { if (realpathSync.native(context.workspace) !== scope.worktree) return 'review_input_unavailable'; } catch { return 'review_input_unavailable'; }
-    if (active.some(writer => {
+    if (reviewInputBusy(source, scope, active, stageSource)) return 'review_input_busy';
+    return undefined;
+}
+
+/** Same physical writer fence before enqueue and inside actual reviewer admission. */
+export function reviewInputBusy(source: MeshWorkQueueEntry, scope: PhysicalOwnershipScope, active: readonly MeshWorkQueueEntry[], stageSource: boolean): boolean {
+    return active.some(writer => {
         if (stageSource && writer.id === source.id) return false;
         if ((writer.status !== 'assigned' && !pendingLaunchReservation(writer)) || writer.readonly || writer.taskMode === 'live_debug_readonly') return false;
         if (pinnedMeshNodeIdMatches(writer.assignedNodeId, scope.nodeId)) return true;
         const paths = writer.ownedPaths ?? { paths: [{ path: '', subtree: true }] };
-        return comparePhysicalOwnership(source.ownedPaths!, scope, paths, currentPhysicalScope(writer.ownershipScope, paths)).physicalConflict;
-    })) return 'review_input_busy';
-    return undefined;
+        return comparePhysicalOwnership(stageSource ? { paths: [] } : source.ownedPaths ?? { paths: [] }, scope, paths, currentPhysicalScope(writer.ownershipScope, paths)).physicalConflict;
+    });
 }
 
 /**

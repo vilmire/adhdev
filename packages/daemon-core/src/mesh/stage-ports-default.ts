@@ -34,7 +34,9 @@ import type { StageGitPort, StageRuntimePorts, SelfCheckRunner, SelfCheckResult,
 import { runMeshRefineValidationProfile } from './refine-profile-run.js';
 import { prepareLightWorkspace, removeLightWorkspace } from './light-workspace.js';
 import { loadLightWorkspaceConfig } from './light-workspace-config.js';
-import { attestLocalOwnership } from './mesh-physical-ownership.js';
+import { attestStageReviewInput, stageReviewArtifactGrants } from './stage-review-input.js';
+import { reviewInputBusy } from './mesh-task-routing-contract.js';
+import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 
 const SELF_CHECK_LOG_MAX = 60_000;
 
@@ -209,7 +211,7 @@ function stageArtifactDir(taskId: string): string {
     return path.join(getConfigDir(), 'stage-artifacts', taskId.replace(/[^A-Za-z0-9_.-]/g, '_'));
 }
 
-export function createProductionStagePorts(components: Pick<DaemonComponents, 'sessionRegistry' | 'instanceManager'>): StageRuntimePorts {
+export function createProductionStagePorts(components: Pick<DaemonComponents, 'sessionRegistry' | 'instanceManager' | 'statusInstanceId'>): StageRuntimePorts {
     const store = () => MeshRuntimeStore.getInstance();
     return {
         now: () => Date.now(),
@@ -252,18 +254,45 @@ export function createProductionStagePorts(components: Pick<DaemonComponents, 's
                 return out;
             },
             enqueueReviewChild: (parent, spec) => {
-                // A read-lease reviewer may only read the implementer's checkout once the parent proves where its
-                // owned paths physically live (review routing refuses review_input_unavailable otherwise). Ordinary
-                // code_change rows carry no ownershipScope, so attest it here, once, before the round is queued.
-                if (!spec.reviewerWorkspace && !parent.ownershipScope && parent.ownedPaths?.paths.length) attestStageParentScope(parent);
-                return enqueueTask(parent.meshId, spec.message, {
-                stageChild: { parentTaskId: parent.id, round: spec.round, review: { sourceTaskId: parent.id, independence: spec.independence }, ...(spec.reviewerWorkspace ? { reviewerWorkspace: spec.reviewerWorkspace } : {}) },
-                difficulty: parent.difficulty === 'difficult' ? 'difficult' : 'medium',
-                ...(parent.missionId ? { missionId: parent.missionId } : {}),
-                inputArtifactIds: spec.inputArtifactIds, inheritArtifacts: false,
-                ...(spec.targetSessionId ? { targetSessionId: spec.targetSessionId } : {}),
-                ...(parent.sourceCoordinatorSessionId ? { sourceCoordinatorSessionId: parent.sourceCoordinatorSessionId } : {}),
-            });
+                return withQueueLock(parent.meshId, () => {
+                    const current = store().findQueueEntryById(parent.meshId, parent.id);
+                    if (!current || current.status !== 'assigned' || current.stageState?.released
+                        || current.stageState?.phase !== 'awaiting_review' || current.stageState.round !== spec.round
+                        || (current.revision ?? 0) !== (parent.revision ?? 0)) throw new Error('stage_review_stale_parent');
+                    // Transactional idempotency: a retry cannot create a second child for the same round.
+                    const existing = current.stageState.reviewTaskIds.map(id => store().findQueueEntryById(parent.meshId, id))
+                        .find(c => c?.stageRound === spec.round && (c.status === 'pending' || c.status === 'assigned'));
+                    if (existing && (existing.status === 'assigned' || existing.assignedSessionId || existing.attemptId || existing.autoLaunch?.sessionId)) throw new Error('stage_review_already_started');
+                    if (existing) return existing;
+                    let proof;
+                    if (!spec.reviewerWorkspace) {
+                        const nodeId = current.assignedNodeId ?? current.targetNodeId;
+                        const mesh = getMesh(current.meshId);
+                        const node = mesh?.nodes?.find(n => n.id === nodeId);
+                        const machineId = getMachineId();
+                        if (!nodeId || !node?.workspace || !mesh?.repoIdentity || !machineId
+                            || !components.statusInstanceId || !daemonIdsEquivalent(node.daemonId, components.statusInstanceId)) throw new Error('review_input_local_context_required');
+                        proof = attestStageReviewInput(current, { repoIdentity: mesh.repoIdentity, machineId, nodeId, workspace: node.workspace },
+                            stageReviewArtifactGrants(store(), current, spec.inputArtifactIds));
+                        if (reviewInputBusy(current, proof.checkout, store().getQueueEntries(current.meshId, ['assigned', 'pending']), true)) throw new Error('review_input_busy');
+                    }
+                    const child = enqueueTask(parent.meshId, spec.message, {
+                        stageChild: { parentTaskId: parent.id, round: spec.round, review: { sourceTaskId: parent.id, independence: spec.independence }, ...(spec.reviewerWorkspace ? { reviewerWorkspace: spec.reviewerWorkspace } : {}) },
+                        difficulty: parent.difficulty === 'difficult' ? 'difficult' : 'medium',
+                        ...(parent.missionId ? { missionId: parent.missionId } : {}),
+                        inputArtifactIds: spec.inputArtifactIds, inheritArtifacts: false,
+                        ...(spec.targetSessionId ? { targetSessionId: spec.targetSessionId } : {}),
+                        ...(parent.sourceCoordinatorSessionId ? { sourceCoordinatorSessionId: parent.sourceCoordinatorSessionId } : {}),
+                    });
+                    if (proof) { proof.childTaskId = child.id; current.stageReviewInput = proof; }
+                    current.stageState.reviewTaskIds.push(child.id);
+                    delete current.stageState.reviewFingerprint;
+                    delete current.stageState.reviewFingerprintUnavailable;
+                    if (spec.reviewFingerprint) current.stageState.reviewFingerprint = spec.reviewFingerprint;
+                    else if (!spec.reviewerWorkspace) current.stageState.reviewFingerprintUnavailable = true;
+                    store().updateQueueEntry(current);
+                    return child;
+                });
             },
             cancel: (meshId, taskId, reason) => { cancelTask(meshId, taskId, { reason, stageManaged: true }); },
             setChildIndependence: (meshId, childId, independence) => {
@@ -338,28 +367,6 @@ export function createProductionStagePorts(components: Pick<DaemonComponents, 's
 }
 
 
-/** Attest the stage parent's physical ownership scope on this machine and persist it (best-effort). */
-function attestStageParentScope(parent: MeshWorkQueueEntry): void {
-    const nodeId = parent.assignedNodeId ?? parent.targetNodeId;
-    const mesh = getMesh(parent.meshId) as { repoIdentity?: string; nodes?: Array<{ id?: string; nodeId?: string; workspace?: string }> } | undefined;
-    const workspace = mesh?.nodes?.find(n => (n.id ?? n.nodeId) === nodeId)?.workspace;
-    const machineId = getMachineId();
-    if (!nodeId || !workspace || !mesh?.repoIdentity || !machineId) return;
-    try {
-        const scope = attestLocalOwnership({ repoIdentity: mesh.repoIdentity, machineId, nodeId, workspace, phase: 'source', paths: parent.ownedPaths! });
-        withQueueLock(parent.meshId, () => {
-            const e = MeshRuntimeStore.getInstance().findQueueEntryById(parent.meshId, parent.id);
-            if (!e || e.ownershipScope) return;
-            e.ownershipScope = scope;
-            e.updatedAt = new Date().toISOString();
-            MeshRuntimeStore.getInstance().updateQueueEntry(e);
-        });
-        parent.ownershipScope = scope;
-    } catch (e: any) {
-        LOG.warn('StagePipeline', `could not attest the source scope of ${parent.id} for its read-lease review: ${e?.message || e}`);
-    }
-}
-
 let installed: StagePipelineHandle | null = null;
 /** The runtime installed for this daemon (undefined before boot) — used by the stage-decide command. */
 export function getInstalledStagePipeline(): StagePipelineHandle | null { return installed; }
@@ -367,7 +374,7 @@ export function getInstalledStagePipeline(): StagePipelineHandle | null { return
 export interface StagePipelineHandle { runtime: StagePipelineRuntime; tick(): Promise<void>; dispose(): void }
 
 /** Register the runtime with the terminal hooks and the notice-silence lookup. Idempotent per daemon boot. */
-export function installStagePipeline(components: Pick<DaemonComponents, 'sessionRegistry' | 'instanceManager'>, ports: StageRuntimePorts = createProductionStagePorts(components)): StagePipelineHandle {
+export function installStagePipeline(components: Pick<DaemonComponents, 'sessionRegistry' | 'instanceManager' | 'statusInstanceId'>, ports: StageRuntimePorts = createProductionStagePorts(components)): StagePipelineHandle {
     const runtime = new StagePipelineRuntime(ports);
     setStageHookTarget(runtime);
     setStageNoticeLookup((meshId, taskId) => {
