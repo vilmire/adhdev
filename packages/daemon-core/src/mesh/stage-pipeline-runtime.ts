@@ -2,13 +2,14 @@
 // All I/O goes through StageRuntimePorts (stage-ports.ts); production wiring is stage-ports-default.ts.
 // The runtime never emits turn states — it reads what the ledger already committed and writes queue rows.
 
+import { recoverPendingStageReview, type StageReviewRecoveryHost, type StageReviewRecoveryRequest } from './stage-review-recovery.js';
 import { reviewIndependenceOf, type MeshReviewReport, type MeshTaskStageState } from '@adhdev/mesh-shared';
 import { reduceStage, type StageEffect, type StageEvent } from './stage-pipeline.js';
 import type { StageRuntimePorts } from './stage-ports.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue-types.js';
 import { dropStageReport, peekStageReport } from './stage-report-stash.js';
 import { buildFinalReport, buildReviewerMessage, buildRevisionMemo } from './stage-synthesis.js';
-import { isStageChild, isStageParent } from './stage-state.js';
+import { isStageChild, isStageParent, selectStageInputArtifacts } from './stage-state.js';
 import { independenceRefusalExceeded } from './stage-independence.js';
 
 const STAGE_PARENT_ENDED = new Set(['completed', 'failed', 'blocked', 'cancelled']);
@@ -33,6 +34,18 @@ export class StagePipelineRuntime {
         this.chains.set(k, next);
         void next.finally(() => { if (this.chains.get(k) === next) this.chains.delete(k); });
         return next;
+    }
+
+    /** Same per-parent chain as claims/reports/resume; never enqueues or replaces a child. */
+    async recoverPendingReview(request: StageReviewRecoveryRequest, host: StageReviewRecoveryHost) {
+        let result: Awaited<ReturnType<typeof recoverPendingStageReview>> | undefined;
+        let error: unknown;
+        await this.serial(request.meshId, request.parentTaskId, async () => {
+            try { result = await recoverPendingStageReview(request, host, this.ports); } catch (e) { error = e; }
+        });
+        if (error) throw error;
+        if (!result) throw new Error('review_recovery_unavailable');
+        return result;
     }
 
     /** Settle every in-flight chain (tests / shutdown). */
@@ -369,12 +382,6 @@ export class StagePipelineRuntime {
     }
 }
 
-/** §7: latest diff + latest self-check + latest verdict + one previous verdict, plus named worker evidence (max 12). */
-export function selectStageInputArtifacts(st: MeshTaskStageState): string[] {
-    const v = st.artifacts.verdict;
-    return [...new Set([
-        ...st.artifacts.diff.slice(-1), ...st.artifacts.selfCheck.slice(-1), ...v.slice(-1), ...(v.length > 1 ? v.slice(-2, -1) : []), ...(st.workerArtifactIds ?? []).slice(-8),
-    ])];
-}
+export { selectStageInputArtifacts } from './stage-state.js';
 
 export type { MeshReviewReport };

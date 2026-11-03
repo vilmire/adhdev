@@ -51,6 +51,7 @@ export interface MeshWorkQueueEntry {
     /** Only host-authenticated pending revisions can install physical context. */
     routingPreferences?: import('@adhdev/mesh-shared').MeshRoutingPreferences;
     review?: import('@adhdev/mesh-shared').MeshReviewConstraint;
+    stageReviewRecoveries?: import('./stage-review-recovery.js').StageReviewRecoveryAudit[];
     stageReviewInput?: import('./stage-review-input.js').StageReviewInput;
     reviewInputScope?: import('@adhdev/mesh-shared').PhysicalOwnershipScope;
     /**

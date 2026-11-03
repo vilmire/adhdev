@@ -1,3 +1,4 @@
+import { STAGE_REVIEW_RECOVERY_SCHEMA } from './mesh-tools-review-recovery.js';
 /**
  * MCP tool schemas — queue domain (mesh-tools-queue.ts / mesh-tools-queue-manage.ts
  * handlers): enqueue task / batch with their discovery metadata, and queue view /
@@ -192,12 +193,13 @@ export const MESH_QUEUE_CANCEL_TOOL = {
 
 export const MESH_TASK_STAGE_DECIDE_TOOL = {
     name: 'mesh_task_stage_decide',
-    description: 'Decide a BLOCKED review-in-task stage task (blocked reason review_unresolved | review_rejected_approach | review_unavailable | self_check_failed | stage_pipeline_ceiling). accept = take the current head as done (unresolved findings stay on record); revise_once = one more revise round; rereview = review again with a different reviewer; abandon = cancel it. Only for blocked stage tasks.',
+    description: 'Decide a BLOCKED review-in-task stage task (blocked reason review_unresolved | review_rejected_approach | review_unavailable | self_check_failed | stage_pipeline_ceiling). accept = take the current head as done (unresolved findings stay on record); revise_once = one more revise round; rereview = review again with a different reviewer; abandon = cancel it. Without recovery, only for blocked stage tasks. With action=rereview and versioned recovery, repair ONE existing pending never-started child by owner answer and parent/child CAS; only difficult→medium. Dry-run first; no automatic dispatch.',
     inputSchema: {
         type: 'object' as const,
         properties: {
             task_id: { type: 'string', description: 'The blocked stage (parent) task id.' },
             action: enumOf(STAGE_DECIDE_ACTIONS),
+            recovery: STAGE_REVIEW_RECOVERY_SCHEMA,
             note: { type: 'string', description: 'Optional reason, recorded with the decision.' },
         },
         required: ['task_id', 'action'],

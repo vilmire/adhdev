@@ -69,3 +69,11 @@ export function stageFooterInput(task: Pick<MeshWorkQueueEntry, 'stagePlan' | 's
     const revising = s.round > 0 || s.selfCheckBounces > 0;
     return { role: revising ? 'revise' : 'implement', round: Math.max(1, s.round), maxRevisions: task.stagePlan!.maxRevisions };
 }
+
+/** §7: latest diff + latest self-check + latest verdict + one previous verdict, plus named worker evidence (max 12). */
+export function selectStageInputArtifacts(st: MeshTaskStageState): string[] {
+    const v = st.artifacts.verdict;
+    return [...new Set([
+        ...st.artifacts.diff.slice(-1), ...st.artifacts.selfCheck.slice(-1), ...v.slice(-1), ...(v.length > 1 ? v.slice(-2, -1) : []), ...(st.workerArtifactIds ?? []).slice(-8),
+    ])];
+}

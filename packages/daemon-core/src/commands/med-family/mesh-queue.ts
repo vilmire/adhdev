@@ -239,6 +239,32 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
         return result.ok ? { success: true, taskId, action } : { success: false, error: result.error };
     },
 
+    /** Versioned, owner-answer-bound recovery of an existing never-started review only. */
+    stage_recover_mesh_review: async (ctx: MedFamilyContext, args: unknown) => {
+        try {
+            const { decodeStageReviewRecovery } = await import('../../mesh/stage-review-recovery.js');
+            const request = decodeStageReviewRecovery(args);
+            const denied = await ctx.requireMeshHostMutationOwner(request.meshId, undefined, 'stage review recovery');
+            if (denied) return denied;
+            const [{ getMesh }, { getMachineId }, { daemonIdsEquivalent }, { resolveMeshHostStatus }, { getInstalledStagePipeline }] = await Promise.all([
+                import('../../config/mesh-config.js'), import('../../config/config.js'), import('@adhdev/mesh-shared'),
+                import('../../mesh/mesh-host-ownership.js'), import('../../mesh/stage-ports-default.js'),
+            ]);
+            const mesh = getMesh(request.meshId);
+            const actor = ctx.deps.statusInstanceId;
+            const owner = resolveMeshHostStatus(mesh, { localDaemonId: actor });
+            const parent = MeshRuntimeStore.getInstance().findQueueEntryById(request.meshId, request.parentTaskId);
+            const node = mesh?.nodes?.find(n => n.id === parent?.assignedNodeId);
+            const machineId = getMachineId();
+            if (!mesh?.repoIdentity || !actor || owner.role !== 'host' || !owner.hostDaemonId || !daemonIdsEquivalent(owner.hostDaemonId, actor)
+                || !machineId || !node?.workspace || !daemonIdsEquivalent(node.daemonId, actor)) throw new Error('authenticated_local_mesh_host_required');
+            const pipeline = getInstalledStagePipeline();
+            if (!pipeline) throw new Error('stage_pipeline_not_ready');
+            // No automatic trigger: owner inspects the committed receipt, then uses normal queue admission once.
+            return await pipeline.runtime.recoverPendingReview(request, { actor, repoIdentity: mesh.repoIdentity, machineId, nodeId: node.id, workspace: node.workspace });
+        } catch (e: any) { return { success: false, error: e?.message ?? String(e) }; }
+    },
+
     trigger_mesh_queue: async (ctx: MedFamilyContext, args: any) => {
         const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         if (!meshId) return { success: false, error: 'meshId required' };
