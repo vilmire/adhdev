@@ -1458,12 +1458,15 @@
                 "target_launchable": "目标可运行协调器",
                 "disk_space": "磁盘空间充足",
                 "snapshot_readable": "项目数据可读取",
+                "no_snapshot_conflicts": "目标机器上没有冲突的记录",
                 "no_open_writer_checkpoint": "没有未完成的工作者停止"
             },
             "code": {
                 "host_key_unpinned": "目标尚未与此主机配对",
                 "host_key_mismatch": "目标为此主机固定了不同的密钥",
                 "member_protocol_unsupported": "请先更新这些机器",
+                "COMMAND_SOURCE_REJECTED": "请使用所有者密码登录后再更改。没有所有者密码的 standalone 仪表板无法开启主机迁移。",
+                "owner_auth_required": "请使用所有者密码登录后再更改。没有所有者密码的 standalone 仪表板无法开启主机迁移。",
                 "snapshot_conflict": "目标存在冲突的记录",
                 "state_preservation_unverified": "请先完成进行中的工作",
                 "not_host": "此机器不是主机",

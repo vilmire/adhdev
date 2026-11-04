@@ -135,7 +135,9 @@ function liveHost(ctx: HighFamilyContext): LiveHandoffHost {
             return inspectTargetReadiness({ selfDaemonId, mesh: mesh as never, plan, ...(opts?.canaryMaxAgeMs ? { canaryMaxAgeMs: opts.canaryMaxAgeMs } : {}),
                 validateSelection: selection => {
                     const { targetNodeId: _targetNodeId, ...override } = selection;
-                    const resolved = resolveRoleLaunch(ctx, 'coordinator', override);
+                    // This machine's defaults do not apply: the plan is what launches, so only its validity here is asked.
+                    const resolved = resolveRoleLaunch(ctx, 'coordinator', override, undefined, ['model', 'thinkingLevel']);
+                    // Still exact: a validated selection that came back different would launch something the plan did not name.
                     return resolved.ok && JSON.stringify(resolved.selection) === JSON.stringify({ provider: selection.provider,
                         ...(selection.model !== undefined ? { model: selection.model } : {}),
                         ...(selection.thinkingLevel !== undefined ? { thinkingLevel: selection.thinkingLevel } : {}) });
@@ -165,7 +167,7 @@ function liveHost(ctx: HighFamilyContext): LiveHandoffHost {
             const census = await liveHost(ctx).observeCoordinator(meshId, plan);
             if (!census.runtimeVerified) return { success: false, ready: false };
             if (census.liveCount) return { success: !!census.sessionId, sessionId: census.sessionId, ready: census.ready };
-            const out = await host.exec('launch_mesh_coordinator', { meshId, managedByAssistant: true, coordinatorNodeId: plan.targetNodeId, cliType: plan.provider, initialModel: plan.model, initialThinkingLevel: plan.thinkingLevel });
+            const out = await host.exec('launch_mesh_coordinator', { meshId, managedByAssistant: true, coordinatorNodeId: plan.targetNodeId, cliType: plan.provider, initialModel: plan.model, initialThinkingLevel: plan.thinkingLevel, exactLaunchSelection: true });
             const sessionId = str(out?.sessionId);
             if (out?.success !== true || !sessionId) return { success: false, ready: false };
             const { localSessionReadyProbe } = await import('../coordinator-injection-cleanup.js');
@@ -289,7 +291,8 @@ const ownerVerb: HighFamilyHandler = async (ctx, args) => {
         if (!meshId || !targetDaemonId) return { success: false, code: 'invalid_args', error: 'meshId and targetDaemonId required' };
         const input = { meshId, targetDaemonId, ...(str(args?.targetNodeId) ? { targetNodeId: str(args.targetNodeId) } : {}), ...(handoffId ? { handoffId } : {}) };
         const key = JSON.stringify([op, meshId, targetDaemonId, input.targetNodeId ?? '']);
-        if (op === 'preflight') return ownerJob(key, async () => { const pf = await e.source.preflight(input); return { success: pf.ok, ok: pf.ok, checks: pf.checks, ...(pf.estimateBytes !== undefined ? { estimateBytes: pf.estimateBytes } : {}) }; });
+        // A preflight that ran is an answer, whatever it found. `ok` carries the verdict; cloud P2P would reject `success:false`.
+        if (op === 'preflight') return ownerJob(key, async () => { const pf = await e.source.preflight(input); return { success: true, ok: pf.ok, checks: pf.checks, ...(pf.estimateBytes !== undefined ? { estimateBytes: pf.estimateBytes } : {}) }; });
         return ownerJob(key, async () => startHostHandoff(ctx, input) as Promise<PeerResult>);
     }
     if (op === 'abort' || op === 'retry') {

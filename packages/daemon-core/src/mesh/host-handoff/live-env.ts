@@ -24,6 +24,7 @@ import { HostHandoffSource, type SourceDeps } from './source-machine.js';
 import { HostHandoffTarget } from './target-machine.js';
 import { exportSnapshot } from './snapshot-export.js';
 import { applySnapshotTables, localTableColumns, approvalProjectResolver } from './snapshot-import.js';
+import { buildConflictProbe, findProbeConflicts } from './snapshot-probe.js';
 import { assertProjectApprovalDestinations, exportProjectApprovalFiles, importProjectApprovalFiles } from './project-files.js';
 import { resolveAssistantProject } from '../../assistant/assistant-projects.js';
 import { acquireProjectFileCut } from './project-write-cut.js';
@@ -217,6 +218,8 @@ export function createLiveDataPort(): HandoffDataPort {
             } catch (e) { if (e !== rollback) throw e; }
             assertProjectApprovalDestinations(getConfigDir(), payload.files);
         },
+        buildConflictProbe: (meshId) => buildConflictProbe(db() as never, meshId),
+        findProbeConflicts: (meshId, probe) => findProbeConflicts(db() as never, meshId, probe),
         freeDiskBytes: () => { try { const s = statfsSync(getConfigDir()); return Number(s.bavail) * Number(s.bsize); } catch { return 0; } },
         markHandedOff: (row) => {
             (MeshRuntimeStore.getInstance().db.prepare(

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { brotliCompressSync } from 'node:zlib';
 import { DST, MESH, OTH, SRC, makeWorld, settle, type World } from './harness.js';
 import { checkHostOwnedWrite, readHostEpoch } from '../../../src/mesh/host-handoff/epoch.js';
 import { requireMeshHostQueueOwner } from '../../../src/mesh/mesh-host-ownership.js';
@@ -182,6 +183,29 @@ describe('acceptance 9: normal handoff', () => {
         expect(w.net.sentVerbs('mesh_host_handoff_activate')).toHaveLength(1);
     });
 
+    it('chunks travel encoded, at most two at a time, and may land out of order without changing the verified copy', async () => {
+        w.net.chunkDelayMs = seq => seq % 2 === 0 ? 12 : 1;
+        const before = w.src.dump();
+        await start();
+        await settle(w);
+        expect(w.dst.mesh.read(MESH)?.role).toBe('host');
+        expect(w.net.chunkStats.peak).toBe(2);
+        expect(new Set(w.net.chunkStats.encodings)).toEqual(new Set(['brotli-base64']));
+        expect(w.dst.dump()).toEqual(before);
+    });
+
+    it('a target that offers no encoding gets plain chunks, one at a time', async () => {
+        w.net.plainChunksOnly = true;
+        w.net.chunkDelayMs = () => 1;
+        const before = w.src.dump();
+        await start();
+        await settle(w);
+        expect(w.dst.mesh.read(MESH)?.role).toBe('host');
+        expect(w.net.chunkStats.peak).toBe(1);
+        expect(new Set(w.net.chunkStats.encodings)).toEqual(new Set([undefined]));
+        expect(w.dst.dump()).toEqual(before);
+    });
+
     it('the epoch strictly increases across two handoffs back and forth', async () => {
         const first = await start() as { handoffId: string };
         await settle(w);
@@ -243,8 +267,23 @@ describe('acceptance 10: failure injection leaves the source host, data intact, 
         w.net.corruptChunkSeq = 1;
         const r = await start() as { handoffId: string };
         await settle(w);
-        expect(w.src.journal.get(r.handoffId, 'source')).toMatchObject({ phase: 'aborted', abortReason: 'chunk_hash_mismatch' });
+        expect(w.src.journal.get(r.handoffId, 'source')).toMatchObject({ phase: 'aborted', abortReason: expect.stringContaining('chunk_hash_mismatch') });
         expectSourceStillHost(before);
+    });
+
+    it('an encoded chunk that expands past its declared size is refused', async () => {
+        const original = w.dst.target.chunk.bind(w.dst.target);
+        let answer: { code?: string; error?: string } | undefined;
+        w.dst.target.chunk = (a, sender) => {
+            if (a.seq !== 0) return original(a, sender);
+            const bomb = brotliCompressSync(Buffer.alloc(4 * 1024 * 1024, 'a')).toString('base64');
+            answer = original({ ...a, data: bomb, encoding: 'brotli-base64' }, sender);
+            return answer as never;
+        };
+        const r = await start() as { handoffId: string };
+        await settle(w);
+        expect(answer).toMatchObject({ code: 'chunk_hash_mismatch', error: 'chunk 0 did not decode' });
+        expect(w.src.journal.get(r.handoffId, 'source')).toMatchObject({ phase: 'aborted' });
     });
 
     it('a target whose schema cannot hold the snapshot fails verification (no ACK is ever sent)', async () => {

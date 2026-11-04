@@ -184,7 +184,7 @@ describe.skipIf(process.platform === 'win32')('two real daemons moving a project
         expect(away.ok).toBe(true);
         await worker.spawn();
         expect(await air.call('live', { meshId: MESH })).toHaveLength(1);
-        expect(net.count('mesh_host_handoff_chunk')).toBe(0);
+        expect(net.log.filter(l => l === 'mesh_host_handoff_chunk:chunk' || l === 'mesh_host_handoff_chunk:manifest')).toEqual([]);
         expect(await air.call('admission', { meshId: MESH })).toBeNull();
     }, 60_000);
 
@@ -269,16 +269,100 @@ describe.skipIf(process.platform === 'win32')('two real daemons moving a project
         await pairTarget();
         const row = "INSERT INTO turn_attempts (attempt_id,scope,mesh_id,session_id,owner_daemon_id,state,terminal_outcome,accepted_at,created_at,updated_at) VALUES ('conflict','mesh_queue',?,?,?,'terminal','completed',1,1,2)";
         await air.call('sql', { sql: row, args: [MESH, 'source-worker', AIR] });
-        await book.call('sql', { sql: row, args: [MESH, 'target-worker', BOOK] });
+        // The one collision that stays a refusal: the same id already belongs to another project here.
+        await book.call('sql', { sql: row, args: [OTHER_MESH, 'target-worker', BOOK] });
         const bookBefore = await book.call('dump', { meshId: MESH });
         const before = await air.call('dump', { meshId: MESH });
         const r = await start();
         await settled(r.handoffId, 'aborted');
-        expect((await air.call('source', { handoffId: r.handoffId })).abortReason).toBe('snapshot_conflict');
+        // The dashboard shows this text, so it has to name the table and the key.
+        expect((await air.call('source', { handoffId: r.handoffId })).abortReason).toMatch(/^snapshot_conflict: .*turn_attempts key \["conflict"\]/);
         expect((await book.call('target', { handoffId: r.handoffId })).phase).toBe('discarded');
         await rolledBack(before, r.handoffId);
         expect(await book.call('dump', { meshId: MESH })).toEqual(bookBefore);
         expect(net.count('mesh_host_handoff_activate')).toBe(0);
+    }, 60_000);
+
+    it('a member with its own overlapping history for the project takes the move and nothing it observed is lost', async () => {
+        await pairTarget();
+        const attempt = "INSERT INTO turn_attempts (attempt_id,scope,mesh_id,task_id,attempt_no,session_id,owner_daemon_id,state,terminal_outcome,data_json,accepted_at,created_at,updated_at) VALUES (?,'mesh_queue',?,?,?,?,?,'completed','completed',?,1,1,2)";
+        const event = "INSERT INTO turn_events (event_id,mesh_id,attempt_id,generation,session_id,kind,source,verdict,dedupe_key,payload_json,publish_state,at_ms,recorded_at) VALUES (?,?,?,0,'worker',?,'x','recorded',?,?,?,1,1)";
+        const artifact = "INSERT INTO session_artifacts (artifact_id,session_id,mesh_id,origin_daemon_id,workspace_root,rel_path,kind,mime,title,size_bytes,sha256,created_at,updated_at) VALUES (?,?,?,?,'/ws',?,'file','text/plain',?,1,'aa',1,2)";
+        const on = (d: Daemon, sql: string, ...args: unknown[]) => d.call('sql', { sql, args });
+        // The host's history: the attempt under the current id, its report event, and a notice it still owes.
+        await on(air, attempt, 'host-attempt', MESH, 'q1', 0, 'worker', AIR, '{"from":"host"}');
+        await on(air, attempt, 'same-id', MESH, 'q2', 0, 'worker-2', AIR, '{"from":"host"}');
+        await on(air, event, 'host-report', MESH, 'host-attempt', 'report', 'r1', '{"from":"host"}', 'published');
+        await on(air, event, 'host-notice', MESH, 'host-attempt', 'notify', 'n1', '{"from":"host"}', 'pending');
+        await on(air, artifact, 'host-copy', 'worker', MESH, AIR, 'out.md', 'host copy');
+        await on(air, artifact, 'host-record-of-member-file', 'worker', MESH, BOOK, 'member.md', 'host record');
+        // The member's own rows for the same turns, under different ids, including a fact the host never saw.
+        await on(book, attempt, 'member-attempt', MESH, 'q1', 0, 'worker', BOOK, '{"from":"member"}');
+        await on(book, attempt, 'same-id', MESH, 'q2', 0, 'worker-2', BOOK, '{"from":"member"}');
+        await on(book, event, 'member-only', MESH, 'member-attempt', 'turn_end', 'seen-here', '{"from":"member"}', 'none');
+        await on(book, event, 'member-report', MESH, 'member-attempt', 'report', 'r1', '{"from":"member"}', 'none');
+        await on(book, event, 'member-notice', MESH, 'member-attempt', 'notify', 'n1', '{"from":"member"}', 'none');
+        await on(book, "INSERT INTO turn_holds (hold_id,attempt_id,reason,on_expire,created_at) VALUES ('member-attempt:owner','member-attempt','owner','hold',1)");
+        await on(book, "INSERT INTO mesh_handoff_note_text (mesh_id,task_id,attempt_id,notes_json,recorded_at) VALUES (?,'member-task','member-attempt','[]','now')", MESH);
+        await on(book, "INSERT INTO assistant_relays (attempt_id,mesh_id,coordinator_session_id,committed_at,kind,outcome) VALUES ('member-attempt',?,'c',1,'turn','completed')", MESH);
+        await on(book, artifact, 'member-copy', 'worker', MESH, AIR, 'out.md', 'stale copy of a host file');
+        await on(book, artifact, 'member-file', 'worker', MESH, BOOK, 'member.md', 'member wrote this');
+
+        const pf = await air.call('preflight', { meshId: MESH, targetDaemonId: BOOK, targetNodeId: bookNode });
+        expect(pf.checks).toContainEqual(expect.objectContaining({ id: 'no_snapshot_conflicts', ok: true }));
+        const r = await start();
+        expect(r).toMatchObject({ success: true });
+        await settled(r.handoffId, 'committed');
+        await exactOwnership(book, air);
+
+        const rows = (sql: string, ...args: unknown[]) => book.call('sql', { sql, args });
+        // The host's row is the turn; the member's id is gone but recorded as what it became.
+        expect(await rows('SELECT attempt_id, data_json FROM turn_attempts WHERE mesh_id=? AND task_id IS NOT NULL ORDER BY attempt_id', MESH)).toEqual([
+            { attempt_id: 'host-attempt', data_json: '{"from":"host"}' }, { attempt_id: 'same-id', data_json: '{"from":"host"}' },
+        ]);
+        expect(await rows("SELECT target_key FROM mesh_host_handoff_row_map WHERE table_name='turn_attempts' AND source_key=?", '["member-attempt"]')).toEqual([{ target_key: '["host-attempt"]' }]);
+        // Events: the member's own fact moved onto the host's attempt; the member's copy of a shared fact stays;
+        // a notice the source still owes replaces the local row.
+        expect(await rows("SELECT event_id, attempt_id FROM turn_events WHERE attempt_id='host-attempt' ORDER BY event_id")).toEqual([
+            { event_id: 'host-notice', attempt_id: 'host-attempt' }, { event_id: 'member-only', attempt_id: 'host-attempt' }, { event_id: 'member-report', attempt_id: 'host-attempt' },
+        ]);
+        // Everything that pointed at the replaced attempt follows it. No orphans.
+        expect(await rows("SELECT hold_id, attempt_id, status FROM turn_holds WHERE attempt_id='host-attempt'")).toEqual([{ hold_id: 'host-attempt:owner', attempt_id: 'host-attempt', status: 'resolved' }]);
+        expect(await rows("SELECT attempt_id FROM mesh_handoff_note_text WHERE task_id='member-task'")).toEqual([{ attempt_id: 'host-attempt' }]);
+        expect(await rows("SELECT attempt_id FROM assistant_relays WHERE mesh_id=?", MESH)).toEqual([{ attempt_id: 'host-attempt' }]);
+        for (const table of ['turn_events', 'turn_holds', 'assistant_relays', 'mesh_handoff_note_text']) {
+            expect(await rows(`SELECT COUNT(*) AS n FROM ${table} c WHERE c.attempt_id='member-attempt'`), table).toEqual([{ n: 0 }]);
+            expect(await rows(`SELECT COUNT(*) AS n FROM ${table} c WHERE c.attempt_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM turn_attempts a WHERE a.attempt_id=c.attempt_id)`), table).toEqual([{ n: 0 }]);
+        }
+        // Artifacts: a file from the source takes the source's row; the member's own file keeps its row.
+        expect(await rows('SELECT artifact_id, rel_path FROM session_artifacts WHERE mesh_id=? ORDER BY rel_path', MESH)).toEqual([
+            { artifact_id: 'member-file', rel_path: 'member.md' }, { artifact_id: 'host-copy', rel_path: 'out.md' },
+        ]);
+        // Both versions survive in the archive.
+        const archive = Object.fromEntries((await rows('SELECT side, payload_json FROM mesh_host_handoff_archive WHERE handoff_id=?', r.handoffId) as Array<{ side: string; payload_json: string }>).map(a => [a.side, JSON.parse(a.payload_json)]));
+        const ids = (side: string, table: string, column: string) => { const t = archive[side][table]; return t.rows.map((row: unknown[]) => row[t.columns.indexOf(column)]); };
+        expect(ids('target-before', 'turn_attempts', 'attempt_id')).toEqual(expect.arrayContaining(['member-attempt', 'same-id']));
+        expect(ids('target-before', 'turn_events', 'event_id')).toEqual(expect.arrayContaining(['member-only', 'member-report', 'member-notice']));
+        expect(ids('target-before', 'session_artifacts', 'artifact_id')).toEqual(expect.arrayContaining(['member-copy', 'member-file']));
+        const source = archive['source-snapshot'].tables;
+        expect(source.turn_attempts.rows.map((row: unknown[]) => row[source.turn_attempts.columns.indexOf('attempt_id')])).toEqual(expect.arrayContaining(['host-attempt', 'same-id']));
+        expect(source.turn_events.rows.map((row: unknown[]) => row[source.turn_events.columns.indexOf('event_id')])).toEqual(expect.arrayContaining(['host-report', 'host-notice']));
+        const decided = (archive.reconciliation as Array<{ table: string; winner: string; incomingKey?: string }>).map(e => `${e.table}:${e.incomingKey}:${e.winner}`);
+        expect(decided).toEqual(expect.arrayContaining(['turn_attempts:host-attempt:source', 'turn_events:host-report:target', 'turn_events:host-notice:source',
+            'session_artifacts:host-copy:source', 'session_artifacts:host-record-of-member-file:target']));
+    }, 60_000);
+
+    it('preflight finds a collision only the owner can settle, before anything stops', async () => {
+        await pairTarget();
+        await book.call('sql', { sql: "INSERT INTO mesh_mission_events (seq, mission_id, mesh_id, type, actor, payload_json, at) VALUES (2, 'm1', ?, 'something_else', 'coordinator', '{}', 'then')", args: [MESH] });
+        const pf = await air.call('preflight', { meshId: MESH, targetDaemonId: BOOK, targetNodeId: bookNode });
+        expect(pf.ok).toBe(false);
+        expect(pf.checks).toContainEqual(expect.objectContaining({ id: 'no_snapshot_conflicts', ok: false, code: 'snapshot_conflict', detail: expect.stringContaining(`mesh_mission_events key ["${MESH}",2]`) }));
+        const r = await start();
+        expect(r).toMatchObject({ success: false, code: 'snapshot_conflict' });
+        expect(await air.call('live', { meshId: MESH })).toHaveLength(1);
+        expect(await air.call('admission', { meshId: MESH })).toBeNull();
+        expect(net.log.filter(l => l === 'mesh_host_handoff_chunk:chunk')).toEqual([]);
     }, 60_000);
 
     it('a provider that stops authenticating between ACK and activate discards on the target and rolls back on the source', async () => {

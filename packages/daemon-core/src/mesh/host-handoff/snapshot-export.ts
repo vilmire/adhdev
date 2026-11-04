@@ -126,10 +126,14 @@ function exportSnapshotInTransaction(input: ExportInput): ExportedSnapshot {
     const size = input.chunkBytes ?? HOST_HANDOFF_CHUNK_BYTES;
     // Cut on string length (JSON of mostly-ASCII ids; a chunk may exceed `size` bytes only by multibyte text).
     const chunks: Array<{ seq: number; sha256: string; data: string }> = [];
-    for (let at = 0, seq = 0; at < text.length || seq === 0; at += size, seq++) {
-        const data = text.slice(at, at + size);
+    for (let at = 0, seq = 0; seq === 0 || at < text.length; seq++) {
+        // Never cut inside a surrogate pair: each half alone would not survive UTF-8 staging or encoding.
+        let end = Math.min(at + size, text.length);
+        const last = text.charCodeAt(end - 1);
+        if (end < text.length && end - at > 1 && last >= 0xD800 && last <= 0xDBFF) end--;
+        const data = text.slice(at, end);
         chunks.push({ seq, sha256: sha256Hex(data), data });
-        if (at + size >= text.length) break;
+        at = end;
     }
     const manifestChunks: ManifestChunk[] = chunks.map(c => ({ seq: c.seq, sha256: c.sha256, bytes: Buffer.byteLength(c.data) }));
     const header: Omit<HandoffManifest, 'digest'> = {

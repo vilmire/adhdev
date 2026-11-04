@@ -1461,12 +1461,15 @@
                 "target_launchable": "El destino puede ejecutar el coordinador",
                 "disk_space": "Espacio en disco suficiente",
                 "snapshot_readable": "Los datos del proyecto son legibles",
+                "no_snapshot_conflicts": "Sin registros en conflicto en el destino",
                 "no_open_writer_checkpoint": "Ninguna parada de trabajador sin terminar"
             },
             "code": {
                 "host_key_unpinned": "El destino no está emparejado con este host",
                 "host_key_mismatch": "El destino fijó otra clave para este host",
                 "member_protocol_unsupported": "Actualiza primero estas máquinas",
+                "COMMAND_SOURCE_REJECTED": "Inicia sesión con la contraseña de propietario para cambiarlo. Un panel standalone sin contraseña de propietario no puede activar los traslados de host.",
+                "owner_auth_required": "Inicia sesión con la contraseña de propietario para cambiarlo. Un panel standalone sin contraseña de propietario no puede activar los traslados de host.",
                 "snapshot_conflict": "El destino tiene registros en conflicto",
                 "state_preservation_unverified": "Termina primero el trabajo en curso",
                 "not_host": "Esta máquina no es el host",

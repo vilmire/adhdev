@@ -39,9 +39,10 @@ export async function handlePeerVerb(
             if (!target) return { success: false, code: 'peer_capability_unconfirmed' };
             const op = str(args.op);
             if (op === 'manifest') return target.manifest({ handoffId, meshId, manifest: args.manifest as never }, sender);
-            if (op === 'chunk') return target.chunk({ handoffId, meshId, seq: Number(args.seq), sha256: str(args.sha256), data: typeof args.data === 'string' ? args.data : '' }, sender);
+            if (op === 'chunk') return target.chunk({ handoffId, meshId, seq: Number(args.seq), sha256: str(args.sha256), data: typeof args.data === 'string' ? args.data : '', ...(str(args.encoding) ? { encoding: str(args.encoding) } : {}) }, sender);
             if (op === 'seal') return target.seal({ handoffId, meshId }, sender);
-            return { success: false, code: 'invalid_args', error: 'op must be manifest, chunk or seal' };
+            if (op === 'conflict_probe') return target.conflictProbe({ handoffId, meshId, probe: args.probe as never }, sender);
+            return { success: false, code: 'invalid_args', error: 'op must be manifest, chunk, seal or conflict_probe' };
         }
         case HOST_HANDOFF_VERB.ack:
             return source ? source.onAck(args.ack as HandoffAck, sender) : { success: false, code: 'handoff_unknown' };
@@ -64,6 +65,7 @@ export function createWirePeerClient(dispatch: PeerDispatch, targetDaemonId: str
         manifest: (a) => send(HOST_HANDOFF_VERB.chunk, { op: 'manifest', ...a }) as never,
         chunk: (a) => send(HOST_HANDOFF_VERB.chunk, { op: 'chunk', ...a }),
         seal: (a) => send(HOST_HANDOFF_VERB.chunk, { op: 'seal', ...a }),
+        conflictProbe: (a) => send(HOST_HANDOFF_VERB.chunk, { op: 'conflict_probe', ...a }) as never,
         activate: (a) => send(HOST_HANDOFF_VERB.activate, a) as never,
         status: (a) => send(HOST_HANDOFF_VERB.status, a) as never,
         discard: (a) => send(HOST_HANDOFF_VERB.discard, a),

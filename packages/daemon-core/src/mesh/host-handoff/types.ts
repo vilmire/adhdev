@@ -43,6 +43,10 @@ export const HOST_HANDOFF_CHUNK_BYTES = 256 * 1024;
 export const HOST_HANDOFF_FREEZE_TIMEOUT_MS = 5 * 60_000;
 export const HOST_HANDOFF_ACK_TIMEOUT_MS = 2 * 60_000;
 export const HOST_HANDOFF_CHUNK_ATTEMPTS = 3;
+/** Wire encoding a target may offer in its manifest answer. The manifest and its hashes stay on the plain text. */
+export const HOST_HANDOFF_CHUNK_ENCODING = 'brotli-base64';
+/** Encoded chunks in flight. Two of them are still no more bytes than one plain chunk, so the 10 s RPC ack budget holds on a slow relay. */
+export const HOST_HANDOFF_SEND_WINDOW = 2;
 export const HOST_HANDOFF_ADVERTISE_INTERVAL_MS = 5 * 60_000;
 export const HOST_HANDOFF_PROBE_BASE_MS = 30_000;
 export const HOST_HANDOFF_PROBE_MAX_MS = 5 * 60_000;

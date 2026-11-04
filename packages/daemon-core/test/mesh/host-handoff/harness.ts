@@ -6,6 +6,7 @@
  */
 
 import crypto from 'node:crypto';
+import { brotliCompressSync, brotliDecompressSync } from 'node:zlib';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -42,6 +43,11 @@ export class FakeNet {
     log: Array<{ from: string; to: string; verb: string; op?: string; ok: boolean; code?: string }> = [];
     private ackGate: { promise: Promise<void>; release: () => void } | null = null;
     corruptChunkSeq: number | null = null;
+    /** Delivery delay per chunk, so later chunks can overtake earlier ones. */
+    chunkDelayMs: ((seq: number) => number) | null = null;
+    chunkStats = { open: 0, peak: 0, encodings: [] as unknown[] };
+    /** Answer manifests like a build that cannot read encoded chunks. */
+    plainChunksOnly = false;
 
     holdAcks(): void {
         let release!: () => void;
@@ -56,12 +62,24 @@ export class FakeNet {
             const op = typeof args.op === 'string' ? args.op : undefined;
             if (this.offline.has(to) || this.offline.has(from)) throw new Error('peer offline');
             if (verb === 'mesh_host_handoff_ack' && this.ackGate) await this.ackGate.promise;
-            if (verb === 'mesh_host_handoff_chunk' && op === 'chunk' && this.corruptChunkSeq === args.seq) args.data = `${String(args.data)}tampered`;
+            if (verb === 'mesh_host_handoff_chunk' && op === 'chunk' && this.corruptChunkSeq === args.seq) {
+                // Well-formed on the wire, wrong in content: only the manifest hash can catch this.
+                args.data = args.encoding ? brotliCompressSync(`${brotliDecompressSync(Buffer.from(String(args.data), 'base64')).toString('utf8')}tampered`).toString('base64') : `${String(args.data)}tampered`;
+            }
             const rule = this.faults.find(f => f.verb === verb && f.times > 0 && (!f.op || f.op === op) && (!f.to || f.to === to) && (f.seq === undefined || f.seq === args.seq));
             if (rule?.mode === 'request') { rule.times--; this.log.push({ from, to, verb, op, ok: false, code: 'request_dropped' }); throw new Error('request dropped'); }
             const peer = this.daemons.get(to);
             if (!peer) throw new Error('unknown peer');
+            const isChunk = verb === 'mesh_host_handoff_chunk' && op === 'chunk';
+            if (isChunk) {
+                this.chunkStats.encodings.push(args.encoding);
+                this.chunkStats.peak = Math.max(this.chunkStats.peak, ++this.chunkStats.open);
+                const delay = this.chunkDelayMs?.(Number(args.seq)) ?? 0;
+                if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+            }
             const res = await handlePeerVerb({ source: peer.source, target: peer.target, certificate: (a, sender) => applyHostTransferToMember(peer.mesh, peer.id, a.meshId, a.certificate) }, verb, args, from);
+            if (isChunk) this.chunkStats.open--;
+            if (op === 'manifest' && this.plainChunksOnly) delete (res as { encodings?: unknown }).encodings;
             this.log.push({ from, to, verb, op, ok: res.success, code: res.code });
             if (rule?.mode === 'response') { rule.times--; throw new Error('response lost'); }
             return structuredClone(res);

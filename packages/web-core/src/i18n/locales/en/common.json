@@ -1458,12 +1458,15 @@
                 "target_launchable": "Target can run the coordinator",
                 "disk_space": "Enough disk space",
                 "snapshot_readable": "Project data is readable",
+                "no_snapshot_conflicts": "No conflicting records on the target",
                 "no_open_writer_checkpoint": "No unfinished worker stop"
             },
             "code": {
                 "host_key_unpinned": "The target has not paired with this host",
                 "host_key_mismatch": "The target pinned a different key for this host",
                 "member_protocol_unsupported": "Update these machines first",
+                "COMMAND_SOURCE_REJECTED": "Sign in with the owner password to change this. A standalone dashboard without an owner password cannot turn on host moves.",
+                "owner_auth_required": "Sign in with the owner password to change this. A standalone dashboard without an owner password cannot turn on host moves.",
                 "snapshot_conflict": "The target holds conflicting records",
                 "state_preservation_unverified": "Finish open work first",
                 "not_host": "This machine is not the host",

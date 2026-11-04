@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LaunchDefaultsStore, resolveLaunchSelection, type LaunchDefaultsRead,
-    type LaunchField, type LaunchProviderFacts, type LaunchValidationPorts,
+    type LaunchField, type LaunchProviderFacts, type LaunchSelection, type LaunchValidationPorts,
     type ResolveLaunchInput } from '../../src/launch-defaults/index.js';
 
 function ports(patch: Partial<LaunchProviderFacts> = {}): LaunchValidationPorts {
@@ -246,5 +246,19 @@ describe('resolution never persists', () => {
         freeze(stored); freeze(project);
         expect(success({ stored, role: 'coordinator', hostCoordinatorLaunch: project }).selection).toEqual(project.selection);
         expect({ stored, project }).toEqual(before);
+    });
+});
+
+describe('a host move launches the plan as given', () => {
+    const exact = (override: Partial<LaunchSelection>) => success({ role: 'coordinator', override, ignoreDefault: ['model', 'thinkingLevel'] });
+    it('an axis the plan omits stays the provider default instead of taking this machine\'s default', () => {
+        expect(success({ role: 'coordinator', override: { provider: 'claude-cli' } }).selection).toEqual({ provider: 'claude-cli', model: 'sonnet', thinkingLevel: 'low' });
+        expect(exact({ provider: 'claude-cli' }).selection).toEqual({ provider: 'claude-cli' });
+        expect(exact({ provider: 'claude-cli' }).applied.thinkingLevel).toEqual({ value: null, source: 'provider_default' });
+    });
+    it('explicit fields are kept, and a value this machine cannot run still refuses', () => {
+        expect(exact({ provider: 'claude-cli', model: 'opus', thinkingLevel: 'high' }).selection).toEqual({ provider: 'claude-cli', model: 'opus', thinkingLevel: 'high' });
+        expect(resolve({ role: 'coordinator', override: { provider: 'claude-cli', thinkingLevel: 'medium' }, ignoreDefault: ['model', 'thinkingLevel'] }).ok).toBe(false);
+        expect(resolve({ role: 'coordinator', override: { provider: 'not-installed' }, ignoreDefault: ['model', 'thinkingLevel'] }).ok).toBe(false);
     });
 });

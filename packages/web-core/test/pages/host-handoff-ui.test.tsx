@@ -112,6 +112,21 @@ describe('MeshHostHandoffDialog', () => {
         expect(send).toHaveBeenCalledWith('daemon_host', 'mesh_host_handoff', { op: 'status', meshId: 'm' })
     })
 
+    it('says the owner password is required when a no-password standalone refuses turning the feature on', async () => {
+        const send = vi.fn(async (_d: string, _c: string, payload: Record<string, unknown>) => {
+            if (payload.op === 'status') return { success: true, enabled: false }
+            return { success: false, code: 'COMMAND_SOURCE_REJECTED', error: "Command 'mesh_host_handoff' is not accepted from source 'standalone'" }
+        })
+        act(() => root.render(<MeshHostHandoffDialog open onClose={() => {}} meshId="m" hostDaemonId="daemon_host" daemons={daemons} sendCommand={send as never} />))
+        await flush()
+        const enable = q('[data-handoff-action="enable-source"]') ?? q('[data-handoff-action^="enable"]')
+        await act(async () => { (enable as HTMLButtonElement).click() })
+        await flush()
+        const shown = q('[data-handoff-error]')
+        expect(shown?.getAttribute('data-handoff-error')).toBe('COMMAND_SOURCE_REJECTED')
+        expect(shown?.textContent).toMatch(/owner password/i)
+    })
+
     it('shows a preflight refusal that cloud P2P delivers as a rejected command', async () => {
         const send = vi.fn(async (_d: string, _c: string, payload: Record<string, unknown>) => {
             if (payload.op === 'status') return { success: true, enabled: true, source: null }

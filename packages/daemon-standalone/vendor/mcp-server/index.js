@@ -43156,6 +43156,8 @@ ${error.message || ""}`;
     var HOST_HANDOFF_FREEZE_TIMEOUT_MS;
     var HOST_HANDOFF_ACK_TIMEOUT_MS;
     var HOST_HANDOFF_CHUNK_ATTEMPTS;
+    var HOST_HANDOFF_CHUNK_ENCODING;
+    var HOST_HANDOFF_SEND_WINDOW;
     var HOST_HANDOFF_ADVERTISE_INTERVAL_MS;
     var HOST_HANDOFF_PROBE_BASE_MS;
     var HOST_HANDOFF_PROBE_MAX_MS;
@@ -43181,6 +43183,8 @@ ${error.message || ""}`;
         HOST_HANDOFF_FREEZE_TIMEOUT_MS = 5 * 6e4;
         HOST_HANDOFF_ACK_TIMEOUT_MS = 2 * 6e4;
         HOST_HANDOFF_CHUNK_ATTEMPTS = 3;
+        HOST_HANDOFF_CHUNK_ENCODING = "brotli-base64";
+        HOST_HANDOFF_SEND_WINDOW = 2;
         HOST_HANDOFF_ADVERTISE_INTERVAL_MS = 5 * 6e4;
         HOST_HANDOFF_PROBE_BASE_MS = 3e4;
         HOST_HANDOFF_PROBE_MAX_MS = 5 * 6e4;
@@ -43244,10 +43248,13 @@ ${error.message || ""}`;
       const text9 = JSON.stringify(payload);
       const size = input.chunkBytes ?? HOST_HANDOFF_CHUNK_BYTES;
       const chunks = [];
-      for (let at = 0, seq2 = 0; at < text9.length || seq2 === 0; at += size, seq2++) {
-        const data = text9.slice(at, at + size);
+      for (let at = 0, seq2 = 0; seq2 === 0 || at < text9.length; seq2++) {
+        let end = Math.min(at + size, text9.length);
+        const last = text9.charCodeAt(end - 1);
+        if (end < text9.length && end - at > 1 && last >= 55296 && last <= 56319) end--;
+        const data = text9.slice(at, end);
         chunks.push({ seq: seq2, sha256: sha256Hex(data), data });
-        if (at + size >= text9.length) break;
+        at = end;
       }
       const manifestChunks = chunks.map((c) => ({ seq: c.seq, sha256: c.sha256, bytes: Buffer.byteLength(c.data) }));
       const header = {
@@ -72783,14 +72790,14 @@ ${mergeTreeErr?.stderr || ""}`;
     function getLastQuotaRanking(nodeId) {
       return lastQuotaRankingByNode.get(nodeId);
     }
-    function recordLastQuotaRankingOutcome(nodeId, outcome, refusalReason) {
+    function recordLastQuotaRankingOutcome(nodeId, outcome, refusalReason2) {
       if (!nodeId) return;
       const existing = lastQuotaRankingByNode.get(nodeId);
       if (!existing) return;
       lastQuotaRankingByNode.set(nodeId, {
         ...existing,
         claimOutcome: outcome,
-        ...outcome === "refused" && refusalReason ? { claimRefusalReason: refusalReason } : {}
+        ...outcome === "refused" && refusalReason2 ? { claimRefusalReason: refusalReason2 } : {}
       });
     }
     function quotaTargetsFromSlots3(slots2) {
@@ -95572,17 +95579,17 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           const claimRefusal = {};
           const task = claimNextTask(meshId, nodeId, sessionId, claim.capabilityTags, { ...claim.options, ...quotaOverrideOnly.on ? { onlyQuotaOverridden: true } : {}, outRefusal: claimRefusal });
           if (!task) {
-            const refusalReason = claimRefusal.reason || "no_pending_candidates";
-            noteSessionClaimRefusal(meshId, sessionId, { reason: refusalReason, ...claimRefusal.taskId ? { taskId: claimRefusal.taskId } : {} });
+            const refusalReason2 = claimRefusal.reason || "no_pending_candidates";
+            noteSessionClaimRefusal(meshId, sessionId, { reason: refusalReason2, ...claimRefusal.taskId ? { taskId: claimRefusal.taskId } : {} });
             recordClaimRefusal(meshId, {
               nodeId,
               sessionId,
               ...providerType ? { providerType } : {},
-              reason: refusalReason,
+              reason: refusalReason2,
               ...claimRefusal.detail ? { detail: claimRefusal.detail } : {}
             });
-            recordLastQuotaRankingOutcome(nodeId, "refused", refusalReason);
-            handleClaimPathDifficultyFloorRefusal({ meshId, nodeId, refusalReason, claimRefusal, coordinatorDaemonId: localCoordinatorDaemonId2() });
+            recordLastQuotaRankingOutcome(nodeId, "refused", refusalReason2);
+            handleClaimPathDifficultyFloorRefusal({ meshId, nodeId, refusalReason: refusalReason2, claimRefusal, coordinatorDaemonId: localCoordinatorDaemonId2() });
             return false;
           }
           clearClaimRefusalState(meshId, nodeId, sessionId);
@@ -140228,6 +140235,240 @@ ${tail}` : ""
         PROJECT_SCOPED_HISTORY_TABLES = /* @__PURE__ */ new Set(["mesh_mission_events", "mesh_release_events"]);
       }
     });
+    function snapshotConflict(table, key7, why) {
+      return new Error(`snapshot conflicts with retained local state: ${table} key ${JSON.stringify(key7)} (${why})`);
+    }
+    var TARGET_LOCAL_KEY_SPACE;
+    var ATTEMPT_KEYED_TABLES;
+    var SnapshotReconciler;
+    var init_snapshot_reconcile = __esm2({
+      "src/mesh/host-handoff/snapshot-reconcile.ts"() {
+        "use strict";
+        init_dist();
+        TARGET_LOCAL_KEY_SPACE = "target-local";
+        ATTEMPT_KEYED_TABLES = ["assistant_relays", "assistant_attempt_bodies", "assistant_relay_coverage"];
+        SnapshotReconciler = class {
+          constructor(db3, c) {
+            this.db = db3;
+            this.c = c;
+          }
+          resolutions = [];
+          incoming = /* @__PURE__ */ new Map();
+          /** Clear the way for one incoming row. `skip`: the local row stays and the incoming one is not applied. */
+          resolve(table, columns, row2) {
+            const v = (name) => row2[columns.indexOf(name)];
+            switch (table) {
+              case "turn_attempts":
+                return this.attempt(v);
+              case "turn_events":
+                return this.event(v);
+              case "session_artifacts":
+                return this.artifact(v);
+              case "mesh_mission_items":
+                return this.missionItem(v);
+              case "mesh_release_missions":
+                return this.releaseMember(v);
+              default:
+                return "apply";
+            }
+          }
+          one(sql, ...args) {
+            return this.db.prepare(sql).all(...args)[0];
+          }
+          run(sql, ...args) {
+            this.db.prepare(sql).run(...args);
+          }
+          now() {
+            return this.c.now?.() ?? Date.now();
+          }
+          map(table, keySpace, from, to) {
+            this.run(
+              "INSERT OR REPLACE INTO mesh_host_handoff_row_map (mesh_id,table_name,source_daemon_id,source_key,target_key,snapshot_digest) VALUES (?,?,?,?,?,?)",
+              this.c.meshId,
+              table,
+              keySpace,
+              JSON.stringify(from),
+              JSON.stringify(to),
+              this.c.digest
+            );
+          }
+          incomingHas(table, column, value) {
+            const id4 = `${table}.${column}`;
+            let values = this.incoming.get(id4);
+            if (!values) {
+              const t = this.c.payload.tables[table];
+              const at = t?.columns.indexOf(column) ?? -1;
+              values = new Set(t && at >= 0 ? t.rows.map((r) => r[at]) : []);
+              this.incoming.set(id4, values);
+            }
+            return values.has(value);
+          }
+          // ── turn_attempts ────────────────────────────────────────────────────────
+          attempt(v) {
+            const id4 = v("attempt_id");
+            if (v("task_id") !== null) {
+              const local = this.one("SELECT * FROM turn_attempts WHERE mesh_id=? AND task_id=? AND attempt_no=? AND attempt_id!=?", this.c.meshId, v("task_id"), v("attempt_no"), id4);
+              if (local) this.absorbAttempt(local, id4, v("terminal_outcome") !== null);
+            }
+            if (v("terminal_outcome") === null) {
+              const open = this.one("SELECT * FROM turn_attempts WHERE session_id=? AND terminal_outcome IS NULL AND attempt_id!=?", v("session_id"), id4);
+              if (open) {
+                if (open.mesh_id !== this.c.meshId) throw snapshotConflict("turn_attempts", [v("session_id")], `session is running attempt ${String(open.attempt_id)} of another project`);
+                this.run(
+                  "UPDATE turn_attempts SET terminal_outcome='cancelled', terminal_reason='host_handoff_superseded', terminal_source='host_handoff', terminal_at=?, updated_at=? WHERE attempt_id=?",
+                  this.now(),
+                  this.now(),
+                  open.attempt_id
+                );
+                this.resolutions.push({ table: "turn_attempts", index: "ux_turn_attempts_open_session", key: [v("session_id")], winner: "source", local: open, incomingKey: id4 });
+              }
+            }
+            return "apply";
+          }
+          /** The host's attempt replaces the member's row for the same turn. Everything the member observed moves onto it. */
+          absorbAttempt(local, targetId, targetTerminal) {
+            const localId = local.attempt_id;
+            for (const event of this.db.prepare("SELECT * FROM turn_events WHERE attempt_id=?").all(localId)) {
+              const held = event.generation !== null && this.one("SELECT 1 AS present FROM turn_events WHERE attempt_id=? AND generation=? AND kind=? AND dedupe_key=?", targetId, event.generation, event.kind, event.dedupe_key);
+              if (held) {
+                this.run("DELETE FROM turn_events WHERE event_id=?", event.event_id);
+                this.resolutions.push({ table: "turn_events", index: "sqlite_autoindex_turn_events_2", key: [targetId, event.generation, event.kind, event.dedupe_key], winner: "source", local: event });
+              } else this.run("UPDATE turn_events SET attempt_id=? WHERE event_id=?", targetId, event.event_id);
+            }
+            for (const hold of this.db.prepare("SELECT * FROM turn_holds WHERE attempt_id=?").all(localId)) {
+              const prefix = `${String(localId)}:`;
+              const holdId2 = String(hold.hold_id);
+              const nextId = holdId2.startsWith(prefix) ? `${String(targetId)}:${holdId2.slice(prefix.length)}` : holdId2;
+              if (nextId !== holdId2 && (this.incomingHas("turn_holds", "hold_id", nextId) || this.one("SELECT 1 AS present FROM turn_holds WHERE hold_id=?", nextId))) {
+                this.run("DELETE FROM turn_holds WHERE hold_id=?", holdId2);
+                this.resolutions.push({ table: "turn_holds", index: "primary", key: [nextId], winner: "source", local: hold });
+                continue;
+              }
+              const settle2 = targetTerminal && hold.status === "active";
+              this.run(
+                "UPDATE turn_holds SET hold_id=?, attempt_id=?, status=?, resolved_at=? WHERE hold_id=?",
+                nextId,
+                targetId,
+                settle2 ? "resolved" : hold.status,
+                settle2 ? this.now() : hold.resolved_at,
+                holdId2
+              );
+            }
+            for (const table of ATTEMPT_KEYED_TABLES) {
+              const row2 = this.one(`SELECT * FROM ${table} WHERE attempt_id=?`, localId);
+              if (!row2) continue;
+              if (this.incomingHas(table, "attempt_id", targetId) || this.one(`SELECT 1 AS present FROM ${table} WHERE attempt_id=?`, targetId)) {
+                this.run(`DELETE FROM ${table} WHERE attempt_id=?`, localId);
+                this.resolutions.push({ table, index: "primary", key: [targetId], winner: "source", local: row2 });
+              } else this.run(`UPDATE ${table} SET attempt_id=? WHERE attempt_id=?`, targetId, localId);
+            }
+            this.run("UPDATE mesh_handoff_note_text SET attempt_id=? WHERE mesh_id=? AND attempt_id=?", targetId, this.c.meshId, localId);
+            this.run("DELETE FROM turn_attempts WHERE attempt_id=?", localId);
+            this.map("turn_attempts", TARGET_LOCAL_KEY_SPACE, [localId], [targetId]);
+            this.resolutions.push({ table: "turn_attempts", index: "ux_turn_attempts_task", key: [this.c.meshId, local.task_id, local.attempt_no], winner: "source", local, incomingKey: targetId });
+          }
+          // ── turn_events ──────────────────────────────────────────────────────────
+          event(v) {
+            if (v("attempt_id") === null || v("generation") === null) return "apply";
+            const local = this.one("SELECT * FROM turn_events WHERE attempt_id=? AND generation=? AND kind=? AND dedupe_key=? AND event_id!=?", v("attempt_id"), v("generation"), v("kind"), v("dedupe_key"), v("event_id"));
+            if (!local) return "apply";
+            const key7 = [v("attempt_id"), v("generation"), v("kind"), v("dedupe_key")];
+            if (v("publish_state") === "pending") {
+              this.run("DELETE FROM turn_events WHERE event_id=?", local.event_id);
+              this.map("turn_events", TARGET_LOCAL_KEY_SPACE, [local.event_id], [v("event_id")]);
+              this.resolutions.push({ table: "turn_events", index: "sqlite_autoindex_turn_events_2", key: key7, winner: "source", local, incomingKey: v("event_id") });
+              return "apply";
+            }
+            this.map("turn_events", this.c.sourceDaemonId, [v("event_id")], [local.event_id]);
+            this.resolutions.push({ table: "turn_events", index: "sqlite_autoindex_turn_events_2", key: key7, winner: "target", local, incomingKey: v("event_id") });
+            return "skip";
+          }
+          // ── session_artifacts ────────────────────────────────────────────────────
+          artifact(v) {
+            const local = this.one("SELECT * FROM session_artifacts WHERE session_id=? AND rel_path=? AND artifact_id!=?", v("session_id"), v("rel_path"), v("artifact_id"));
+            if (!local) return "apply";
+            const key7 = [v("session_id"), v("rel_path")];
+            if (local.mesh_id !== null && local.mesh_id !== this.c.meshId) throw snapshotConflict("session_artifacts", key7, `path belongs to another project's artifact ${String(local.artifact_id)}`);
+            const origin = String(local.origin_daemon_id ?? "");
+            if (origin === this.c.sourceDaemonId || daemonIdsEquivalent5(origin, this.c.sourceDaemonId)) {
+              this.run("DELETE FROM session_artifacts WHERE artifact_id=?", local.artifact_id);
+              this.map("session_artifacts", TARGET_LOCAL_KEY_SPACE, [local.artifact_id], [v("artifact_id")]);
+              this.resolutions.push({ table: "session_artifacts", index: "idx_session_artifacts_unique_path", key: key7, winner: "source", local, incomingKey: v("artifact_id") });
+              return "apply";
+            }
+            if (local.mesh_id === null) this.run("UPDATE session_artifacts SET mesh_id=?, mission_id=COALESCE(mission_id,?) WHERE artifact_id=?", this.c.meshId, v("mission_id"), local.artifact_id);
+            this.map("session_artifacts", this.c.sourceDaemonId, [v("artifact_id")], [local.artifact_id]);
+            this.resolutions.push({ table: "session_artifacts", index: "idx_session_artifacts_unique_path", key: key7, winner: "target", local, incomingKey: v("artifact_id") });
+            return "skip";
+          }
+          // ── mesh_mission_items ───────────────────────────────────────────────────
+          missionItem(v) {
+            if (v("dedupe_key") === null) return "apply";
+            const local = this.one("SELECT * FROM mesh_mission_items WHERE mission_id=? AND dedupe_key=? AND id!=?", v("mission_id"), v("dedupe_key"), v("id"));
+            if (!local) return "apply";
+            const key7 = [v("mission_id"), v("dedupe_key")];
+            if (local.mesh_id !== this.c.meshId) throw snapshotConflict("mesh_mission_items", key7, `item ${String(local.id)} belongs to another project`);
+            this.run("UPDATE OR IGNORE mesh_mission_ref_evals SET item_id=? WHERE item_id=?", v("id"), local.id);
+            this.run("DELETE FROM mesh_mission_ref_evals WHERE item_id=?", local.id);
+            this.run("UPDATE OR IGNORE assistant_decision_answer_log SET item_id=? WHERE mesh_id=? AND item_id=?", v("id"), this.c.meshId, local.id);
+            this.run("DELETE FROM assistant_decision_answer_log WHERE mesh_id=? AND item_id=?", this.c.meshId, local.id);
+            this.run("DELETE FROM mesh_mission_items WHERE id=?", local.id);
+            this.map("mesh_mission_items", TARGET_LOCAL_KEY_SPACE, [local.id], [v("id")]);
+            this.resolutions.push({ table: "mesh_mission_items", index: "idx_mesh_mission_items_dedupe", key: key7, winner: "source", local, incomingKey: v("id") });
+            return "apply";
+          }
+          // ── mesh_release_missions ────────────────────────────────────────────────
+          releaseMember(v) {
+            if (v("state") !== "member") return "apply";
+            const local = this.one("SELECT * FROM mesh_release_missions WHERE mission_id=? AND state='member' AND NOT (release_id=? AND added_at=?)", v("mission_id"), v("release_id"), v("added_at"));
+            if (!local) return "apply";
+            if (local.mesh_id !== this.c.meshId) throw snapshotConflict("mesh_release_missions", [v("mission_id")], `mission is active in release ${String(local.release_id)} of another project`);
+            this.run(
+              "UPDATE mesh_release_missions SET state='removed', ended_at=COALESCE(ended_at,?) WHERE release_id=? AND mission_id=? AND added_at=?",
+              new Date(this.now()).toISOString(),
+              local.release_id,
+              local.mission_id,
+              local.added_at
+            );
+            this.resolutions.push({ table: "mesh_release_missions", index: "idx_mesh_release_missions_one_active", key: [v("mission_id")], winner: "source", local, incomingKey: v("release_id") });
+            return "apply";
+          }
+          // ── assistant_memory_entry ───────────────────────────────────────────────
+          /** `id` is the public identity. `seq` is this daemon's storage rowid and may belong to any other entry here. */
+          applyMemoryRows(columns, rows) {
+            const idAt = columns.indexOf("id"), seqAt = columns.indexOf("seq");
+            const rest = columns.filter((c) => c !== "seq");
+            const restAt = rest.map((c) => columns.indexOf(c));
+            for (const row2 of rows) {
+              const local = this.one("SELECT * FROM assistant_memory_entry WHERE id=?", row2[idAt]);
+              if (local) {
+                if (local.scope !== "project" || local.project_ref !== this.c.meshId) throw snapshotConflict("assistant_memory_entry", [row2[idAt]], "id is held by a global entry or another project");
+                if (restAt.every((at, i) => local[rest[i]] === row2[at])) continue;
+                this.run(`UPDATE assistant_memory_entry SET ${rest.map((c) => `${c}=?`).join(",")} WHERE id=?`, ...restAt.map((at) => row2[at]), row2[idAt]);
+                this.resolutions.push({ table: "assistant_memory_entry", index: "sqlite_autoindex_assistant_memory_entry_1", key: [row2[idAt]], winner: "source", local, incomingKey: row2[seqAt] });
+                continue;
+              }
+              const keepSeq = !this.one("SELECT 1 AS present FROM assistant_memory_entry WHERE seq=?", row2[seqAt]);
+              const names = keepSeq ? columns : rest;
+              this.run(`INSERT INTO assistant_memory_entry (${names.join(",")}) VALUES (${names.map(() => "?").join(",")})`, ...names.map((c) => row2[columns.indexOf(c)]));
+            }
+          }
+          /** One audit record per handoff. A retry finds nothing new, and appends to what it finds. */
+          archive(handoffId) {
+            if (!this.resolutions.length) return;
+            const prior = this.one("SELECT payload_json FROM mesh_host_handoff_archive WHERE handoff_id=? AND side='reconciliation'", handoffId);
+            const merged = [...prior?.payload_json ? JSON.parse(prior.payload_json) : [], ...this.resolutions];
+            this.run(
+              "INSERT INTO mesh_host_handoff_archive (handoff_id,side,mesh_id,snapshot_digest,payload_json) VALUES (?,'reconciliation',?,?,?) ON CONFLICT(handoff_id,side) DO UPDATE SET payload_json=excluded.payload_json",
+              handoffId,
+              this.c.meshId,
+              this.c.digest,
+              JSON.stringify(merged)
+            );
+          }
+        };
+      }
+    });
     var snapshot_import_exports = {};
     __export2(snapshot_import_exports, {
       applySnapshotTables: () => applySnapshotTables,
@@ -140326,12 +140567,19 @@ ${tail}` : ""
         "mesh_releases",
         "mesh_release_missions",
         "assistant_decision_answer_log",
-        "assistant_metric_daily"
+        "assistant_metric_daily",
+        "turn_attempts",
+        "turn_holds",
+        "mesh_task_outputs",
+        "mesh_mission_ref_evals",
+        "assistant_attempt_bodies",
+        "assistant_relays",
+        "assistant_relay_coverage"
       ]);
       const surrogate = { mesh_mission_events: "seq", mesh_release_events: "seq", ...historyIdentity === "preserve-exact" ? {} : { mesh_tool_call_log: "id", assistant_procedure_signals: "id" } };
       const appendOnly = historyIdentity === "preserve-exact" ? /* @__PURE__ */ new Set(["mesh_tool_call_log", "assistant_procedure_signals"]) : /* @__PURE__ */ new Set();
       const observed2 = /* @__PURE__ */ new Set(["mesh_topic_index", "mesh_local_records", "session_artifacts", "turn_events"]);
-      const sourceWins = (table, row2, columns, existing) => table === "turn_events" && row2[columns.indexOf("publish_state")] === "pending" || (table === "session_artifacts" && existing.origin_daemon_id === source2 || daemonIdsEquivalent5(String(existing.origin_daemon_id ?? ""), source2));
+      const sourceWins = (table, row2, columns, existing) => table === "turn_events" && row2[columns.indexOf("publish_state")] === "pending" || table === "session_artifacts" && (existing.origin_daemon_id === source2 || daemonIdsEquivalent5(String(existing.origin_daemon_id ?? ""), source2));
       const apply = db3.transaction(() => {
         const counts2 = {};
         const retained = db3.prepare("SELECT snapshot_digest FROM mesh_host_handoff_archive WHERE handoff_id=? AND side=?").all(handoffId, "source-snapshot")[0];
@@ -140339,8 +140587,14 @@ ${tail}` : ""
         const before = Object.fromEntries(HOST_SNAPSHOT_TABLES.map((spec) => [spec.table, readTable(db3, spec, meshId)]));
         db3.prepare("INSERT OR IGNORE INTO mesh_host_handoff_archive (handoff_id,side,mesh_id,snapshot_digest,payload_json) VALUES (?,?,?,?,?)").run(handoffId, "target-before", meshId, digest7, JSON.stringify(before));
         db3.prepare("INSERT OR IGNORE INTO mesh_host_handoff_archive (handoff_id,side,mesh_id,snapshot_digest,payload_json) VALUES (?,?,?,?,?)").run(handoffId, "source-snapshot", meshId, digest7, JSON.stringify(payload));
+        const reconciler = new SnapshotReconciler(db3, { meshId, sourceDaemonId: source2, digest: digest7, payload });
         for (const spec of HOST_SNAPSHOT_TABLES) {
           const t = payload.tables[spec.table];
+          if (spec.table === "assistant_memory_entry") {
+            reconciler.applyMemoryRows(t.columns, t.rows);
+            counts2[spec.table] = t.rows.length;
+            continue;
+          }
           if (appendOnly.has(spec.table)) {
             const keep = t.columns.filter((c) => c !== surrogateIdOf(spec.table));
             const at = keep.map((c) => t.columns.indexOf(c));
@@ -140361,15 +140615,16 @@ ${tail}` : ""
           const pk = historyIdentityColumns(db3, spec.table);
           if (!pk.length) throw new Error(`snapshot table has no identity: ${spec.table}`);
           const select = db3.prepare(`SELECT * FROM ${spec.table} WHERE ${pk.map((k) => `${k} = ?`).join(" AND ")}`);
-          const insert = db3.prepare(`INSERT ${observed2.has(spec.table) ? "OR IGNORE " : ""}INTO ${spec.table} (${t.columns.join(", ")}) VALUES (${t.columns.map(() => "?").join(", ")})`);
+          const insert = db3.prepare(`INSERT INTO ${spec.table} (${t.columns.join(", ")}) VALUES (${t.columns.map(() => "?").join(", ")})`);
           const coordinate = surrogate[spec.table];
-          const needsRemap = coordinate && t.rows.some((row2) => {
+          const collided = coordinate ? t.rows.find((row2) => {
             const key7 = JSON.stringify(pk.map((k) => row2[t.columns.indexOf(k)]));
             if (db3.prepare("SELECT target_key FROM mesh_host_handoff_row_map WHERE mesh_id=? AND table_name=? AND source_daemon_id=? AND source_key=?").all(meshId, spec.table, source2, key7).length) return true;
             const existing = select.all(...pk.map((k) => row2[t.columns.indexOf(k)]))[0];
             return existing && !t.columns.every((c, i) => existing[c] === row2[i]);
-          });
-          if (needsRemap && historyIdentity !== "origin-qualified-prototype") throw new Error(`history identity collision requires owner compatibility decision: ${spec.table}`);
+          }) : void 0;
+          const needsRemap = !!collided;
+          if (collided && historyIdentity !== "origin-qualified-prototype") throw new Error(`history identity collision requires owner compatibility decision: ${spec.table} key ${JSON.stringify(pk.map((k) => collided[t.columns.indexOf(k)]))}`);
           let nextCoordinate = coordinate ? Number(db3.prepare(`SELECT COALESCE(MAX(${coordinate}),0) AS n FROM ${spec.table}`).all()[0].n) : 0;
           let lastCoordinate = -1;
           for (const original of t.rows) {
@@ -140389,6 +140644,8 @@ ${tail}` : ""
               if (coordinate) lastCoordinate = Number(row2[t.columns.indexOf(coordinate)]);
               continue;
             }
+            if (reconciler.resolve(spec.table, t.columns, row2) === "skip") continue;
+            existing = select.all(...pk.map((k) => row2[t.columns.indexOf(k)]))[0];
             if (coordinate && needsRemap && !mapped) {
               row2[t.columns.indexOf(coordinate)] = ++nextCoordinate;
               db3.prepare("INSERT INTO mesh_host_handoff_row_map (mesh_id,table_name,source_daemon_id,source_key,target_key,snapshot_digest) VALUES (?,?,?,?,?,?)").run(meshId, spec.table, source2, key7, JSON.stringify(pk.map((k) => row2[t.columns.indexOf(k)])), digest7);
@@ -140400,15 +140657,27 @@ ${tail}` : ""
               lastCoordinate = value;
             }
             if (existing) {
-              const scopeMatches = spec.parentTable ? before[spec.table].rows.some((r) => pk.every((k) => r[before[spec.table].columns.indexOf(k)] === row2[t.columns.indexOf(k)])) : existing[spec.meshColumn] === meshId;
-              if (!scopeMatches) throw new Error(`snapshot conflicts with retained local state: ${spec.table}`);
+              const scopeMatches = spec.parentTable ? before[spec.table].rows.some((r) => pk.every((k) => r[before[spec.table].columns.indexOf(k)] === row2[t.columns.indexOf(k)])) : existing[spec.meshColumn] === meshId || observed2.has(spec.table) && existing[spec.meshColumn] === null;
+              const rowKey = pk.map((k) => row2[t.columns.indexOf(k)]);
+              if (!scopeMatches) throw snapshotConflict(spec.table, rowKey, "the row belongs to another project");
               if (observed2.has(spec.table) && !sourceWins(spec.table, row2, t.columns, existing)) continue;
-              if (!observed2.has(spec.table) && !mutable.has(spec.table)) throw new Error(`snapshot conflicts with retained local state: ${spec.table}`);
-              db3.prepare(`UPDATE ${spec.table} SET ${t.columns.map((c) => `${c}=?`).join(",")} WHERE ${pk.map((k) => `${k}=?`).join(" AND ")}`).run(...row2, ...pk.map((k) => row2[t.columns.indexOf(k)]));
-            } else insert.run(...row2);
+              if (!observed2.has(spec.table) && !mutable.has(spec.table)) throw snapshotConflict(spec.table, rowKey, "host-only history differs");
+              try {
+                db3.prepare(`UPDATE ${spec.table} SET ${t.columns.map((c) => `${c}=?`).join(",")} WHERE ${pk.map((k) => `${k}=?`).join(" AND ")}`).run(...row2, ...rowKey);
+              } catch (e) {
+                throw snapshotConflict(spec.table, rowKey, e.message);
+              }
+            } else {
+              try {
+                insert.run(...row2);
+              } catch (e) {
+                throw snapshotConflict(spec.table, pk.map((k) => row2[t.columns.indexOf(k)]), e.message);
+              }
+            }
           }
           counts2[spec.table] = t.rows.length;
         }
+        reconciler.archive(handoffId);
         return counts2;
       });
       return apply();
@@ -140434,6 +140703,7 @@ ${tail}` : ""
         init_project_files();
         init_assistant_projects();
         init_history_identity();
+        init_snapshot_reconcile();
       }
     });
     function retentionStatePath() {
@@ -140991,7 +141261,7 @@ ${tail}` : ""
         };
       }
     });
-    function resolveRoleLaunch(ctx, role, override, projectId) {
+    function resolveRoleLaunch(ctx, role, override, projectId, ignoreDefault) {
       const ports = getLaunchDefaultsCommandPorts(ctx);
       const unavailable3 = (reason) => ({
         ok: false,
@@ -141004,7 +141274,7 @@ ${tail}` : ""
       if (!ports.store.withSnapshot) return unavailable3("snapshot_lock_unavailable");
       try {
         return ports.store.withSnapshot((stored) => {
-          if (stored.status !== "ok") return resolveLaunchSelection({ role, stored, override }, ports.validation);
+          if (stored.status !== "ok") return resolveLaunchSelection({ role, stored, override, ...ignoreDefault ? { ignoreDefault } : {} }, ports.validation);
           if (projectId && !ports.projects) return unavailable3("project_storage_unavailable");
           const resolve76 = () => {
             let hasHostInventory = false;
@@ -141023,6 +141293,7 @@ ${tail}` : ""
               role,
               stored,
               override,
+              ...ignoreDefault ? { ignoreDefault } : {},
               ...state2?.entry ? { hostCoordinatorLaunch: {
                 projectId: state2.projectId,
                 revision: state2.revision,
@@ -150437,9 +150708,10 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           if (!target2) return { success: false, code: "peer_capability_unconfirmed" };
           const op = str18(args.op);
           if (op === "manifest") return target2.manifest({ handoffId, meshId, manifest: args.manifest }, sender);
-          if (op === "chunk") return target2.chunk({ handoffId, meshId, seq: Number(args.seq), sha256: str18(args.sha256), data: typeof args.data === "string" ? args.data : "" }, sender);
+          if (op === "chunk") return target2.chunk({ handoffId, meshId, seq: Number(args.seq), sha256: str18(args.sha256), data: typeof args.data === "string" ? args.data : "", ...str18(args.encoding) ? { encoding: str18(args.encoding) } : {} }, sender);
           if (op === "seal") return target2.seal({ handoffId, meshId }, sender);
-          return { success: false, code: "invalid_args", error: "op must be manifest, chunk or seal" };
+          if (op === "conflict_probe") return target2.conflictProbe({ handoffId, meshId, probe: args.probe }, sender);
+          return { success: false, code: "invalid_args", error: "op must be manifest, chunk, seal or conflict_probe" };
         }
         case HOST_HANDOFF_VERB.ack:
           return source2 ? source2.onAck(args.ack, sender) : { success: false, code: "handoff_unknown" };
@@ -150460,6 +150732,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         manifest: (a) => send(HOST_HANDOFF_VERB.chunk, { op: "manifest", ...a }),
         chunk: (a) => send(HOST_HANDOFF_VERB.chunk, { op: "chunk", ...a }),
         seal: (a) => send(HOST_HANDOFF_VERB.chunk, { op: "seal", ...a }),
+        conflictProbe: (a) => send(HOST_HANDOFF_VERB.chunk, { op: "conflict_probe", ...a }),
         activate: (a) => send(HOST_HANDOFF_VERB.activate, a),
         status: (a) => send(HOST_HANDOFF_VERB.status, a),
         discard: (a) => send(HOST_HANDOFF_VERB.discard, a),
@@ -150475,16 +150748,83 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         init_types2();
       }
     });
+    function buildConflictProbe(db3, meshId) {
+      const history = {};
+      for (const table of HISTORY_TABLES) {
+        const rows = db3.prepare(`SELECT * FROM ${table} WHERE mesh_id=? ORDER BY seq`).all(meshId);
+        const columns = rows.length ? Object.keys(rows[0]).filter((c) => c !== "row_id") : [];
+        history[table] = { columns, rows: rows.map((r) => [r.seq, rowDigest(r, columns)]) };
+      }
+      return {
+        history,
+        artifacts: db3.prepare("SELECT session_id, rel_path FROM session_artifacts WHERE mesh_id=?").all(meshId).map((r) => [String(r.session_id), String(r.rel_path)]),
+        items: db3.prepare("SELECT mission_id, dedupe_key FROM mesh_mission_items WHERE mesh_id=? AND dedupe_key IS NOT NULL").all(meshId).map((r) => [String(r.mission_id), String(r.dedupe_key)]),
+        memory: db3.prepare("SELECT id FROM assistant_memory_entry WHERE scope='project' AND project_ref=?").all(meshId).map((r) => String(r.id))
+      };
+    }
+    function findProbeConflicts(db3, meshId, probe) {
+      const found = [];
+      for (const table of HISTORY_TABLES) {
+        const incoming = probe.history?.[table];
+        if (!incoming?.rows?.length) continue;
+        const digests = new Map(incoming.rows);
+        for (const local of db3.prepare(`SELECT * FROM ${table} WHERE mesh_id=?`).all(meshId)) {
+          const want = digests.get(local.seq);
+          if (want !== void 0 && want !== rowDigest(local, incoming.columns)) found.push({ table, key: [meshId, local.seq], reason: "the same event number holds different content here" });
+        }
+      }
+      const artifact = db3.prepare("SELECT artifact_id, mesh_id FROM session_artifacts WHERE session_id=? AND rel_path=?");
+      for (const [session, path141] of probe.artifacts ?? []) {
+        const local = artifact.all(session, path141)[0];
+        if (local && local.mesh_id !== null && local.mesh_id !== meshId) found.push({ table: "session_artifacts", key: [session, path141], reason: `path belongs to another project's artifact ${String(local.artifact_id)}` });
+      }
+      const item = db3.prepare("SELECT id, mesh_id FROM mesh_mission_items WHERE mission_id=? AND dedupe_key=?");
+      for (const [mission, dedupe2] of probe.items ?? []) {
+        const local = item.all(mission, dedupe2)[0];
+        if (local && local.mesh_id !== meshId) found.push({ table: "mesh_mission_items", key: [mission, dedupe2], reason: `item ${String(local.id)} belongs to another project` });
+      }
+      const memory = db3.prepare("SELECT scope, project_ref FROM assistant_memory_entry WHERE id=?");
+      for (const id4 of probe.memory ?? []) {
+        const local = memory.all(id4)[0];
+        if (local && (local.scope !== "project" || local.project_ref !== meshId)) found.push({ table: "assistant_memory_entry", key: [id4], reason: "id is held by a global entry or another project" });
+      }
+      return found;
+    }
+    function describeProbeConflicts(conflicts) {
+      const shown = conflicts.slice(0, MAX_REPORTED).map((c) => `${c.table} key ${JSON.stringify(c.key)} (${c.reason})`).join("; ");
+      return conflicts.length > MAX_REPORTED ? `${shown}; and ${conflicts.length - MAX_REPORTED} more` : shown;
+    }
+    var HISTORY_TABLES;
+    var MAX_REPORTED;
+    var rowDigest;
+    var init_snapshot_probe = __esm2({
+      "src/mesh/host-handoff/snapshot-probe.ts"() {
+        "use strict";
+        init_snapshot_export();
+        HISTORY_TABLES = ["mesh_mission_events", "mesh_release_events"];
+        MAX_REPORTED = 5;
+        rowDigest = (row2, columns) => sha256Hex(JSON.stringify(columns.map((c) => row2[c] ?? null))).slice(0, 16);
+      }
+    });
+    var import_node_zlib;
     var MEMBER_UNREACHABLE;
+    var refusalReason;
     var refuse6;
     var HostHandoffSource;
     var init_source_machine = __esm2({
       "src/mesh/host-handoff/source-machine.ts"() {
         "use strict";
+        import_node_zlib = require("zlib");
         init_dist();
+        init_snapshot_probe();
         init_snapshot_export();
         init_types2();
         MEMBER_UNREACHABLE = /PEER_NOT_CONNECTED|NO_PEER|NO_TRANSPORT|QUEUE_OVERFLOW|CONNECT_TIMEOUT|not connected|signaling|not available/i;
+        refusalReason = (r, fallback) => {
+          const code = String(r.code ?? fallback);
+          const detail = typeof r.error === "string" ? r.error : "";
+          return detail ? `${code}: ${detail}`.slice(0, 500) : code;
+        };
         refuse6 = (code, error, extra = {}) => ({ success: false, code, error, ...extra });
         HostHandoffSource = class {
           constructor(d) {
@@ -150555,16 +150895,31 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
                   const snap = this.d.data.exportSnapshot({ meshId: input.meshId, handoffId: probeId, fromDaemonId: this.d.selfDaemonId, toDaemonId: input.targetDaemonId, hostEpoch: view2.hostEpoch, meshConfig: view2.config, launchPlan });
                   estimateBytes2 = snapshotBytes(snap);
                   const targetFree = cap.diskFreeBytes;
-                  add("disk_space", this.d.data.freeDiskBytes() >= estimateBytes2 * 2 && cap.ready?.diskOk !== false && (targetFree === void 0 || targetFree >= estimateBytes2 * 3), "insufficient_disk");
+                  add("disk_space", this.d.data.freeDiskBytes() >= estimateBytes2 * 2 && cap.ready?.diskOk !== false && (targetFree === void 0 || targetFree >= estimateBytes2 * 4), "insufficient_disk");
                 } catch (e) {
                   add("snapshot_readable", false, "verify_failed", e?.message);
                 }
               }
               if (capable) await this.checkFleetMembers(input, view2?.memberDaemonIds ?? [], checks);
+              if (capable) await this.checkConflictProbe(input, probeId, checks);
               const freeze = await this.d.freeze.check(input.meshId);
               add("no_open_writer_checkpoint", freeze.ready || freeze.code !== "writer_checkpoint_pending", "writer_checkpoint_pending", freeze.ready ? void 0 : freeze.detail);
             }
             return { ok: checks.every((c) => c.ok), checks, ...launchPlan ? { launchPlan } : {}, ...targetPublicKey ? { targetPublicKey } : {}, ...estimateBytes2 !== void 0 ? { estimateBytes: estimateBytes2 } : {} };
+          }
+          /** Find a collision the import would refuse while nothing has stopped. Silence proves nothing: the rehearsal still decides. */
+          async checkConflictProbe(input, handoffId, checks) {
+            const client = this.d.peer(input.targetDaemonId);
+            if (!client.conflictProbe || !this.d.data.buildConflictProbe) return;
+            let answer2;
+            try {
+              answer2 = await client.conflictProbe({ handoffId, meshId: input.meshId, probe: this.d.data.buildConflictProbe(input.meshId) });
+            } catch (e) {
+              this.log(`conflict probe unanswered: ${e?.message ?? e}`);
+              return;
+            }
+            const conflicts = answer2.success && Array.isArray(answer2.conflicts) ? answer2.conflicts : [];
+            checks.push({ id: "no_snapshot_conflicts", ok: conflicts.length === 0, ...conflicts.length ? { code: "snapshot_conflict", detail: describeProbeConflicts(conflicts) } : {} });
           }
           /** Every online roster member must speak this protocol, or it could never adopt the new host. */
           async checkFleetMembers(input, members, checks) {
@@ -150721,23 +151076,32 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             const peer = this.d.peer(rec8.peerDaemonId);
             try {
               const m = await peer.manifest({ handoffId: rec8.handoffId, meshId: rec8.meshId, manifest: snap.manifest });
-              if (!m.success) return { ok: false, code: String(m.code ?? "manifest_mismatch") };
+              if (!m.success) return { ok: false, code: refusalReason(m, "manifest_mismatch") };
               const have = new Set(m.have ?? []);
-              for (const c of snap.chunks) {
-                if (have.has(c.seq)) continue;
-                for (let attempt = 1; ; attempt++) {
-                  try {
-                    const r = await peer.chunk({ handoffId: rec8.handoffId, meshId: rec8.meshId, seq: c.seq, sha256: c.sha256, data: c.data });
-                    if (!r.success) return { ok: false, code: String(r.code ?? "chunk_hash_mismatch") };
-                    break;
-                  } catch (e) {
-                    if (attempt >= HOST_HANDOFF_CHUNK_ATTEMPTS) throw e;
+              const pending = snap.chunks.filter((c) => !have.has(c.seq));
+              const encode = m.encodings?.includes(HOST_HANDOFF_CHUNK_ENCODING) === true;
+              let next = 0;
+              let refused5;
+              const worker = async () => {
+                while (next < pending.length && refused5 === void 0) {
+                  const c = pending[next++];
+                  const wire = encode ? { data: (0, import_node_zlib.brotliCompressSync)(Buffer.from(c.data, "utf8"), { params: { [import_node_zlib.constants.BROTLI_PARAM_QUALITY]: 5, [import_node_zlib.constants.BROTLI_PARAM_LGWIN]: 22 } }).toString("base64"), encoding: HOST_HANDOFF_CHUNK_ENCODING } : { data: c.data };
+                  for (let attempt = 1; ; attempt++) {
+                    try {
+                      const r = await peer.chunk({ handoffId: rec8.handoffId, meshId: rec8.meshId, seq: c.seq, sha256: c.sha256, ...wire });
+                      if (!r.success) refused5 ??= refusalReason(r, "chunk_hash_mismatch");
+                      break;
+                    } catch (e) {
+                      if (attempt >= HOST_HANDOFF_CHUNK_ATTEMPTS) throw e;
+                    }
                   }
+                  this.d.journal.update(rec8.handoffId, "source", { updatedAt: this.d.clock.now() });
                 }
-                this.d.journal.update(rec8.handoffId, "source", { updatedAt: this.d.clock.now() });
-              }
+              };
+              await Promise.all(Array.from({ length: encode ? HOST_HANDOFF_SEND_WINDOW : 1 }, worker));
+              if (refused5 !== void 0) return { ok: false, code: refused5 };
               const sealed = await peer.seal({ handoffId: rec8.handoffId, meshId: rec8.meshId });
-              if (!sealed.success) return { ok: false, code: String(sealed.code ?? "verify_failed") };
+              if (!sealed.success) return { ok: false, code: refusalReason(sealed, "verify_failed") };
               this.d.journal.update(rec8.handoffId, "source", { updatedAt: this.d.clock.now() });
               return { ok: true };
             } catch (e) {
@@ -150822,7 +151186,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
               return;
             }
             if (res.applied === false && res.discarded === true && res.phase === "discarded" && res.epoch === rec8.epoch) {
-              await this.abortInternal(this.d.journal.get(handoffId, "source"), String(res.code ?? "activate_failed"), true);
+              await this.abortInternal(this.d.journal.get(handoffId, "source"), refusalReason(res, "activate_failed"), true);
               return;
             }
             this.move(handoffId, "uncertain", { probeCount: 0, lastProbeAt: this.d.clock.now() });
@@ -151079,6 +151443,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         };
       }
     });
+    var import_node_zlib2;
     var TARGET_STAGE_TTL_MS;
     var POST_APPLY_CANARY_MAX_AGE_MS;
     var LAUNCH_RETRY_MS;
@@ -151090,6 +151455,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       "src/mesh/host-handoff/target-machine.ts"() {
         "use strict";
         init_dist();
+        import_node_zlib2 = require("zlib");
         init_snapshot_import();
         init_snapshot_export();
         init_certificate();
@@ -151145,6 +151511,13 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
               ready: { coordinatorLaunchable: readiness?.ok ?? this.d.coordinator.canLaunch(a.meshId), ...readiness ? { checks: readiness.checks } : {}, diskOk: this.d.data.freeDiskBytes() > 64 * 1024 * 1024 }
             };
           }
+          /** Answer from the same member check as `capability`, before anything froze. Read-only. */
+          conflictProbe(a, sender) {
+            const view2 = this.memberView(a.meshId, sender);
+            if (!view2 || view2.role !== "member" || !view2.hostDaemonId || !daemonIdsEquivalent5(view2.hostDaemonId, sender)) return fail10("wrong_peer");
+            if (!this.d.data.findProbeConflicts) return fail10("invalid_args", "conflict probe unavailable");
+            return { success: true, conflicts: this.d.data.findProbeConflicts(a.meshId, a.probe) };
+          }
           manifest(a, sender) {
             const m = a.manifest;
             if (!m || m.protocol !== HOST_HANDOFF_PROTOCOL || m.handoffId !== a.handoffId || m.meshId !== a.meshId) return fail10("manifest_mismatch");
@@ -151157,7 +151530,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
               if (existing.phase === "discarded") return fail10("handoff_aborted");
               if (existing.phase === "active") return fail10("already_committed");
               if (existing.manifestDigest !== m.digest) return fail10("manifest_mismatch");
-              return { success: true, have: this.d.journal.getChunks(a.handoffId).map((c) => c.seq) };
+              return { success: true, have: this.d.journal.getChunks(a.handoffId).map((c) => c.seq), encodings: [HOST_HANDOFF_CHUNK_ENCODING] };
             }
             const other = this.d.journal.findActive(a.meshId, "target");
             if (other) return fail10("handoff_in_progress");
@@ -151175,7 +151548,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
               updatedAt: now
             });
             this.d.journal.putManifest(a.handoffId, m);
-            return { success: true, have: [] };
+            return { success: true, have: [], encodings: [HOST_HANDOFF_CHUNK_ENCODING] };
           }
           chunk(a, sender) {
             const rec8 = this.d.journal.get(a.handoffId, "target");
@@ -151184,10 +151557,19 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             if (wrong) return wrong;
             if (rec8.phase === "discarded") return fail10("handoff_aborted");
             if (rec8.phase !== "importing") return { success: true, duplicate: true };
-            if (typeof a.data !== "string" || sha256Hex(a.data) !== a.sha256) return fail10("chunk_hash_mismatch", `chunk ${a.seq}`);
             const want = this.d.journal.getManifest(a.handoffId)?.chunks.find((c) => c.seq === a.seq);
             if (!want || want.sha256 !== a.sha256) return fail10("chunk_hash_mismatch", `chunk ${a.seq} is not in the manifest`);
-            this.d.journal.putChunk(a.handoffId, a.seq, a.sha256, a.data);
+            let data = a.data;
+            if (a.encoding !== void 0) {
+              if (a.encoding !== HOST_HANDOFF_CHUNK_ENCODING) return fail10("chunk_hash_mismatch", `chunk ${a.seq}: unknown encoding`);
+              try {
+                data = (0, import_node_zlib2.brotliDecompressSync)(Buffer.from(a.data, "base64"), { maxOutputLength: want.bytes + 1 }).toString("utf8");
+              } catch {
+                return fail10("chunk_hash_mismatch", `chunk ${a.seq} did not decode`);
+              }
+            }
+            if (typeof data !== "string" || sha256Hex(data) !== a.sha256) return fail10("chunk_hash_mismatch", `chunk ${a.seq}`);
+            this.d.journal.putChunk(a.handoffId, a.seq, a.sha256, data);
             this.d.journal.update(a.handoffId, "target", { updatedAt: this.d.clock.now() });
             return { success: true };
           }
@@ -151871,6 +152253,8 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           }
           assertProjectApprovalDestinations(getConfigDir2(), payload.files);
         },
+        buildConflictProbe: (meshId) => buildConflictProbe(db2(), meshId),
+        findProbeConflicts: (meshId, probe) => findProbeConflicts(db2(), meshId, probe),
         freeDiskBytes: () => {
           try {
             const s2 = (0, import_node_fs50.statfsSync)(getConfigDir2());
@@ -152014,6 +152398,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         init_target_machine();
         init_snapshot_export();
         init_snapshot_import();
+        init_snapshot_probe();
         init_project_files();
         init_assistant_projects();
         init_project_write_cut();
@@ -152425,7 +152810,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             ...opts?.canaryMaxAgeMs ? { canaryMaxAgeMs: opts.canaryMaxAgeMs } : {},
             validateSelection: (selection) => {
               const { targetNodeId: _targetNodeId, ...override } = selection;
-              const resolved = resolveRoleLaunch(ctx, "coordinator", override);
+              const resolved = resolveRoleLaunch(ctx, "coordinator", override, void 0, ["model", "thinkingLevel"]);
               return resolved.ok && JSON.stringify(resolved.selection) === JSON.stringify({
                 provider: selection.provider,
                 ...selection.model !== void 0 ? { model: selection.model } : {},
@@ -152457,7 +152842,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           const census2 = await liveHost(ctx).observeCoordinator(meshId, plan);
           if (!census2.runtimeVerified) return { success: false, ready: false };
           if (census2.liveCount) return { success: !!census2.sessionId, sessionId: census2.sessionId, ready: census2.ready };
-          const out = await host.exec("launch_mesh_coordinator", { meshId, managedByAssistant: true, coordinatorNodeId: plan.targetNodeId, cliType: plan.provider, initialModel: plan.model, initialThinkingLevel: plan.thinkingLevel });
+          const out = await host.exec("launch_mesh_coordinator", { meshId, managedByAssistant: true, coordinatorNodeId: plan.targetNodeId, cliType: plan.provider, initialModel: plan.model, initialThinkingLevel: plan.thinkingLevel, exactLaunchSelection: true });
           const sessionId = str19(out?.sessionId);
           if (out?.success !== true || !sessionId) return { success: false, ready: false };
           const { localSessionReadyProbe: localSessionReadyProbe2 } = await Promise.resolve().then(() => (init_coordinator_injection_cleanup(), coordinator_injection_cleanup_exports));
@@ -152682,7 +153067,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             const key7 = JSON.stringify([op, meshId, targetDaemonId, input.targetNodeId ?? ""]);
             if (op === "preflight") return ownerJob(key7, async () => {
               const pf = await e.source.preflight(input);
-              return { success: pf.ok, ok: pf.ok, checks: pf.checks, ...pf.estimateBytes !== void 0 ? { estimateBytes: pf.estimateBytes } : {} };
+              return { success: true, ok: pf.ok, checks: pf.checks, ...pf.estimateBytes !== void 0 ? { estimateBytes: pf.estimateBytes } : {} };
             });
             return ownerJob(key7, async () => startHostHandoff(ctx, input));
           }
@@ -203306,7 +203691,8 @@ ${marker2}`,
           ...args?.cliType !== void 0 ? { provider: args.cliType } : {},
           ...args?.initialModel !== void 0 && args.initialModel !== null ? { model: args.initialModel } : {},
           ...args?.initialThinkingLevel !== void 0 && args.initialThinkingLevel !== null ? { thinkingLevel: args.initialThinkingLevel } : {}
-        }, meshId);
+          // A host move launches the plan as given: an axis it omits means the provider's default, not this machine's.
+        }, meshId, args?.exactLaunchSelection === true ? ["model", "thinkingLevel"] : void 0);
         if (!resolved.ok) return roleLaunchFailure(resolved);
         cliType = resolved.selection.provider;
         const initialModel = resolved.selection.model;

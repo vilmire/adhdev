@@ -1458,12 +1458,15 @@
                 "target_launchable": "대상이 코디네이터를 실행할 수 있음",
                 "disk_space": "디스크 공간 충분",
                 "snapshot_readable": "프로젝트 데이터 읽기 가능",
+                "no_snapshot_conflicts": "대상 머신에 충돌하는 기록 없음",
                 "no_open_writer_checkpoint": "끝나지 않은 워커 중지 없음"
             },
             "code": {
                 "host_key_unpinned": "대상이 이 호스트와 페어링되지 않았습니다",
                 "host_key_mismatch": "대상이 이 호스트에 대해 다른 키를 고정했습니다",
                 "member_protocol_unsupported": "이 머신들을 먼저 업데이트하세요",
+                "COMMAND_SOURCE_REJECTED": "변경하려면 소유자 비밀번호로 로그인하세요. 소유자 비밀번호가 없는 standalone 대시보드에서는 호스트 이동을 켤 수 없습니다.",
+                "owner_auth_required": "변경하려면 소유자 비밀번호로 로그인하세요. 소유자 비밀번호가 없는 standalone 대시보드에서는 호스트 이동을 켤 수 없습니다.",
                 "snapshot_conflict": "대상에 충돌하는 기록이 있습니다",
                 "state_preservation_unverified": "진행 중인 작업을 먼저 끝내세요",
                 "not_host": "이 머신은 호스트가 아닙니다",

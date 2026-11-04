@@ -117,7 +117,7 @@ export function MeshHostHandoffDialog({ open, onClose, meshId, hostDaemonId, dae
             if (res?.enabled !== true) setError(String(res?.code || 'peer_capability_unconfirmed'))
             await refresh()
             setChecks(null); setPreflightOk(false)
-        } catch (e: any) { setError(e?.message || 'failed') } finally { setBusy(false) }
+        } catch (e: any) { setError(String(handoffAnswerFromError(e)?.code || e?.code || e?.message || 'failed')) } finally { setBusy(false) }
     }
     /** One-time code from the host, handed to the target by this owner connection. Neither is ever displayed. */
     const pairTarget = async () => {

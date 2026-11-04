@@ -8,15 +8,17 @@
  * exit must be proved before target activation is sent.
  */
 
+import { brotliCompressSync, constants as zlibConstants } from 'node:zlib';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import type { HandoffJournal } from './journal.js';
 import type { HandoffPeerClient } from './peer.js';
 import type {
     CertificatePort, HandoffClock, HandoffDataPort, HandoffFreezePort, HandoffHoldPort, HandoffLog, HandoffMeshPort, HandoffMetrics, SourceCoordinatorPort,
 } from './ports.js';
+import { describeProbeConflicts } from './snapshot-probe.js';
 import { rowCountsOf, sanitizeConfigForSnapshot, snapshotBytes, type ExportedSnapshot } from './snapshot-export.js';
 import {
-    HOST_HANDOFF_ACK_TIMEOUT_MS, HOST_HANDOFF_ADVERTISE_INTERVAL_MS, HOST_HANDOFF_CHUNK_ATTEMPTS, HOST_HANDOFF_FREEZE_TIMEOUT_MS, HOST_HANDOFF_PROBE_BASE_MS, HOST_HANDOFF_PROBE_MAX_MS, HOST_HANDOFF_PROTOCOL,
+    HOST_HANDOFF_ACK_TIMEOUT_MS, HOST_HANDOFF_ADVERTISE_INTERVAL_MS, HOST_HANDOFF_CHUNK_ATTEMPTS, HOST_HANDOFF_CHUNK_ENCODING, HOST_HANDOFF_FREEZE_TIMEOUT_MS, HOST_HANDOFF_PROBE_BASE_MS, HOST_HANDOFF_PROBE_MAX_MS, HOST_HANDOFF_PROTOCOL, HOST_HANDOFF_SEND_WINDOW,
     HOST_HANDOFF_RETENTION_MS, type HandoffLaunchPlan, type HandoffAck, type HandoffErrorCode, type HandoffRecord, type PeerResult, type PreflightCheck, type SourcePhase,
 } from './types.js';
 
@@ -45,6 +47,13 @@ export type StartResult =
     | { success: false; code: HandoffErrorCode | string; error: string; checks?: PreflightCheck[]; handoffId?: string; phase?: SourcePhase };
 
 const MEMBER_UNREACHABLE = /PEER_NOT_CONNECTED|NO_PEER|NO_TRANSPORT|QUEUE_OVERFLOW|CONNECT_TIMEOUT|not connected|signaling|not available/i;
+
+/** A refusal as the journal keeps it: the code first, so the dashboard shows which table and key. */
+const refusalReason = (r: PeerResult, fallback: string): string => {
+    const code = String(r.code ?? fallback);
+    const detail = typeof r.error === 'string' ? r.error : '';
+    return detail ? `${code}: ${detail}`.slice(0, 500) : code;
+};
 
 const refuse = (code: HandoffErrorCode | string, error: string, extra: Record<string, unknown> = {}): { success: false; code: string; error: string } & Record<string, unknown> =>
     ({ success: false, code, error, ...extra });
@@ -111,17 +120,30 @@ export class HostHandoffSource {
                 try {
                     const snap = this.d.data.exportSnapshot({ meshId: input.meshId, handoffId: probeId, fromDaemonId: this.d.selfDaemonId, toDaemonId: input.targetDaemonId, hostEpoch: view!.hostEpoch, meshConfig: view!.config, launchPlan });
                     estimateBytes = snapshotBytes(snap);
-                    // Staging, the retained snapshot archive and the before-image each hold about one copy.
+                    // Staging, the retained snapshot archive and the before-image each hold about one copy,
+                    // and the rehearsal's rolled-back import needs about one more in the WAL.
                     const targetFree = cap!.diskFreeBytes;
-                    add('disk_space', this.d.data.freeDiskBytes() >= estimateBytes * 2 && cap!.ready?.diskOk !== false && (targetFree === undefined || targetFree >= estimateBytes * 3), 'insufficient_disk');
+                    add('disk_space', this.d.data.freeDiskBytes() >= estimateBytes * 2 && cap!.ready?.diskOk !== false && (targetFree === undefined || targetFree >= estimateBytes * 4), 'insufficient_disk');
                 } catch (e) { add('snapshot_readable', false, 'verify_failed', (e as Error)?.message); }
             }
             if (capable) await this.checkFleetMembers(input, view?.memberDaemonIds ?? [], checks);
+            if (capable) await this.checkConflictProbe(input, probeId, checks);
             const freeze = await this.d.freeze.check(input.meshId);
             // A coordinator that is merely busy is waited out during `freezing`; an open writer checkpoint is never forced.
             add('no_open_writer_checkpoint', freeze.ready || freeze.code !== 'writer_checkpoint_pending', 'writer_checkpoint_pending', freeze.ready ? undefined : freeze.detail);
         }
         return { ok: checks.every(c => c.ok), checks, ...(launchPlan ? { launchPlan } : {}), ...(targetPublicKey ? { targetPublicKey } : {}), ...(estimateBytes !== undefined ? { estimateBytes } : {}) };
+    }
+
+    /** Find a collision the import would refuse while nothing has stopped. Silence proves nothing: the rehearsal still decides. */
+    private async checkConflictProbe(input: StartInput, handoffId: string, checks: PreflightCheck[]): Promise<void> {
+        const client = this.d.peer(input.targetDaemonId);
+        if (!client.conflictProbe || !this.d.data.buildConflictProbe) return;
+        let answer: Awaited<ReturnType<NonNullable<HandoffPeerClient['conflictProbe']>>>;
+        try { answer = await client.conflictProbe({ handoffId, meshId: input.meshId, probe: this.d.data.buildConflictProbe(input.meshId) }); }
+        catch (e) { this.log(`conflict probe unanswered: ${(e as Error)?.message ?? e}`); return; }
+        const conflicts = answer.success && Array.isArray(answer.conflicts) ? answer.conflicts : [];
+        checks.push({ id: 'no_snapshot_conflicts', ok: conflicts.length === 0, ...(conflicts.length ? { code: 'snapshot_conflict' as const, detail: describeProbeConflicts(conflicts) } : {}) });
     }
 
     /** Every online roster member must speak this protocol, or it could never adopt the new host. */
@@ -251,24 +273,37 @@ export class HostHandoffSource {
         const peer = this.d.peer(rec.peerDaemonId);
         try {
             const m = await peer.manifest({ handoffId: rec.handoffId, meshId: rec.meshId, manifest: snap.manifest });
-            if (!m.success) return { ok: false, code: String(m.code ?? 'manifest_mismatch') };
+            if (!m.success) return { ok: false, code: refusalReason(m, 'manifest_mismatch') };
             const have = new Set(m.have ?? []);
-            for (const c of snap.chunks) {
-                if (have.has(c.seq)) continue;
-                // A lost RPC on one of hundreds of chunks is not worth the whole handoff. An
-                // explicit refusal from the target still stops the transfer immediately.
-                for (let attempt = 1; ; attempt++) {
-                    try {
-                        const r = await peer.chunk({ handoffId: rec.handoffId, meshId: rec.meshId, seq: c.seq, sha256: c.sha256, data: c.data });
-                        if (!r.success) return { ok: false, code: String(r.code ?? 'chunk_hash_mismatch') };
-                        break;
-                    } catch (e) { if (attempt >= HOST_HANDOFF_CHUNK_ATTEMPTS) throw e; }
+            const pending = snap.chunks.filter(c => !have.has(c.seq));
+            // Chunk JSON is about 4.5x smaller encoded, and bytes are what a relayed channel is short of.
+            // Only an encoding target gets a window: a plain chunk already fills the ack budget alone.
+            const encode = m.encodings?.includes(HOST_HANDOFF_CHUNK_ENCODING) === true;
+            let next = 0;
+            let refused: string | undefined;
+            const worker = async () => {
+                while (next < pending.length && refused === undefined) {
+                    const c = pending[next++]!;
+                    const wire = encode
+                        ? { data: brotliCompressSync(Buffer.from(c.data, 'utf8'), { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 5, [zlibConstants.BROTLI_PARAM_LGWIN]: 22 } }).toString('base64'), encoding: HOST_HANDOFF_CHUNK_ENCODING }
+                        : { data: c.data };
+                    // A lost RPC on one of hundreds of chunks is not worth the whole handoff. An
+                    // explicit refusal from the target still stops the transfer immediately.
+                    for (let attempt = 1; ; attempt++) {
+                        try {
+                            const r = await peer.chunk({ handoffId: rec.handoffId, meshId: rec.meshId, seq: c.seq, sha256: c.sha256, ...wire });
+                            if (!r.success) refused ??= refusalReason(r, 'chunk_hash_mismatch');
+                            break;
+                        } catch (e) { if (attempt >= HOST_HANDOFF_CHUNK_ATTEMPTS) throw e; }
+                    }
+                    // Progress, not silence: the ACK deadline starts when the copy is complete.
+                    this.d.journal.update(rec.handoffId, 'source', { updatedAt: this.d.clock.now() });
                 }
-                // Progress, not silence: the ACK deadline starts when the copy is complete.
-                this.d.journal.update(rec.handoffId, 'source', { updatedAt: this.d.clock.now() });
-            }
+            };
+            await Promise.all(Array.from({ length: encode ? HOST_HANDOFF_SEND_WINDOW : 1 }, worker));
+            if (refused !== undefined) return { ok: false, code: refused };
             const sealed = await peer.seal({ handoffId: rec.handoffId, meshId: rec.meshId });
-            if (!sealed.success) return { ok: false, code: String(sealed.code ?? 'verify_failed') };
+            if (!sealed.success) return { ok: false, code: refusalReason(sealed, 'verify_failed') };
             this.d.journal.update(rec.handoffId, 'source', { updatedAt: this.d.clock.now() });
             return { ok: true };
         } catch (e) {
@@ -345,7 +380,7 @@ export class HostHandoffSource {
         // A refusal alone does not revoke a delayed activate. Only a retained
         // tombstone for this exact epoch proves the target cannot later apply.
         if (res.applied === false && res.discarded === true && res.phase === 'discarded' && res.epoch === rec.epoch) {
-            await this.abortInternal(this.d.journal.get(handoffId, 'source')!, String(res.code ?? 'activate_failed'), true); return;
+            await this.abortInternal(this.d.journal.get(handoffId, 'source')!, refusalReason(res, 'activate_failed'), true); return;
         }
         this.move(handoffId, 'uncertain', { probeCount: 0, lastProbeAt: this.d.clock.now() });
     }

@@ -7,6 +7,7 @@
  */
 
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
+import { brotliDecompressSync } from 'node:zlib';
 import type { HandoffJournal } from './journal.js';
 import type { HandoffAckClient } from './peer.js';
 import type { CertificatePort, HandoffClock, HandoffDataPort, HandoffLog, HandoffMeshPort, TargetCoordinatorPort } from './ports.js';
@@ -14,7 +15,8 @@ import { verifyStagedSnapshot } from './snapshot-import.js';
 import { sha256Hex } from './snapshot-export.js';
 import { verifyHostTransferCertificate } from './certificate.js';
 import { originGrantPublicKeysEqual } from '../origin-grant-keypair.js';
-import { HOST_HANDOFF_PROTOCOL, type HandoffLaunchPlan, type HandoffAck, type HandoffManifest, type HandoffRecord, type HostTransferCertificate, type PeerResult, type TargetPhase } from './types.js';
+import type { ProbeConflict, SnapshotConflictProbe } from './snapshot-probe.js';
+import { HOST_HANDOFF_CHUNK_ENCODING, HOST_HANDOFF_PROTOCOL, type HandoffLaunchPlan, type HandoffAck, type HandoffManifest, type HandoffRecord, type HostTransferCertificate, type PeerResult, type TargetPhase } from './types.js';
 
 export interface TargetDeps {
     selfDaemonId: string;
@@ -80,7 +82,15 @@ export class HostHandoffTarget {
         };
     }
 
-    manifest(a: { handoffId: string; meshId: string; manifest: HandoffManifest }, sender: string): PeerResult & { have?: number[] } {
+    /** Answer from the same member check as `capability`, before anything froze. Read-only. */
+    conflictProbe(a: { handoffId: string; meshId: string; probe: SnapshotConflictProbe }, sender: string): PeerResult & { conflicts?: ProbeConflict[] } {
+        const view = this.memberView(a.meshId, sender);
+        if (!view || view.role !== 'member' || !view.hostDaemonId || !daemonIdsEquivalent(view.hostDaemonId, sender)) return fail('wrong_peer');
+        if (!this.d.data.findProbeConflicts) return fail('invalid_args', 'conflict probe unavailable');
+        return { success: true, conflicts: this.d.data.findProbeConflicts(a.meshId, a.probe) };
+    }
+
+    manifest(a: { handoffId: string; meshId: string; manifest: HandoffManifest }, sender: string): PeerResult & { have?: number[]; encodings?: string[] } {
         const m = a.manifest;
         if (!m || m.protocol !== HOST_HANDOFF_PROTOCOL || m.handoffId !== a.handoffId || m.meshId !== a.meshId) return fail('manifest_mismatch');
         if (!daemonIdsEquivalent(m.fromDaemonId, sender) || !daemonIdsEquivalent(m.toDaemonId, this.d.selfDaemonId)) return fail('wrong_peer');
@@ -92,7 +102,7 @@ export class HostHandoffTarget {
             if (existing.phase === 'discarded') return fail('handoff_aborted');
             if (existing.phase === 'active') return fail('already_committed');
             if (existing.manifestDigest !== m.digest) return fail('manifest_mismatch');
-            return { success: true, have: this.d.journal.getChunks(a.handoffId).map(c => c.seq) };
+            return { success: true, have: this.d.journal.getChunks(a.handoffId).map(c => c.seq), encodings: [HOST_HANDOFF_CHUNK_ENCODING] };
         }
         const other = this.d.journal.findActive(a.meshId, 'target');
         if (other) return fail('handoff_in_progress');
@@ -103,19 +113,26 @@ export class HostHandoffTarget {
             manifestDigest: m.digest, createdAt: now, updatedAt: now,
         });
         this.d.journal.putManifest(a.handoffId, m);
-        return { success: true, have: [] };
+        return { success: true, have: [], encodings: [HOST_HANDOFF_CHUNK_ENCODING] };
     }
 
-    chunk(a: { handoffId: string; meshId: string; seq: number; sha256: string; data: string }, sender: string): PeerResult {
+    chunk(a: { handoffId: string; meshId: string; seq: number; sha256: string; data: string; encoding?: string }, sender: string): PeerResult {
         const rec = this.d.journal.get(a.handoffId, 'target');
         if (!rec) return fail('handoff_unknown');
         const wrong = this.requireSource(rec, sender); if (wrong) return wrong;
         if (rec.phase === 'discarded') return fail('handoff_aborted');
         if (rec.phase !== 'importing') return { success: true, duplicate: true };
-        if (typeof a.data !== 'string' || sha256Hex(a.data) !== a.sha256) return fail('chunk_hash_mismatch', `chunk ${a.seq}`);
         const want = this.d.journal.getManifest(a.handoffId)?.chunks.find(c => c.seq === a.seq);
         if (!want || want.sha256 !== a.sha256) return fail('chunk_hash_mismatch', `chunk ${a.seq} is not in the manifest`);
-        this.d.journal.putChunk(a.handoffId, a.seq, a.sha256, a.data);
+        let data = a.data;
+        if (a.encoding !== undefined) {
+            if (a.encoding !== HOST_HANDOFF_CHUNK_ENCODING) return fail('chunk_hash_mismatch', `chunk ${a.seq}: unknown encoding`);
+            // The manifest bounds the output, so a hostile stream cannot expand past what was declared.
+            try { data = brotliDecompressSync(Buffer.from(a.data, 'base64'), { maxOutputLength: want.bytes + 1 }).toString('utf8'); }
+            catch { return fail('chunk_hash_mismatch', `chunk ${a.seq} did not decode`); }
+        }
+        if (typeof data !== 'string' || sha256Hex(data) !== a.sha256) return fail('chunk_hash_mismatch', `chunk ${a.seq}`);
+        this.d.journal.putChunk(a.handoffId, a.seq, a.sha256, data);
         this.d.journal.update(a.handoffId, 'target', { updatedAt: this.d.clock.now() });
         return { success: true };
     }

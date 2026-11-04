@@ -10,7 +10,7 @@ vi.mock('../../../src/config/config.js', async (orig) => ({
 
 import { getDaemonCommandRegistry } from '../../../src/commands/router.js';
 import { HOST_HANDOFF_PROTOCOL, HOST_HANDOFF_VERB } from '../../../src/mesh/host-handoff/types.js';
-import { meshHostHandoffHandlers, hostHandoffEnabled } from '../../../src/commands/high-family/mesh-host-handoff.js';
+import { __resetHostHandoffEnginesForTest, meshHostHandoffHandlers, hostHandoffEnabled } from '../../../src/commands/high-family/mesh-host-handoff.js';
 
 describe('host handoff is experimental and off by default (owner decision H2)', () => {
     it('refuses a source label or caller supplied owner flag without a private ingress proof', async () => {
@@ -41,6 +41,16 @@ describe('host handoff is experimental and off by default (owner decision H2)', 
         expect(await probe(ctx, { meshId: 'm', _meshSenderDaemonId: 'daemon_x' })).toMatchObject({ success: true, protocol: HOST_HANDOFF_PROTOCOL });
         const certificate = meshHostHandoffHandlers.mesh_host_handoff_certificate!;
         expect(await certificate(ctx, { meshId: 'unknown-project', certificate: { meshId: 'unknown-project' }, _meshSenderDaemonId: 'daemon_x' })).toMatchObject({ success: false, code: 'certificate_wrong_mesh' });
+    });
+    it('a preflight that ran answers success:true and carries its verdict in ok, so cloud P2P does not treat it as a rejected command', async () => {
+        flag.on = true;
+        __resetHostHandoffEnginesForTest();
+        const owner = meshHostHandoffHandlers.mesh_host_handoff!;
+        const ctx = { deps: { statusInstanceId: 'daemon_self', dispatchMeshCommand: vi.fn() } } as never;
+        const answer = await owner(ctx, ownerArgs({ op: 'preflight', meshId: 'missing-project', targetDaemonId: 'daemon_target' })) as { success: boolean; ok: boolean; checks: Array<{ id: string; ok: boolean }> };
+        expect(answer).toMatchObject({ success: true, ok: false });
+        expect(answer.checks.some(c => !c.ok)).toBe(true);
+        __resetHostHandoffEnginesForTest();
     });
     it('pair_host needs the owner, a code and an explicit node; nothing is pinned on a refusal', async () => {
         flag.on = true;

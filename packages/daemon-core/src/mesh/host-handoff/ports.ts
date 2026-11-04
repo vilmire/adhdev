@@ -7,6 +7,7 @@
  */
 
 import type { ExportedSnapshot, SnapshotPayload } from './snapshot-export.js';
+import type { ProbeConflict, SnapshotConflictProbe } from './snapshot-probe.js';
 import type { HandoffManifest, HandoffLaunchPlan, HostTransferCertificate } from './types.js';
 
 export interface HostMeshView {
@@ -59,6 +60,10 @@ export interface HandoffDataPort {
     applySnapshot(meshId: string, payload: SnapshotPayload, provenance?: { handoffId: string; sourceDaemonId: string; snapshotDigest: string; epoch?: number }): Record<string, number>;
     /** Prove the snapshot would apply, then roll everything back. Throws the conflict the real apply would hit. */
     dryRunApply?(meshId: string, payload: SnapshotPayload, provenance?: { handoffId: string; sourceDaemonId: string; snapshotDigest: string; epoch?: number }): void;
+    /** Source: the compact key set of `conflictProbe`, read in preflight. */
+    buildConflictProbe?(meshId: string): SnapshotConflictProbe;
+    /** Target: read-only match of that key set against local rows. */
+    findProbeConflicts?(meshId: string, probe: SnapshotConflictProbe): ProbeConflict[];
     freeDiskBytes(): number;
     /** Source: record that the mesh's host-owned data is now read-only history. */
     markHandedOff(row: { meshId: string; handoffId: string; newHostDaemonId: string; epoch: number; handedOffAt: number; retainUntil: number }): void;

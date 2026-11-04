@@ -394,7 +394,8 @@ const launchCoordinator: HighFamilyHandler = async (ctx: HighFamilyContext, args
                         ...(args?.cliType !== undefined ? { provider: args.cliType } : {}),
                         ...(args?.initialModel !== undefined && args.initialModel !== null ? { model: args.initialModel } : {}),
                         ...(args?.initialThinkingLevel !== undefined && args.initialThinkingLevel !== null ? { thinkingLevel: args.initialThinkingLevel } : {}),
-                    }, meshId);
+                    // A host move launches the plan as given: an axis it omits means the provider's default, not this machine's.
+                    }, meshId, args?.exactLaunchSelection === true ? ['model', 'thinkingLevel'] : undefined);
                     if (!resolved.ok) return roleLaunchFailure(resolved);
                     cliType = resolved.selection.provider;
                     const initialModel = resolved.selection.model;

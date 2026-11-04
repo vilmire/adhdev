@@ -5,10 +5,10 @@ import { getMeshConfigPath } from '../config/mesh-config-store.js';
 import type { HighFamilyContext } from '../commands/high-family/types.js';
 import { getLaunchDefaultsCommandPorts } from './ports.js';
 import { resolveLaunchSelection, type ResolveLaunchResult } from './resolve.js';
-import type { LaunchRole, LaunchSelection } from './validate.js';
+import type { LaunchField, LaunchRole, LaunchSelection } from './validate.js';
 
 export function resolveRoleLaunch(ctx: Pick<HighFamilyContext, 'deps'>, role: LaunchRole,
-    override: Partial<LaunchSelection>, projectId?: string): ResolveLaunchResult {
+    override: Partial<LaunchSelection>, projectId?: string, ignoreDefault?: LaunchField[]): ResolveLaunchResult {
     const ports = getLaunchDefaultsCommandPorts(ctx);
     const unavailable = (reason: string): ResolveLaunchResult => ({ ok: false,
         code: 'launch_default_unavailable', role, field: 'provider', reason,
@@ -16,7 +16,7 @@ export function resolveRoleLaunch(ctx: Pick<HighFamilyContext, 'deps'>, role: La
     if (!ports.store.withSnapshot) return unavailable('snapshot_lock_unavailable');
     try {
         return ports.store.withSnapshot(stored => {
-            if (stored.status !== 'ok') return resolveLaunchSelection({ role, stored, override }, ports.validation);
+            if (stored.status !== 'ok') return resolveLaunchSelection({ role, stored, override, ...(ignoreDefault ? { ignoreDefault } : {}) }, ports.validation);
             if (projectId && !ports.projects) return unavailable('project_storage_unavailable');
             const resolve = () => {
                 // Only this daemon's persisted host inventory may supply a project
@@ -29,7 +29,7 @@ export function resolveRoleLaunch(ctx: Pick<HighFamilyContext, 'deps'>, role: La
                 const project = hasHostInventory ? ports.projects?.read(projectId!) : undefined;
                 if (project && !project.ok && project.code !== 'project_not_found') return unavailable(project.code);
                 const state = project?.ok ? project.state : undefined;
-                return resolveLaunchSelection({ role, stored, override,
+                return resolveLaunchSelection({ role, stored, override, ...(ignoreDefault ? { ignoreDefault } : {}),
                     ...(state?.entry ? { hostCoordinatorLaunch: { projectId: state.projectId,
                         revision: state.revision, selection: { provider: state.entry.provider,
                             ...(state.entry.model !== undefined ? { model: state.entry.model } : {}),

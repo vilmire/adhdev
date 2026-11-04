@@ -1458,12 +1458,15 @@
                 "target_launchable": "対象でコーディネーターを実行可能",
                 "disk_space": "ディスク容量が十分",
                 "snapshot_readable": "プロジェクトデータを読み取れる",
+                "no_snapshot_conflicts": "移動先に競合する記録がない",
                 "no_open_writer_checkpoint": "未完了のワーカー停止なし"
             },
             "code": {
                 "host_key_unpinned": "移行先はこのホストとペアリングされていません",
                 "host_key_mismatch": "移行先はこのホストに別の鍵を固定しています",
                 "member_protocol_unsupported": "先にこれらのマシンを更新してください",
+                "COMMAND_SOURCE_REJECTED": "変更するにはオーナーパスワードでサインインしてください。オーナーパスワードのない standalone ダッシュボードではホストの移動をオンにできません。",
+                "owner_auth_required": "変更するにはオーナーパスワードでサインインしてください。オーナーパスワードのない standalone ダッシュボードではホストの移動をオンにできません。",
                 "snapshot_conflict": "移行先に競合する記録があります",
                 "state_preservation_unverified": "先に進行中の作業を終えてください",
                 "not_host": "このマシンはホストではありません",
