@@ -94681,6 +94681,8 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         if (recentlyAttempted(key7, now)) continue;
         attempted.set(key7, now);
         const from = task.assignedProviderType;
+        const assignedNode = (Array.isArray(mesh?.nodes) ? mesh.nodes : []).find((n) => task.assignedNodeId && meshNodeIdMatches7(n, task.assignedNodeId));
+        if (!assignedNode || !isLocalAutoLaunchNode(assignedNode)) continue;
         const alternatives = await (deps.findAlternatives ?? (components ? usableAlternativeFinder(components, meshId, mesh) : async () => []))(
           { ...task, requiredTags: [...(task.requiredTags ?? []).filter((t) => !t.startsWith("provider=")), `provider=${from}`] }
         );
@@ -205649,6 +205651,7 @@ ${lines.join("\n")}
     init_mesh_runtime_store();
     init_mesh_quota_override();
     init_dist();
+    init_mesh_candidacy_predicates();
     init_mesh_runtime_store();
     init_mesh_quota_override();
     init_mesh_mission_decisions();
@@ -205680,6 +205683,14 @@ ${lines.join("\n")}
       const resolved = await ctx.getMeshForCommand(req.meshId, void 0, { preferInline: true });
       const node = resolved?.mesh?.nodes?.find((n) => meshNodeIdMatches7(n, task.assignedNodeId));
       if (!node) return reopen({ ok: false, code: "quota_switch_node_missing", error: "the node that ran the task is no longer in the project" });
+      if (!isLocalAutoLaunchNode(node)) {
+        return reopen({
+          ok: false,
+          code: "quota_switch_remote_node",
+          error: "this task runs on another machine; switching its CLI from here cannot prove the old session stopped",
+          recovery: "Wait for the limit to reset, or stop the session from that machine (or its own dashboard) and requeue the task there."
+        });
+      }
       const control = ctx.deps.sessionHostControl;
       const result = await switchQuotaExhaustedSession({
         hostHasSession: control ? async (id4) => (await control.listSessions()).some((r) => r?.sessionId === id4) : void 0,

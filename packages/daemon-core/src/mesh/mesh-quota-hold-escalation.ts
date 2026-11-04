@@ -120,6 +120,10 @@ export async function escalateQuotaHeldTasks(
         if (recentlyAttempted(key, now)) continue;
         attempted.set(key, now);
         const from = task.assignedProviderType as string;
+        // The stop + absence proof runs against THIS daemon's session host only, so a task on a remote member node
+        // cannot be switched safely (a second writer could start while its CLI still runs): offer no switch for it.
+        const assignedNode = (Array.isArray(mesh?.nodes) ? mesh.nodes : []).find((n: any) => task.assignedNodeId && meshNodeIdMatches(n, task.assignedNodeId));
+        if (!assignedNode || !isLocalAutoLaunchNode(assignedNode)) continue;
         const alternatives = await (deps.findAlternatives ?? (components ? usableAlternativeFinder(components, meshId, mesh) : async () => []))(
             { ...task, requiredTags: [...(task.requiredTags ?? []).filter(t => !t.startsWith('provider=')), `provider=${from}`] } as MeshWorkQueueEntry);
         const result = raiseQuotaSwitchDecision(meshId, task, { fromProvider: from, alternatives });

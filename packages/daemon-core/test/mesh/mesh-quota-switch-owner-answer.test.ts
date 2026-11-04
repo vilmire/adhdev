@@ -31,7 +31,7 @@ afterEach(() => {
     __resetMeshRuntimeStoreForTests();
 });
 
-async function scenario() {
+async function scenario(nodeDaemon = 'test-machine') {
     const meshId = randomUUID();
     const sessionId = randomUUID();
     const startedAt = Date.now();
@@ -57,9 +57,10 @@ async function scenario() {
     const claude = withCliRateLimitEvidence('claude-cli', { provider: 'claude-cli', status: 'ok', updatedAt: Date.now() - 60_000, error: null,
         session: { usedPercent: 99, windowMinutes: 300, resetsAt: Date.now() + 3_600_000 }, weekly: null } as any,
         { observedAt: Date.now() - 30_000, resetsAt: Date.now() + 3_600_000 });
-    const node = { id: NODE, daemonId: 'daemon-local', workspace: '/repo/a', nodeFacts: { schemaVersion: 1, reportedAt: Date.now(), quota: { 'claude-cli': claude } } };
+    const node = { id: NODE, daemonId: nodeDaemon, workspace: '/repo/a', nodeFacts: { schemaVersion: 1, reportedAt: Date.now(), quota: { 'claude-cli': claude } } };
     const mesh = { id: meshId, policy: {}, nodes: [node] };
     const raised = await escalateQuotaHeldTasks(null, meshId, mesh, { findAlternatives: async () => ['codex-cli', 'kimi'] });
+    if (nodeDaemon !== 'test-machine') return { meshId, taskId, raised, control, mesh, node };
     expect(raised).toHaveLength(1);
     const card = buildOwnerDecisions(meshId).find(d => d.itemId === raised[0])!;
     const ctx: any = {
@@ -129,6 +130,25 @@ describe('quota switch decision card + owner answer', () => {
         expect(task).toMatchObject({ status: 'assigned', assignedSessionId: s.sessionId });
         expect(task.requiredTags).toEqual(['provider=claude-cli']);
         expect(sessionStopPending(MeshRuntimeStore.getInstance().db, s.sessionId)).toBe(true);
+        expect(buildOwnerDecisions(s.meshId).some(d => d.itemId === s.card.itemId)).toBe(true);
+    });
+
+    it('a task on a remote member node gets no switch card (the stop proof is local-host only)', async () => {
+        const s: any = await scenario('member-a-daemon');
+        expect(s.raised).toEqual([]);
+        expect(buildOwnerDecisions(s.meshId)).toEqual([]);
+    });
+
+    it('an owner answer for a task on a remote node is refused: nothing stopped, task stays assigned, decision reopened', async () => {
+        const s = await scenario();
+        answerMissionDecision({ meshId: s.meshId, itemId: s.card.itemId, optionId: s.optionFor('Switch to codex-cli') }, owner);
+        const remoteNode = { id: NODE, daemonId: 'member-a-daemon', workspace: '/repo/a' };
+        const ctx = { ...s.ctx, getMeshForCommand: async () => ({ mesh: { id: s.meshId, policy: {}, nodes: [remoteNode] } }) };
+        const { applyOwnerQuotaSwitch } = await import('../../src/commands/high-family/quota-switch-answer.js');
+        const r = await applyOwnerQuotaSwitch(ctx, { meshId: s.meshId, itemId: s.card.itemId }, owner as any);
+        expect(r).toMatchObject({ ok: false, code: 'quota_switch_remote_node' });
+        expect(s.control.stopSession).not.toHaveBeenCalled();
+        expect(getQueueEntryById(s.meshId, s.taskId)?.status).toBe('assigned');
         expect(buildOwnerDecisions(s.meshId).some(d => d.itemId === s.card.itemId)).toBe(true);
     });
 });

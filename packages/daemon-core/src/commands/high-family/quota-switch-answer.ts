@@ -7,6 +7,7 @@
  * a task that moved on is never switched, and on any failure reopens the decision so nothing looks decided.
  */
 import { meshNodeIdMatches } from '@adhdev/mesh-shared';
+import { isLocalAutoLaunchNode } from '../../mesh/mesh-candidacy-predicates.js';
 import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
 import { parseQuotaSwitchProvider, taskIdFromQuotaOverrideKey } from '../../mesh/mesh-quota-override.js';
 import { switchQuotaExhaustedSession } from '../../mesh/mesh-quota-provider-switch.js';
@@ -51,6 +52,13 @@ export async function applyOwnerQuotaSwitch(
     const resolved = await ctx.getMeshForCommand(req.meshId, undefined, { preferInline: true });
     const node = resolved?.mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, task.assignedNodeId!));
     if (!node) return reopen({ ok: false, code: 'quota_switch_node_missing', error: 'the node that ran the task is no longer in the project' });
+
+    // Fail closed: the stop and its absence proof use THIS daemon's session host. A task on a remote member node
+    // would be requeued (a new pin, a second writer) while its CLI may still run there.
+    if (!isLocalAutoLaunchNode(node)) {
+        return reopen({ ok: false, code: 'quota_switch_remote_node', error: 'this task runs on another machine; switching its CLI from here cannot prove the old session stopped',
+            recovery: 'Wait for the limit to reset, or stop the session from that machine (or its own dashboard) and requeue the task there.' });
+    }
 
     const control = (ctx.deps as { sessionHostControl?: { listSessions(): Promise<any[]> } | null }).sessionHostControl;
     const result = await switchQuotaExhaustedSession({
