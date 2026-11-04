@@ -140318,7 +140318,7 @@ ${tail}` : ""
       const surrogate = { mesh_mission_events: "seq", mesh_release_events: "seq", ...historyIdentity === "preserve-exact" ? {} : { mesh_tool_call_log: "id", assistant_procedure_signals: "id" } };
       const appendOnly = historyIdentity === "preserve-exact" ? /* @__PURE__ */ new Set(["mesh_tool_call_log", "assistant_procedure_signals"]) : /* @__PURE__ */ new Set();
       const observed2 = /* @__PURE__ */ new Set(["mesh_topic_index", "mesh_local_records", "session_artifacts", "turn_events"]);
-      const sourceWins = (table, row2, columns, existing) => table === "turn_events" && row2[columns.indexOf("publish_state")] === "pending" || table === "session_artifacts" && existing.origin_daemon_id === source2;
+      const sourceWins = (table, row2, columns, existing) => table === "turn_events" && row2[columns.indexOf("publish_state")] === "pending" || (table === "session_artifacts" && existing.origin_daemon_id === source2 || daemonIdsEquivalent5(String(existing.origin_daemon_id ?? ""), source2));
       const apply = db3.transaction(() => {
         const counts2 = {};
         const retained = db3.prepare("SELECT snapshot_digest FROM mesh_host_handoff_archive WHERE handoff_id=? AND side=?").all(handoffId, "source-snapshot")[0];
@@ -140417,6 +140417,7 @@ ${tail}` : ""
       "src/mesh/host-handoff/snapshot-import.ts"() {
         "use strict";
         init_snapshot_export();
+        init_dist();
         init_project_files();
         init_assistant_projects();
         init_history_identity();

@@ -158,4 +158,19 @@ describe('complete logical project snapshot preservation', () => {
         expect(() => applySnapshotTables(world.dst.db as never, MESH, conflict.payload)).toThrow('retained local state');
         expect(world.dst.dump()).toEqual(before);
     });
+
+    it('a source-origin artifact row replaces the local copy when the origin id is stored in another daemon-id form', () => {
+        world = makeWorld({ sqliteJournal: true });
+        const art = (origin: string, title: string) => ({ artifact_id: 'art-1', session_id: 'worker', mesh_id: MESH, origin_daemon_id: origin, workspace_root: '/ws',
+            rel_path: 'out.md', kind: 'file', mime: 'text/markdown', title, size_bytes: 1, sha256: 'aa', created_at: 1, updated_at: 2 });
+        insert('session_artifacts', art(SRC, 'from source'));
+        const snap = snapshot();
+        const payload = JSON.parse(snap.chunks[0]!.data) as SnapshotPayload;
+        // The target already holds the same artifact, its origin recorded in the bare machine form of the SAME source daemon.
+        world.dst.db.prepare(`INSERT INTO session_artifacts (${Object.keys(art('x', 't')).join(',')}) VALUES (${Object.keys(art('x', 't')).map(() => '?').join(',')})`)
+            .run(...Object.values(art(SRC.replace(/^daemon_/, ''), 'stale local copy')));
+        applySnapshotTables(world.dst.db as never, MESH, payload, { handoffId: 'h-alias', sourceDaemonId: SRC, snapshotDigest: snap.manifest.digest });
+        const row = world.dst.db.prepare('SELECT title FROM session_artifacts WHERE artifact_id=?').get('art-1') as { title: string };
+        expect(row.title).toBe('from source');
+    });
 });

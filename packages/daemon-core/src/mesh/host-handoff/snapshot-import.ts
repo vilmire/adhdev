@@ -6,6 +6,7 @@
  */
 
 import { HOST_SNAPSHOT_TABLES, readTable, manifestDigest, sha256Hex, tableColumns, type SnapshotPayload } from './snapshot-export.js';
+import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import type { HandoffManifest } from './types.js';
 import { verifyProjectApprovalFiles } from './project-files.js';
 import { resolveAssistantProject } from '../../assistant/assistant-projects.js';
@@ -117,7 +118,7 @@ export function applySnapshotTables(db: Db, meshId: string, payload: SnapshotPay
     const observed = new Set(['mesh_topic_index', 'mesh_local_records', 'session_artifacts', 'turn_events']);
     const sourceWins = (table: string, row: unknown[], columns: string[], existing: Record<string, unknown>): boolean =>
         (table === 'turn_events' && row[columns.indexOf('publish_state')] === 'pending')
-        || (table === 'session_artifacts' && existing.origin_daemon_id === source);
+        || (table === 'session_artifacts' && existing.origin_daemon_id === source || daemonIdsEquivalent(String(existing.origin_daemon_id ?? ''), source));
     const apply = db.transaction(() => {
         const counts: Record<string, number> = {};
         const retained = db.prepare('SELECT snapshot_digest FROM mesh_host_handoff_archive WHERE handoff_id=? AND side=?').all(handoffId, 'source-snapshot')[0] as { snapshot_digest: string } | undefined;
