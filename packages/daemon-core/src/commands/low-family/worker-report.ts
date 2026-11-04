@@ -223,7 +223,9 @@ export function toReportResponse(result: WorkerReportResult): Record<string, unk
                         ? 'Nothing was recorded — call again.'
                         : result.refusal === 'stale_report'
                             ? 'This report was written for an earlier task of this session and can no longer be filed against it; nothing was recorded.'
-                            : 'The completion was refused by the turn ledger; the task state is authoritative.',
+                            : result.refusal === 'rejected_by_reducer' && result.detail?.startsWith('checkpoint_pending')
+                                ? 'The completion is NOT accepted yet: this session\'s physical writer stop is unconfirmed. Nothing is completed; keep the saved report and let it be re-sent after the stop settles.'
+                                : 'The completion was refused by the turn ledger; the task state is authoritative.',
         };
     }
     return {

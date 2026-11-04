@@ -350,6 +350,7 @@ export {
     rotateCaptureLogIfNeeded,
     openCaptureLogFd,
     DAEMON_CAPTURE_LOG_NAME,
+    getDaemonCaptureLogPath,
     MAX_CAPTURE_LOG_SIZE,
     MAX_CAPTURE_LOG_GENERATIONS,
 } from './logging/logger.js';

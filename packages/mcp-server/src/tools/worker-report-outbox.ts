@@ -533,6 +533,12 @@ export class WorkerReportDelivery {
       return this.retryable(entry, e?.message || String(e), true);
     }
     const error = typeof result?.error === 'string' ? result.error : '';
+    // The daemon observed the report but did NOT accept it: the exact writer's stop is unconfirmed
+    // (attempt `stopping`). That is a pending state, not a verdict — keep the report in the outbox and
+    // re-send the same delivery once the stop settles instead of dropping the only copy on a refusal.
+    if (result?.success !== true && error === 'rejected_by_reducer' && typeof result?.detail === 'string' && result.detail.startsWith('checkpoint_pending')) {
+      return this.retryable(entry, `${error} — ${result.detail}`, false);
+    }
     if (result?.success !== true
       && (RETRYABLE_REFUSALS[entry.kind].has(error) || error.includes('request failed decode') || error.startsWith('Unknown command: worker_') || TRANSIENT_ERROR_TEXT.test(error))) {
       const detail = typeof result?.detail === 'string' && result.detail ? ` — ${result.detail}` : '';

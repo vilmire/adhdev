@@ -72,7 +72,7 @@ import { meshRecord } from './mesh-record.js';
 import { checkStageReportRequirements, stashStageReportForIdentity } from './stage-report-hook.js';
 import { getActiveTurnLedger } from './turn-ledger/active-ledger.js';
 import { observeAcceptedWorkerReport } from './turn-ledger/worker-report-evidence.js';
-import { exchangeWorkerSessionBind, hashWorkerSessionBind, verifyWorkerTaskToken, workerSessionBindStatus, WORKER_BIND_CANARY_PREFIX, type WorkerTokenExchangeResult } from './worker-mcp-isolation.js';
+import { exchangeWorkerSessionBind, findWorkerTaskTokenForSession, hashWorkerSessionBind, mintWorkerTaskToken, verifyWorkerTaskToken, workerSessionBindStatus, WORKER_BIND_CANARY_PREFIX, type WorkerTokenExchangeResult } from './worker-mcp-isolation.js';
 import type { WorkerHandoffNotes, WorkerCompletionReport } from './worker-report-validation.js';
 import { resolveLateWorkerIdentity, acceptLateWorkerCompletionReport } from './worker-report-late.js';
 import type { PreparedWorkerDelivery } from './worker-bridge-prepared.js';
@@ -237,18 +237,55 @@ export function resolveWorkerIdentity(
     // nothing to resolve and no window in which the session could have moved on.
     const direct = verifyWorkerTaskToken(credential.token);
     if (direct) {
-        return {
+        return followStageRevisionAttempt({
             token: direct.token,
             meshId: direct.meshId,
             taskId: direct.taskId,
             ...(direct.attemptId ? { attemptId: direct.attemptId } : {}),
             sessionId: direct.sessionId || '',
             ...(direct.nodeId ? { nodeId: direct.nodeId } : {}),
-        };
+        }, customStore);
     }
-    return exchangeWorkerSessionBind(credential.bind, (meshId, sessionId) =>
+    const exchanged = exchangeWorkerSessionBind(credential.bind, (meshId, sessionId) =>
         resolveCurrentTaskForSession(meshId, sessionId, customStore),
     );
+    return exchanged ? followStageRevisionAttempt(exchanged, customStore) : null;
+}
+
+/**
+ * A managed (stage) task re-queues the SAME session for a revision after its
+ * self-check or review: the ledger opens attempt N+1 on that session while the
+ * worker's MCP process — which cannot be re-launched — still presents the
+ * credential minted for attempt N, so every later report/artifact call was refused
+ * `stale_attempt` until the worker was rebound by hand.
+ *
+ * Follow the session to its CURRENT attempt, and only then: the task must be a
+ * stage task, the current attempt must be open and on the very session the
+ * credential names, and the credential's own attempt must be an older one of the
+ * same task. A credential for another session, a terminal current attempt, or a
+ * non-stage task keeps the strict stale verdict (the REDRIVE-DUP guard that
+ * attempt-scoped tokens exist for). The minted token is attempt-scoped like any
+ * other, so the follow is repeatable and never widens authority past this session.
+ */
+function followStageRevisionAttempt(identity: WorkerTokenExchangeResult, customStore: MeshRuntimeStore | null): WorkerTokenExchangeResult {
+    if (!identity.attemptId || !identity.sessionId) return identity;
+    try {
+        const store = customStore ?? MeshRuntimeStore.getInstance();
+        const current = store.turnStore().findLatestAttemptForTask(identity.meshId, identity.taskId);
+        if (!current || current.terminal || current.attemptId === identity.attemptId) return identity;
+        if (!current.sessionId || !sessionIdsEquivalent(current.sessionId, identity.sessionId)) return identity;
+        if (!store.findQueueEntryById(identity.meshId, identity.taskId)?.stageState) return identity;
+        let token = findWorkerTaskTokenForSession(identity.meshId, identity.taskId, identity.sessionId, current.attemptId);
+        if (token?.attemptId !== current.attemptId) {
+            token = mintWorkerTaskToken({
+                meshId: identity.meshId, taskId: identity.taskId, attemptId: current.attemptId,
+                sessionId: identity.sessionId, ...(identity.nodeId ? { nodeId: identity.nodeId } : {}),
+            });
+        }
+        return { ...identity, token: token.token, attemptId: current.attemptId };
+    } catch {
+        return identity;
+    }
 }
 
 /**
@@ -963,7 +1000,7 @@ export function acceptWorkerCompletionReportForIdentity(
         if (!ledger) return { accepted: false, refusal: 'rejected_by_reducer', detail: 'checkpoint_pending:no_owner_ledger' };
         observeAcceptedWorkerReport(ledger, { ...identity, outcome: report.outcome, summary: report.summary,
             hasHandoffNotes: !!report.handoffNotes, atMs: nowMs });
-        return { accepted: false, refusal: 'rejected_by_reducer', detail: 'checkpoint_pending:report retained; physical writer stop is unconfirmed' };
+        return { accepted: false, refusal: 'rejected_by_reducer', detail: 'checkpoint_pending:report NOT accepted yet; physical writer stop is unconfirmed (the worker re-sends it after the stop settles)' };
     }
     let commit: ReturnType<typeof commitTaskTerminal>;
     stashStageReportForIdentity(identity, report, nowMs); // review-in-task: pipeline reads it from the terminal hook

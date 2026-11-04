@@ -1,7 +1,8 @@
 import { pinnedMeshNodeIdMatches } from './mesh-pinned-node-identity.js';
 import { assertSourceDependencyGraph } from './mesh-task-phase-dependencies.js';
 import { normalizeRoutingPreferences } from './mesh-task-routing-contract.js';
-import { normalizeOwnedPaths, findOwnershipConflicts, type MeshTaskPhase } from '@adhdev/mesh-shared';
+import { normalizeOwnedPaths, findOwnershipConflicts, isMeshTaskDifficulty, type MeshTaskPhase } from '@adhdev/mesh-shared';
+import { getDifficultyBrains } from '../config/mesh-config-routing.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue-types.js';
 import { findOpenQueueAttempt } from './mesh-queue-attempt-guard.js';
@@ -17,6 +18,8 @@ export interface PendingTaskRevisionPatch {
     dependsOn?: string[];
     routingPreferences?: import('@adhdev/mesh-shared').MeshRoutingPreferences;
     review?: import('@adhdev/mesh-shared').MeshReviewConstraint;
+    /** Task-scoped difficulty reclassification of a PENDING task (never a node slot change). */
+    difficulty?: import('@adhdev/mesh-shared').MeshTaskDifficulty;
 }
 /** Passed only by the authenticated host handler, never spread from request options. */
 export interface TaskRevisionHostContext {
@@ -28,7 +31,7 @@ export interface TaskRevisionHostContext {
 export function revisePendingTask(meshId: string, taskId: string, expectedRevision: number, patch: PendingTaskRevisionPatch, host: TaskRevisionHostContext): MeshWorkQueueEntry {
     if (!host?.actor || !host.repoIdentity || !host.machineId) throw new Error('authenticated_host_required');
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new Error('invalid_expected_revision');
-    if (!patch || typeof patch !== 'object' || Array.isArray(patch) || !Object.keys(patch).length || Object.keys(patch).some(k => !['message', 'ownedPaths', 'phase', 'dependsOn', 'routingPreferences', 'review'].includes(k))) throw new Error('unsupported_revision_patch');
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch) || !Object.keys(patch).length || Object.keys(patch).some(k => !['message', 'ownedPaths', 'phase', 'dependsOn', 'routingPreferences', 'review', 'difficulty'].includes(k))) throw new Error('unsupported_revision_patch');
     const store = MeshRuntimeStore.getInstance();
     return store.transaction(() => {
         const before = store.findQueueEntryById(meshId, taskId);
@@ -54,6 +57,20 @@ export function revisePendingTask(meshId: string, taskId: string, expectedRevisi
             if (patch.phase !== 'source' && patch.phase !== 'integration') throw new Error('invalid_revision_phase');
             if (next.readonly || next.taskMode === 'live_debug_readonly') throw new Error('write_phase_required');
             next.phase = patch.phase;
+        }
+        if (patch.difficulty !== undefined) {
+            // The supported route out of `task_difficulty_floor_unavailable`: reclassify THIS pending task. The node's
+            // slots are never touched. A stage task's plan was resolved from its difficulty, so it is not reclassified.
+            if (!isMeshTaskDifficulty(patch.difficulty)) throw new Error('invalid_revision_difficulty');
+            if (before.stagePlan || before.stageState || before.origin === 'stage') throw new Error('difficulty_revision_unsupported_for_stage_task');
+            next.difficulty = patch.difficulty;
+            // Preset-derived model / thinking follow the new class; explicit caller choices stay.
+            let preset: { model?: string; thinkingLevel?: string } | undefined;
+            try { preset = getDifficultyBrains(meshId)[patch.difficulty]; } catch { preset = undefined; }
+            if (next.modelSource === 'preset') { delete next.model; delete next.modelSource; }
+            if (next.thinkingLevelSource === 'preset') { delete next.thinkingLevel; delete next.thinkingLevelSource; }
+            if (preset?.model && !next.model) { next.model = preset.model; next.modelSource = 'preset'; }
+            if (preset?.thinkingLevel && !next.thinkingLevel) { next.thinkingLevel = preset.thinkingLevel; next.thinkingLevelSource = 'preset'; }
         }
         if (patch.routingPreferences !== undefined) next.routingPreferences = normalizeRoutingPreferences(patch.routingPreferences);
         if (patch.review !== undefined) {
@@ -99,7 +116,7 @@ export function revisePendingTask(meshId: string, taskId: string, expectedRevisi
         if (host.dryRun) return next; // Validation uses the same transaction/proof path; no writes or scheduling.
         next.revisionHistory = [...(before.revisionHistory ?? []), {
             revision: expectedRevision, at: new Date().toISOString(), actor: host.actor,
-            before: { message: before.message, ownedPaths: before.ownedPaths, phase: before.phase, dependsOn: before.dependsOn, ownershipScope: before.ownershipScope, routingPreferences: before.routingPreferences, review: before.review },
+            before: { message: before.message, ownedPaths: before.ownedPaths, phase: before.phase, dependsOn: before.dependsOn, ownershipScope: before.ownershipScope, routingPreferences: before.routingPreferences, review: before.review, difficulty: before.difficulty, model: before.model, modelSource: before.modelSource, thinkingLevel: before.thinkingLevel, thinkingLevelSource: before.thinkingLevelSource },
         }];
         if (!host.deferScheduling) { delete next.hold; delete next.holdNoticeId; delete next.autoLaunch; }
         // updateQueueEntry owns the monotonic revision; no retries, attempts or identities change.

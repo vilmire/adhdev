@@ -107,6 +107,13 @@ describe('stage readonly input attestation', () => {
         await runtime.onChildTerminal(parent.meshId, child.id);
         expect(source().stageState!.blockedReason).toBe('reviewer_integrity_unverifiable');
     });
+    it('pins the read-lease review child to the parent node so another checkout cannot claim it', () => {
+        const { live, ports, source } = setup();
+        const child = ports.queue.enqueueReviewChild(live, spec);
+        expect(child.targetNodeId).toBe(live.assignedNodeId ?? live.targetNodeId);
+        expect(child.targetNodeId).toBeTruthy();
+        expect(source().stageState!.reviewTaskIds).toEqual([child.id]);
+    });
     it('reviews exact oss declarations and clean zero-new-delta parent without writer ownership', () => {
         const { ws, live, ports, source } = setup();
         const child = ports.queue.enqueueReviewChild(live, spec);

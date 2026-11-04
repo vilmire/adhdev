@@ -63,6 +63,11 @@ export function setLocalNodeProviderFallback(fn: ((node: any) => readonly string
     localNodeProviderFallback = fn;
 }
 
+/** True once boot installed the "which CLIs does this machine have enabled" port (`installLocalNodeProviderFallback`). */
+export function isLocalNodeProviderFallbackInstalled(): boolean {
+    return localNodeProviderFallback !== null;
+}
+
 function localNodeDefaultProviders(node: any): string[] {
     if (!localNodeProviderFallback) return [];
     try { return orderProvidersByBuiltinPreference(localNodeProviderFallback(node) ?? []); } catch { return []; }

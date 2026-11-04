@@ -3,7 +3,8 @@ import type { DaemonComponents } from '../boot/daemon-components.js';
 import { LOG } from '../logging/logger.js';
 import type { RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import type { NodeCapabilitySlot } from '@adhdev/mesh-shared';
-import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
+import { isLocalAutoLaunchNode } from './mesh-candidacy-predicates.js';
+import { isLocalNodeProviderFallbackInstalled, resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON, type ProviderQuotaGateBlock } from './mesh-quota-routing.js';
 import { recordLastQuotaRanking, quotaSpreadBonusByProvider, quotaTargetsFromSlots } from './mesh-quota-ranking-records.js';
 import type { QuotaFactsContext } from './mesh-quota-sources.js';
@@ -14,6 +15,24 @@ import { orderSlotsForProviderSelection, type FitnessTask } from './mesh-schedul
 import { selectProviderWithDiagnostics, selectionRationaleFrom, type ResolvedProviderSelection } from './mesh-routing-decision.js';
 import { slotProviderUnusableReason } from './mesh-slot-provider-usability.js';
 import { taskRequiresDifficultyFloor } from './mesh-scheduling-fitness.js';
+
+/**
+ * Why a node resolved to NO capability slots. The three causes need different fixes and used to share
+ * one `missing_provider_priority` code:
+ *  - `provider_priority_workspace_empty`: the node record has no workspace, so no local default can be derived
+ *    for it — repair the node record, not its priority;
+ *  - `provider_loader_unavailable`: this daemon never installed the enabled-provider port, so a locally hosted
+ *    node's defaults could not be computed (a boot/wiring state, not a configuration gap);
+ *  - `missing_provider_priority`: slots, providerPriority and every default source really are empty — configure
+ *    `policy.slots` / `policy.providerPriority` (or enable a provider on the machine).
+ * Each stays within an existing actionable-skip prefix so the coordinator is still told.
+ */
+export function describeEmptyNodeSlots(node: any): string {
+    const workspace = typeof node?.workspace === 'string' ? node.workspace.trim() : '';
+    if (!workspace) return 'provider_priority_workspace_empty';
+    if (isLocalAutoLaunchNode(node) && !isLocalNodeProviderFallbackInstalled()) return 'provider_loader_unavailable';
+    return 'missing_provider_priority';
+}
 
 export async function resolveUsableProvider(
     components: DaemonComponents,
@@ -62,7 +81,7 @@ export async function resolveUsableProvider(
     // EVERY slot is at its cap the selection — and the wait/notify semantics the
     // downstream guard derives from it — is byte-identical to before.
     const slots = resolveNodeCapabilitySlots(node, meshId);
-    if (!slots.length) return { reason: 'missing_provider_priority' };
+    if (!slots.length) return { reason: describeEmptyNodeSlots(node) };
     const quotaTargetsByProvider = task ? quotaTargetsFromSlots(slots) : undefined;
     const quotaBonusByProvider = task ? quotaSpreadBonusByProvider(node, quotaRouting, Date.now(), quotaFactsContext, quotaTargetsByProvider) : undefined;
     const orderedSlots = task

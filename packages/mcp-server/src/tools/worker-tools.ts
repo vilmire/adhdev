@@ -587,6 +587,17 @@ function ignoredKeysWarning(ignoredHandoffKeys: string[]): string {
  */
 function renderQueued(kind: WorkerDeliveryKind, outcome: Extract<WorkerSubmitOutcome, { status: 'queued' }>, ignoredHandoffKeys: string[] = []): string {
   const windowMin = Math.round(WORKER_OUTBOX_MAX_AGE_MS / 60_000);
+  if (kind === 'report' && outcome.error.includes('checkpoint_pending')) {
+    // Not a timeout: the daemon answered and has NOT accepted the report yet. A local copy is not receipt.
+    const lines = [
+      `Report NOT yet accepted (${outcome.entryId}): the coordinator daemon is still confirming that your session's writer has stopped `
+        + `(${outcome.error}). The report is saved locally only — that is not coordinator receipt and the task is not completed.`,
+      `It is re-sent automatically after the stop settles, for up to ${windowMin} min, and a later tool call reports the final verdict. `
+        + 'Do not call report_completion again for this report.',
+    ];
+    if (ignoredHandoffKeys.length) lines.push(ignoredKeysWarning(ignoredHandoffKeys));
+    return lines.join('\n');
+  }
   const lines = kind === 'report'
     ? [
       `Report saved and QUEUED for delivery (${outcome.entryId}) — the daemon did not answer in time `

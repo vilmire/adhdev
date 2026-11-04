@@ -21,6 +21,8 @@
  * No daemon change required — update_mesh_node already accepts slots.
  */
 import { normalizeNodeCapabilitySlots } from '@adhdev/mesh-shared';
+import { isLocalControlPlaneNode } from './mesh-node-identity.js';
+import { supportsMeshRelay } from '../transports/mode.js';
 import {
     commandForNode,
     findNodeWithRefresh,
@@ -105,6 +107,34 @@ export async function meshNodeSlotsSet(
         if (result?.success === false) {
             return JSON.stringify({ success: false, error: result.error || 'update_mesh_node failed' });
         }
+        // The coordinator daemon owns the mesh roster and the slot config it routes from. A write
+        // routed to a REMOTE owner only reaches that member's copy, so apply it to the coordinator's
+        // own mesh config too, or the answer is success while routing keeps the old slots (the same
+        // class as mesh_remove_node leaving the host list unchanged).
+        let hostWrite: Record<string, unknown> | undefined;
+        if (supportsMeshRelay(ctx.transport) && node.daemonId && !isLocalControlPlaneNode(ctx, node)) {
+            try {
+                const local: any = unwrapCommandPayload(await ctx.transport.command('update_mesh_node', {
+                    meshId: ctx.mesh.id,
+                    nodeId: node.id,
+                    policy: { slots: proposed },
+                    inlineMesh: ctx.mesh,
+                }));
+                hostWrite = { written: local?.success !== false, ...(local?.error ? { error: local.error } : {}) };
+            } catch (e: any) {
+                hostWrite = { written: false, error: e?.message || String(e) };
+            }
+            if (hostWrite.written !== true) {
+                return JSON.stringify({
+                    success: false,
+                    written: false,
+                    code: 'mesh_node_slots_host_write_failed',
+                    error: 'The owning daemon accepted the slots but the coordinator mesh config was not updated, so routing still uses the previous slots.',
+                    hostWrite,
+                    nodeId: node.id,
+                });
+            }
+        }
         // Coordinator-side sync (mirror clone_mesh_node / remove_mesh_node above): the
         // write landed on the node's home-daemon and its inline cache, but the
         // coordinator's in-memory ctx.mesh — the view slot-fitness routing reads — still
@@ -133,6 +163,7 @@ export async function meshNodeSlotsSet(
             replacement: true,
             previousSlots: current,
             slots: proposed,
+            ...(hostWrite ? { hostWrite } : {}),
             nextAction: 'Verify with mesh_node_slots (action "list"). Slot-fitness routing picks these up on the next queue drain.',
         }, null, 2);
     } catch (e: any) {

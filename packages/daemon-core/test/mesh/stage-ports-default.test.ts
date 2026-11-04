@@ -35,26 +35,30 @@ describe('production stage ports', () => {
         expect(await defaultStageGit.fingerprint('/opt/absent/workspace')).toBeNull();
     });
 
-    it('fingerprint is content-based: ignored-file edits, skip-worktree flags and untracked edits are all detected', async () => {
+    it('fingerprint is content-based: skip-worktree flags and untracked edits are detected, git-ignored output is not', async () => {
         const dir = mkdtempSync(join(tmpdir(), 'stage-fp-')); dirs.push(dir);
         git(dir, 'init', '-b', 'main');
         writeFileSync(join(dir, '.gitignore'), 'secret.cfg\nbuild/\n'); writeFileSync(join(dir, 'a.txt'), '1\n'); writeFileSync(join(dir, 'secret.cfg'), 'v1');
         git(dir, 'add', '.'); git(dir, 'commit', '-m', 'one');
         const base = (await defaultStageGit.fingerprint(dir))!;
         expect(await defaultStageGit.fingerprint(dir)).toBe(base);
-        // 1. content change of an IGNORED file (status shows nothing for it)
+        // 1. a reviewer that runs tests/builds rewrites IGNORED output: not a source mutation, the verdict stays valid
         await new Promise(r => setTimeout(r, 15));
         writeFileSync(join(dir, 'secret.cfg'), 'v2-longer');
-        const afterIgnored = (await defaultStageGit.fingerprint(dir))!;
-        expect(afterIgnored).not.toBe(base);
-        // 2. an in-place edit of an EXISTING file inside an ignored directory is detected (every ignored file is enumerated)
+        expect(await defaultStageGit.fingerprint(dir)).toBe(base);
         const { mkdirSync } = await import('node:fs');
         mkdirSync(join(dir, 'build')); writeFileSync(join(dir, 'build', 'out.js'), 'x');
-        const withBuild = (await defaultStageGit.fingerprint(dir))!;
-        expect(withBuild).not.toBe(afterIgnored);
         await new Promise(r => setTimeout(r, 15));
         writeFileSync(join(dir, 'build', 'out.js'), 'xyz');
-        expect(await defaultStageGit.fingerprint(dir)).not.toBe(withBuild);
+        expect(await defaultStageGit.fingerprint(dir)).toBe(base);
+        // 2. an untracked (non-ignored) source file is still a mutation, and so is its in-place edit
+        writeFileSync(join(dir, 'new.ts'), 'x');
+        const withNew = (await defaultStageGit.fingerprint(dir))!;
+        expect(withNew).not.toBe(base);
+        await new Promise(r => setTimeout(r, 15));
+        writeFileSync(join(dir, 'new.ts'), 'xyz');
+        expect(await defaultStageGit.fingerprint(dir)).not.toBe(withNew);
+        rmSync(join(dir, 'new.ts'));
         // 3. skip-worktree flag (hides later edits from status/diff)
         const before = (await defaultStageGit.fingerprint(dir))!;
         git(dir, 'update-index', '--skip-worktree', 'a.txt');

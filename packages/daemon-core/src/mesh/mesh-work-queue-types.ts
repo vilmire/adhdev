@@ -76,7 +76,7 @@ export interface MeshWorkQueueEntry {
     ownershipScope?: import('@adhdev/mesh-shared').PhysicalOwnershipScope;
     phase?: import('@adhdev/mesh-shared').MeshTaskPhase;
     revision?: number;
-    revisionHistory?: Array<{ revision: number; at: string; actor: string; before: { message: string; ownedPaths?: OwnedPathsDeclaration; phase?: import('@adhdev/mesh-shared').MeshTaskPhase; dependsOn?: string[]; ownershipScope?: import('@adhdev/mesh-shared').PhysicalOwnershipScope; routingPreferences?: import('@adhdev/mesh-shared').MeshRoutingPreferences; review?: import('@adhdev/mesh-shared').MeshReviewConstraint } }>;
+    revisionHistory?: Array<{ revision: number; at: string; actor: string; before: { message: string; ownedPaths?: OwnedPathsDeclaration; phase?: import('@adhdev/mesh-shared').MeshTaskPhase; dependsOn?: string[]; ownershipScope?: import('@adhdev/mesh-shared').PhysicalOwnershipScope; routingPreferences?: import('@adhdev/mesh-shared').MeshRoutingPreferences; review?: import('@adhdev/mesh-shared').MeshReviewConstraint; difficulty?: string; model?: string; modelSource?: string; thinkingLevel?: string; thinkingLevelSource?: string } }>;
     logicalOverlapWarnings?: Array<{ taskId: string; overlappingPaths: readonly string[]; action: 'serialize_integration' }>;
     id: string;
     meshId: string;
