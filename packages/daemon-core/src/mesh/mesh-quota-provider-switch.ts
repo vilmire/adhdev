@@ -28,6 +28,8 @@ import { getQueueEntryById, requeueTaskWithOutcome } from './mesh-work-queue.js'
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 
 export interface QuotaProviderSwitchDeps {
+    /** Does the session host still list this session? `false` = it is gone (deleted/never restored): nothing to stop, ownership can move. */
+    hostHasSession?(sessionId: string): Promise<boolean>;
     cleanupMeshSessions(args: {
         meshId: string; nodeId: string; node: any; mode: 'stop'; sessionIds: string[]; source: 'mesh_cleanup_sessions';
     }): Promise<{ success: boolean; stoppedSessionIds?: string[]; errors?: Array<{ sessionId: string; error: string; recovery?: string }>; [key: string]: unknown }>;
@@ -74,13 +76,19 @@ export async function switchQuotaExhaustedSession(deps: QuotaProviderSwitchDeps,
         if (task.status !== 'assigned' || task.assignedSessionId !== a.sessionId) {
             return fail('validate', 'task_not_owned_by_session', 'the task is not assigned to that session (already moved, finished or cancelled); nothing was stopped');
         }
-        const stop = await deps.cleanupMeshSessions({
-            meshId: a.meshId, nodeId: a.nodeId, node: a.node, mode: 'stop', sessionIds: [a.sessionId], source: 'mesh_cleanup_sessions',
-        });
+        // DELETED-SESSION CASE: the task is still assigned to a session the host no longer has (deleted by hand or
+        // lost on restart). There is nothing left to stop and no second writer can appear from it, so the reassignment
+        // is allowed on the host's own "absent" answer - never on a stop that did not happen.
+        const gone = deps.hostHasSession ? !(await deps.hostHasSession(a.sessionId).catch(() => true)) : false;
+        const stop = gone
+            ? { success: true, stoppedSessionIds: [a.sessionId] as string[] }
+            : await deps.cleanupMeshSessions({
+                meshId: a.meshId, nodeId: a.nodeId, node: a.node, mode: 'stop', sessionIds: [a.sessionId], source: 'mesh_cleanup_sessions',
+            });
         const stopped = stop.success && (stop.stoppedSessionIds ?? []).includes(a.sessionId);
         if (!stopped) {
-            const err = stop.errors?.find(e => e.sessionId === a.sessionId);
-            const code = err?.error ?? (stop.success ? 'cleanup_unconfirmed' : String(stop.error ?? 'cleanup_unconfirmed'));
+            const err = (stop as { errors?: Array<{ sessionId: string; error: string; recovery?: string }> }).errors?.find(e => e.sessionId === a.sessionId);
+            const code = err?.error ?? (stop.success ? 'cleanup_unconfirmed' : String((stop as { error?: unknown }).error ?? 'cleanup_unconfirmed'));
             meshRecord(a.meshId, 'quota_provider_switch', { nodeId: a.nodeId, sessionId: a.sessionId, taskId: a.taskId,
                 payload: { phase: 'stop_refused', code, fromProvider: a.fromProvider, toProvider: a.toProvider } }, { local: true });
             return fail('stop', code, `the exhausted ${a.fromProvider} session was not proven stopped (${code}); it stays the task's owner`,

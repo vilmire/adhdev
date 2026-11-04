@@ -165241,7 +165241,8 @@ ${defangRelayBody(text9)}`;
         if (task.status !== "assigned" || task.assignedSessionId !== a.sessionId) {
           return fail2("validate", "task_not_owned_by_session", "the task is not assigned to that session (already moved, finished or cancelled); nothing was stopped");
         }
-        const stop = await deps.cleanupMeshSessions({
+        const gone = deps.hostHasSession ? !await deps.hostHasSession(a.sessionId).catch(() => true) : false;
+        const stop = gone ? { success: true, stoppedSessionIds: [a.sessionId] } : await deps.cleanupMeshSessions({
           meshId: a.meshId,
           nodeId: a.nodeId,
           node: a.node,

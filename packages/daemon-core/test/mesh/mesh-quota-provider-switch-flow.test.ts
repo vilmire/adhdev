@@ -124,4 +124,22 @@ describe('usage limit -> switch CLI flow', () => {
         expect(await first).toMatchObject({ ok: true });
         expect(s.control.stopSession).toHaveBeenCalledTimes(1);
     });
+
+    it('deleted-session case: a task still assigned to a session the host no longer has moves on the host\'s own absent answer, with no stop attempted', async () => {
+        const s = scenario();
+        s.control.listSessions = async () => [];
+        const deps = { ...s.deps, hostHasSession: async (id: string) => (await s.control.listSessions()).some((r: any) => r.sessionId === id) };
+        const result = await switchQuotaExhaustedSession(deps, s.args);
+        expect(result).toMatchObject({ ok: true, toProvider: 'codex-cli' });
+        expect(s.control.stopSession).not.toHaveBeenCalled();
+        expect(getQueueEntryById(s.meshId, s.taskId)).toMatchObject({ status: 'pending', requiredTags: ['provider=codex-cli'] });
+    });
+
+    it('an unreadable host answer is never read as "absent" (falls back to the stop path)', async () => {
+        const s = scenario();
+        const deps = { ...s.deps, hostHasSession: async () => { throw new Error('host busy'); } };
+        const result = await switchQuotaExhaustedSession(deps, s.args);
+        expect(result).toMatchObject({ ok: true });
+        expect(s.control.stopSession).toHaveBeenCalledTimes(1);
+    });
 });
