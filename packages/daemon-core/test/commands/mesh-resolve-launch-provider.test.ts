@@ -76,7 +76,7 @@ describe('mesh_resolve_launch_provider', () => {
 
     it('reports the routing reason (not a guess) when nothing is launchable', async () => {
         const loader = providerLoader([]);
-        const node = { id: 'node_local', daemonId: 'mach_host000000000001', policy: {} };
+        const node = { id: 'node_local', daemonId: 'mach_host000000000001', workspace: '/work/local', policy: {} };
         const off = installLocalNodeProviderFallback(loader as any);
         try {
             const res: any = await meshStatusViewHandlers.mesh_resolve_launch_provider(ctxFor(node, loader), { meshId: MESH_ID, nodeId: 'node_local' });

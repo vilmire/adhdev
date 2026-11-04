@@ -26434,7 +26434,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       return isRecoveryContextQueryResponse2(value) ? value : null;
     }
     function decodeQueueReviseRequest(value) {
-      if (!isRecord2(value) || !hasOnlyKeys22(value, ["v", "meshId", "taskId", "expectedRevision", "patch", "dryRun", "deferScheduling"]) || value.v !== TURN_IPC_PROTOCOL_VERSION2 || !isEvidenceIdentifier2(value.meshId) || !isEvidenceIdentifier2(value.taskId) || !Number.isSafeInteger(value.expectedRevision) || value.expectedRevision < 0 || !isRecord2(value.patch) || !Object.keys(value.patch).length || !hasOnlyKeys22(value.patch, ["message", "ownedPaths", "phase", "dependsOn", "routingPreferences", "review", "requestQuotaOverride"])) return null;
+      if (!isRecord2(value) || !hasOnlyKeys22(value, ["v", "meshId", "taskId", "expectedRevision", "patch", "dryRun", "deferScheduling"]) || value.v !== TURN_IPC_PROTOCOL_VERSION2 || !isEvidenceIdentifier2(value.meshId) || !isEvidenceIdentifier2(value.taskId) || !Number.isSafeInteger(value.expectedRevision) || value.expectedRevision < 0 || !isRecord2(value.patch) || !Object.keys(value.patch).length || !hasOnlyKeys22(value.patch, ["message", "ownedPaths", "phase", "dependsOn", "routingPreferences", "review", "difficulty", "requestQuotaOverride"])) return null;
       if (value.dryRun !== void 0 && typeof value.dryRun !== "boolean") return null;
       if (value.deferScheduling !== void 0 && typeof value.deferScheduling !== "boolean") return null;
       const p = value.patch;
@@ -26442,6 +26442,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       if (p.requestQuotaOverride !== void 0 && (p.requestQuotaOverride !== true || Object.keys(p).length !== 1)) return null;
       if (p.message !== void 0 && (typeof p.message !== "string" || !p.message.trim())) return null;
       if (p.phase !== void 0 && p.phase !== "source" && p.phase !== "integration") return null;
+      if (p.difficulty !== void 0 && p.difficulty !== "easy" && p.difficulty !== "medium" && p.difficulty !== "difficult" && p.difficulty !== "freeform") return null;
       for (const key6 of ["ownedPaths", "dependsOn"]) {
         if (p[key6] !== void 0 && (!Array.isArray(p[key6]) || !p[key6].every((x) => typeof x === "string" && !!x.trim()))) return null;
       }
@@ -72572,6 +72573,9 @@ ${mergeTreeErr?.stderr || ""}`;
     function setLocalNodeProviderFallback(fn) {
       localNodeProviderFallback = fn;
     }
+    function isLocalNodeProviderFallbackInstalled() {
+      return localNodeProviderFallback !== null;
+    }
     function localNodeDefaultProviders(node) {
       if (!localNodeProviderFallback) return [];
       try {
@@ -92438,6 +92442,14 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         summary: "the target node is on a remote daemon this coordinator cannot auto-launch a session on (no dispatch transport, or no coordinator daemon id to stamp)",
         nextAction: "Launch a session on that node yourself with mesh_launch_session, or ensure the remote daemon is connected over P2P."
       };
+      if (reason === "provider_priority_workspace_empty") return {
+        summary: "the node record has no workspace, so no default provider order can be derived for it (this is a node-record gap, not a missing providerPriority)",
+        nextAction: "Repair the node record (its workspace path) with mesh_config or re-add the node; setting providerPriority alone will not clear this."
+      };
+      if (reason === "provider_loader_unavailable") return {
+        summary: "this daemon's provider loader is not available, so the machine's enabled CLI providers could not be read (a boot/wiring state, not a configuration gap)",
+        nextAction: "Wait for the daemon to finish starting, or restart it; do not change the node's providerPriority for this."
+      };
       if (reason.startsWith("provider") || reason === "missing_provider_priority") return {
         summary: `the current provider scan found no usable provider for this task (provider priority missing/unusable, or the provider loader is unavailable; ${reason})`,
         nextAction: "Check the node's providerPriority policy and that the required CLI provider is installed and enabled on that machine. Quota-gated candidates use a separate, self-resolving reason and are not proof of this configuration blocker."
@@ -92589,6 +92601,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
           "remote_auto_launch_unsupported",
           "remote_auto_launch_no_coordinator_daemon_id",
           "missing_provider_priority",
+          "provider_priority_workspace_empty",
           "provider_loader_unavailable",
           "provider_priority_unusable",
           "provider_unusable",
@@ -94215,11 +94228,17 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         init_mesh_node_slots();
       }
     });
+    function describeEmptyNodeSlots(node) {
+      const workspace = typeof node?.workspace === "string" ? node.workspace.trim() : "";
+      if (!workspace) return "provider_priority_workspace_empty";
+      if (isLocalAutoLaunchNode(node) && !isLocalNodeProviderFallbackInstalled()) return "provider_loader_unavailable";
+      return "missing_provider_priority";
+    }
     async function resolveUsableProvider(components, nodeId, node, meshId, requiredTags, task, quotaRouting, quotaFactsContext, taskId, routingRefusal) {
       const providerLoader = components.providerLoader;
       if (!providerLoader) return { reason: "provider_loader_unavailable" };
       const slots2 = resolveNodeCapabilitySlots(node, meshId);
-      if (!slots2.length) return { reason: "missing_provider_priority" };
+      if (!slots2.length) return { reason: describeEmptyNodeSlots(node) };
       const quotaTargetsByProvider = task ? quotaTargetsFromSlots3(slots2) : void 0;
       const quotaBonusByProvider = task ? quotaSpreadBonusByProvider(node, quotaRouting, Date.now(), quotaFactsContext, quotaTargetsByProvider) : void 0;
       const orderedSlots = task ? orderSlotsForProviderSelection(slots2, meshId ?? "", nodeId, node, task, quotaBonusByProvider) : slots2;
@@ -94330,6 +94349,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         "use strict";
         init_mesh_task_routing_contract();
         init_logger();
+        init_mesh_candidacy_predicates();
         init_mesh_node_slots();
         init_mesh_quota_routing();
         init_mesh_quota_ranking_records();
@@ -134000,7 +134020,7 @@ ${detail.join("\n")}` : stripped;
     function revisePendingTask(meshId, taskId, expectedRevision, patch, host) {
       if (!host?.actor || !host.repoIdentity || !host.machineId) throw new Error("authenticated_host_required");
       if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new Error("invalid_expected_revision");
-      if (!patch || typeof patch !== "object" || Array.isArray(patch) || !Object.keys(patch).length || Object.keys(patch).some((k) => !["message", "ownedPaths", "phase", "dependsOn", "routingPreferences", "review"].includes(k))) throw new Error("unsupported_revision_patch");
+      if (!patch || typeof patch !== "object" || Array.isArray(patch) || !Object.keys(patch).length || Object.keys(patch).some((k) => !["message", "ownedPaths", "phase", "dependsOn", "routingPreferences", "review", "difficulty"].includes(k))) throw new Error("unsupported_revision_patch");
       const store5 = MeshRuntimeStore.getInstance();
       return store5.transaction(() => {
         const before = store5.findQueueEntryById(meshId, taskId);
@@ -134026,6 +134046,33 @@ ${detail.join("\n")}` : stripped;
           if (patch.phase !== "source" && patch.phase !== "integration") throw new Error("invalid_revision_phase");
           if (next.readonly || next.taskMode === "live_debug_readonly") throw new Error("write_phase_required");
           next.phase = patch.phase;
+        }
+        if (patch.difficulty !== void 0) {
+          if (!isMeshTaskDifficulty2(patch.difficulty)) throw new Error("invalid_revision_difficulty");
+          if (before.stagePlan || before.stageState || before.origin === "stage") throw new Error("difficulty_revision_unsupported_for_stage_task");
+          next.difficulty = patch.difficulty;
+          let preset;
+          try {
+            preset = getDifficultyBrains(meshId)[patch.difficulty];
+          } catch {
+            preset = void 0;
+          }
+          if (next.modelSource === "preset") {
+            delete next.model;
+            delete next.modelSource;
+          }
+          if (next.thinkingLevelSource === "preset") {
+            delete next.thinkingLevel;
+            delete next.thinkingLevelSource;
+          }
+          if (preset?.model && !next.model) {
+            next.model = preset.model;
+            next.modelSource = "preset";
+          }
+          if (preset?.thinkingLevel && !next.thinkingLevel) {
+            next.thinkingLevel = preset.thinkingLevel;
+            next.thinkingLevelSource = "preset";
+          }
         }
         if (patch.routingPreferences !== void 0) next.routingPreferences = normalizeRoutingPreferences(patch.routingPreferences);
         if (patch.review !== void 0) {
@@ -134069,7 +134116,7 @@ ${detail.join("\n")}` : stripped;
           revision: expectedRevision,
           at: (/* @__PURE__ */ new Date()).toISOString(),
           actor: host.actor,
-          before: { message: before.message, ownedPaths: before.ownedPaths, phase: before.phase, dependsOn: before.dependsOn, ownershipScope: before.ownershipScope, routingPreferences: before.routingPreferences, review: before.review }
+          before: { message: before.message, ownedPaths: before.ownedPaths, phase: before.phase, dependsOn: before.dependsOn, ownershipScope: before.ownershipScope, routingPreferences: before.routingPreferences, review: before.review, difficulty: before.difficulty, model: before.model, modelSource: before.modelSource, thinkingLevel: before.thinkingLevel, thinkingLevelSource: before.thinkingLevelSource }
         }];
         if (!host.deferScheduling) {
           delete next.hold;
@@ -134087,6 +134134,7 @@ ${detail.join("\n")}` : stripped;
         init_mesh_task_phase_dependencies();
         init_mesh_task_routing_contract();
         init_dist();
+        init_mesh_config_routing();
         init_mesh_runtime_store();
         init_mesh_queue_attempt_guard();
         init_mesh_task_inflight();
@@ -245310,7 +245358,7 @@ var MESH_QUEUE_REQUEUE_TOOL = {
 };
 var MESH_QUEUE_REVISE_TOOL = {
   name: "mesh_queue_revise",
-  description: "Atomically revise an existing PENDING task by expected revision (legacy revision is 0). Preserves id, mission, history and dependents. Edits message, ownership, source/integration phase or dependency graph; By default releases stale holds and reschedules immediately. dry_run validates without mutation; defer_scheduling applies the revision while preserving holds/parking and does not trigger scheduling. Physical source migration requires an existing local node pin, attested by the host. Assigned/open attempts refuse; no force or active handoff in version 1. Source completion is uncommitted/not_mergeable, never release acceptance.",
+  description: "Atomically revise an existing PENDING task by expected revision (legacy revision is 0). Preserves id, mission, history and dependents. Edits message, ownership, source/integration phase, difficulty class or dependency graph; By default releases stale holds and reschedules immediately. dry_run validates without mutation; defer_scheduling applies the revision while preserving holds/parking and does not trigger scheduling. Physical source migration requires an existing local node pin, attested by the host. Assigned/open attempts refuse; no force or active handoff in version 1. Source completion is uncommitted/not_mergeable, never release acceptance.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -245337,6 +245385,7 @@ var MESH_QUEUE_REVISE_TOOL = {
             sourceTaskId: { type: "string" },
             differentProvider: { const: true }
           } },
+          difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: "Reclassify THIS pending task (the supported recovery when a hold says task_difficulty_floor_unavailable for the node's slots). Preset-derived model/thinking follow the new class; explicit ones stay. Never changes node slots or global brain presets. Not for stage (review-in-task) tasks." },
           requestQuotaOverride: { const: true, description: "Alone: ask the OWNER to let this quota-held task run despite the quota reserve (raises an owner decision; you cannot grant it)." }
         }
       }

@@ -38,6 +38,22 @@ describe('pending task revision CAS', () => {
         expect(() => revisePendingTask(meshId, original.id, 0, { message: 'Stale' }, context())).toThrow(/stale_revision/);
         expect(getQueueEntryById(meshId, original.id)).toEqual(edited);
     });
+    it('reclassifies the difficulty of one pending task (the recovery from task_difficulty_floor_unavailable) and records the prior class', () => {
+        const original = task();
+        expect(original.difficulty).toBe('medium');
+        const edited = revisePendingTask(meshId, original.id, 0, { difficulty: 'easy' }, context());
+        expect(edited).toMatchObject({ id: original.id, difficulty: 'easy', revision: 1, revisionHistory: [{ before: { difficulty: 'medium' } }] });
+        expect(getQueueEntryById(meshId, original.id)?.difficulty).toBe('easy');
+        expect(() => revisePendingTask(meshId, original.id, 1, { difficulty: 'impossible' as any }, context())).toThrow(/invalid_revision_difficulty/);
+        expect(getQueueEntryById(meshId, original.id)?.difficulty).toBe('easy');
+        // A dry run validates without saving.
+        revisePendingTask(meshId, original.id, 1, { difficulty: 'difficult' }, { ...context(), dryRun: true });
+        expect(getQueueEntryById(meshId, original.id)?.difficulty).toBe('easy');
+        // An assigned task is not reclassified.
+        revisePendingTask(meshId, original.id, 1, { difficulty: 'medium' }, context());
+        MeshRuntimeStore.getInstance().claimNextQueueTask(meshId, 'node', 'worker', [], claim);
+        expect(() => revisePendingTask(meshId, original.id, 2, { difficulty: 'difficult' }, context())).toThrow(/pending_required/);
+    });
     it('rejects invalid paths, unknown deps, cycles, expansion collisions with zero changes', () => {
         const original = task(['small.ts']);
         const dep = enqueueTask(meshId, 'Dependent', { difficulty: 'medium', dependsOn: [original.id] });

@@ -124,11 +124,11 @@ describe('default provider priority from what the node reports', () => {
     });
 
     it('keeps missing_provider_priority when nothing usable is known', async () => {
-        const remoteNoFacts = { id: 'node_remote', daemonId: REMOTE_DAEMON, policy: {} };
+        const remoteNoFacts = { id: 'node_remote', daemonId: REMOTE_DAEMON, workspace: '/work/remote', policy: {} };
         expect((await resolve(components(), remoteNoFacts)).reason).toBe('missing_provider_priority');
-        const allDisabled = { id: 'node_remote', daemonId: REMOTE_DAEMON, policy: {}, nodeFacts: facts({ 'claude-cli': false }) };
+        const allDisabled = { id: 'node_remote', daemonId: REMOTE_DAEMON, workspace: '/work/remote', policy: {}, nodeFacts: facts({ 'claude-cli': false }) };
         expect((await resolve(components(), allDisabled)).reason).toBe('missing_provider_priority');
-        const localNothingEnabled = { id: 'node_local', daemonId: 'mach_host000000000001', policy: {} };
+        const localNothingEnabled = { id: 'node_local', daemonId: 'mach_host000000000001', workspace: '/work/local', policy: {} };
         const comps = components([]);
         const off = installLocalNodeProviderFallback(comps.providerLoader);
         try {
@@ -136,6 +136,18 @@ describe('default provider priority from what the node reports', () => {
         } finally {
             off();
         }
+    });
+
+    it('tells an empty node workspace and an unavailable provider loader apart from a truly missing priority', async () => {
+        // No workspace on the node record: a node-record gap, not a priority gap.
+        const noWorkspace = { id: 'node_remote', daemonId: REMOTE_DAEMON, policy: {} };
+        expect((await resolve(components(), noWorkspace)).reason).toBe('provider_priority_workspace_empty');
+        // A locally hosted node while the enabled-provider port is not installed: loader unavailable.
+        const local = { id: 'node_local', daemonId: 'mach_host000000000001', workspace: '/work/local', policy: {} };
+        expect((await resolve(components([]), local)).reason).toBe('provider_loader_unavailable');
+        // A remote node never needs the local port: it is truly missing.
+        const remote = { id: 'node_remote', daemonId: REMOTE_DAEMON, workspace: '/work/remote', policy: {} };
+        expect((await resolve(components(), remote)).reason).toBe('missing_provider_priority');
     });
 
     it('difficulty-aware selection still runs over the defaulted slots', async () => {

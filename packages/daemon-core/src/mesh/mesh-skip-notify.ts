@@ -36,6 +36,7 @@ const ACTIONABLE_SKIP_REASON_PREFIXES = [
     'remote_auto_launch_unsupported',
     'remote_auto_launch_no_coordinator_daemon_id',
     'missing_provider_priority',
+    'provider_priority_workspace_empty',
     'provider_loader_unavailable',
     'provider_priority_unusable',
     'provider_unusable',
@@ -516,6 +517,14 @@ function actionableSkipGuidance(
     if (reason.startsWith('remote_auto_launch')) return {
         summary: 'the target node is on a remote daemon this coordinator cannot auto-launch a session on (no dispatch transport, or no coordinator daemon id to stamp)',
         nextAction: 'Launch a session on that node yourself with mesh_launch_session, or ensure the remote daemon is connected over P2P.',
+    };
+    if (reason === 'provider_priority_workspace_empty') return {
+        summary: 'the node record has no workspace, so no default provider order can be derived for it (this is a node-record gap, not a missing providerPriority)',
+        nextAction: 'Repair the node record (its workspace path) with mesh_config or re-add the node; setting providerPriority alone will not clear this.',
+    };
+    if (reason === 'provider_loader_unavailable') return {
+        summary: "this daemon's provider loader is not available, so the machine's enabled CLI providers could not be read (a boot/wiring state, not a configuration gap)",
+        nextAction: 'Wait for the daemon to finish starting, or restart it; do not change the node\'s providerPriority for this.',
     };
     if (reason.startsWith('provider') || reason === 'missing_provider_priority') return {
         summary: `the current provider scan found no usable provider for this task (provider priority missing/unusable, or the provider loader is unavailable; ${reason})`,
