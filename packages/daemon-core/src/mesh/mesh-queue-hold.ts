@@ -100,7 +100,9 @@ export function queueHoldContext(task: MeshWorkQueueEntry, reason: string, queue
         const detail: MeshQueueHold['detail'] = { overlappingPaths: overlaps };
         if (explained?.reason.kind === 'missing_scope') {
             detail.unknownField = 'ownershipScope';
-            detail.resolution = `assigned task ${explained.taskId} has no host ownershipScope; concurrent non-readonly admission stays closed until that task is completed, failed, or cancelled; a pending revise cannot attach a scope while admission fails; do not stop the task to narrow it.`;
+            detail.resolution = `assigned task ${explained.taskId} has no host-attested ownershipScope, so it counts as an unknown writer and every other write task waits behind it. `
+                + `If it declared owned_paths and runs on a node of this host, attach the proof without stopping it: mesh_queue_revise task_id=${explained.taskId} patch={attestActiveOwnership:true} with its current expected_revision. `
+                + 'Otherwise it stays closed until that task is completed, failed, or cancelled.';
         } else if (explained?.reason.kind === 'resource' || explained?.reason.kind === 'worktree') {
             detail.canonicalResource = explained.reason.path;
             detail.resolution = `resolves when task ${explained.taskId} is no longer assigned or its attested resources no longer include this path.`;
@@ -113,6 +115,18 @@ export function queueHoldContext(task: MeshWorkQueueEntry, reason: string, queue
             ? active.filter(other => !other.readonly && other.taskMode !== 'live_debug_readonly' && nodeId && meshNodeIdMatches({ id: other.assignedNodeId }, nodeId)).map(other => other.id)
             : [];
     return { blockingTaskIds, detail: overlaps.length ? { overlappingPaths: overlaps } : {} };
+}
+
+/** What to do about a claim refusal `ownership_unproven: <why>` — the raw proof error alone says what failed, not how to fix it. */
+export function ownershipUnprovenResolution(message: string): string {
+    if (/ownedPaths/.test(message)) {
+        return 'This write task declares no owned_paths, so it cannot be proven isolated and waits behind every active writer. '
+            + 'Revise it with mesh_queue_revise (patch: ownedPaths + phase) to let it run beside isolated work; readonly tasks are not affected.';
+    }
+    if (/source_phase_path_forbidden|ownership_symlink_escape/.test(message)) {
+        return `${message} - the declared path cannot be owned from a source checkout; narrow owned_paths or run it as an integration task.`;
+    }
+    return `${message} - the host could not attest the node checkout this task would write in; check the node workspace is a git worktree root on this machine.`;
 }
 
 /** Mutate only the diagnostic payload; never bump updatedAt (pin/reclaim clocks use it). */

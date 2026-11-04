@@ -242,7 +242,7 @@ export const MESH_QUEUE_REQUEUE_TOOL = {
 
 export const MESH_QUEUE_REVISE_TOOL = {
     name: 'mesh_queue_revise',
-    description: 'Atomically revise an existing PENDING task by expected revision (legacy revision is 0). Preserves id, mission, history and dependents. Edits message, ownership, source/integration phase or dependency graph; By default releases stale holds and reschedules immediately. dry_run validates without mutation; defer_scheduling applies the revision while preserving holds/parking and does not trigger scheduling. Physical source migration requires an existing local node pin, attested by the host. Assigned/open attempts refuse; no force or active handoff in version 1. Source completion is uncommitted/not_mergeable, never release acceptance.',
+    description: 'Atomically revise an existing PENDING task by expected revision (legacy revision is 0). Preserves id, mission, history and dependents. Edits message, ownership, source/integration phase or dependency graph; By default releases stale holds and reschedules immediately. dry_run validates without mutation; defer_scheduling applies the revision while preserving holds/parking and does not trigger scheduling. Physical source migration requires an existing local node pin, attested by the host. Assigned/open attempts refuse every edit; the only active-task operation is patch.attestActiveOwnership (adds the missing scope proof, changes nothing else). No force or active handoff in version 1. Source completion is uncommitted/not_mergeable, never release acceptance.',
     inputSchema: {
         type: 'object' as const, additionalProperties: false,
         required: ['task_id', 'expected_revision', 'patch'],
@@ -262,6 +262,7 @@ export const MESH_QUEUE_REVISE_TOOL = {
                     review: { type: 'object', additionalProperties: false, required: ['sourceTaskId', 'differentProvider'], properties: {
                         sourceTaskId: { type: 'string' }, differentProvider: { const: true },
                     } },
+                    attestActiveOwnership: { const: true, description: 'Alone, on an ASSIGNED write task that declared owned_paths but has no host-attested ownership scope (it blocks every other write task as an unknown writer): attach the scope for the running task without stopping it. Needs the current expected_revision; refused when the task declared no paths, is remote, or its live session is not in the node checkout.' },
                     requestQuotaOverride: { const: true, description: 'Alone: ask the OWNER to let this quota-held task run despite the quota reserve (raises an owner decision; you cannot grant it).' },
                 },
             },

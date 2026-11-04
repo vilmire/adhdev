@@ -41,7 +41,7 @@ describe('durable queue holds', () => {
             detail: {
                 overlappingPaths: [{ taskId: holder.id, ownedPath: 'oss/packages/daemon-core/test/mesh/queue.test.ts', blockingPath: 'oss/packages/daemon-core/test/**' }],
                 unknownField: 'ownershipScope',
-                resolution: `assigned task ${holder.id} has no host ownershipScope; concurrent non-readonly admission stays closed until that task is completed, failed, or cancelled; a pending revise cannot attach a scope while admission fails; do not stop the task to narrow it.`,
+                resolution: expect.stringContaining(`assigned task ${holder.id} has no host-attested ownershipScope`),
             },
         });
         vi.advanceTimersByTime(60_000); store.claimNextQueueTask(mesh, 'worker-node', 'worker-session', [], opts);

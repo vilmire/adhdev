@@ -26434,12 +26434,14 @@ ${renderWorkerProtocolFooter2(input)}`;
       return isRecoveryContextQueryResponse2(value) ? value : null;
     }
     function decodeQueueReviseRequest(value) {
-      if (!isRecord2(value) || !hasOnlyKeys22(value, ["v", "meshId", "taskId", "expectedRevision", "patch", "dryRun", "deferScheduling"]) || value.v !== TURN_IPC_PROTOCOL_VERSION2 || !isEvidenceIdentifier2(value.meshId) || !isEvidenceIdentifier2(value.taskId) || !Number.isSafeInteger(value.expectedRevision) || value.expectedRevision < 0 || !isRecord2(value.patch) || !Object.keys(value.patch).length || !hasOnlyKeys22(value.patch, ["message", "ownedPaths", "phase", "dependsOn", "routingPreferences", "review", "requestQuotaOverride"])) return null;
+      if (!isRecord2(value) || !hasOnlyKeys22(value, ["v", "meshId", "taskId", "expectedRevision", "patch", "dryRun", "deferScheduling"]) || value.v !== TURN_IPC_PROTOCOL_VERSION2 || !isEvidenceIdentifier2(value.meshId) || !isEvidenceIdentifier2(value.taskId) || !Number.isSafeInteger(value.expectedRevision) || value.expectedRevision < 0 || !isRecord2(value.patch) || !Object.keys(value.patch).length || !hasOnlyKeys22(value.patch, ["message", "ownedPaths", "phase", "dependsOn", "routingPreferences", "review", "requestQuotaOverride", "attestActiveOwnership"])) return null;
       if (value.dryRun !== void 0 && typeof value.dryRun !== "boolean") return null;
       if (value.deferScheduling !== void 0 && typeof value.deferScheduling !== "boolean") return null;
       const p = value.patch;
       if (p.requestQuotaOverride && (value.dryRun !== void 0 || value.deferScheduling !== void 0)) return null;
       if (p.requestQuotaOverride !== void 0 && (p.requestQuotaOverride !== true || Object.keys(p).length !== 1)) return null;
+      if (p.attestActiveOwnership && (value.dryRun !== void 0 || value.deferScheduling !== void 0)) return null;
+      if (p.attestActiveOwnership !== void 0 && (p.attestActiveOwnership !== true || Object.keys(p).length !== 1)) return null;
       if (p.message !== void 0 && (typeof p.message !== "string" || !p.message.trim())) return null;
       if (p.phase !== void 0 && p.phase !== "source" && p.phase !== "integration") return null;
       for (const key6 of ["ownedPaths", "dependsOn"]) {
@@ -48768,7 +48770,7 @@ ${error.message || ""}`;
         const detail = { overlappingPaths: overlaps2 };
         if (explained?.reason.kind === "missing_scope") {
           detail.unknownField = "ownershipScope";
-          detail.resolution = `assigned task ${explained.taskId} has no host ownershipScope; concurrent non-readonly admission stays closed until that task is completed, failed, or cancelled; a pending revise cannot attach a scope while admission fails; do not stop the task to narrow it.`;
+          detail.resolution = `assigned task ${explained.taskId} has no host-attested ownershipScope, so it counts as an unknown writer and every other write task waits behind it. If it declared owned_paths and runs on a node of this host, attach the proof without stopping it: mesh_queue_revise task_id=${explained.taskId} patch={attestActiveOwnership:true} with its current expected_revision. Otherwise it stays closed until that task is completed, failed, or cancelled.`;
         } else if (explained?.reason.kind === "resource" || explained?.reason.kind === "worktree") {
           detail.canonicalResource = explained.reason.path;
           detail.resolution = `resolves when task ${explained.taskId} is no longer assigned or its attested resources no longer include this path.`;
@@ -48777,6 +48779,15 @@ ${error.message || ""}`;
       }
       const blockingTaskIds = reason === "dependencies_unsatisfied" ? (task.dependsOn || []).filter((id4) => !queue.some((other) => other.id === id4 && other.status === "completed")) : reason === "node_busy_with_active_assignment" || reason === "node_has_active_assignment" ? active.filter((other) => !other.readonly && other.taskMode !== "live_debug_readonly" && nodeId && meshNodeIdMatches7({ id: other.assignedNodeId }, nodeId)).map((other) => other.id) : [];
       return { blockingTaskIds, detail: overlaps2.length ? { overlappingPaths: overlaps2 } : {} };
+    }
+    function ownershipUnprovenResolution(message) {
+      if (/ownedPaths/.test(message)) {
+        return "This write task declares no owned_paths, so it cannot be proven isolated and waits behind every active writer. Revise it with mesh_queue_revise (patch: ownedPaths + phase) to let it run beside isolated work; readonly tasks are not affected.";
+      }
+      if (/source_phase_path_forbidden|ownership_symlink_escape/.test(message)) {
+        return `${message} - the declared path cannot be owned from a source checkout; narrow owned_paths or run it as an integration task.`;
+      }
+      return `${message} - the host could not attest the node checkout this task would write in; check the node workspace is a git worktree root on this machine.`;
     }
     function setQueueTaskHold(task, reason, context2, now = Date.now()) {
       if (task.status !== "pending") return;
@@ -98003,7 +98014,7 @@ ${continuationNotice}` } : dispatchTask,
               const escaped = message.match(/ownership_symlink_escape:\s*(\S+)/);
               const unknownField = forbidden?.[1] || escaped?.[1] || (/ownedPaths/.test(message) ? "ownedPaths" : "workspace");
               context2.blockingTaskIds = [];
-              context2.detail = { unknownField, resolution: message };
+              context2.detail = { unknownField, resolution: ownershipUnprovenResolution(message) };
             }
             if (gate.reason === "dependencies_unsatisfied") context2.blockingTaskIds = (candidate.dependsOn || []).filter((id4) => depStatus.get(id4) !== "completed");
             const previousHold = JSON.stringify(candidate.hold);
@@ -133965,6 +133976,62 @@ ${detail.join("\n")}` : stripped;
         MAX_REMEMBERED = 200;
       }
     });
+    function attestActiveTaskOwnership(meshId, taskId, expectedRevision, host) {
+      if (!host?.actor || !host.repoIdentity || !host.machineId) throw new Error("authenticated_host_required");
+      if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new Error("invalid_expected_revision");
+      const store5 = MeshRuntimeStore.getInstance();
+      return store5.transaction(() => {
+        const before = store5.findQueueEntryById(meshId, taskId);
+        if (!before) throw new Error("task_not_found");
+        if (before.status !== "assigned") throw new Error("assigned_required: pending tasks use an ordinary revision");
+        if ((before.revision ?? 0) !== expectedRevision) throw new Error("stale_revision");
+        if (isTaskReadonly3(before)) throw new Error("write_task_required");
+        if (before.ownershipScope) throw new Error("ownership_already_attested");
+        if (!before.ownedPaths?.paths.length) {
+          throw new Error("ownedpaths_undeclared: the running task never declared what it writes, so no scope can be proven; it stays an unknown writer until it ends");
+        }
+        if (!before.assignedSessionId || !host.nodeId || !host.workspace || !pinnedMeshNodeIdMatches(host.nodeId, before.assignedNodeId)) {
+          throw new Error("local_pinned_physical_context_required");
+        }
+        try {
+          if (!host.sessionWorkspace || import_node_fs37.realpathSync.native(host.sessionWorkspace) !== import_node_fs37.realpathSync.native(host.workspace)) throw new Error("mismatch");
+        } catch {
+          throw new Error("active_workspace_unproven: the assigned session is not running in the node checkout");
+        }
+        const phase = before.phase === "integration" ? "integration" : "source";
+        const scope2 = attestLocalOwnership2({
+          repoIdentity: host.repoIdentity,
+          machineId: host.machineId,
+          nodeId: host.nodeId,
+          workspace: host.workspace,
+          phase,
+          paths: before.ownedPaths
+        });
+        if (!currentPhysicalScope(scope2, before.ownedPaths)) throw new Error("ownership_unproven: unproven_active_physical_resource");
+        const next = structuredClone(before);
+        next.ownershipScope = scope2;
+        next.phase = phase;
+        next.revisionHistory = [...before.revisionHistory ?? [], {
+          revision: expectedRevision,
+          at: (/* @__PURE__ */ new Date()).toISOString(),
+          actor: host.actor,
+          before: { message: before.message, ownedPaths: before.ownedPaths, phase: before.phase, dependsOn: before.dependsOn, ownershipScope: void 0, routingPreferences: before.routingPreferences, review: before.review }
+        }];
+        store5.updateQueueEntry(next);
+        return next;
+      });
+    }
+    var import_node_fs37;
+    var init_mesh_active_ownership = __esm2({
+      "src/mesh/mesh-active-ownership.ts"() {
+        "use strict";
+        import_node_fs37 = require("fs");
+        init_mesh_runtime_store();
+        init_mesh_physical_ownership();
+        init_mesh_pinned_node_identity();
+        init_mesh_task_predicates();
+      }
+    });
     function revisePendingTask(meshId, taskId, expectedRevision, patch, host) {
       if (!host?.actor || !host.repoIdentity || !host.machineId) throw new Error("authenticated_host_required");
       if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new Error("invalid_expected_revision");
@@ -134653,7 +134720,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       if (!node.isLocalWorktree || !node.workspace) {
         return { kind: "terminal", result: { success: false, error: `Refinery requires a local worktree node`, refineStages } };
       }
-      if (!(0, import_node_fs37.existsSync)(node.workspace)) {
+      if (!(0, import_node_fs38.existsSync)(node.workspace)) {
         recordMeshRefineStage(refineStages, "resolve_refs", "failed", Date.now(), {
           workspace: node.workspace,
           workspaceMissing: true
@@ -135027,14 +135094,14 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       if (!Array.isArray(refineStages)) return false;
       return refineStages.some((stage) => stage?.stage === "sync_base" && stage?.rebased === true);
     }
-    var import_node_fs37;
+    var import_node_fs38;
     var init_router_refine_sync_stages = __esm2({
       "src/commands/router-refine-sync-stages.ts"() {
         "use strict";
         init_mesh_refine_publication_contract();
         init_mesh_refine_gates();
         init_dist();
-        import_node_fs37 = require("fs");
+        import_node_fs38 = require("fs");
         init_mesh_refine_landing();
         init_git_locale();
         init_git_status();
@@ -135062,7 +135129,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
           callSite,
           gitArgs,
           cwd,
-          cwdExists: (0, import_node_fs38.existsSync)(cwd),
+          cwdExists: (0, import_node_fs39.existsSync)(cwd),
           code: error?.code ?? null,
           syscall: error?.syscall ?? null,
           path: error?.path ?? null,
@@ -135169,7 +135236,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       return { order: ranked.map((a) => a.nodeId), changeAreas: areaById, rationale };
     }
     var import_node_child_process26;
-    var import_node_fs38;
+    var import_node_fs39;
     var import_node_util12;
     var execFileAsync7;
     var GIT2;
@@ -135178,7 +135245,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       "src/mesh/mesh-refine-batch.ts"() {
         "use strict";
         import_node_child_process26 = require("child_process");
-        import_node_fs38 = require("fs");
+        import_node_fs39 = require("fs");
         import_node_util12 = require("util");
         init_resolve_executable();
         init_logger();
@@ -135200,7 +135267,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
     }
     async function assessScope(cwd, path141, baseRef, branchRef) {
       try {
-        if (!(0, import_node_fs39.existsSync)(cwd)) return { path: path141, verdict: "unknown", error: `path does not exist: ${cwd}` };
+        if (!(0, import_node_fs40.existsSync)(cwd)) return { path: path141, verdict: "unknown", error: `path does not exist: ${cwd}` };
         const liveBaseHead = await git8(cwd, ["rev-parse", baseRef]);
         const branchHead = await git8(cwd, ["rev-parse", branchRef]);
         if (!liveBaseHead || !branchHead) {
@@ -135291,12 +135358,12 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       return { verdict, scopes: scopes2, touchedSubmodulePaths, durationMs: Date.now() - started };
     }
     var import_node_path33;
-    var import_node_fs39;
+    var import_node_fs40;
     var init_mesh_refine_base_divergence = __esm2({
       "src/mesh/mesh-refine-base-divergence.ts"() {
         "use strict";
         import_node_path33 = require("path");
-        import_node_fs39 = require("fs");
+        import_node_fs40 = require("fs");
         init_mesh_refine_batch();
         init_git_executor();
       }
@@ -135607,7 +135674,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
     function refineWorktreeVanishedOutcome(ctx, nextStage) {
       const workspace = ctx?.node?.workspace;
       if (typeof workspace !== "string" || !workspace) return null;
-      if ((0, import_node_fs40.existsSync)(workspace)) return null;
+      if ((0, import_node_fs41.existsSync)(workspace)) return null;
       recordMeshRefineStage(ctx.refineStages, nextStage, "failed", Date.now(), {
         workspace,
         workspaceMissing: true,
@@ -135627,12 +135694,12 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         }
       };
     }
-    var import_node_fs40;
+    var import_node_fs41;
     var REFINE_INFLIGHT_FRESHNESS_MS;
     var init_mesh_refine_inflight = __esm2({
       "src/mesh/mesh-refine-inflight.ts"() {
         "use strict";
-        import_node_fs40 = require("fs");
+        import_node_fs41 = require("fs");
         init_mesh_refine_zombie_sweep();
         init_mesh_refine_landing();
         init_mesh_refine_gates();
@@ -137892,6 +137959,7 @@ ${tail}` : ""
         init_dist();
         init_config();
         init_mesh_physical_ownership();
+        init_mesh_active_ownership();
         init_dist();
         init_mesh_task_revision();
         init_mesh_quota_hold_escalation();
@@ -138148,6 +138216,21 @@ ${tail}` : ""
               const asked = await requestQuotaOverrideDecision(ctx.components(), req.meshId, req.taskId, mesh);
               if (!asked.ok) return { success: false, code: asked.code, error: asked.error };
               return { success: true, task: queueWire(MeshRuntimeStore.getInstance().findQueueEntryById(req.meshId, req.taskId)), quotaOverrideRequested: { decisionId: asked.itemId, alreadyAsked: asked.deduped, options: asked.options } };
+            }
+            if (req.patch.attestActiveOwnership === true) {
+              const sessionWorkspace = task?.assignedSessionId ? ctx.deps.instanceManager?.getInstance?.(task.assignedSessionId)?.workingDir : void 0;
+              const attested = attestActiveTaskOwnership(req.meshId, req.taskId, req.expectedRevision, {
+                actor: self,
+                repoIdentity: mesh.repoIdentity,
+                machineId,
+                ...localNode ? { nodeId: localNode.id, workspace: localNode.workspace } : {},
+                ...typeof sessionWorkspace === "string" ? { sessionWorkspace } : {}
+              });
+              try {
+                void triggerMeshQueue(ctx.components(), req.meshId).catch((e) => LOG.warn("MeshQueue", `Ownership attest reschedule: ${String(e)}`));
+              } catch {
+              }
+              return { success: true, task: queueWire(attested) };
             }
             const edited = revisePendingTask(req.meshId, req.taskId, req.expectedRevision, req.patch, {
               actor: self,
@@ -139569,18 +139652,18 @@ ${tail}` : ""
       if (bytes > MAX_BYTES) throw new Error("approval files exceed byte bound");
     }
     function safeDir(configDir, area, create) {
-      const root = (0, import_node_fs44.realpathSync)(configDir);
+      const root = (0, import_node_fs45.realpathSync)(configDir);
       for (const component of ["assistant", area]) {
         const parent = component === "assistant" ? configDir : (0, import_node_path37.join)(configDir, "assistant");
         const path141 = (0, import_node_path37.join)(parent, component);
-        if ((0, import_node_fs44.existsSync)(path141)) {
-          const stat2 = (0, import_node_fs44.lstatSync)(path141);
+        if ((0, import_node_fs45.existsSync)(path141)) {
+          const stat2 = (0, import_node_fs45.lstatSync)(path141);
           if (!stat2.isDirectory() || stat2.isSymbolicLink()) throw new Error("approval directory is not a local directory");
-        } else if (create) (0, import_node_fs44.mkdirSync)(path141, { mode: 448 });
+        } else if (create) (0, import_node_fs45.mkdirSync)(path141, { mode: 448 });
         else return path141;
       }
       const dir = (0, import_node_path37.join)(configDir, "assistant", area);
-      const rel = (0, import_node_path37.relative)(root, (0, import_node_fs44.realpathSync)(dir));
+      const rel = (0, import_node_path37.relative)(root, (0, import_node_fs45.realpathSync)(dir));
       if (rel === ".." || rel.startsWith(`..${import_node_path37.sep}`)) throw new Error("approval directory escaped config");
       return dir;
     }
@@ -139588,13 +139671,13 @@ ${tail}` : ""
       const files = [];
       for (const area of ["staged", "staged-control"]) {
         const dir = safeDir(configDir, area, false);
-        if (!(0, import_node_fs44.existsSync)(dir)) continue;
-        for (const name of (0, import_node_fs44.readdirSync)(dir).sort()) {
+        if (!(0, import_node_fs45.existsSync)(dir)) continue;
+        for (const name of (0, import_node_fs45.readdirSync)(dir).sort()) {
           if (!/^[A-Za-z0-9_-]+\.json$/.test(name)) continue;
           const path141 = (0, import_node_path37.join)(dir, name);
-          const stat2 = (0, import_node_fs44.lstatSync)(path141);
+          const stat2 = (0, import_node_fs45.lstatSync)(path141);
           if (!stat2.isFile() || stat2.isSymbolicLink() || stat2.size > MAX_FILE_BYTES) throw new Error("approval file is not a bounded local file");
-          const data = (0, import_node_fs44.readFileSync)(path141, "utf8");
+          const data = (0, import_node_fs45.readFileSync)(path141, "utf8");
           const value = record5(JSON.parse(data));
           if (!value) throw new Error("approval record is unreadable");
           if (value.kind === "memory" && value.op?.scope !== "project" || value.kind === "session_control" && value.role === "assistant") continue;
@@ -139611,54 +139694,54 @@ ${tail}` : ""
     function importProjectApprovalFiles(configDir, meshId, files, resolveProject3) {
       verifyProjectApprovalFiles(files, meshId, resolveProject3);
       const verifyExisting = (path141, data) => {
-        const stat2 = (0, import_node_fs44.lstatSync)(path141);
-        if (!stat2.isFile() || stat2.isSymbolicLink() || (0, import_node_fs44.readFileSync)(path141, "utf8") !== data) throw new Error("approval destination conflicts with retained data");
+        const stat2 = (0, import_node_fs45.lstatSync)(path141);
+        if (!stat2.isFile() || stat2.isSymbolicLink() || (0, import_node_fs45.readFileSync)(path141, "utf8") !== data) throw new Error("approval destination conflicts with retained data");
       };
       const destinations = files.map((file) => {
         const path141 = (0, import_node_path37.join)(safeDir(configDir, file.area, true), file.name);
         const consumed = `${path141}.consumed`;
-        if ((0, import_node_fs44.existsSync)(consumed)) {
-          const stat2 = (0, import_node_fs44.lstatSync)(consumed);
+        if ((0, import_node_fs45.existsSync)(consumed)) {
+          const stat2 = (0, import_node_fs45.lstatSync)(consumed);
           if (!stat2.isFile() || stat2.isSymbolicLink()) throw new Error("approval consent receipt is not a local file");
           throw new Error("approval consent receipt already retained");
         }
-        if ((0, import_node_fs44.existsSync)(path141)) {
+        if ((0, import_node_fs45.existsSync)(path141)) {
           verifyExisting(path141, file.data);
         }
         return { file, path: path141 };
       });
       for (const { file, path: path141 } of destinations) {
-        if ((0, import_node_fs44.existsSync)(path141)) {
+        if ((0, import_node_fs45.existsSync)(path141)) {
           verifyExisting(path141, file.data);
           continue;
         }
         const staged = `${path141}.handoff-${file.sha256}`;
-        if (!(0, import_node_fs44.existsSync)(staged)) {
-          const fd = (0, import_node_fs44.openSync)(staged, "wx", 384);
+        if (!(0, import_node_fs45.existsSync)(staged)) {
+          const fd = (0, import_node_fs45.openSync)(staged, "wx", 384);
           try {
-            (0, import_node_fs44.writeFileSync)(fd, file.data);
-            (0, import_node_fs44.fsyncSync)(fd);
+            (0, import_node_fs45.writeFileSync)(fd, file.data);
+            (0, import_node_fs45.fsyncSync)(fd);
           } finally {
-            (0, import_node_fs44.closeSync)(fd);
+            (0, import_node_fs45.closeSync)(fd);
           }
-        } else if ((0, import_node_fs44.lstatSync)(staged).isSymbolicLink() || (0, import_node_fs44.readFileSync)(staged, "utf8") !== file.data) throw new Error("approval staging conflict");
+        } else if ((0, import_node_fs45.lstatSync)(staged).isSymbolicLink() || (0, import_node_fs45.readFileSync)(staged, "utf8") !== file.data) throw new Error("approval staging conflict");
         try {
-          (0, import_node_fs44.linkSync)(staged, path141);
+          (0, import_node_fs45.linkSync)(staged, path141);
         } catch (e) {
           if (e.code !== "EEXIST") throw e;
           verifyExisting(path141, file.data);
         }
         if (process.platform !== "win32") {
-          const fd = (0, import_node_fs44.openSync)((0, import_node_path37.join)(configDir, "assistant", file.area), "r");
+          const fd = (0, import_node_fs45.openSync)((0, import_node_path37.join)(configDir, "assistant", file.area), "r");
           try {
-            (0, import_node_fs44.fsyncSync)(fd);
+            (0, import_node_fs45.fsyncSync)(fd);
           } finally {
-            (0, import_node_fs44.closeSync)(fd);
+            (0, import_node_fs45.closeSync)(fd);
           }
         }
       }
     }
-    var import_node_fs44;
+    var import_node_fs45;
     var import_node_path37;
     var import_node_crypto61;
     var MAX_FILE_BYTES;
@@ -139669,7 +139752,7 @@ ${tail}` : ""
     var init_project_files = __esm2({
       "src/mesh/host-handoff/project-files.ts"() {
         "use strict";
-        import_node_fs44 = require("fs");
+        import_node_fs45 = require("fs");
         import_node_path37 = require("path");
         import_node_crypto61 = require("crypto");
         MAX_FILE_BYTES = 1024 * 1024;
@@ -140434,7 +140517,7 @@ ${tail}` : ""
             let hasHostInventory = false;
             if (projectId) {
               try {
-                (0, import_node_fs45.statSync)(getMeshConfigPath());
+                (0, import_node_fs46.statSync)(getMeshConfigPath());
                 hasHostInventory = true;
               } catch (error) {
                 if (error.code !== "ENOENT") throw error;
@@ -140485,11 +140568,11 @@ ${tail}` : ""
         }
       };
     }
-    var import_node_fs45;
+    var import_node_fs46;
     var init_consumer = __esm2({
       "src/launch-defaults/consumer.ts"() {
         "use strict";
-        import_node_fs45 = require("fs");
+        import_node_fs46 = require("fs");
         init_mesh_config_store();
         init_ports();
         init_resolve();
@@ -143310,18 +143393,18 @@ ${grant.exp}`).digest("hex");
     });
     function syncDir2(dir) {
       if (process.platform === "win32") return;
-      const fd = (0, import_node_fs47.openSync)(dir, "r");
+      const fd = (0, import_node_fs48.openSync)(dir, "r");
       try {
-        (0, import_node_fs47.fsyncSync)(fd);
+        (0, import_node_fs48.fsyncSync)(fd);
       } finally {
-        (0, import_node_fs47.closeSync)(fd);
+        (0, import_node_fs48.closeSync)(fd);
       }
     }
     function getStagedControlStore() {
       return shared2 ?? (shared2 = new StagedControlStore());
     }
     var import_node_crypto64;
-    var import_node_fs47;
+    var import_node_fs48;
     var import_node_path40;
     var STAGED_CONTROL_TTL_MS;
     var ID_RE4;
@@ -143331,7 +143414,7 @@ ${grant.exp}`).digest("hex");
       "src/assistant/staged-control.ts"() {
         "use strict";
         import_node_crypto64 = require("crypto");
-        import_node_fs47 = require("fs");
+        import_node_fs48 = require("fs");
         import_node_path40 = require("path");
         init_project_write_cut();
         init_config();
@@ -143359,16 +143442,16 @@ ${grant.exp}`).digest("hex");
             const at = this.now();
             const id4 = `ctl-${(0, import_node_crypto64.randomBytes)(12).toString("hex")}`;
             const record8 = { version: 1, id: id4, createdAt: at, expiresAt: at + STAGED_CONTROL_TTL_MS, ...proposal };
-            (0, import_node_fs47.mkdirSync)(this.dir, { recursive: true, mode: 448 });
+            (0, import_node_fs48.mkdirSync)(this.dir, { recursive: true, mode: 448 });
             const tmp = `${this.path(id4)}.tmp-${(0, import_node_crypto64.randomBytes)(6).toString("hex")}`;
-            const fd = (0, import_node_fs47.openSync)(tmp, "wx", 384);
+            const fd = (0, import_node_fs48.openSync)(tmp, "wx", 384);
             try {
-              (0, import_node_fs47.writeFileSync)(fd, JSON.stringify(record8, null, 2));
-              (0, import_node_fs47.fsyncSync)(fd);
+              (0, import_node_fs48.writeFileSync)(fd, JSON.stringify(record8, null, 2));
+              (0, import_node_fs48.fsyncSync)(fd);
             } finally {
-              (0, import_node_fs47.closeSync)(fd);
+              (0, import_node_fs48.closeSync)(fd);
             }
-            (0, import_node_fs47.renameSync)(tmp, this.path(id4));
+            (0, import_node_fs48.renameSync)(tmp, this.path(id4));
             syncDir2(this.dir);
             return record8;
           }
@@ -143376,7 +143459,7 @@ ${grant.exp}`).digest("hex");
           read(id4) {
             if (!ID_RE4.test(id4)) return null;
             try {
-              const value = JSON.parse((0, import_node_fs47.readFileSync)(this.path(id4), "utf8"));
+              const value = JSON.parse((0, import_node_fs48.readFileSync)(this.path(id4), "utf8"));
               if (!value || value.version !== 1 || value.id !== id4 || value.kind !== "session_control" && value.kind !== "host_handoff") return null;
               return { record: value, expired: this.now() >= value.expiresAt };
             } catch {
@@ -143385,9 +143468,9 @@ ${grant.exp}`).digest("hex");
           }
           /** Live (unexpired) proposals, oldest first; expired ones are removed. */
           list() {
-            if (!(0, import_node_fs47.existsSync)(this.dir)) return [];
+            if (!(0, import_node_fs48.existsSync)(this.dir)) return [];
             const out = [];
-            for (const name of (0, import_node_fs47.readdirSync)(this.dir)) {
+            for (const name of (0, import_node_fs48.readdirSync)(this.dir)) {
               if (!name.startsWith("ctl-") || !name.endsWith(".json")) continue;
               const id4 = name.slice(0, -5);
               const read2 = this.read(id4);
@@ -143410,7 +143493,7 @@ ${grant.exp}`).digest("hex");
           }
           removeUnlocked(id4) {
             try {
-              (0, import_node_fs47.unlinkSync)(this.path(id4));
+              (0, import_node_fs48.unlinkSync)(this.path(id4));
             } catch {
             }
           }
@@ -143428,7 +143511,7 @@ ${grant.exp}`).digest("hex");
                   const current5 = this.read(id4);
                   if (!current5) return { success: false, code: "staged_not_found", error: "Control proposal not found." };
                   if (current5.expired) return { success: false, code: "staged_expired", error: "Control proposal expired (1 hour); ask again." };
-                  (0, import_node_fs47.renameSync)(this.path(id4), `${this.path(id4)}.consumed`);
+                  (0, import_node_fs48.renameSync)(this.path(id4), `${this.path(id4)}.consumed`);
                   syncDir2(this.dir);
                   accepted = current5.record;
                   return void 0;
@@ -143474,8 +143557,8 @@ ${grant.exp}`).digest("hex");
           }
           restore(record8) {
             try {
-              (0, import_node_fs47.mkdirSync)(this.dir, { recursive: true, mode: 448 });
-              (0, import_node_fs47.writeFileSync)(this.path(record8.id), JSON.stringify(record8, null, 2), { mode: 384 });
+              (0, import_node_fs48.mkdirSync)(this.dir, { recursive: true, mode: 448 });
+              (0, import_node_fs48.writeFileSync)(this.path(record8.id), JSON.stringify(record8, null, 2), { mode: 384 });
             } catch {
             }
           }
@@ -150679,10 +150762,10 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
     });
     function inventory(configDir, meshId) {
       const path141 = (0, import_node_path41.join)(configDir, "meshes.json");
-      if (!(0, import_node_fs48.existsSync)(path141)) return { ok: false, detail: "project inventory unavailable" };
+      if (!(0, import_node_fs49.existsSync)(path141)) return { ok: false, detail: "project inventory unavailable" };
       let parsed;
       try {
-        parsed = JSON.parse((0, import_node_fs48.readFileSync)(path141, "utf8"));
+        parsed = JSON.parse((0, import_node_fs49.readFileSync)(path141, "utf8"));
       } catch {
         return { ok: false, detail: "project inventory unreadable" };
       }
@@ -150698,10 +150781,10 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
     function consumedAmbiguity(configDir) {
       for (const area of ["staged", "staged-control"]) {
         const dir = (0, import_node_path41.join)(configDir, "assistant", area);
-        if (!(0, import_node_fs48.existsSync)(dir)) continue;
+        if (!(0, import_node_fs49.existsSync)(dir)) continue;
         let names;
         try {
-          names = (0, import_node_fs48.readdirSync)(dir);
+          names = (0, import_node_fs49.readdirSync)(dir);
         } catch {
           return "approval directory is unreadable";
         }
@@ -150710,9 +150793,9 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           const live = name.slice(0, -".consumed".length);
           if (!/^[A-Za-z0-9_-]+\.json$/.test(live)) return "approval consent receipt name is not exact";
           const receipt = (0, import_node_path41.join)(dir, name);
-          const stat2 = (0, import_node_fs48.lstatSync)(receipt);
+          const stat2 = (0, import_node_fs49.lstatSync)(receipt);
           if (!stat2.isFile() || stat2.isSymbolicLink()) return "approval consent receipt is not a local file";
-          if ((0, import_node_fs48.existsSync)((0, import_node_path41.join)(dir, live))) return "approval has both a live proposal and a consumed receipt";
+          if ((0, import_node_fs49.existsSync)((0, import_node_path41.join)(dir, live))) return "approval has both a live proposal and a consumed receipt";
         }
       }
       return null;
@@ -150799,13 +150882,13 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         insert.run(meshId, eventId, hash3, provenance.handoffId, provenance.epoch);
       }
     }
-    var import_node_fs48;
+    var import_node_fs49;
     var import_node_path41;
     var fail10;
     var init_preservation_boundary = __esm2({
       "src/mesh/host-handoff/preservation-boundary.ts"() {
         "use strict";
-        import_node_fs48 = require("fs");
+        import_node_fs49 = require("fs");
         import_node_path41 = require("path");
         init_assistant_projects();
         init_project_files();
@@ -151032,7 +151115,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         },
         freeDiskBytes: () => {
           try {
-            const s2 = (0, import_node_fs49.statfsSync)(getConfigDir2());
+            const s2 = (0, import_node_fs50.statfsSync)(getConfigDir2());
             return Number(s2.bavail) * Number(s2.bsize);
           } catch {
             return 0;
@@ -151141,13 +151224,13 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         })
       };
     }
-    var import_node_fs49;
+    var import_node_fs50;
     var import_node_crypto68;
     var HOLD_TTL_MS;
     var init_live_env = __esm2({
       "src/mesh/host-handoff/live-env.ts"() {
         "use strict";
-        import_node_fs49 = require("fs");
+        import_node_fs50 = require("fs");
         import_node_crypto68 = require("crypto");
         init_dist();
         init_config();
@@ -151278,10 +151361,10 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       const refusal2 = describeCanaryContract(provider, selection);
       if (refusal2) return result(false, true, "canary_contract_unsupported", refusal2);
       const spec = provider.hostHandoffCanary;
-      const root = (0, import_node_fs50.mkdtempSync)((0, import_node_path42.join)(options.parentDir ?? (0, import_node_os13.tmpdir)(), "adhdev-host-canary-"));
+      const root = (0, import_node_fs51.mkdtempSync)((0, import_node_path42.join)(options.parentDir ?? (0, import_node_os13.tmpdir)(), "adhdev-host-canary-"));
       const config = (0, import_node_path42.join)(root, "config"), workspace = (0, import_node_path42.join)(root, "workspace");
-      (0, import_node_fs50.mkdirSync)(config, { mode: 448 });
-      (0, import_node_fs50.mkdirSync)(workspace, { mode: 448 });
+      (0, import_node_fs51.mkdirSync)(config, { mode: 448 });
+      (0, import_node_fs51.mkdirSync)(workspace, { mode: 448 });
       let args;
       try {
         args = substituteCanaryArgs(spec, selection, workspace, config);
@@ -151364,7 +151447,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       });
     }
     var import_node_child_process34;
-    var import_node_fs50;
+    var import_node_fs51;
     var import_node_os13;
     var import_node_path42;
     var import_node_crypto69;
@@ -151375,7 +151458,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       "src/mesh/host-handoff/target-canary.ts"() {
         "use strict";
         import_node_child_process34 = require("child_process");
-        import_node_fs50 = require("fs");
+        import_node_fs51 = require("fs");
         import_node_os13 = require("os");
         import_node_path42 = require("path");
         import_node_crypto69 = require("crypto");
@@ -151396,9 +151479,9 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       let workspace;
       if (node?.workspace) {
         try {
-          workspace = (0, import_node_fs51.realpathSync)(node.workspace);
-          if (!(0, import_node_fs51.statSync)(workspace).isDirectory()) workspace = void 0;
-          else (0, import_node_fs51.accessSync)(workspace, import_node_fs51.constants.R_OK | import_node_fs51.constants.W_OK | import_node_fs51.constants.X_OK);
+          workspace = (0, import_node_fs52.realpathSync)(node.workspace);
+          if (!(0, import_node_fs52.statSync)(workspace).isDirectory()) workspace = void 0;
+          else (0, import_node_fs52.accessSync)(workspace, import_node_fs52.constants.R_OK | import_node_fs52.constants.W_OK | import_node_fs52.constants.X_OK);
         } catch {
           workspace = void 0;
         }
@@ -151413,7 +151496,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           );
           const root = (await git12(["rev-parse", "--show-toplevel"])).stdout.trim();
           const remote = (await git12(["config", "--get", "remote.origin.url"])).stdout.trim();
-          add("repository_identity", (0, import_node_fs51.realpathSync)(root) === workspace && !!p.mesh.repoIdentity && normalizeRepoIdentity(remote) === normalizeRepoIdentity(p.mesh.repoIdentity));
+          add("repository_identity", (0, import_node_fs52.realpathSync)(root) === workspace && !!p.mesh.repoIdentity && normalizeRepoIdentity(remote) === normalizeRepoIdentity(p.mesh.repoIdentity));
         } catch {
           add("repository_identity", false, "A registered repository with matching identity is required.");
         }
@@ -151443,14 +151526,14 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       return { ok: checks.every((c) => c.ok), checks };
     }
     var import_node_child_process35;
-    var import_node_fs51;
+    var import_node_fs52;
     var import_node_util18;
     var exec6;
     var init_target_readiness = __esm2({
       "src/mesh/host-handoff/target-readiness.ts"() {
         "use strict";
         import_node_child_process35 = require("child_process");
-        import_node_fs51 = require("fs");
+        import_node_fs52 = require("fs");
         import_node_util18 = require("util");
         init_dist();
         init_mesh_config_store();
@@ -198720,7 +198803,7 @@ ${marker2}`,
         session: { scope: "optional", aliasSessionId: true }
       }
     }, { meshSender: "authenticated_peer" });
-    var import_node_fs41 = require("fs");
+    var import_node_fs42 = require("fs");
     var import_node_path34 = require("path");
     init_dist();
     init_hidden_spawn();
@@ -198743,7 +198826,7 @@ ${marker2}`,
     }
     function canonicalWorkspace(node) {
       const path141 = node.workspace;
-      requireProof(typeof path141 === "string" && (0, import_node_path34.isAbsolute)(path141) && (0, import_node_fs41.realpathSync)(path141) === (0, import_node_path34.resolve)(path141), "source_parent_untrusted_path");
+      requireProof(typeof path141 === "string" && (0, import_node_path34.isAbsolute)(path141) && (0, import_node_fs42.realpathSync)(path141) === (0, import_node_path34.resolve)(path141), "source_parent_untrusted_path");
       requireProof(!node.repoRoot || (0, import_node_path34.resolve)(node.repoRoot) === path141, "source_parent_repo_root_mismatch");
       requireProof(git9(path141, "rev-parse", "--show-toplevel") === path141, "source_parent_untrusted_path");
       return path141;
@@ -198757,13 +198840,13 @@ ${marker2}`,
       }
       const workspace = canonicalWorkspace(node);
       const base = canonicalWorkspace(parent);
-      const common2 = (0, import_node_fs41.realpathSync)(git9(workspace, "rev-parse", "--path-format=absolute", "--git-common-dir"));
-      requireProof(common2 === (0, import_node_path34.join)(base, ".git") && (0, import_node_fs41.lstatSync)(common2).isDirectory() && !(0, import_node_fs41.lstatSync)(common2).isSymbolicLink(), "source_parent_cross_repo");
-      requireProof((0, import_node_fs41.realpathSync)(git9(base, "rev-parse", "--absolute-git-dir")) === common2, "source_parent_not_main_checkout");
-      const gitDir = (0, import_node_fs41.realpathSync)(git9(workspace, "rev-parse", "--absolute-git-dir"));
+      const common2 = (0, import_node_fs42.realpathSync)(git9(workspace, "rev-parse", "--path-format=absolute", "--git-common-dir"));
+      requireProof(common2 === (0, import_node_path34.join)(base, ".git") && (0, import_node_fs42.lstatSync)(common2).isDirectory() && !(0, import_node_fs42.lstatSync)(common2).isSymbolicLink(), "source_parent_cross_repo");
+      requireProof((0, import_node_fs42.realpathSync)(git9(base, "rev-parse", "--absolute-git-dir")) === common2, "source_parent_not_main_checkout");
+      const gitDir = (0, import_node_fs42.realpathSync)(git9(workspace, "rev-parse", "--absolute-git-dir"));
       const entry = (0, import_node_path34.relative)((0, import_node_path34.join)(common2, "worktrees"), gitDir);
       requireProof(entry && !entry.startsWith(`..${import_node_path34.sep}`) && entry !== ".." && !(0, import_node_path34.isAbsolute)(entry) && !entry.includes(import_node_path34.sep), "source_parent_external_worktree");
-      requireProof(!(0, import_node_fs41.lstatSync)((0, import_node_path34.join)(workspace, ".git")).isSymbolicLink() && (0, import_node_fs41.realpathSync)((0, import_node_fs41.readFileSync)((0, import_node_path34.join)(gitDir, "gitdir"), "utf8").trim()) === (0, import_node_path34.join)(workspace, ".git"), "source_parent_invalid_backlink");
+      requireProof(!(0, import_node_fs42.lstatSync)((0, import_node_path34.join)(workspace, ".git")).isSymbolicLink() && (0, import_node_fs42.realpathSync)((0, import_node_fs42.readFileSync)((0, import_node_path34.join)(gitDir, "gitdir"), "utf8").trim()) === (0, import_node_path34.join)(workspace, ".git"), "source_parent_invalid_backlink");
       requireProof(git9(base, "symbolic-ref", "--short", "HEAD") === (mesh.defaultBranch || "main"), "source_parent_wrong_default_branch");
       const identity5 = normalizeRepoIdentity(mesh.repoIdentity || "");
       requireProof(identity5 && normalizeRepoIdentity(git9(base, "remote", "get-url", "origin")) === identity5 && normalizeRepoIdentity(git9(workspace, "remote", "get-url", "origin")) === identity5, "source_parent_repo_identity_mismatch");
@@ -199352,20 +199435,20 @@ ${marker2}`,
       },
       remove_mesh_node: (ctx, args) => removeMeshNode(ctx, args)
     };
-    var import_node_fs43 = require("fs");
+    var import_node_fs44 = require("fs");
     var import_node_path36 = require("path");
     var import_node_child_process31 = require("child_process");
     var import_node_util15 = require("util");
     init_git_locale();
     var import_node_child_process30 = require("child_process");
-    var import_node_fs42 = require("fs");
+    var import_node_fs43 = require("fs");
     var import_node_path35 = require("path");
     var import_node_util14 = require("util");
     init_git_executor();
     init_git_locale();
     async function initializeWorktreeSubmodules(worktreePath) {
       const initializer = (0, import_node_path35.join)(worktreePath, "scripts/bootstrap-submodules.mjs");
-      if ((0, import_node_fs42.existsSync)(initializer)) {
+      if ((0, import_node_fs43.existsSync)(initializer)) {
         await (0, import_node_util14.promisify)(import_node_child_process30.execFile)(process.execPath, [initializer], {
           cwd: worktreePath,
           env: gitChildEnv(),
@@ -199640,7 +199723,7 @@ ${marker2}`,
       try {
         await initializeWorktreeSubmodules(worktreePath);
         const hookInstaller = (0, import_node_path36.join)(worktreePath, "scripts/setup-hooks.mjs");
-        if ((0, import_node_fs43.existsSync)(hookInstaller)) await (0, import_node_util15.promisify)(import_node_child_process31.execFile)(process.execPath, [hookInstaller], { cwd: worktreePath, env: gitChildEnv(), timeout: 3e4, windowsHide: true });
+        if ((0, import_node_fs44.existsSync)(hookInstaller)) await (0, import_node_util15.promisify)(import_node_child_process31.execFile)(process.execPath, [hookInstaller], { cwd: worktreePath, env: gitChildEnv(), timeout: 3e4, windowsHide: true });
         submodulesInitialized = true;
         if (gitUserName && gitUserEmail) {
           console.log("gitUserName is", gitUserName);
@@ -202469,7 +202552,7 @@ ${ptyResult.output.slice(-2e3)}`);
     init_mesh_routing();
     init_mesh_host_ownership();
     init_hidden_spawn();
-    var import_node_fs46 = require("fs");
+    var import_node_fs47 = require("fs");
     init_git_locale();
     var import_node_path38 = require("path");
     var PREVIEW_DEPLOY_RECORD = ".adhdev/preview-deploy.json";
@@ -202480,17 +202563,17 @@ ${ptyResult.output.slice(-2e3)}`);
     ];
     function hasDeployPreviewNpmScript(repoRoot) {
       const pkgPath = (0, import_node_path38.resolve)(repoRoot, "package.json");
-      if (!(0, import_node_fs46.existsSync)(pkgPath)) return false;
+      if (!(0, import_node_fs47.existsSync)(pkgPath)) return false;
       try {
-        const pkg = JSON.parse((0, import_node_fs46.readFileSync)(pkgPath, "utf8"));
+        const pkg = JSON.parse((0, import_node_fs47.readFileSync)(pkgPath, "utf8"));
         return typeof pkg?.scripts?.["deploy:preview"] === "string";
       } catch {
         return false;
       }
     }
     function hasPreviewDriverEvidence(repoRoot) {
-      if ((0, import_node_fs46.existsSync)((0, import_node_path38.resolve)(repoRoot, PREVIEW_DEPLOY_RECORD))) return true;
-      return PREVIEW_PIPELINE_SCRIPTS.some((rel) => (0, import_node_fs46.existsSync)((0, import_node_path38.resolve)(repoRoot, rel)));
+      if ((0, import_node_fs47.existsSync)((0, import_node_path38.resolve)(repoRoot, PREVIEW_DEPLOY_RECORD))) return true;
+      return PREVIEW_PIPELINE_SCRIPTS.some((rel) => (0, import_node_fs47.existsSync)((0, import_node_path38.resolve)(repoRoot, rel)));
     }
     function isPreviewPipelineConfigured(repoRoot) {
       return hasPreviewDriverEvidence(repoRoot) || hasDeployPreviewNpmScript(repoRoot);
@@ -202510,9 +202593,9 @@ ${ptyResult.output.slice(-2e3)}`);
     }
     function readRecord3(repoRoot) {
       const path141 = (0, import_node_path38.resolve)(repoRoot, PREVIEW_DEPLOY_RECORD);
-      if (!(0, import_node_fs46.existsSync)(path141)) return null;
+      if (!(0, import_node_fs47.existsSync)(path141)) return null;
       try {
-        const parsed = JSON.parse((0, import_node_fs46.readFileSync)(path141, "utf8"));
+        const parsed = JSON.parse((0, import_node_fs47.readFileSync)(path141, "utf8"));
         return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
       } catch {
         return null;
@@ -203371,7 +203454,7 @@ ${ptyResult.output.slice(-2e3)}`);
     }, { meshSender: "authenticated_peer" });
     init_assistant_store();
     init_drivers();
-    var import_node_fs54 = require("fs");
+    var import_node_fs55 = require("fs");
     var import_node_path45 = require("path");
     init_command_registry();
     init_worker_report();
@@ -203381,11 +203464,11 @@ ${ptyResult.output.slice(-2e3)}`);
     init_logger();
     init_config();
     var import_node_crypto72 = require("crypto");
-    var import_node_fs53 = require("fs");
+    var import_node_fs54 = require("fs");
     var import_node_path44 = require("path");
     init_installed_driver();
     var import_node_crypto71 = require("crypto");
-    var import_node_fs52 = require("fs");
+    var import_node_fs53 = require("fs");
     var import_node_path43 = require("path");
     init_manifest();
     init_activation_store();
@@ -203423,20 +203506,20 @@ ${ptyResult.output.slice(-2e3)}`);
       return `sha256:${hash3.digest("hex")}`;
     }
     function readDriverPackageDir(dir) {
-      const root = (0, import_node_fs52.lstatSync)(dir);
+      const root = (0, import_node_fs53.lstatSync)(dir);
       if (!root.isDirectory() || root.isSymbolicLink()) throw new DriverPackageError("invalid_directory", "Driver package must be a real directory");
       const out = [];
       const walk = (sub) => {
-        for (const entry of (0, import_node_fs52.readdirSync)((0, import_node_path43.join)(dir, sub), { withFileTypes: true })) {
+        for (const entry of (0, import_node_fs53.readdirSync)((0, import_node_path43.join)(dir, sub), { withFileTypes: true })) {
           if (EXCLUDED_NAMES2.has(entry.name)) continue;
           const rel = sub ? `${sub}/${entry.name}` : entry.name;
-          const stat2 = (0, import_node_fs52.lstatSync)((0, import_node_path43.join)(dir, rel));
+          const stat2 = (0, import_node_fs53.lstatSync)((0, import_node_path43.join)(dir, rel));
           if (stat2.isSymbolicLink()) throw new DriverPackageError("symlink_refused", `Symbolic link in driver package: ${rel}`);
           if (stat2.isDirectory()) walk(rel);
           else if (stat2.isFile()) {
             if (out.length >= DRIVER_BUNDLE_MAX_FILES) throw new DriverPackageError("too_many_files", `More than ${DRIVER_BUNDLE_MAX_FILES} files`);
             if (stat2.size > DRIVER_BUNDLE_MAX_FILE_BYTES) throw new DriverPackageError("file_too_large", `${rel} exceeds ${DRIVER_BUNDLE_MAX_FILE_BYTES} bytes`);
-            out.push({ path: rel, bytes: (0, import_node_fs52.readFileSync)((0, import_node_path43.join)(dir, rel)) });
+            out.push({ path: rel, bytes: (0, import_node_fs53.readFileSync)((0, import_node_path43.join)(dir, rel)) });
           } else throw new DriverPackageError("non_regular_entry", `Non-regular entry in driver package: ${rel}`);
         }
       };
@@ -203583,7 +203666,7 @@ ${lines.join("\n")}
       }
       let legacy = false;
       try {
-        legacy = (0, import_node_fs53.readdirSync)(externalRoot2, { withFileTypes: true }).some((e) => e.isDirectory() && LEGACY_CATEGORIES.has(e.name));
+        legacy = (0, import_node_fs54.readdirSync)(externalRoot2, { withFileTypes: true }).some((e) => e.isDirectory() && LEGACY_CATEGORIES.has(e.name));
       } catch {
       }
       const dest = legacy ? (0, import_node_path44.join)(externalRoot2, "driver", type2) : (0, import_node_path44.join)(externalRoot2, INSTALL_SOURCE_NAME, "driver", type2);
@@ -203597,23 +203680,23 @@ ${lines.join("\n")}
       try {
         for (const file of pkg.files) {
           const target2 = (0, import_node_path44.join)(staged, file.path);
-          (0, import_node_fs53.mkdirSync)((0, import_node_path44.dirname)(target2), { recursive: true });
-          (0, import_node_fs53.writeFileSync)(target2, file.bytes, { mode: 420 });
+          (0, import_node_fs54.mkdirSync)((0, import_node_path44.dirname)(target2), { recursive: true });
+          (0, import_node_fs54.writeFileSync)(target2, file.bytes, { mode: 420 });
         }
         if (computeDriverTreeDigest(staged) !== treeDigest) throw new DriverPackageError("bundle_digest_mismatch", "Written tree does not match the verified digest");
-        (0, import_node_fs53.mkdirSync)((0, import_node_path44.dirname)(dest), { recursive: true });
+        (0, import_node_fs54.mkdirSync)((0, import_node_path44.dirname)(dest), { recursive: true });
         const old = (0, import_node_path44.join)(work, "previous");
-        if ((0, import_node_fs53.existsSync)(dest)) (0, import_node_fs53.renameSync)(dest, old);
+        if ((0, import_node_fs54.existsSync)(dest)) (0, import_node_fs54.renameSync)(dest, old);
         try {
-          (0, import_node_fs53.renameSync)(staged, dest);
+          (0, import_node_fs54.renameSync)(staged, dest);
         } catch (error) {
-          if ((0, import_node_fs53.existsSync)(old)) (0, import_node_fs53.renameSync)(old, dest);
+          if ((0, import_node_fs54.existsSync)(old)) (0, import_node_fs54.renameSync)(old, dest);
           throw error;
         }
         return { dest, replaced };
       } finally {
         try {
-          (0, import_node_fs53.rmSync)(work, { recursive: true, force: true });
+          (0, import_node_fs54.rmSync)(work, { recursive: true, force: true });
         } catch {
         }
       }
@@ -203628,7 +203711,7 @@ ${lines.join("\n")}
       let probe = full;
       for (; ; ) {
         try {
-          (0, import_node_fs54.lstatSync)(probe);
+          (0, import_node_fs55.lstatSync)(probe);
           break;
         } catch (error) {
           if (error.code !== "ENOENT") throw error;
@@ -203637,7 +203720,7 @@ ${lines.join("\n")}
           probe = parent;
         }
       }
-      const real2 = (0, import_node_path45.relative)(root, (0, import_node_fs54.realpathSync)(probe));
+      const real2 = (0, import_node_path45.relative)(root, (0, import_node_fs55.realpathSync)(probe));
       if (real2.startsWith("..") || (0, import_node_path45.isAbsolute)(real2)) throw new DriverPackageError("path_outside_workspace", "Path resolves outside the workspace");
       return full;
     }
@@ -203652,16 +203735,16 @@ ${lines.join("\n")}
       });
       if (!ws.workspaceRoot) return { failure: fail11("workspace_unavailable", "The worker session workspace could not be resolved") };
       try {
-        return { root: (0, import_node_fs54.realpathSync)(ws.workspaceRoot) };
+        return { root: (0, import_node_fs55.realpathSync)(ws.workspaceRoot) };
       } catch {
         return { failure: fail11("workspace_unavailable", "The worker session workspace is not readable") };
       }
     }
     function readBundleFile(path141) {
-      const stat2 = (0, import_node_fs54.lstatSync)(path141);
+      const stat2 = (0, import_node_fs55.lstatSync)(path141);
       if (!stat2.isFile() || stat2.isSymbolicLink()) throw new DriverPackageError("invalid_path", "Bundle path must be a regular file");
       if (stat2.size > DRIVER_BUNDLE_MAX_JSON_BYTES) throw new DriverPackageError("package_too_large", "Bundle exceeds the 4 MiB limit");
-      return (0, import_node_fs54.readFileSync)(path141, "utf8");
+      return (0, import_node_fs55.readFileSync)(path141, "utf8");
     }
     async function fetchBundleArtifact(ctx, args) {
       const res = await artifactHandlers.artifact_fetch(ctx, args);
@@ -203703,7 +203786,7 @@ ${lines.join("\n")}
           if (typeof input.name !== "string" || !input.name.trim() || typeof input.command !== "string" || !input.command.trim() || !Array.isArray(input.actions) || !input.actions.length || input.actions.length > 100) throw new DriverPackageError("invalid_arguments", "name, command and at least one action are required");
           const dir = resolveInsideWorkspace(w.root, input.dir ?? `drivers/${input.type}`);
           try {
-            (0, import_node_fs54.lstatSync)(dir);
+            (0, import_node_fs55.lstatSync)(dir);
             throw new DriverPackageError("already_exists", "Target directory already exists");
           } catch (error) {
             if (error instanceof DriverPackageError) throw error;
@@ -203713,8 +203796,8 @@ ${lines.join("\n")}
           const pkg = verifyDriverFiles(files, { checkReferences: false });
           for (const file of pkg.files) {
             const target2 = (0, import_node_path45.join)(dir, file.path);
-            (0, import_node_fs54.mkdirSync)((0, import_node_path45.dirname)(target2), { recursive: true });
-            (0, import_node_fs54.writeFileSync)(target2, file.bytes);
+            (0, import_node_fs55.mkdirSync)((0, import_node_path45.dirname)(target2), { recursive: true });
+            (0, import_node_fs55.writeFileSync)(target2, file.bytes);
           }
           return {
             success: true,
@@ -203744,15 +203827,15 @@ ${lines.join("\n")}
           const out = resolveInsideWorkspace(w.root, args?.out ?? `driver-bundles/${pkg.report.type}.driver-bundle.json`);
           if (!out.endsWith(".json")) throw new DriverPackageError("invalid_path", "out must be a .json file (artifact kind json)");
           try {
-            const stat2 = (0, import_node_fs54.lstatSync)(out);
+            const stat2 = (0, import_node_fs55.lstatSync)(out);
             if (!stat2.isFile() || stat2.isSymbolicLink()) throw new DriverPackageError("invalid_path", "out exists and is not a regular file");
           } catch (error) {
             if (error instanceof DriverPackageError) throw error;
             if (error.code !== "ENOENT") throw error;
           }
           const text9 = encodeDriverBundle(pkg);
-          (0, import_node_fs54.mkdirSync)((0, import_node_path45.dirname)(out), { recursive: true });
-          (0, import_node_fs54.writeFileSync)(out, text9);
+          (0, import_node_fs55.mkdirSync)((0, import_node_path45.dirname)(out), { recursive: true });
+          (0, import_node_fs55.writeFileSync)(out, text9);
           const path141 = (0, import_node_path45.relative)(w.root, out);
           return {
             success: true,
@@ -204804,9 +204887,9 @@ ${lines.join("\n")}
     init_dist();
     init_owned_lock();
     var import_session_host_core13 = require_dist();
-    var import_node_fs55 = require("fs");
+    var import_node_fs56 = require("fs");
     async function readPersistedRuntimeRecord(file) {
-      const stream = (0, import_node_fs55.createReadStream)(file, { encoding: "utf8", highWaterMark: 16 * 1024 });
+      const stream = (0, import_node_fs56.createReadStream)(file, { encoding: "utf8", highWaterMark: 16 * 1024 });
       let text9 = "", cursor = 0, start = -1, depth = 0;
       let quoted = false, escaped = false;
       try {
@@ -205062,7 +205145,7 @@ ${lines.join("\n")}
     init_worker_private_home();
     init_mcp_tool_allow();
     var import_node_crypto76 = require("crypto");
-    var import_node_fs56 = require("fs");
+    var import_node_fs57 = require("fs");
     var os41 = __toESM2(require("os"));
     var import_node_path48 = require("path");
     init_mesh_coordinator_config();
@@ -205126,7 +205209,7 @@ ${lines.join("\n")}
       return contents.split(/\r?\n/).some((line) => line.trim() === needle);
     }
     init_assistant_launch_plan();
-    var O_NOFOLLOW_FLAG = typeof import_node_fs56.constants.O_NOFOLLOW === "number" ? import_node_fs56.constants.O_NOFOLLOW : 0;
+    var O_NOFOLLOW_FLAG = typeof import_node_fs57.constants.O_NOFOLLOW === "number" ? import_node_fs57.constants.O_NOFOLLOW : 0;
     function unsafePathError(message) {
       return new Error(`assistant_unsafe_path: ${message}`);
     }
@@ -205143,7 +205226,7 @@ ${lines.join("\n")}
     }
     function lstatOrNull(targetPath) {
       try {
-        return (0, import_node_fs56.lstatSync)(targetPath);
+        return (0, import_node_fs57.lstatSync)(targetPath);
       } catch (err2) {
         if (err2?.code === "ENOENT") return null;
         throw err2;
@@ -205156,7 +205239,7 @@ ${lines.join("\n")}
         const p = (0, import_node_path48.join)(home, rel);
         candidates.push((0, import_node_path48.resolve)(p));
         try {
-          candidates.push((0, import_node_fs56.realpathSync)(p));
+          candidates.push((0, import_node_fs57.realpathSync)(p));
         } catch {
         }
       }
@@ -205181,7 +205264,7 @@ ${lines.join("\n")}
       }
       let rootStat = lstatOrNull(resolvedRoot);
       if (!rootStat) {
-        (0, import_node_fs56.mkdirSync)(resolvedRoot, { recursive: true, mode: 448 });
+        (0, import_node_fs57.mkdirSync)(resolvedRoot, { recursive: true, mode: 448 });
         rootStat = lstatOrNull(resolvedRoot);
       }
       if (!rootStat || rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
@@ -205197,7 +205280,7 @@ ${lines.join("\n")}
         cursor = (0, import_node_path48.join)(cursor, seg);
         let stat2 = lstatOrNull(cursor);
         if (!stat2) {
-          (0, import_node_fs56.mkdirSync)(cursor, { mode: 448 });
+          (0, import_node_fs57.mkdirSync)(cursor, { mode: 448 });
           stat2 = lstatOrNull(cursor);
         }
         if (!stat2 || stat2.isSymbolicLink() || !stat2.isDirectory()) {
@@ -205205,8 +205288,8 @@ ${lines.join("\n")}
         }
         assertOwnedByCurrentUser(stat2, cursor);
       }
-      const realRoot = (0, import_node_fs56.realpathSync)(resolvedRoot);
-      const realTarget = (0, import_node_fs56.realpathSync)(resolvedTarget);
+      const realRoot = (0, import_node_fs57.realpathSync)(resolvedRoot);
+      const realTarget = (0, import_node_fs57.realpathSync)(resolvedTarget);
       if (realTarget !== realRoot && !realTarget.startsWith(realRoot + import_node_path48.sep)) {
         throw unsafePathError(`canonical directory ${realTarget} escapes canonical root ${realRoot}`);
       }
@@ -205240,17 +205323,17 @@ ${lines.join("\n")}
       }
       let fd = null;
       try {
-        fd = (0, import_node_fs56.openSync)(canonicalFilePath, import_node_fs56.constants.O_RDONLY | O_NOFOLLOW_FLAG);
-        const fstat = (0, import_node_fs56.fstatSync)(fd);
+        fd = (0, import_node_fs57.openSync)(canonicalFilePath, import_node_fs57.constants.O_RDONLY | O_NOFOLLOW_FLAG);
+        const fstat = (0, import_node_fs57.fstatSync)(fd);
         if (!fstat.isFile() || fstat.nlink > 1 || fstat.ino !== lstat2.ino || fstat.dev !== lstat2.dev) {
           throw unsafePathError(`config file ${canonicalFilePath} changed or failed descriptor verification on open`);
         }
         assertOwnedByCurrentUser(fstat, canonicalFilePath);
-        const realFile = (0, import_node_fs56.realpathSync)(canonicalFilePath);
+        const realFile = (0, import_node_fs57.realpathSync)(canonicalFilePath);
         if (realFile !== canonicalFilePath || (0, import_node_path48.dirname)(realFile) !== expectedRealParent) {
           throw unsafePathError(`canonical config file ${realFile} does not match expected ${canonicalFilePath}`);
         }
-        const content = (0, import_node_fs56.readFileSync)(fd, "utf-8");
+        const content = (0, import_node_fs57.readFileSync)(fd, "utf-8");
         return {
           exists: true,
           content,
@@ -205262,7 +205345,7 @@ ${lines.join("\n")}
       } finally {
         if (fd !== null) {
           try {
-            (0, import_node_fs56.closeSync)(fd);
+            (0, import_node_fs57.closeSync)(fd);
           } catch {
           }
         }
@@ -205291,12 +205374,12 @@ ${lines.join("\n")}
         let tmpFd = null;
         let renamed2 = false;
         try {
-          tmpFd = (0, import_node_fs56.openSync)(
+          tmpFd = (0, import_node_fs57.openSync)(
             tmpPath,
-            import_node_fs56.constants.O_CREAT | import_node_fs56.constants.O_EXCL | import_node_fs56.constants.O_WRONLY | O_NOFOLLOW_FLAG,
+            import_node_fs57.constants.O_CREAT | import_node_fs57.constants.O_EXCL | import_node_fs57.constants.O_WRONLY | O_NOFOLLOW_FLAG,
             384
           );
-          const tmpStat = (0, import_node_fs56.fstatSync)(tmpFd);
+          const tmpStat = (0, import_node_fs57.fstatSync)(tmpFd);
           if (!tmpStat.isFile() || tmpStat.nlink !== 1) {
             throw unsafePathError(`temporary config file ${tmpPath} is not an isolated regular file`);
           }
@@ -205304,14 +205387,14 @@ ${lines.join("\n")}
           const buf = Buffer.from(next, "utf-8");
           let offset = 0;
           while (offset < buf.length) {
-            const writtenBytes = options.onWriteTempChunkForTest ? options.onWriteTempChunkForTest(tmpFd, buf, offset) : (0, import_node_fs56.writeSync)(tmpFd, buf, offset, buf.length - offset);
+            const writtenBytes = options.onWriteTempChunkForTest ? options.onWriteTempChunkForTest(tmpFd, buf, offset) : (0, import_node_fs57.writeSync)(tmpFd, buf, offset, buf.length - offset);
             if (!Number.isInteger(writtenBytes) || writtenBytes <= 0) {
               throw new Error("EIO: short or zero-byte write while writing temporary assistant config");
             }
             offset += writtenBytes;
           }
-          (0, import_node_fs56.fsyncSync)(tmpFd);
-          (0, import_node_fs56.closeSync)(tmpFd);
+          (0, import_node_fs57.fsyncSync)(tmpFd);
+          (0, import_node_fs57.closeSync)(tmpFd);
           tmpFd = null;
           options.onBeforeRenameForTest?.(attempt, canonicalFilePath, tmpPath);
           const recheckedParent = ensurePrivateAssistantDirectoryChain(options.rootDir, parentDir);
@@ -205322,7 +205405,7 @@ ${lines.join("\n")}
           const changedConcurrently = preRenameSnapshot.exists !== snapshot.exists || snapshot.exists && (preRenameSnapshot.ino !== snapshot.ino || preRenameSnapshot.dev !== snapshot.dev || preRenameSnapshot.size !== snapshot.size || preRenameSnapshot.mtimeMs !== snapshot.mtimeMs || preRenameSnapshot.content !== snapshot.content);
           if (changedConcurrently) {
             try {
-              (0, import_node_fs56.unlinkSync)(tmpPath);
+              (0, import_node_fs57.unlinkSync)(tmpPath);
             } catch {
             }
             if (attempt + 1 < maxRetries) {
@@ -205330,18 +205413,18 @@ ${lines.join("\n")}
             }
             throw conflictError(`concurrent modification detected on ${canonicalFilePath} after ${maxRetries} attempts`);
           }
-          (0, import_node_fs56.renameSync)(tmpPath, canonicalFilePath);
+          (0, import_node_fs57.renameSync)(tmpPath, canonicalFilePath);
           renamed2 = true;
           if (process.platform !== "win32") {
             let dirFd = null;
             try {
-              dirFd = (0, import_node_fs56.openSync)(realParent, import_node_fs56.constants.O_RDONLY | O_NOFOLLOW_FLAG);
-              (0, import_node_fs56.fsyncSync)(dirFd);
+              dirFd = (0, import_node_fs57.openSync)(realParent, import_node_fs57.constants.O_RDONLY | O_NOFOLLOW_FLAG);
+              (0, import_node_fs57.fsyncSync)(dirFd);
             } catch {
             } finally {
               if (dirFd !== null) {
                 try {
-                  (0, import_node_fs56.closeSync)(dirFd);
+                  (0, import_node_fs57.closeSync)(dirFd);
                 } catch {
                 }
               }
@@ -205351,13 +205434,13 @@ ${lines.join("\n")}
         } finally {
           if (tmpFd !== null) {
             try {
-              (0, import_node_fs56.closeSync)(tmpFd);
+              (0, import_node_fs57.closeSync)(tmpFd);
             } catch {
             }
           }
           if (!renamed2) {
             try {
-              (0, import_node_fs56.unlinkSync)(tmpPath);
+              (0, import_node_fs57.unlinkSync)(tmpPath);
             } catch {
             }
           }
@@ -235369,10 +235452,10 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     init_fsm_evaluator();
     init_fsm_loader();
     var crypto23 = __toESM2(require("crypto"));
-    var import_node_fs57 = require("fs");
+    var import_node_fs58 = require("fs");
     var import_node_path49 = require("path");
     init_provider_cli_shared();
-    var import_node_fs58 = require("fs");
+    var import_node_fs59 = require("fs");
     var import_node_path50 = require("path");
     init_manifest();
     var V1_PRIMITIVE_CATALOG = Object.freeze({
@@ -237048,7 +237131,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     init_mesh_runtime_store();
     init_logger();
     init_config();
-    var import_node_fs59 = require("fs");
+    var import_node_fs60 = require("fs");
     init_logger();
     var LEGACY_OWNER_MARKER = "operator-recovery-owner";
     var LEGACY_LOCK_RECLAIM_MIN_AGE_MS = 10 * 6e4;
@@ -237059,7 +237142,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       try {
         let st;
         try {
-          st = (0, import_node_fs59.lstatSync)(lock);
+          st = (0, import_node_fs60.lstatSync)(lock);
         } catch (e) {
           if (e.code === "ENOENT") return { reclaimed: false, reason: "absent" };
           throw e;
@@ -237067,8 +237150,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (!st.isDirectory()) return { reclaimed: false, reason: "not_directory" };
         const ageMs2 = now - st.mtimeMs;
         if (!(ageMs2 > minAgeMs)) return { reclaimed: false, reason: "fresh" };
-        if ((0, import_node_fs59.readdirSync)(lock).length > 0) return { reclaimed: false, reason: "has_contents" };
-        (0, import_node_fs59.rmdirSync)(lock);
+        if ((0, import_node_fs60.readdirSync)(lock).length > 0) return { reclaimed: false, reason: "has_contents" };
+        (0, import_node_fs60.rmdirSync)(lock);
         LOG.warn("MeshConfig", `Removed abandoned legacy mesh write lock ${lock} (age ${Math.round(ageMs2 / 1e3)}s, no ${LEGACY_OWNER_MARKER} marker); left by a crashed older ADHDev version`);
         return { reclaimed: true, ageMs: ageMs2 };
       } catch (e) {
@@ -245536,7 +245619,7 @@ var MESH_QUEUE_REQUEUE_TOOL = {
 };
 var MESH_QUEUE_REVISE_TOOL = {
   name: "mesh_queue_revise",
-  description: "Atomically revise an existing PENDING task by expected revision (legacy revision is 0). Preserves id, mission, history and dependents. Edits message, ownership, source/integration phase or dependency graph; By default releases stale holds and reschedules immediately. dry_run validates without mutation; defer_scheduling applies the revision while preserving holds/parking and does not trigger scheduling. Physical source migration requires an existing local node pin, attested by the host. Assigned/open attempts refuse; no force or active handoff in version 1. Source completion is uncommitted/not_mergeable, never release acceptance.",
+  description: "Atomically revise an existing PENDING task by expected revision (legacy revision is 0). Preserves id, mission, history and dependents. Edits message, ownership, source/integration phase or dependency graph; By default releases stale holds and reschedules immediately. dry_run validates without mutation; defer_scheduling applies the revision while preserving holds/parking and does not trigger scheduling. Physical source migration requires an existing local node pin, attested by the host. Assigned/open attempts refuse every edit; the only active-task operation is patch.attestActiveOwnership (adds the missing scope proof, changes nothing else). No force or active handoff in version 1. Source completion is uncommitted/not_mergeable, never release acceptance.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -245563,6 +245646,7 @@ var MESH_QUEUE_REVISE_TOOL = {
             sourceTaskId: { type: "string" },
             differentProvider: { const: true }
           } },
+          attestActiveOwnership: { const: true, description: "Alone, on an ASSIGNED write task that declared owned_paths but has no host-attested ownership scope (it blocks every other write task as an unknown writer): attach the scope for the running task without stopping it. Needs the current expected_revision; refused when the task declared no paths, is remote, or its live session is not in the node checkout." },
           requestQuotaOverride: { const: true, description: "Alone: ask the OWNER to let this quota-held task run despite the quota reserve (raises an owner decision; you cannot grant it)." }
         }
       }

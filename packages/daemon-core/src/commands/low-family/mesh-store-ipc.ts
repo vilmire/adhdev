@@ -5,6 +5,7 @@ import { getMesh } from '../../config/mesh-config.js';
 import { decodeQueueReviseRequest, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { getMachineId } from '../../config/config.js';
 import { attestLocalOwnership } from '../../mesh/mesh-physical-ownership.js';
+import { attestActiveTaskOwnership } from '../../mesh/mesh-active-ownership.js';
 import { normalizeOwnedPaths } from '@adhdev/mesh-shared';
 import { revisePendingTask } from '../../mesh/mesh-task-revision.js';
 import { requestQuotaOverrideDecision } from '../../mesh/mesh-quota-hold-escalation.js';
@@ -473,6 +474,19 @@ const queueRevise: LowFamilyHandler = async (ctx, args: unknown) => {
             const asked = await requestQuotaOverrideDecision(ctx.components(), req.meshId, req.taskId, mesh);
             if (!asked.ok) return { success: false, code: asked.code, error: asked.error };
             return { success: true, task: queueWire(MeshRuntimeStore.getInstance().findQueueEntryById(req.meshId, req.taskId)), quotaOverrideRequested: { decisionId: asked.itemId, alreadyAsked: asked.deduped, options: asked.options } };
+        }
+        if (req.patch.attestActiveOwnership === true) {
+            const sessionWorkspace = task?.assignedSessionId
+                ? (ctx.deps.instanceManager?.getInstance?.(task.assignedSessionId) as { workingDir?: unknown } | undefined)?.workingDir
+                : undefined;
+            const attested = attestActiveTaskOwnership(req.meshId, req.taskId, req.expectedRevision, {
+                actor: self, repoIdentity: mesh.repoIdentity, machineId,
+                ...(localNode ? { nodeId: localNode.id, workspace: localNode.workspace } : {}),
+                ...(typeof sessionWorkspace === 'string' ? { sessionWorkspace } : {}),
+            });
+            // Tasks held behind this writer may now be admissible.
+            try { void triggerMeshQueue(ctx.components(), req.meshId).catch(e => LOG.warn('MeshQueue', `Ownership attest reschedule: ${String(e)}`)); } catch { /* boot drain will retry */ }
+            return { success: true, task: queueWire(attested) };
         }
         const edited = revisePendingTask(req.meshId, req.taskId, req.expectedRevision, req.patch as Parameters<typeof revisePendingTask>[3], {
             actor: self, repoIdentity: mesh.repoIdentity, machineId, dryRun: req.dryRun, deferScheduling: req.deferScheduling,
