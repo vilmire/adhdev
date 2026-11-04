@@ -199,6 +199,28 @@ describe('git-dir change detector (member side)', () => {
     expect(watchers.size).toBe(0)
   })
 
+  it('a watched workspace whose last read was dirty keeps being re-read on the tick (a cleanup moves no git-dir file)', async () => {
+    let now = 40_000_000
+    let dirty = 2
+    const readGit = vi.fn(async () => ({ ...git(), untracked: dirty, lastCheckedAt: now }))
+    const dispatch = vi.fn(async (_c: string, _cmd: string, args: any) => ({ success: true, accepted: true, ...(args.gitSignature ? { gitHeld: true } : {}) }))
+    const pusher = new MeshNodeStatePusher({ dispatch, readGit, now: () => now, heartbeatMs: 300_000, startTimer: () => ({ stop() {} }), watchGit: () => ({ stop() {} }) })
+    pusher.selfRegister({ coordinatorDaemonId: 'coord', meshId: MESH, nodeId: NODE, workspace: WS })
+    await pusher.tick()
+    expect(readGit).toHaveBeenCalledTimes(1)
+    // Files are removed from the tree: nothing the detector watches moves.
+    dirty = 0
+    now += 60_000
+    await pusher.tick()
+    expect(readGit).toHaveBeenCalledTimes(2)
+    expect(dispatch.mock.calls.at(-1)![2].git).toMatchObject({ untracked: 0 })
+    // Once clean, the tick is back to zero git spawns.
+    now += 60_000
+    await pusher.tick()
+    expect(readGit).toHaveBeenCalledTimes(2)
+    pusher.stop()
+  })
+
   it("this daemon's own read never re-triggers (the self-read quiet window); a session event owes one read", async () => {
     let now = 20_000_000
     const { pusher, watchers, readGit } = watchedPusher({ now: () => now })

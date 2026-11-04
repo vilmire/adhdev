@@ -67537,6 +67537,2217 @@ ${mergeTreeErr?.stderr || ""}`;
         init_mesh_runtime_store();
       }
     });
+    function readObjectRecord(value) {
+      return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    }
+    function readStringValue(...values) {
+      for (const value of values) {
+        if (typeof value === "string" && value.trim()) return value.trim();
+      }
+      return void 0;
+    }
+    function readNumberValue(...values) {
+      for (const value of values) {
+        if (typeof value === "number" && Number.isFinite(value)) return value;
+      }
+      return void 0;
+    }
+    function readBooleanValue(...values) {
+      for (const value of values) {
+        if (typeof value === "boolean") return value;
+      }
+      return void 0;
+    }
+    function toIsoTimestamp(value) {
+      if (typeof value === "number" && Number.isFinite(value)) return new Date(value).toISOString();
+      const stringValue = readStringValue(value);
+      return stringValue || null;
+    }
+    var init_mesh_node_record_readers = __esm2({
+      "src/mesh/mesh-node-record-readers.ts"() {
+        "use strict";
+      }
+    });
+    function normalizeInlineMeshGitStatus(status, node, options) {
+      return normalizeGitStatus(status, readObjectRecord(node), options);
+    }
+    function buildInlineMeshTransitGitStatus(node) {
+      return pickBestTransitGitStatus(readObjectRecord(node));
+    }
+    function shouldRefreshStalePendingAggregate(snapshot, options) {
+      if (options?.requireDirectPeerTruth !== true || !Array.isArray(snapshot?.nodes)) return false;
+      return snapshot.nodes.some((node) => {
+        if (node?.gitProbePending !== true) return false;
+        const git12 = readObjectRecord(node?.git);
+        return !readBooleanValue(git12.isGitRepo) && !readStringValue(git12.branch, git12.headCommit, git12.upstream);
+      });
+    }
+    function buildLivePeerGitConnection(connection, timestamp2 = (/* @__PURE__ */ new Date()).toISOString()) {
+      const source2 = readStringValue(connection.source);
+      const transport = readStringValue(connection.transport);
+      return {
+        ...connection,
+        perspective: readStringValue(connection.perspective) ?? "selected_coordinator",
+        source: source2 && source2 !== "not_reported" ? source2 : "mesh_peer_status",
+        state: "connected",
+        transport: transport && transport !== "unknown" ? transport : "direct",
+        reported: true,
+        directPeerTruthSatisfied: true,
+        authority: "live_peer",
+        cached: false,
+        reason: "Live peer git snapshot reported by the selected coordinator.",
+        lastStateChangeAt: readStringValue(connection.lastStateChangeAt) ?? timestamp2
+      };
+    }
+    function recordInlineMeshDirectGitTruth(node, git12, source2) {
+      if (!node || typeof node !== "object" || Array.isArray(node)) {
+        return {
+          reporterPlatform: null,
+          reporterArch: null,
+          reporterMachineNickname: null,
+          reporterProviderVersions: null,
+          reporterDaemonBuildVersion: null,
+          reportedMemberState: null,
+          nodeFacts: null
+        };
+      }
+      const checkedAt = readNumberValue(git12.lastCheckedAt) ?? Date.now();
+      const updatedAt = new Date(checkedAt).toISOString();
+      const nextGit = {
+        ...git12,
+        lastCheckedAt: checkedAt
+      };
+      node.lastGit = {
+        source: source2,
+        checkedAt,
+        status: nextGit
+      };
+      node.last_git = node.lastGit;
+      node.machineStatus = "online";
+      node.updatedAt = updatedAt;
+      node.lastSeenAt = updatedAt;
+      const repoRoot = readStringValue(nextGit.repoRoot);
+      if (repoRoot && !readStringValue(node.repoRoot)) node.repoRoot = repoRoot;
+      const isLocalSource = source2 === "selected_coordinator_local_git";
+      const reporterPlatform = readStringValue(git12.reporterPlatform) ?? (isLocalSource ? process.platform : null);
+      const reporterArch = readStringValue(git12.reporterArch) ?? (isLocalSource ? process.arch : null);
+      stampNodeReporterPlatform(node, reporterPlatform, reporterArch);
+      if (reporterPlatform) node.reportedPlatform = reporterPlatform;
+      if (reporterArch) node.reportedArch = reporterArch;
+      const reporterMachineNickname = readStringValue(git12.reporterMachineNickname) ?? null;
+      if (reporterMachineNickname) node.machineNickname = reporterMachineNickname;
+      const unified = normalizeReportedMemberState(git12.reporterMemberState);
+      const reporterProviderVersions = (unified?.providerVersions ? readProviderVersionsRecord(unified.providerVersions) : null) ?? readProviderVersionsRecord(git12.reporterProviderVersions) ?? (isLocalSource ? readLocalReporterProviderVersions() : null);
+      if (reporterProviderVersions) node.reportedProviderVersions = reporterProviderVersions;
+      const reporterDaemonBuildVersion = readStringValue(unified?.daemonBuildVersion) ?? readStringValue(git12.reporterDaemonBuildVersion) ?? (isLocalSource ? readLocalReporterDaemonBuildVersion() : null) ?? null;
+      if (reporterDaemonBuildVersion) node.reportedDaemonBuildVersion = reporterDaemonBuildVersion;
+      if (!isLocalSource) {
+        const mirrored = {
+          ...reporterProviderVersions ? { providerVersions: reporterProviderVersions } : {},
+          ...reporterDaemonBuildVersion ? { daemonBuildVersion: reporterDaemonBuildVersion } : {},
+          lastReportedAt: readNumberValue(unified?.lastReportedAt) ?? checkedAt
+        };
+        if (mirrored.providerVersions || mirrored.daemonBuildVersion) {
+          node.reportedMemberState = mirrored;
+        }
+      }
+      if (!isLocalSource) {
+        const remoteFacts = normalizeMeshNodeFacts(git12.reporterNodeFacts);
+        if (remoteFacts) node.nodeFacts = selectReportedQuotaFacts(node.nodeFacts, remoteFacts, Date.now());
+      } else {
+        try {
+          let localNickname = null;
+          try {
+            localNickname = readStringValue(getMachineNickname()) ?? null;
+          } catch {
+          }
+          node.nodeFacts = buildLocalNodeFacts({
+            providerVersions: reporterProviderVersions ?? null,
+            machineNickname: localNickname
+          });
+        } catch {
+        }
+      }
+      return {
+        reporterPlatform,
+        reporterArch,
+        reporterMachineNickname,
+        reporterProviderVersions,
+        reporterDaemonBuildVersion,
+        reportedMemberState: !isLocalSource ? node.reportedMemberState ?? null : null,
+        // Bundle rides to persistence so the facts (incl. build COMMIT — the
+        // deploy-lag anchor) survive a config reload / coordinator restart.
+        nodeFacts: node.nodeFacts ?? null
+      };
+    }
+    function recordReportedNodeFacts(node, rawFacts) {
+      if (!node || typeof node !== "object" || Array.isArray(node)) return null;
+      const normalized = normalizeMeshNodeFacts(rawFacts);
+      if (!normalized) return null;
+      const facts = selectReportedQuotaFacts(node.nodeFacts, normalized, Date.now());
+      const platform10 = readStringValue(facts.platform) ?? null;
+      const arch2 = readStringValue(facts.arch) ?? null;
+      const nickname = readStringValue(facts.machineNickname) ?? null;
+      const providerVersions = readProviderVersionsRecord(facts.providerVersions);
+      const buildVersion = readStringValue(readObjectRecord(facts.daemonBuild).version) ?? null;
+      const buildCommit = readStringValue(readObjectRecord(facts.daemonBuild).commit) ?? null;
+      const previousCommit = readStringValue(readObjectRecord(readObjectRecord(node.nodeFacts).daemonBuild).commit) ?? null;
+      const quotaChanged = JSON.stringify(facts.quota) !== JSON.stringify(readObjectRecord(node.nodeFacts).quota);
+      const configChanged = platform10 && platform10 !== readStringValue(node.reportedPlatform) || arch2 && arch2 !== readStringValue(node.reportedArch) || nickname && nickname !== readStringValue(node.machineNickname) || buildVersion && buildVersion !== readStringValue(node.reportedDaemonBuildVersion) || buildCommit && buildCommit !== previousCommit || providerVersions && JSON.stringify(providerVersions) !== JSON.stringify(readProviderVersionsRecord(node.reportedProviderVersions));
+      stampNodeReporterPlatform(node, platform10, arch2);
+      if (platform10) node.reportedPlatform = platform10;
+      if (arch2) node.reportedArch = arch2;
+      if (nickname) node.machineNickname = nickname;
+      if (providerVersions) node.reportedProviderVersions = providerVersions;
+      if (buildVersion) node.reportedDaemonBuildVersion = buildVersion;
+      if (providerVersions || buildVersion) {
+        node.reportedMemberState = {
+          ...providerVersions ? { providerVersions } : {},
+          ...buildVersion ? { daemonBuildVersion: buildVersion } : {},
+          lastReportedAt: facts.reportedAt
+        };
+      }
+      node.nodeFacts = facts;
+      if (!configChanged && !quotaChanged) return null;
+      return {
+        reporterPlatform: platform10,
+        reporterArch: arch2,
+        reporterMachineNickname: nickname,
+        reporterProviderVersions: providerVersions,
+        reporterDaemonBuildVersion: buildVersion,
+        reportedMemberState: node.reportedMemberState ?? null,
+        nodeFacts: facts
+      };
+    }
+    function normalizeReportedMemberState(value) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+      const raw = value;
+      const providerVersions = readProviderVersionsRecord(raw.providerVersions);
+      const daemonBuildVersion = readStringValue(raw.daemonBuildVersion);
+      const lastReportedAt = readNumberValue(raw.lastReportedAt);
+      if (!providerVersions && !daemonBuildVersion && lastReportedAt === void 0) {
+        return null;
+      }
+      return {
+        ...providerVersions ? { providerVersions } : {},
+        ...daemonBuildVersion ? { daemonBuildVersion } : {},
+        ...lastReportedAt !== void 0 ? { lastReportedAt } : {}
+      };
+    }
+    function readProviderVersionsRecord(value) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+      const out = {};
+      for (const [key6, raw] of Object.entries(value)) {
+        if (typeof key6 !== "string" || !key6.trim()) continue;
+        const version2 = typeof raw === "string" ? raw.trim() : "";
+        if (!version2) continue;
+        out[key6] = version2;
+      }
+      return Object.keys(out).length > 0 ? out : null;
+    }
+    function readLocalReporterProviderVersions() {
+      try {
+        return readProviderVersionsRecord(getCachedProviderVersions());
+      } catch {
+        return null;
+      }
+    }
+    function buildFreshLocalNodeFacts() {
+      try {
+        let localNickname = null;
+        try {
+          localNickname = readStringValue(getMachineNickname()) ?? null;
+        } catch {
+        }
+        return buildLocalNodeFacts({ providerVersions: readLocalReporterProviderVersions(), machineNickname: localNickname });
+      } catch {
+        return null;
+      }
+    }
+    function readLocalReporterDaemonBuildVersion() {
+      try {
+        const version2 = getDaemonBuildInfo().version;
+        return typeof version2 === "string" && version2.trim() && version2 !== "unknown" ? version2.trim() : null;
+      } catch {
+        return null;
+      }
+    }
+    function stampNodeReporterPlatform(node, platform10, arch2) {
+      if (!node || typeof node !== "object" || Array.isArray(node)) return;
+      if (!platform10 && !arch2) return;
+      const overrides2 = node.userOverrides && typeof node.userOverrides === "object" && !Array.isArray(node.userOverrides) ? node.userOverrides : {};
+      let changed = false;
+      if (platform10 && !readStringValue(overrides2.platform)) {
+        overrides2.platform = platform10;
+        changed = true;
+      }
+      if (arch2 && !readStringValue(overrides2.arch)) {
+        overrides2.arch = arch2;
+        changed = true;
+      }
+      if (changed) node.userOverrides = overrides2;
+    }
+    function persistNodeReporterPlatform(meshSource, mesh, nodeId, reporter) {
+      if (meshSource !== "local_config") return;
+      const meshId = readStringValue(mesh?.id);
+      if (!meshId || !nodeId) return;
+      const reportedPlatform = reporter.reporterPlatform ?? void 0;
+      const reportedArch = reporter.reporterArch ?? void 0;
+      const reportedMachineNickname = reporter.reporterMachineNickname ?? void 0;
+      const reportedProviderVersions = reporter.reporterProviderVersions ?? void 0;
+      const reportedDaemonBuildVersion = reporter.reporterDaemonBuildVersion ?? void 0;
+      const reportedMemberState = reporter.reportedMemberState ?? void 0;
+      const nodeFacts = reporter.nodeFacts ?? void 0;
+      if (!reportedPlatform && !reportedArch && !reportedMachineNickname && !reportedProviderVersions && !reportedDaemonBuildVersion && !reportedMemberState && !nodeFacts) {
+        return;
+      }
+      void Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports)).then(({ updateNode: updateNode2 }) => updateNode2(meshId, nodeId, {
+        reportedPlatform,
+        reportedArch,
+        reportedMachineNickname,
+        reportedProviderVersions,
+        reportedDaemonBuildVersion,
+        reportedMemberState,
+        nodeFacts
+      })).catch(() => {
+      });
+    }
+    function buildCachedInlineMeshGitStatus(node) {
+      const liveGit = buildInlineMeshTransitGitStatus(node);
+      if (liveGit) return liveGit;
+      const cachedStatus = readObjectRecord(node?.cachedStatus);
+      const cachedGit = readObjectRecord(cachedStatus.git);
+      if (!Object.keys(cachedGit).length) return void 0;
+      return normalizeInlineMeshGitStatus(cachedGit, node);
+    }
+    function shouldDiscardCachedInlineMeshStatus(node) {
+      const cachedStatus = readObjectRecord(node?.cachedStatus);
+      if (!Object.keys(cachedStatus).length) return false;
+      const cachedGit = readObjectRecord(cachedStatus.git);
+      const workspaceError = readStringValue(cachedStatus.error, node?.error);
+      if (workspaceError && /workspace must be an existing directory/i.test(workspaceError)) return true;
+      const isGitRepo = readBooleanValue(cachedGit.isGitRepo);
+      const branch = readStringValue(cachedGit.branch);
+      const headCommit = readStringValue(cachedGit.headCommit);
+      return isGitRepo === false && !branch && !headCommit;
+    }
+    function stripInlineMeshTransientNodeState(node) {
+      if (!node || typeof node !== "object" || Array.isArray(node)) return node;
+      const {
+        cachedStatus,
+        lastGit: _lastGit,
+        last_git: _lastGitLegacy,
+        lastProbe: _lastProbe,
+        last_probe: _lastProbeLegacy,
+        error: _error,
+        health: _health,
+        machineStatus: _machineStatus,
+        lastSeenAt: _lastSeenAt,
+        last_seen_at: _lastSeenAtLegacy,
+        updatedAt: _updatedAt,
+        updated_at: _updatedAtLegacy,
+        activeSession: _activeSession,
+        active_session: _activeSessionLegacy,
+        activeSessionId: _activeSessionId,
+        active_session_id: _activeSessionIdLegacy,
+        sessionId: _sessionId,
+        session_id: _sessionIdLegacy,
+        providerType: _providerType,
+        provider_type: _providerTypeLegacy,
+        originGrantPublicKey: _originGrantPublicKey,
+        ...rest
+      } = node;
+      if (cachedStatus && !shouldDiscardCachedInlineMeshStatus(node)) {
+        return { ...rest, cachedStatus };
+      }
+      return rest;
+    }
+    function stripUntrustedInlineMeshGrantKeys(inlineMesh) {
+      if (!inlineMesh || typeof inlineMesh !== "object" || Array.isArray(inlineMesh)) return inlineMesh;
+      let changed = false;
+      let meshHost = inlineMesh.meshHost;
+      if (meshHost && typeof meshHost === "object" && !Array.isArray(meshHost) && "originGrantPublicKey" in meshHost) {
+        const { originGrantPublicKey: _ignored, ...restHost } = meshHost;
+        meshHost = restHost;
+        changed = true;
+      }
+      let nodes = inlineMesh.nodes;
+      if (Array.isArray(nodes)) {
+        let nodesChanged = false;
+        const nextNodes = nodes.map((node) => {
+          if (node && typeof node === "object" && !Array.isArray(node) && "originGrantPublicKey" in node) {
+            const { originGrantPublicKey: _ignored, ...restNode } = node;
+            nodesChanged = true;
+            return restNode;
+          }
+          return node;
+        });
+        if (nodesChanged) {
+          nodes = nextNodes;
+          changed = true;
+        }
+      }
+      if (!changed) return inlineMesh;
+      return {
+        ...inlineMesh,
+        ...meshHost !== inlineMesh.meshHost ? { meshHost } : {},
+        ...nodes !== inlineMesh.nodes ? { nodes } : {}
+      };
+    }
+    function hasInlineMeshTransientNodeState(node) {
+      if (!node || typeof node !== "object" || Array.isArray(node)) return false;
+      return "cachedStatus" in node || "lastGit" in node || "last_git" in node || "lastProbe" in node || "last_probe" in node || "error" in node || "health" in node || "machineStatus" in node || "lastSeenAt" in node || "last_seen_at" in node || "updatedAt" in node || "updated_at" in node || "activeSession" in node || "active_session" in node || "activeSessionId" in node || "active_session_id" in node || "sessionId" in node || "session_id" in node || "providerType" in node || "provider_type" in node;
+    }
+    function inlineMeshCarriesTransientNodeTruth(inlineMesh) {
+      if (!inlineMesh || typeof inlineMesh !== "object" || Array.isArray(inlineMesh)) return false;
+      if (!Array.isArray(inlineMesh.nodes) || inlineMesh.nodes.length === 0) return false;
+      return inlineMesh.nodes.some((node) => hasInlineMeshTransientNodeState(node));
+    }
+    function readInlineMeshNodeId(node) {
+      return normalizeMeshNodeId(node) ?? "";
+    }
+    function isDeadLocalWorktreeNode(node) {
+      if (node?.isLocalWorktree !== true) return false;
+      const workspace = readStringValue(node?.workspace);
+      if (!workspace) return false;
+      return !fs17.existsSync(workspace);
+    }
+    function foldMeshNodeIdentityToCanonical(node) {
+      if (!node || typeof node !== "object" || Array.isArray(node)) return node;
+      const canonical2 = normalizeMeshNodeId(node);
+      if (canonical2 === void 0) return node;
+      if (node.id === canonical2 && node.nodeId === canonical2 && node.node_id === void 0) return node;
+      node.id = canonical2;
+      node.nodeId = canonical2;
+      if ("node_id" in node) delete node.node_id;
+      return node;
+    }
+    function normalizeInlineMeshNodeIdentity(inlineMesh) {
+      if (!inlineMesh || typeof inlineMesh !== "object" || Array.isArray(inlineMesh)) return inlineMesh;
+      if (!Array.isArray(inlineMesh.nodes) || inlineMesh.nodes.length === 0) return inlineMesh;
+      for (const node of inlineMesh.nodes) foldMeshNodeIdentityToCanonical(node);
+      return inlineMesh;
+    }
+    function sanitizeInlineMesh(inlineMesh) {
+      if (!inlineMesh || typeof inlineMesh !== "object" || Array.isArray(inlineMesh)) return inlineMesh;
+      const stripped = stripUntrustedInlineMeshGrantKeys(inlineMesh);
+      if (!Array.isArray(stripped.nodes)) return stripped;
+      let changed = false;
+      const nodes = stripped.nodes.map((node) => {
+        if (!hasInlineMeshTransientNodeState(node)) return node;
+        changed = true;
+        return stripInlineMeshTransientNodeState(node);
+      });
+      if (!changed) return stripped;
+      return {
+        ...stripped,
+        nodes
+      };
+    }
+    function reconcileInlineMeshCache(rawCached, rawIncoming, removedNodeIds) {
+      const cached5 = stripUntrustedInlineMeshGrantKeys(rawCached);
+      const incoming = stripUntrustedInlineMeshGrantKeys(rawIncoming);
+      if (!cached5 || typeof cached5 !== "object" || Array.isArray(cached5)) return incoming;
+      if (!incoming || typeof incoming !== "object" || Array.isArray(incoming)) return cached5;
+      const cachedNodes = Array.isArray(cached5.nodes) ? cached5.nodes : [];
+      const incomingNodes = Array.isArray(incoming.nodes) ? incoming.nodes : [];
+      if (!cachedNodes.length || !incomingNodes.length) return { ...cached5, ...incoming };
+      const cachedUpdatedAt = Date.parse(readStringValue(cached5.updatedAt, cached5.updated_at) || "");
+      const incomingUpdatedAt = Date.parse(readStringValue(incoming.updatedAt, incoming.updated_at) || "");
+      const cacheFieldsWinOnConflict = Number.isFinite(cachedUpdatedAt) && (!Number.isFinite(incomingUpdatedAt) || cachedUpdatedAt > incomingUpdatedAt);
+      const cachedById = /* @__PURE__ */ new Map();
+      for (const node of cachedNodes) {
+        const nodeId = readInlineMeshNodeId(node);
+        if (nodeId) cachedById.set(nodeId, node);
+      }
+      const mergedIncomingIds = /* @__PURE__ */ new Set();
+      const nodes = incomingNodes.map((incomingNode) => {
+        const nodeId = readInlineMeshNodeId(incomingNode);
+        const cachedNode = nodeId ? cachedById.get(nodeId) : void 0;
+        if (nodeId) mergedIncomingIds.add(nodeId);
+        if (!cachedNode) return incomingNode;
+        if (hasInlineMeshTransientNodeState(incomingNode)) {
+          return cacheFieldsWinOnConflict ? { ...incomingNode, ...cachedNode } : { ...cachedNode, ...incomingNode };
+        }
+        return { ...stripInlineMeshTransientNodeState(cachedNode), ...incomingNode };
+      });
+      const droppedNodeIds = [];
+      for (const cachedNode of cachedNodes) {
+        const nodeId = readInlineMeshNodeId(cachedNode);
+        if (!nodeId || mergedIncomingIds.has(nodeId)) continue;
+        if (removedNodeIds?.has(nodeId)) {
+          droppedNodeIds.push(nodeId);
+          continue;
+        }
+        nodes.push(cachedNode);
+      }
+      if (droppedNodeIds.length > 0) {
+        LOG.info("Mesh", `[NodeMembershipMerge] mesh=${String(cached5.id || incoming.id || "unknown")} droppedNodeIds=${JSON.stringify(droppedNodeIds)} reason=tombstoned_removal cachedCount=${cachedNodes.length} incomingCount=${incomingNodes.length}`);
+      }
+      return {
+        ...cached5,
+        ...incoming,
+        nodes
+      };
+    }
+    var fs17;
+    var init_mesh_inline_mesh_cache = __esm2({
+      "src/mesh/mesh-inline-mesh-cache.ts"() {
+        "use strict";
+        init_dist();
+        init_mesh_node_record_readers();
+        init_config();
+        init_node_facts();
+        init_cli_detector();
+        init_build_info();
+        fs17 = __toESM2(require("fs"));
+        init_logger();
+        init_reported_snapshot();
+      }
+    });
+    function truncateString22(value, maxChars) {
+      if (value.length <= maxChars) return value;
+      if (maxChars <= 12) return value.slice(0, Math.max(0, maxChars));
+      return `${value.slice(0, maxChars - 12)}...[truncated]`;
+    }
+    function trimStructuredStrings(value, maxChars) {
+      if (typeof value === "string") return truncateString22(value, maxChars);
+      if (Array.isArray(value)) return value.map((item) => trimStructuredStrings(item, maxChars));
+      if (!value || typeof value !== "object") return value;
+      return Object.fromEntries(
+        Object.entries(value).map(([key6, nested]) => [key6, trimStructuredStrings(nested, maxChars)])
+      );
+    }
+    function estimateBytes(value) {
+      try {
+        return JSON.stringify(value).length;
+      } catch {
+        return String(value ?? "").length;
+      }
+    }
+    function trimMessageForStatus(message, stringLimit) {
+      if (!message || typeof message !== "object") return message;
+      const { _src, ...rest } = message;
+      void _src;
+      return trimStructuredStrings(rest, stringLimit);
+    }
+    function normalizeMessageTime(message) {
+      if (!message || typeof message !== "object") return message;
+      const msg = message;
+      if (msg.receivedAt == null) {
+        const fallback = msg.timestamp ?? msg.createdAt;
+        if (fallback != null) {
+          const ts2 = typeof fallback === "string" ? Date.parse(fallback) : Number(fallback);
+          if (Number.isFinite(ts2) && ts2 > 0) msg.receivedAt = ts2;
+        }
+      }
+      return msg;
+    }
+    function trimMessagesForStatus(messages, options) {
+      if (!options.includeMessages || options.messageLimit <= 0 || options.totalBytesLimit <= 0) return [];
+      if (!Array.isArray(messages) || messages.length === 0) return [];
+      const recent = messages.slice(-options.messageLimit);
+      const kept = [];
+      let totalBytes = 0;
+      for (let i = recent.length - 1; i >= 0; i -= 1) {
+        let normalized = normalizeMessageTime(trimMessageForStatus(recent[i], options.stringLimit));
+        let size = estimateBytes(normalized);
+        if (size > options.totalBytesLimit) {
+          normalized = normalizeMessageTime(trimMessageForStatus(recent[i], options.fallbackStringLimit));
+          size = estimateBytes(normalized);
+        }
+        if (kept.length > 0 && totalBytes + size > options.totalBytesLimit) {
+          continue;
+        }
+        kept.push(normalized);
+        totalBytes += size;
+      }
+      return kept.reverse();
+    }
+    function hasApprovalButtons(activeModal) {
+      return (activeModal?.buttons?.length ?? 0) > 0;
+    }
+    function normalizeManagedStatus(status, opts) {
+      if (hasApprovalButtons(opts?.activeModal)) return "waiting_approval";
+      return normalizeSessionStatus(status) ?? "idle";
+    }
+    function isManagedStatusWorking(status) {
+      return normalizeManagedStatus(status) === "generating";
+    }
+    function isManagedStatusWaiting(status, opts) {
+      return normalizeManagedStatus(status, opts) === "waiting_approval";
+    }
+    function normalizeActiveChatData(activeChat, options = FULL_STATUS_ACTIVE_CHAT_OPTIONS) {
+      if (!activeChat) return activeChat;
+      const resolvedOptions = {
+        ...FULL_STATUS_ACTIVE_CHAT_OPTIONS,
+        ...options
+      };
+      const {
+        messages: _messages,
+        ...rest
+      } = activeChat;
+      const normalized = {
+        ...rest,
+        status: normalizeManagedStatus(activeChat.status, { activeModal: activeChat.activeModal }),
+        activeModal: resolvedOptions.includeActiveModal && activeChat.activeModal ? {
+          message: truncateString22(activeChat.activeModal.message || "", STATUS_MODAL_MESSAGE_LIMIT),
+          buttons: (activeChat.activeModal.buttons || []).map(
+            (button) => truncateString22(String(button || ""), STATUS_MODAL_BUTTON_LIMIT)
+          )
+        } : null,
+        inputContent: resolvedOptions.includeInputContent && activeChat.inputContent ? truncateString22(activeChat.inputContent, 2 * 1024) : void 0
+      };
+      if (resolvedOptions.includeMessages) {
+        normalized.messages = trimMessagesForStatus(activeChat.messages, resolvedOptions);
+      }
+      return normalized;
+    }
+    var FULL_STATUS_ACTIVE_CHAT_OPTIONS;
+    var LIVE_STATUS_ACTIVE_CHAT_OPTIONS;
+    var METADATA_STATUS_ACTIVE_CHAT_OPTIONS;
+    var STATUS_MODAL_MESSAGE_LIMIT;
+    var STATUS_MODAL_BUTTON_LIMIT;
+    var init_normalize = __esm2({
+      "src/status/normalize.ts"() {
+        "use strict";
+        init_dist();
+        FULL_STATUS_ACTIVE_CHAT_OPTIONS = {
+          includeMessages: true,
+          includeInputContent: true,
+          includeActiveModal: true,
+          messageLimit: 60,
+          totalBytesLimit: 96 * 1024,
+          stringLimit: 4 * 1024,
+          fallbackStringLimit: 1024
+        };
+        LIVE_STATUS_ACTIVE_CHAT_OPTIONS = {
+          includeMessages: false,
+          includeInputContent: false,
+          includeActiveModal: false,
+          messageLimit: 0,
+          totalBytesLimit: 0,
+          stringLimit: 512,
+          fallbackStringLimit: 256
+        };
+        METADATA_STATUS_ACTIVE_CHAT_OPTIONS = {
+          ...LIVE_STATUS_ACTIVE_CHAT_OPTIONS,
+          includeActiveModal: true
+        };
+        STATUS_MODAL_MESSAGE_LIMIT = 2 * 1024;
+        STATUS_MODAL_BUTTON_LIMIT = 120;
+      }
+    });
+    function isTerminalTurnStage(stage) {
+      return TURN_TERMINAL_STAGES.has(stage);
+    }
+    function isoOrNull(ms3) {
+      return typeof ms3 === "number" && Number.isFinite(ms3) ? new Date(ms3).toISOString() : null;
+    }
+    function surfaceStageOfAttempt(attempt) {
+      const setup = attempt.data?.providerSuspension;
+      if (setup?.providerSetup && setup.generation === attempt.generation && setup.resolvedAt === null && (attempt.state === "accepted" || attempt.state === "delivered")) return "waiting_approval";
+      if (attempt.state === "suspended") return attempt.suspension === "choice" ? "waiting_choice" : "waiting_approval";
+      return attempt.state;
+    }
+    function presentationRowFromAttempt(attempt, updatedAtMs) {
+      const terminal = attempt.terminal;
+      return {
+        attemptId: attempt.attemptId,
+        meshId: attempt.meshId,
+        taskId: attempt.taskId,
+        attemptSeq: attempt.attemptNo + 1,
+        generation: attempt.generation,
+        providerSuspension: attempt.data.providerSuspension,
+        sessionId: attempt.sessionId || null,
+        nodeId: attempt.nodeId,
+        providerType: attempt.providerType,
+        stage: surfaceStageOfAttempt(attempt),
+        acceptedAt: isoOrNull(attempt.acceptedAt),
+        deliveredAt: isoOrNull(attempt.deliveredAt),
+        consumedAt: isoOrNull(attempt.consumedAt),
+        terminalOutcome: terminal ? terminal.outcome : null,
+        terminalReason: terminal ? terminal.reason : null,
+        terminalAt: terminal ? isoOrNull(terminal.at) : null,
+        updatedAt: new Date(updatedAtMs).toISOString()
+      };
+    }
+    function turnStageToSurfaceStatus(stage) {
+      switch (stage) {
+        case "accepted":
+        case "delivered":
+          return "starting";
+        case "consumed":
+        case "generating":
+          return "generating";
+        case "waiting_approval":
+          return "waiting_approval";
+        case "waiting_choice":
+          return "waiting_choice";
+        case "finalizing":
+        case "stopping":
+          return "finalizing";
+        case "completed":
+        case "blocked":
+          return "idle";
+        case "failed":
+          return "error";
+        case "cancelled":
+          return "stopped";
+      }
+    }
+    function ageMs(nowMs2, iso) {
+      const raw = rawAgeMs(nowMs2, iso);
+      return raw === null ? null : Math.max(0, raw);
+    }
+    function rawAgeMs(nowMs2, iso) {
+      if (!iso) return null;
+      const ts2 = Date.parse(iso);
+      return Number.isFinite(ts2) ? nowMs2 - ts2 : null;
+    }
+    function isStaleTurnAttemptAuthority(row2, nowMs2) {
+      if (!STALE_GATED_STAGES.has(row2.stage)) return false;
+      const age = rawAgeMs(nowMs2, row2.updatedAt ?? null);
+      if (age === null) return false;
+      if (age < -FUTURE_UPDATED_AT_SKEW_TOLERANCE_MS) return true;
+      return age > STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS;
+    }
+    function presentationFromAttemptRow(row2, nowMs2 = Date.now()) {
+      const stage = row2.stage;
+      return {
+        authority: "turn_reducer",
+        status: turnStageToSurfaceStatus(stage),
+        stage,
+        terminalOutcome: row2.terminalOutcome ?? null,
+        terminalReason: row2.terminalReason ?? null,
+        meshId: row2.meshId,
+        taskId: row2.taskId,
+        attemptId: row2.attemptId,
+        attemptSeq: row2.attemptSeq,
+        sessionId: row2.sessionId ?? null,
+        nodeId: row2.nodeId ?? null,
+        providerType: row2.providerType ?? null,
+        acceptedAt: row2.acceptedAt ?? null,
+        deliveredAt: row2.deliveredAt ?? null,
+        consumedAt: row2.consumedAt ?? null,
+        terminalAt: row2.terminalAt ?? null,
+        updatedAt: row2.updatedAt ?? null,
+        projectionAgeMs: ageMs(nowMs2, row2.updatedAt),
+        approvalAgeMs: stage === "waiting_approval" && row2.providerSuspension?.generation === row2.generation ? ageMs(nowMs2, isoOrNull(row2.providerSuspension?.at)) : null,
+        choiceAgeMs: stage === "waiting_choice" ? ageMs(nowMs2, row2.updatedAt) : null,
+        finalizingAgeMs: stage === "finalizing" ? ageMs(nowMs2, row2.updatedAt) : null
+      };
+    }
+    function resolveTurnAttemptRow(lookup3) {
+      try {
+        const turns = MeshRuntimeStore.getInstance().turnStore();
+        const meshId = typeof lookup3.meshId === "string" && lookup3.meshId.trim() ? lookup3.meshId.trim() : null;
+        const taskId = typeof lookup3.taskId === "string" && lookup3.taskId.trim() ? lookup3.taskId.trim() : null;
+        if (meshId && taskId) {
+          const found = turns.findPresentationAttemptForTask(meshId, taskId);
+          if (found) return presentationRowFromAttempt(found.attempt, found.updatedAt);
+        }
+        const sessionId = typeof lookup3.sessionId === "string" && lookup3.sessionId.trim() ? lookup3.sessionId.trim() : null;
+        if (sessionId) {
+          const found = turns.findPresentationAttemptForSession(sessionId);
+          return found ? presentationRowFromAttempt(found.attempt, found.updatedAt) : null;
+        }
+        return null;
+      } catch {
+        return null;
+      }
+    }
+    function resolveSessionTurnPresentation(args) {
+      const nowMs2 = args.nowMs ?? Date.now();
+      const row2 = resolveTurnAttemptRow(args);
+      if (row2 && !isStaleTurnAttemptAuthority(row2, nowMs2)) {
+        const presentation = presentationFromAttemptRow(row2, nowMs2);
+        recordProjectionSource("turn_reducer");
+        observePresentationAges(presentation);
+        return presentation;
+      }
+      recordProjectionSource("provider_fsm_fallback");
+      return {
+        authority: "provider_fsm_fallback",
+        status: normalizeManagedStatus(args.providerStatus),
+        stage: null,
+        terminalOutcome: null,
+        terminalReason: null,
+        meshId: null,
+        taskId: null,
+        attemptId: null,
+        attemptSeq: null,
+        sessionId: typeof args.sessionId === "string" ? args.sessionId : null,
+        nodeId: null,
+        providerType: args.providerType ?? null,
+        acceptedAt: null,
+        deliveredAt: null,
+        consumedAt: null,
+        terminalAt: null,
+        updatedAt: null,
+        projectionAgeMs: null,
+        approvalAgeMs: null,
+        choiceAgeMs: null,
+        finalizingAgeMs: null
+      };
+    }
+    function isRestartBlockingPresentation(presentation, providerBlocking) {
+      if (presentation.authority !== "turn_reducer") return providerBlocking;
+      return presentation.stage !== null && !isTerminalTurnStage(presentation.stage);
+    }
+    function getTurnPresentationMetrics() {
+      return {
+        projectionSource: { ...presentationMetrics.projectionSource },
+        maxProjectionAgeMs: presentationMetrics.maxProjectionAgeMs,
+        maxFinalizingAgeMs: presentationMetrics.maxFinalizingAgeMs,
+        maxApprovalAgeMs: presentationMetrics.maxApprovalAgeMs,
+        maxChoiceAgeMs: presentationMetrics.maxChoiceAgeMs
+      };
+    }
+    function recordProjectionSource(source2) {
+      presentationMetrics.projectionSource[source2] += 1;
+    }
+    function observePresentationAges(p) {
+      if (p.projectionAgeMs !== null) presentationMetrics.maxProjectionAgeMs = Math.max(presentationMetrics.maxProjectionAgeMs, p.projectionAgeMs);
+      if (p.finalizingAgeMs !== null) presentationMetrics.maxFinalizingAgeMs = Math.max(presentationMetrics.maxFinalizingAgeMs, p.finalizingAgeMs);
+      if (p.approvalAgeMs !== null) presentationMetrics.maxApprovalAgeMs = Math.max(presentationMetrics.maxApprovalAgeMs, p.approvalAgeMs);
+      if (p.choiceAgeMs !== null) presentationMetrics.maxChoiceAgeMs = Math.max(presentationMetrics.maxChoiceAgeMs, p.choiceAgeMs);
+    }
+    var TURN_TERMINAL_STAGES;
+    var STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS;
+    var STALE_GATED_STAGES;
+    var FUTURE_UPDATED_AT_SKEW_TOLERANCE_MS;
+    var presentationMetrics;
+    var init_mesh_turn_presentation = __esm2({
+      "src/mesh/mesh-turn-presentation.ts"() {
+        "use strict";
+        init_mesh_runtime_store();
+        init_normalize();
+        TURN_TERMINAL_STAGES = /* @__PURE__ */ new Set(["completed", "blocked", "failed", "cancelled"]);
+        STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS = 30 * 60 * 1e3;
+        STALE_GATED_STAGES = /* @__PURE__ */ new Set(["generating", "consumed"]);
+        FUTURE_UPDATED_AT_SKEW_TOLERANCE_MS = 2e3;
+        presentationMetrics = {
+          projectionSource: { turn_reducer: 0, provider_fsm_fallback: 0 },
+          maxProjectionAgeMs: 0,
+          maxFinalizingAgeMs: 0,
+          maxApprovalAgeMs: 0,
+          maxChoiceAgeMs: 0
+        };
+      }
+    });
+    function projectProviderApproval(approval, sessionId, providerType, waiting2 = false) {
+      if (approval === null) return null;
+      if (!approval) return waiting2 ? { source: "status_only", compatibility: "unknown", type: "unknown", evidence: "unavailable", lifecycle: "pending", modalKey: null, createdAt: null, resolvedAt: null, description: "", buttons: [], actionable: false, sessionId, providerType } : null;
+      const candidate = resolveTurnAttemptRow({ sessionId });
+      const row2 = approval.attemptId && candidate?.attemptId !== approval.attemptId || approval.type === "provider_setup" && !approval.attemptId && candidate && ["completed", "failed", "cancelled"].includes(candidate.stage) ? null : candidate;
+      const suspended = row2?.providerSuspension;
+      const current5 = suspended?.generation === row2?.generation && suspended?.modalKey === approval.modalKey;
+      const boundElsewhere = row2?.providerSuspension && !current5;
+      const terminal = row2 && ["completed", "failed", "cancelled"].includes(row2.stage);
+      return {
+        ...approval,
+        sessionId,
+        providerType,
+        nodeId: row2?.nodeId ?? approval.nodeId ?? null,
+        meshId: row2?.meshId ?? approval.meshId ?? null,
+        taskId: row2?.taskId ?? approval.taskId ?? null,
+        attemptId: row2?.attemptId ?? approval.attemptId ?? null,
+        generation: row2?.generation ?? approval.generation ?? null,
+        createdAt: current5 ? suspended.at : approval.createdAt,
+        resolvedAt: current5 ? suspended.resolvedAt ?? approval.resolvedAt : approval.resolvedAt,
+        lifecycle: terminal || current5 && suspended.resolvedAt !== null ? "resolved" : approval.lifecycle,
+        actionable: approval.actionable && !boundElsewhere && !terminal && !(current5 && suspended.resolvedAt !== null)
+      };
+    }
+    function matchesProviderApprovalTarget(approval, target2) {
+      return !!approval && approval.source === "provider_modal" && approval.type === "tool_permission" && approval.evidence === "live" && approval.lifecycle === "pending" && approval.actionable && !!approval.modalKey && Array.isArray(approval.buttons) && approval.buttons.some((button) => typeof button === "string" && button.trim()) && approval.modalKey === target2.modalKey && (approval.attemptId ?? null) === target2.attemptId && (approval.generation ?? null) === target2.generation;
+    }
+    var init_provider_approval = __esm2({
+      "src/status/provider-approval.ts"() {
+        "use strict";
+        init_mesh_turn_presentation();
+      }
+    });
+    function awaitWithWarmupDeadline(work, opts) {
+      const pollMs = Math.max(1, Math.min(opts.pollIntervalMs ?? 200, opts.connectTimeoutMs));
+      return new Promise((resolve76, reject) => {
+        let done = false;
+        let poll2;
+        let responseTimer;
+        const startedAt = Date.now();
+        const cleanup = () => {
+          if (poll2) {
+            clearInterval(poll2);
+            poll2 = void 0;
+          }
+          if (responseTimer) {
+            clearTimeout(responseTimer);
+            responseTimer = void 0;
+          }
+        };
+        const settle2 = (fn) => {
+          if (done) return;
+          done = true;
+          cleanup();
+          fn();
+        };
+        const armResponse = () => {
+          if (responseTimer || done) return;
+          responseTimer = setTimeout(
+            () => settle2(() => reject(new Error("timeout"))),
+            opts.responseTimeoutMs
+          );
+          if (typeof responseTimer.unref === "function") responseTimer.unref();
+        };
+        const onPoll = () => {
+          if (done) return;
+          if (opts.isConnected()) {
+            if (poll2) {
+              clearInterval(poll2);
+              poll2 = void 0;
+            }
+            armResponse();
+            return;
+          }
+          if (Date.now() - startedAt >= opts.connectTimeoutMs) {
+            settle2(() => reject(new Error("timeout")));
+          }
+        };
+        if (opts.isConnected()) {
+          armResponse();
+        } else {
+          poll2 = setInterval(onPoll, pollMs);
+          if (typeof poll2.unref === "function") poll2.unref();
+        }
+        work.then(
+          (val) => settle2(() => resolve76(val)),
+          (err2) => settle2(() => reject(err2))
+        );
+      });
+    }
+    function readWarmupConnectionState(connection) {
+      const state2 = connection?.state;
+      return typeof state2 === "string" && state2.length > 0 ? state2 : void 0;
+    }
+    function resolveWarmupDeadlineOpts(opts) {
+      const { getConnection, daemonId, connectTimeoutMs, responseTimeoutMs } = opts;
+      if (getConnection) {
+        return {
+          isConnected: () => readWarmupConnectionState(getConnection(daemonId)) === "connected",
+          connectTimeoutMs,
+          responseTimeoutMs
+        };
+      }
+      opts.onMissingGetter?.(daemonId);
+      return {
+        isConnected: () => false,
+        connectTimeoutMs: connectTimeoutMs + responseTimeoutMs,
+        responseTimeoutMs
+      };
+    }
+    var init_mesh_warmup_deadline = __esm2({
+      "src/mesh/mesh-warmup-deadline.ts"() {
+        "use strict";
+      }
+    });
+    function workingDirBasename(p) {
+      return (p || "").split(/[\\/]/).filter(Boolean).pop() || "session";
+    }
+    var init_working_dir = __esm2({
+      "src/providers/working-dir.ts"() {
+        "use strict";
+      }
+    });
+    async function probeRemoteMeshGitStatus(args) {
+      if (!args.dispatchMeshCommand) return null;
+      const dispatch2 = args.dispatchMeshCommand(
+        args.daemonId,
+        "git_status",
+        withStatusProbeMarker2({ ...args.extraArgs ?? {}, workspace: args.workspace, refreshUpstream: true })
+      );
+      const remoteResult = await awaitWithWarmupDeadline(dispatch2, resolveWarmupDeadlineOpts({
+        getConnection: args.getConnection,
+        daemonId: args.daemonId,
+        connectTimeoutMs: args.connectTimeoutMs,
+        responseTimeoutMs: args.responseTimeoutMs,
+        onMissingGetter: warnMeshWarmupGetterMissingOnce
+      }));
+      const remoteGit = remoteResult?.status ?? remoteResult?.git ?? remoteResult;
+      if (!remoteGit || typeof remoteGit !== "object" || typeof remoteGit.isGitRepo !== "boolean") return null;
+      const reporterPlatform = readStringValue(remoteResult?.reporterPlatform);
+      const reporterArch = readStringValue(remoteResult?.reporterArch);
+      const reporterMachineNickname = readStringValue(remoteResult?.reporterMachineNickname);
+      const git12 = remoteGit;
+      if (reporterPlatform) git12.reporterPlatform = reporterPlatform;
+      if (reporterArch) git12.reporterArch = reporterArch;
+      if (reporterMachineNickname) git12.reporterMachineNickname = reporterMachineNickname;
+      const reporterProviderVersions = readProviderVersionsRecord(remoteResult?.reporterProviderVersions);
+      if (reporterProviderVersions) git12.reporterProviderVersions = reporterProviderVersions;
+      const reporterDaemonBuildVersion = readStringValue(remoteResult?.reporterDaemonBuildVersion);
+      if (reporterDaemonBuildVersion) git12.reporterDaemonBuildVersion = reporterDaemonBuildVersion;
+      const reporterMemberState = normalizeReportedMemberState(remoteResult?.reporterMemberState);
+      if (reporterMemberState) git12.reporterMemberState = reporterMemberState;
+      const reporterNodeFacts = normalizeMeshNodeFacts(remoteResult?.reporterNodeFacts);
+      if (reporterNodeFacts) git12.reporterNodeFacts = reporterNodeFacts;
+      return git12;
+    }
+    function readMeshConnectionState(connection) {
+      return readStringValue(connection?.state);
+    }
+    function warnMeshWarmupGetterMissingOnce(daemonId) {
+      if (meshWarmupGetterMissingWarned.has(daemonId)) return;
+      meshWarmupGetterMissingWarned.add(daemonId);
+      LOG.warn("Mesh", `Mesh peer connection getter unavailable for ${String(daemonId).slice(0, 12)}; warmup deadline degraded to the combined connect+response window (cannot observe DataChannel open). This avoids a cold-open false-timeout but loses warm/cold precision \u2014 wire getMeshPeerConnectionStatus on this daemon.`);
+    }
+    function isMeshConnectionDefinitivelyDown(connection) {
+      if (!connection) return true;
+      const state2 = readMeshConnectionState(connection);
+      return state2 === "failed" || state2 === "closed" || state2 === "disconnected";
+    }
+    async function probeRemoteMeshGitStatusWithRetry(args) {
+      if (args.getConnection && isMeshConnectionDefinitivelyDown(args.getConnection(args.daemonId))) {
+        return null;
+      }
+      for (let attempt = 0; attempt <= MESH_DIRECT_PROBE_MAX_RETRIES; attempt += 1) {
+        if (attempt > 0) {
+          const connection = args.getConnection?.(args.daemonId);
+          if (args.getConnection && readMeshConnectionState(connection) !== "connected") break;
+          if (connection) args.onConnection?.(connection);
+          await new Promise((resolve76) => setTimeout(resolve76, 250 * 2 ** (attempt - 1)));
+        }
+        try {
+          const remoteGit = await probeRemoteMeshGitStatus({
+            dispatchMeshCommand: args.dispatchMeshCommand,
+            daemonId: args.daemonId,
+            workspace: args.workspace,
+            responseTimeoutMs: attempt === 0 ? args.timeoutMs : args.retryTimeoutMs ?? args.timeoutMs,
+            connectTimeoutMs: args.connectTimeoutMs ?? MESH_DIRECT_PROBE_CONNECT_TIMEOUT_MS,
+            getConnection: args.getConnection,
+            extraArgs: args.extraArgs
+          });
+          if (remoteGit) return remoteGit;
+        } catch {
+        }
+      }
+      return null;
+    }
+    async function hydrateInlineMeshDirectTruth(args) {
+      const nodes = Array.isArray(args.mesh?.nodes) ? args.mesh.nodes : [];
+      if (!nodes.length) {
+        return {
+          directEvidenceCount: 0,
+          localConfirmedCount: 0,
+          peerAttemptedCount: 0,
+          peerConfirmedCount: 0,
+          standingEvidenceCount: 0,
+          unavailableNodeIds: [],
+          deadNodeIds: []
+        };
+      }
+      const selectedCoordinatorNodeId = readStringValue(
+        args.mesh?.coordinator?.preferredNodeId,
+        nodes[0]?.id,
+        nodes[0]?.nodeId
+      );
+      let localConfirmedCount = 0;
+      let standingEvidenceCount = 0;
+      const unavailableNodeIds = [];
+      const deadNodeIds = [];
+      const classifyNode = async (nodeIndex, node) => {
+        const nodeId = normalizeMeshNodeId(node) || `node_${nodeIndex}`;
+        const workspace = readStringValue(node?.workspace);
+        const daemonId = readStringValue(node?.daemonId);
+        const isSelfNode = Boolean(
+          nodeId && selectedCoordinatorNodeId && daemonIdsEquivalent5(nodeId, selectedCoordinatorNodeId)
+        ) || Boolean(
+          daemonId && (daemonIdsEquivalent5(daemonId, args.localMachineId) || daemonIdsEquivalent5(daemonId, args.statusInstanceId))
+        ) || Boolean(args.meshSource !== "local_config" && nodeIndex === 0);
+        const isSelfDaemonNode = Boolean(
+          daemonId && (daemonIdsEquivalent5(daemonId, args.localMachineId) || daemonIdsEquivalent5(daemonId, args.statusInstanceId))
+        );
+        if ((isSelfNode || isSelfDaemonNode) && isDeadLocalWorktreeNode(node)) {
+          return { kind: "dead", nodeId };
+        }
+        if (!workspace) {
+          return !isSelfNode && daemonId ? { kind: "unavailable", nodeId } : { kind: "skip" };
+        }
+        if (fs18.existsSync(workspace)) {
+          try {
+            const runLocalProbe = () => getGitRepoStatus(workspace, { timeoutMs: 1e4, refreshUpstream: true });
+            const localGit = args.probeCache ? await args.probeCache.probeLocal(workspace, runLocalProbe) : await runLocalProbe();
+            if (localGit?.isGitRepo) {
+              const reporter = recordInlineMeshDirectGitTruth(node, localGit, "selected_coordinator_local_git");
+              persistNodeReporterPlatform(args.meshSource, args.mesh, nodeId, reporter);
+              return { kind: "local" };
+            }
+          } catch {
+          }
+        }
+        const standingGit = buildInlineMeshTransitGitStatus(node);
+        if (standingGit) {
+          return { kind: "standing" };
+        }
+        return { kind: "skip" };
+      };
+      const nodeEntries = [...nodes.entries()];
+      const settledResults = await Promise.allSettled(
+        nodeEntries.map(([nodeIndex, node]) => classifyNode(nodeIndex, node))
+      );
+      settledResults.forEach((settled, i) => {
+        const [nodeIndex, node] = nodeEntries[i];
+        const result = settled.status === "fulfilled" ? settled.value : (() => {
+          const nodeId = normalizeMeshNodeId(node) || `node_${nodeIndex}`;
+          const daemonId = readStringValue(node?.daemonId);
+          const isSelfNode = Boolean(
+            nodeId && selectedCoordinatorNodeId && daemonIdsEquivalent5(nodeId, selectedCoordinatorNodeId)
+          ) || Boolean(
+            daemonId && (daemonIdsEquivalent5(daemonId, args.localMachineId) || daemonIdsEquivalent5(daemonId, args.statusInstanceId))
+          );
+          return !isSelfNode && daemonId ? { kind: "unavailable", nodeId } : { kind: "skip" };
+        })();
+        switch (result.kind) {
+          case "dead":
+            deadNodeIds.push(result.nodeId);
+            break;
+          case "unavailable":
+            unavailableNodeIds.push(result.nodeId);
+            break;
+          case "local":
+            localConfirmedCount += 1;
+            break;
+          case "standing":
+            standingEvidenceCount += 1;
+            break;
+          case "skip":
+          default:
+            break;
+        }
+      });
+      return {
+        directEvidenceCount: localConfirmedCount + standingEvidenceCount,
+        localConfirmedCount,
+        // No remote peer is probed on this path (see the doc comment above).
+        peerAttemptedCount: 0,
+        peerConfirmedCount: 0,
+        standingEvidenceCount,
+        unavailableNodeIds,
+        deadNodeIds
+      };
+    }
+    var fs18;
+    var MESH_DIRECT_PROBE_TIMEOUT_MS;
+    var MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS;
+    var MESH_DIRECT_PROBE_CONNECT_TIMEOUT_MS;
+    var MESH_DIRECT_PROBE_REUSE_MS;
+    var MeshGitProbeCache;
+    var MESH_DIRECT_PROBE_MAX_RETRIES;
+    var meshWarmupGetterMissingWarned;
+    var init_mesh_node_git_probe = __esm2({
+      "src/mesh/mesh-node-git-probe.ts"() {
+        "use strict";
+        init_runtime_defaults();
+        init_dist();
+        init_mesh_warmup_deadline();
+        init_mesh_node_record_readers();
+        init_mesh_inline_mesh_cache();
+        init_logger();
+        fs18 = __toESM2(require("fs"));
+        init_git_status();
+        MESH_DIRECT_PROBE_TIMEOUT_MS = readMeshTimeoutEnvMs("MESH_DIRECT_PROBE_TIMEOUT_MS", 25e3);
+        MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS = readMeshTimeoutEnvMs("MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS", 25e3);
+        MESH_DIRECT_PROBE_CONNECT_TIMEOUT_MS = MESH_CONNECT_TIMEOUT_MS;
+        MESH_DIRECT_PROBE_REUSE_MS = readMeshTimeoutEnvMs("MESH_DIRECT_PROBE_REUSE_MS", 12e3);
+        MeshGitProbeCache = class {
+          constructor(reuseMs, now = Date.now) {
+            this.reuseMs = reuseMs;
+            this.now = now;
+          }
+          inflight = /* @__PURE__ */ new Map();
+          recent = /* @__PURE__ */ new Map();
+          async probeLocal(workspace, probe) {
+            const key6 = workspace;
+            const cached5 = this.recent.get(key6);
+            if (cached5 && this.now() - cached5.at < this.reuseMs) {
+              return cached5.value;
+            }
+            const existing = this.inflight.get(key6);
+            if (existing) return existing;
+            const pending = (async () => {
+              const result = await probe();
+              if (result) this.recent.set(key6, { at: this.now(), value: result });
+              return result;
+            })();
+            this.inflight.set(key6, pending);
+            try {
+              return await pending;
+            } finally {
+              if (this.inflight.get(key6) === pending) this.inflight.delete(key6);
+            }
+          }
+        };
+        MESH_DIRECT_PROBE_MAX_RETRIES = 2;
+        meshWarmupGetterMissingWarned = /* @__PURE__ */ new Set();
+      }
+    });
+    function readMeshNodeLabel(status, node) {
+      return readStringValue(status.nodeId, normalizeMeshNodeId(node)) ?? "unknown";
+    }
+    function buildInlineMeshBranchConvergence(args) {
+      const git12 = readObjectRecord(args.status.git);
+      const nodeLabel = readMeshNodeLabel(args.status, args.node);
+      const defaultBranch = readStringValue(args.mesh?.defaultBranch) ?? "main";
+      const branch = readStringValue(git12.branch, args.node?.worktreeBranch) ?? null;
+      const upstream = readStringValue(git12.upstream) ?? null;
+      const upstreamStatus = readStringValue(git12.upstreamStatus, git12.upstream_status) ?? (upstream ? "unchecked" : "no_upstream");
+      const ahead = readNumberValue(git12.ahead) ?? 0;
+      const behind = readNumberValue(git12.behind) ?? 0;
+      const uncommittedChanges = countGitWorktreeChanges2(git12);
+      const hasConflicts = readBooleanValue(git12.hasConflicts) ?? (Array.isArray(git12.conflictFiles) && git12.conflictFiles.length > 0);
+      const base = {
+        defaultBranch,
+        branch,
+        upstream,
+        upstreamStatus,
+        ahead,
+        behind,
+        isWorktree: args.node?.isLocalWorktree === true || args.status.isLocalWorktree === true,
+        isDefaultBranch: branch === defaultBranch
+      };
+      const isGitRepo = readBooleanValue(git12.isGitRepo);
+      const headCommit = readStringValue(git12.headCommit, git12.head);
+      if (isGitRepo === void 0 || isGitRepo === true && !readStringValue(git12.branch) && !headCommit) {
+        const worktreeGoneEarly = args.node?.isLocalWorktree === true && isGitRepo === void 0 && !!readStringValue(args.node?.workspace) && !(() => {
+          try {
+            return fs19.existsSync(readStringValue(args.node?.workspace));
+          } catch {
+            return true;
+          }
+        })();
+        if (!worktreeGoneEarly) {
+          return {
+            ...base,
+            status: "unknown",
+            needsConvergence: false,
+            reason: isGitRepo === void 0 ? "git_status_unavailable" : "branch_unknown",
+            nextStep: null
+          };
+        }
+      }
+      if (isGitRepo !== true) {
+        const ghostPath = readStringValue(args.node?.workspace);
+        const worktreeGone = args.node?.isLocalWorktree === true && !!ghostPath && !(() => {
+          try {
+            return fs19.existsSync(ghostPath);
+          } catch {
+            return true;
+          }
+        })();
+        if (worktreeGone) {
+          return {
+            ...base,
+            status: "cleanup_candidate",
+            needsConvergence: false,
+            reason: "worktree_path_missing",
+            nextStep: `The worktree directory for node '${nodeLabel}' no longer exists, so there is no git status to resolve. Remove the stale node with mesh_remove_node (or let the worktree-node retention pass reclaim it); any unmerged branch ref is preserved, never deleted.`
+          };
+        }
+        return {
+          ...base,
+          status: "blocked_review",
+          needsConvergence: true,
+          reason: "git_status_unavailable",
+          nextStep: `Resolve git status for node '${nodeLabel}' before marking the task complete.`
+        };
+      }
+      if (!branch) {
+        return {
+          ...base,
+          status: "blocked_review",
+          needsConvergence: true,
+          reason: "branch_unknown",
+          nextStep: `Inspect node '${nodeLabel}' git branch before deciding whether it is merged to ${defaultBranch}.`
+        };
+      }
+      if (hasConflicts || uncommittedChanges > 0) {
+        return {
+          ...base,
+          status: "not_mergeable",
+          needsConvergence: true,
+          reason: hasConflicts ? "conflicts_present" : "dirty_workspace",
+          nextStep: `Commit, checkpoint, or resolve node '${nodeLabel}' before any main convergence step.`
+        };
+      }
+      if (branch === defaultBranch) {
+        if (upstream && upstreamStatus !== "fresh") {
+          return {
+            ...base,
+            status: "blocked_review",
+            needsConvergence: true,
+            reason: "default_branch_upstream_unverified",
+            nextStep: `Refresh ${defaultBranch}'s upstream refs or resolve the fetch failure before declaring convergence complete for node '${nodeLabel}'.`
+          };
+        }
+        if (ahead > 0 || behind > 0) {
+          return {
+            ...base,
+            status: "blocked_review",
+            needsConvergence: true,
+            reason: "default_branch_not_even_with_upstream",
+            nextStep: `Bring ${defaultBranch} even with its upstream before declaring convergence complete.`
+          };
+        }
+        return {
+          ...base,
+          status: "merged_to_main",
+          needsConvergence: false,
+          reason: "clean_default_branch",
+          nextStep: null
+        };
+      }
+      if (args.node?.isLocalWorktree === true || args.status.isLocalWorktree === true) {
+        return {
+          ...base,
+          status: "cleanup_candidate",
+          needsConvergence: true,
+          reason: "clean_non_default_worktree_branch",
+          nextStep: `Branch '${branch}' is a clean worktree off ${defaultBranch}. Report cleanup_candidate. Merging is the next step only when the request or the done criteria include landing.`
+        };
+      }
+      if (upstream && upstreamStatus !== "fresh") {
+        return {
+          ...base,
+          status: "blocked_review",
+          needsConvergence: true,
+          reason: "feature_branch_upstream_unverified",
+          nextStep: `Refresh branch '${branch}' upstream refs or resolve the fetch failure before deciding whether it is ready to merge into ${defaultBranch}.`
+        };
+      }
+      if (!upstream || ahead > 0 || behind > 0) {
+        return {
+          ...base,
+          status: "blocked_review",
+          needsConvergence: true,
+          reason: !upstream ? "feature_branch_missing_upstream" : "feature_branch_not_even_with_upstream",
+          nextStep: `Push or reconcile branch '${branch}', then merge it into ${defaultBranch} or mark it not_mergeable with a reason.`
+        };
+      }
+      return {
+        ...base,
+        status: "pushed_feature_branch_needs_merge",
+        needsConvergence: true,
+        reason: "clean_non_default_branch",
+        nextStep: `Branch '${branch}' is even with its upstream and off ${defaultBranch}. Report pushed_feature_branch_needs_merge. Merging is the next step only when the request or the done criteria include landing.`
+      };
+    }
+    function applyInlineMeshBranchConvergence(mesh, node, status) {
+      const git12 = readObjectRecord(status.git);
+      if (Object.keys(git12).length === 0 && !status.gitProbePending) return;
+      const uncommittedChanges = countGitWorktreeChanges2(git12);
+      status.isDirty = uncommittedChanges > 0;
+      status.uncommittedChanges = uncommittedChanges;
+      status.branchConvergence = buildInlineMeshBranchConvergence({ mesh, node, status });
+      status.autoFastForwardEligible = isInlineMeshAutoFastForwardEligible(git12);
+      if (status.autoFastForwardEligible) {
+        status.suggestedAction = "auto_fast_forward";
+      } else {
+        delete status.suggestedAction;
+      }
+    }
+    var fs19;
+    var init_mesh_branch_convergence = __esm2({
+      "src/mesh/mesh-branch-convergence.ts"() {
+        "use strict";
+        fs19 = __toESM2(require("fs"));
+        init_dist();
+        init_mesh_node_identity();
+      }
+    });
+    var mesh_node_identity_exports = {};
+    __export2(mesh_node_identity_exports, {
+      MESH_DIRECT_PROBE_CONNECT_TIMEOUT_MS: () => MESH_DIRECT_PROBE_CONNECT_TIMEOUT_MS,
+      MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS: () => MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS,
+      MESH_DIRECT_PROBE_REUSE_MS: () => MESH_DIRECT_PROBE_REUSE_MS,
+      MESH_DIRECT_PROBE_TIMEOUT_MS: () => MESH_DIRECT_PROBE_TIMEOUT_MS,
+      MESH_NODE_LIVE_TRUTH_MARKER: () => MESH_NODE_LIVE_TRUTH_MARKER,
+      MeshGitProbeCache: () => MeshGitProbeCache,
+      applyCachedInlineMeshNodeStatus: () => applyCachedInlineMeshNodeStatus,
+      applyInlineMeshBranchConvergence: () => applyInlineMeshBranchConvergence,
+      awaitWithWarmupDeadline: () => awaitWithWarmupDeadline,
+      buildFreshLocalNodeFacts: () => buildFreshLocalNodeFacts,
+      buildHistoricalMeshSessions: () => buildHistoricalMeshSessions,
+      buildInlineMeshTransitGitStatus: () => buildInlineMeshTransitGitStatus,
+      buildLivePeerGitConnection: () => buildLivePeerGitConnection,
+      buildMeshNodeCheckoutLabel: () => buildMeshNodeCheckoutLabel,
+      buildMeshNodeDataFreshness: () => buildMeshNodeDataFreshness,
+      buildMeshNodeDisplayLabel: () => buildMeshNodeDisplayLabel,
+      buildMeshNodeMachineIdentity: () => buildMeshNodeMachineIdentity,
+      buildMeshNodeMachineLabel: () => buildMeshNodeMachineLabel,
+      buildMeshNodeProbeFreshness: () => buildMeshNodeProbeFreshness,
+      collectLiveMeshSessionRecords: () => collectLiveMeshSessionRecords,
+      collectMeshNodeHostedSessionIds: () => collectMeshNodeHostedSessionIds,
+      countGitWorktreeChanges: () => countGitWorktreeChanges2,
+      deriveMeshNodeHealthFromGit: () => deriveMeshNodeHealthFromGit,
+      finalizeMeshNodeStatus: () => finalizeMeshNodeStatus,
+      foldMeshNodeIdentityToCanonical: () => foldMeshNodeIdentityToCanonical,
+      hydrateInlineMeshDirectTruth: () => hydrateInlineMeshDirectTruth,
+      inlineMeshCarriesTransientNodeTruth: () => inlineMeshCarriesTransientNodeTruth,
+      isDeadLocalWorktreeNode: () => isDeadLocalWorktreeNode,
+      isInlineMeshAutoFastForwardEligible: () => isInlineMeshAutoFastForwardEligible,
+      isMeshNodeFreshEnoughToLaunch: () => isMeshNodeFreshEnoughToLaunch2,
+      isMeshNodeHealthLaunchable: () => isMeshNodeHealthLaunchable,
+      logRepoMeshStatusDebug: () => logRepoMeshStatusDebug,
+      normalizeInlineMeshNodeIdentity: () => normalizeInlineMeshNodeIdentity,
+      normalizeProviderRoles: () => normalizeProviderRoles,
+      persistNodeReporterPlatform: () => persistNodeReporterPlatform,
+      probeRemoteMeshGitStatusWithRetry: () => probeRemoteMeshGitStatusWithRetry,
+      readBooleanValue: () => readBooleanValue,
+      readCachedInlineMeshActiveSessionDetails: () => readCachedInlineMeshActiveSessionDetails,
+      readCachedInlineMeshActiveSessions: () => readCachedInlineMeshActiveSessions,
+      readInlineMeshNodeId: () => readInlineMeshNodeId,
+      readLiveMeshNodeWorkspace: () => readLiveMeshNodeWorkspace,
+      readMeshNodeDaemonId: () => readMeshNodeDaemonId,
+      readMeshNodeDisplayMachineName: () => readMeshNodeDisplayMachineName,
+      readMeshNodeHostname: () => readMeshNodeHostname,
+      readMeshNodeMachineId: () => readMeshNodeMachineId,
+      readNumberValue: () => readNumberValue,
+      readObjectRecord: () => readObjectRecord,
+      readProviderPriorityFromPolicy: () => readProviderPriorityFromPolicy,
+      readStringValue: () => readStringValue,
+      reconcileInlineMeshCache: () => reconcileInlineMeshCache,
+      recordInlineMeshDirectGitTruth: () => recordInlineMeshDirectGitTruth,
+      recordReportedNodeFacts: () => recordReportedNodeFacts,
+      resolveEffectiveMeshNodeHealth: () => resolveEffectiveMeshNodeHealth,
+      resolveMeshNodeAttribution: () => resolveMeshNodeAttribution,
+      resolveProviderTypeFromPriority: () => resolveProviderTypeFromPriority,
+      sanitizeInlineMesh: () => sanitizeInlineMesh,
+      shouldRefreshStalePendingAggregate: () => shouldRefreshStalePendingAggregate,
+      stripUntrustedInlineMeshGrantKeys: () => stripUntrustedInlineMeshGrantKeys,
+      summarizeInlineMeshBranchConvergence: () => summarizeInlineMeshBranchConvergence,
+      summarizeMeshSessionRecord: () => summarizeMeshSessionRecord,
+      summarizeRepoMeshStatusDebug: () => summarizeRepoMeshStatusDebug
+    });
+    function readProviderPriorityFromPolicy(policy) {
+      const record8 = policy && typeof policy === "object" && !Array.isArray(policy) ? policy : {};
+      const derived = deriveProviderPriorityFromSlots2(record8.slots);
+      if (derived.length) return derived;
+      const raw = record8.providerPriority;
+      if (Array.isArray(raw)) {
+        const seen2 = /* @__PURE__ */ new Set();
+        const explicit = raw.map((type2) => typeof type2 === "string" ? type2.trim() : "").filter(Boolean).filter((type2) => {
+          if (seen2.has(type2)) return false;
+          seen2.add(type2);
+          return true;
+        });
+        if (explicit.length) return explicit;
+      }
+      return [];
+    }
+    function normalizeProviderRoles(value) {
+      if (!Array.isArray(value)) return [];
+      const byType = /* @__PURE__ */ new Map();
+      for (const raw of value) {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+        const rec8 = raw;
+        const providerType = typeof rec8.providerType === "string" ? rec8.providerType.trim() : "";
+        if (!providerType) continue;
+        const entry = { providerType };
+        const maxParallel = Number(rec8.maxParallel);
+        if (Number.isFinite(maxParallel) && maxParallel >= 0) entry.maxParallel = Math.floor(maxParallel);
+        byType.set(providerType.toLowerCase(), entry);
+      }
+      return [...byType.values()];
+    }
+    function summarizeRepoMeshStatusDebug(status) {
+      const nodes = Array.isArray(status?.nodes) ? status.nodes : [];
+      return {
+        success: status?.success,
+        meshId: readStringValue(status?.meshId, status?.mesh_id) ?? null,
+        refreshedAt: readStringValue(status?.refreshedAt, status?.refreshed_at) ?? null,
+        sourceOfTruth: status?.sourceOfTruth ?? null,
+        branchConvergenceSummary: status?.branchConvergenceSummary ?? status?.branch_convergence_summary ?? null,
+        nodeCount: nodes.length,
+        nodes: nodes.map((node) => ({
+          // Status emits the id under `nodeId` (3-way input absorbed). The
+          // inline cache keeps `id` and `nodeId` equal, so this serialized form
+          // round-trips back through the cache without flipping shape.
+          nodeId: normalizeMeshNodeId(node) ?? null,
+          daemonId: readStringValue(node?.daemonId, node?.daemon_id) ?? null,
+          workspace: readStringValue(node?.workspace, node?.git?.workspace) ?? null,
+          health: readStringValue(node?.health) ?? null,
+          machineStatus: readStringValue(node?.machineStatus, node?.machine_status) ?? null,
+          connection: node?.connection && typeof node.connection === "object" ? {
+            state: readStringValue(node.connection.state) ?? null,
+            transport: readStringValue(node.connection.transport) ?? null,
+            source: readStringValue(node.connection.source) ?? null,
+            reported: readBooleanValue(node.connection.reported) ?? null
+          } : null,
+          gitProbePending: node?.gitProbePending === true,
+          launchReady: node?.launchReady === true,
+          git: summarizeGitShape(node?.git),
+          branchConvergence: node?.branchConvergence ?? node?.branch_convergence ?? null
+        }))
+      };
+    }
+    function logRepoMeshStatusDebug(event, fields) {
+      try {
+        LOG.info("MeshStatusDebug", `[RepoMeshStatusDebug] ${JSON.stringify({ event, ...fields })}`);
+      } catch {
+        LOG.info("MeshStatusDebug", `[RepoMeshStatusDebug] ${event}`);
+      }
+    }
+    function buildMeshNodeMachineLabel(node, nodeId) {
+      const machineName = readMeshNodeDisplayMachineName(node);
+      if (machineName) {
+        return machineName === readMeshNodeHostname(node) ? machineName.replace(/\.local$/i, "") : machineName;
+      }
+      const id4 = readStringValue(node.daemonId, node.daemon_id, node.machineId, node.machine_id);
+      if (id4) return id4.length > 16 ? `${id4.slice(0, 12)}\u2026` : id4;
+      return nodeId || "unidentified mesh node";
+    }
+    function buildMeshNodeCheckoutLabel(node, nodeId) {
+      const branch = readStringValue(node.worktreeBranch, node.worktree_branch);
+      if (branch) return `\u2387 ${branch}`;
+      const workspace = readStringValue(node.workspace, node.repoRoot, node.repo_root);
+      const basename38 = workspace ? workingDirBasename(workspace) : void 0;
+      return basename38 || (nodeId ? nodeId.slice(0, 8) : "node");
+    }
+    function buildMeshNodeDisplayLabel(node, nodeId, _providerPriority) {
+      return buildMeshNodeMachineLabel(node, nodeId);
+    }
+    function normalizeMeshHostname(value) {
+      const hostname6 = readStringValue(value);
+      if (!hostname6) return void 0;
+      return hostname6.toLowerCase().replace(/\.$/, "");
+    }
+    function readMeshNodeMachineId(node) {
+      return readStringValue(
+        node.machineId,
+        node.machine_id,
+        readObjectRecord(node.machine)?.id,
+        readObjectRecord(node.machine)?.machineId,
+        readObjectRecord(node.lastProbe)?.machineId,
+        readObjectRecord(node.last_probe)?.machine_id,
+        readObjectRecord(readObjectRecord(node.lastProbe)?.machine)?.id,
+        readObjectRecord(readObjectRecord(node.lastProbe)?.machine)?.machineId,
+        readObjectRecord(readObjectRecord(node.last_probe)?.machine)?.id,
+        readObjectRecord(readObjectRecord(node.last_probe)?.machine)?.machine_id
+      );
+    }
+    function readMeshNodeDaemonId(node) {
+      return readStringValue(
+        node.daemonId,
+        node.daemon_id,
+        readObjectRecord(node.machine)?.daemonId,
+        readObjectRecord(node.machine)?.daemon_id,
+        readObjectRecord(node.lastProbe)?.daemonId,
+        readObjectRecord(node.last_probe)?.daemon_id,
+        readObjectRecord(readObjectRecord(node.lastProbe)?.machine)?.daemonId,
+        readObjectRecord(readObjectRecord(node.lastProbe)?.machine)?.daemon_id,
+        readObjectRecord(readObjectRecord(node.last_probe)?.machine)?.daemonId,
+        readObjectRecord(readObjectRecord(node.last_probe)?.machine)?.daemon_id
+      );
+    }
+    function readMeshNodeHostname(node) {
+      return readStringValue(
+        node.hostname,
+        node.host,
+        node.machineHostname,
+        node.machine_hostname,
+        readObjectRecord(node.machine)?.hostname,
+        readObjectRecord(node.machine)?.host,
+        readObjectRecord(node.lastProbe)?.hostname,
+        readObjectRecord(node.last_probe)?.hostname,
+        readObjectRecord(readObjectRecord(node.lastProbe)?.machine)?.hostname,
+        readObjectRecord(readObjectRecord(node.last_probe)?.machine)?.hostname
+      );
+    }
+    function readMeshNodeDisplayMachineName(node) {
+      return readStringValue(
+        node.machineName,
+        node.machine_name,
+        node.machineLabel,
+        node.machine_label,
+        node.machineNickname,
+        node.machine_nickname,
+        node.alias,
+        readObjectRecord(node.machine)?.name,
+        readObjectRecord(node.machine)?.displayName,
+        readObjectRecord(node.machine)?.display_name,
+        readObjectRecord(node.lastProbe)?.machineName,
+        readObjectRecord(node.last_probe)?.machine_name,
+        readObjectRecord(readObjectRecord(node.lastProbe)?.machine)?.name,
+        readObjectRecord(readObjectRecord(node.last_probe)?.machine)?.name,
+        readMeshNodeHostname(node)
+      );
+    }
+    function compactMeshIdentityEvidence(value) {
+      if (!value) return void 0;
+      return value.length > 24 ? `${value.slice(0, 12)}\u2026${value.slice(-8)}` : value;
+    }
+    function buildMeshNodeMachineIdentity(node, opts) {
+      const machineId = readMeshNodeMachineId(node);
+      const daemonId = readMeshNodeDaemonId(node);
+      const hostname6 = readMeshNodeHostname(node);
+      const machineName = readMeshNodeDisplayMachineName(node);
+      const coordinatorHostname = readStringValue(opts.coordinatorHostname);
+      const machineIdMatches = Boolean(opts.localMachineId && machineId && daemonIdsEquivalent5(opts.localMachineId, machineId));
+      const daemonIdMatches = Boolean(opts.localDaemonId && daemonId && daemonIdsEquivalent5(opts.localDaemonId, daemonId));
+      const hostnameMatches = Boolean(
+        normalizeMeshHostname(hostname6) && normalizeMeshHostname(coordinatorHostname) && normalizeMeshHostname(hostname6) === normalizeMeshHostname(coordinatorHostname)
+      );
+      const sameMachine = opts.isSelfNode === true || machineIdMatches || daemonIdMatches || hostnameMatches;
+      const evidence = [];
+      for (const [label2, value] of [["machineName", machineName], ["hostname", hostname6], ["machineId", machineId], ["daemonId", daemonId]]) {
+        const compact2 = compactMeshIdentityEvidence(value);
+        if (compact2) evidence.push(`${label2}:${compact2}`);
+      }
+      const locality = sameMachine ? "same_machine" : evidence.length > 0 ? "remote_known" : "remote_or_unknown";
+      const localityReason = sameMachine ? machineIdMatches ? "matched coordinator machine id" : daemonIdMatches ? "matched coordinator daemon id" : hostnameMatches ? "matched coordinator hostname" : "selected coordinator node" : evidence.length > 0 ? `known remote/other machine identity; no local coordinator match (${evidence.join(", ")})` : "no useful machine identity evidence available";
+      return {
+        daemonId,
+        machineId,
+        hostname: hostname6,
+        machineName,
+        displayName: machineName || hostname6 || daemonId || machineId,
+        coordinatorHostname,
+        sameMachine,
+        locality,
+        localityReason,
+        identityEvidence: evidence
+      };
+    }
+    async function resolveProviderTypeFromPriority(args) {
+      if (!args.providerPriority.length) {
+        return { error: `Node '${args.nodeId}' has no providerPriority policy; pass cliType explicitly or configure node.policy.providerPriority` };
+      }
+      const failed = [];
+      for (const requestedType of args.providerPriority) {
+        const normalizedType = args.providerLoader.resolveAlias(requestedType);
+        if (!args.providerLoader.isMachineProviderEnabled(normalizedType)) {
+          failed.push(`${requestedType}: disabled`);
+          continue;
+        }
+        const detected = await detectCLI(normalizedType, args.providerLoader, { includeVersion: false });
+        args.providerLoader.setCliDetectionResults([{
+          id: normalizedType,
+          installed: !!detected,
+          path: detected?.path
+        }], false);
+        args.onStatusChange?.();
+        if (detected) return { providerType: normalizedType };
+        failed.push(`${requestedType}: not detected`);
+      }
+      return { error: `No usable provider detected for node '${args.nodeId}' from providerPriority: ${failed.join("; ")}` };
+    }
+    var init_mesh_node_identity = __esm2({
+      "src/mesh/mesh-node-identity.ts"() {
+        "use strict";
+        init_cli_detector();
+        init_dist();
+        init_logger();
+        init_mesh_warmup_deadline();
+        init_working_dir();
+        init_mesh_node_record_readers();
+        init_mesh_node_record_readers();
+        init_mesh_inline_mesh_cache();
+        init_mesh_node_freshness();
+        init_mesh_node_sessions();
+        init_mesh_node_git_probe();
+        init_mesh_branch_convergence();
+      }
+    });
+    var import_session_host_core5;
+    var init_runtime_surface = __esm2({
+      "src/session-host/runtime-surface.ts"() {
+        "use strict";
+        import_session_host_core5 = require_dist();
+      }
+    });
+    function readCachedInlineMeshActiveSessions(node) {
+      const cachedStatus = readObjectRecord(node?.cachedStatus);
+      const activeSession = readObjectRecord(cachedStatus.activeSession);
+      const fallbackSession = Object.keys(activeSession).length ? activeSession : readObjectRecord(node?.activeSession ?? node?.active_session);
+      const sessionId = readStringValue(fallbackSession.id, fallbackSession.sessionId, fallbackSession.session_id, node?.activeSessionId, node?.active_session_id, node?.sessionId, node?.session_id);
+      return sessionId ? [sessionId] : [];
+    }
+    function collectMeshNodeHostedSessionIds(node) {
+      const ids = /* @__PURE__ */ new Set();
+      for (const id4 of readCachedInlineMeshActiveSessions(node)) ids.add(id4);
+      const cachedStatus = readObjectRecord(node?.cachedStatus);
+      for (const value of [
+        node?.activeSessions,
+        node?.active_sessions,
+        node?.activeSessionDetails,
+        node?.active_session_details,
+        node?.sessions,
+        node?.sessionDetails,
+        node?.session_details,
+        readObjectRecord(node?.lastProbe).sessions,
+        readObjectRecord(node?.last_probe).sessions,
+        cachedStatus.activeSessions,
+        cachedStatus.active_sessions,
+        cachedStatus.activeSessionDetails,
+        cachedStatus.active_session_details,
+        cachedStatus.sessions
+      ]) {
+        if (!Array.isArray(value)) continue;
+        for (const item of value) {
+          if (typeof item === "string") {
+            const id5 = readStringValue(item);
+            if (id5) ids.add(id5);
+            continue;
+          }
+          const record8 = readObjectRecord(item);
+          const id4 = readStringValue(record8.id, record8.sessionId, record8.session_id, record8.runtimeSessionId, record8.instanceId);
+          if (id4) ids.add(id4);
+        }
+      }
+      return ids;
+    }
+    function resolveMeshNodeAttribution(node) {
+      const record8 = readObjectRecord(node);
+      return {
+        daemonId: readMeshNodeDaemonId(record8),
+        machineName: readMeshNodeDisplayMachineName(record8)
+      };
+    }
+    function readCachedInlineMeshActiveSessionDetails(node) {
+      const cachedStatus = readObjectRecord(node?.cachedStatus);
+      const activeSession = readObjectRecord(cachedStatus.activeSession);
+      const fallbackSession = Object.keys(activeSession).length ? activeSession : readObjectRecord(node?.activeSession ?? node?.active_session);
+      const sessionId = readStringValue(
+        fallbackSession.id,
+        fallbackSession.sessionId,
+        fallbackSession.session_id,
+        node?.activeSessionId,
+        node?.active_session_id,
+        node?.sessionId,
+        node?.session_id
+      );
+      if (!sessionId) return [];
+      return [{
+        sessionId,
+        providerType: readStringValue(
+          fallbackSession.providerType,
+          fallbackSession.provider_type,
+          fallbackSession.cliType,
+          fallbackSession.cli_type,
+          fallbackSession.provider,
+          node?.providerType,
+          node?.provider_type
+        ),
+        state: readStringValue(fallbackSession.status, fallbackSession.state, fallbackSession.lifecycle),
+        chatStatus: readStringValue(fallbackSession.chatStatus, fallbackSession.chat_status),
+        lifecycle: readStringValue(fallbackSession.lifecycle),
+        title: readStringValue(fallbackSession.title, fallbackSession.displayName, fallbackSession.display_name) ?? null,
+        workspace: readStringValue(fallbackSession.workspace, node?.workspace) ?? null,
+        role: readStringValue(fallbackSession.role) ?? null,
+        isSelfCoordinator: fallbackSession.isSelfCoordinator === true || fallbackSession.is_self_coordinator === true,
+        createdAt: readStringValue(fallbackSession.createdAt, fallbackSession.created_at) ?? null,
+        startedAt: readStringValue(fallbackSession.startedAt, fallbackSession.started_at) ?? null,
+        lastActivityAt: readStringValue(fallbackSession.lastActivityAt, fallbackSession.last_activity_at) ?? null,
+        recoveryState: readStringValue(fallbackSession.recoveryState, fallbackSession.recovery_state) ?? null,
+        // [T2] Carry the worker-computed last-message preview through the cached inline-mesh
+        // active-session entry. The worker's get_status_metadata slim now ships these
+        // (mesh-tools.ts), and this is the surface the coordinator's inbox-preview path reads
+        // (buildDaemonMetadataUpdateForSubscription → stampLocalAssistantPreviewOnCachedEntry).
+        // Without carrying them here, the coordinator could only derive the preview from a live
+        // in-process instance it doesn't host for a remote worker, so the inbox stuck on the
+        // dispatched user task. Only present when the worker reported them.
+        ...readStringValue(fallbackSession.lastMessagePreview, fallbackSession.last_message_preview) ? { lastMessagePreview: readStringValue(fallbackSession.lastMessagePreview, fallbackSession.last_message_preview) } : {},
+        ...readStringValue(fallbackSession.lastMessageRole, fallbackSession.last_message_role) ? { lastMessageRole: readStringValue(fallbackSession.lastMessageRole, fallbackSession.last_message_role) } : {},
+        ...readNumberValue(fallbackSession.lastMessageAt, fallbackSession.last_message_at) !== void 0 ? { lastMessageAt: readNumberValue(fallbackSession.lastMessageAt, fallbackSession.last_message_at) } : {},
+        // RESTORE-STICK: carry the worker's AUTHORITATIVE dashboard hide/mute state and the
+        // raw per-session user override (userHidden/userMuted) through the cached inline-mesh
+        // active-session entry. The worker's mesh_status slim (mcp-server mesh-tools-status.ts)
+        // now ships these from its own status/builders resolution, which already honors a
+        // manual restore/un-mute. Without carrying them here, the coordinator's cloud snapshot
+        // append re-derives hide/mute purely from mesh policy and overwrites the user's manual
+        // un-hide every snapshot — the restore flickered visible then re-hid.
+        ...readBooleanValue(fallbackSession.surfaceHidden) !== void 0 ? { surfaceHidden: readBooleanValue(fallbackSession.surfaceHidden) } : {},
+        ...readBooleanValue(fallbackSession.muted) !== void 0 ? { muted: readBooleanValue(fallbackSession.muted) } : {},
+        ...readBooleanValue(fallbackSession.userHidden, fallbackSession.user_hidden) !== void 0 ? { userHidden: readBooleanValue(fallbackSession.userHidden, fallbackSession.user_hidden) } : {},
+        ...readBooleanValue(fallbackSession.userMuted, fallbackSession.user_muted) !== void 0 ? { userMuted: readBooleanValue(fallbackSession.userMuted, fallbackSession.user_muted) } : {},
+        providerApproval: fallbackSession.providerApproval === void 0 ? void 0 : providerApprovalSnapshot(fallbackSession.providerApproval),
+        isCached: true
+      }];
+    }
+    function readWorkerMcpDeliveryFromMeta(meta2) {
+      const delivered = readBooleanValue(meta2.workerMcpDelivered);
+      if (delivered === void 0) return void 0;
+      const rawReason = readStringValue(meta2.workerMcpDeliveryReason);
+      const reason = rawReason && WORKER_MCP_DELIVERY_REASONS.includes(rawReason) ? rawReason : void 0;
+      return { delivered, ...reason ? { reason } : {} };
+    }
+    function summarizeMeshSessionRecord(record8) {
+      const meta2 = readObjectRecord(record8?.meta);
+      const workerMcp = readWorkerMcpDeliveryFromMeta(meta2);
+      const isSelfCoordinator = Boolean(readStringValue(meta2.meshCoordinatorFor));
+      let chatStatus = readStringValue(record8?.chatStatus, record8?.activeChat?.status, meta2.chatStatus, meta2.sessionStatus);
+      const state2 = readLiveMeshSessionState(record8);
+      const statusNote = isSelfCoordinator && (!chatStatus || chatStatus === "idle" || state2 === "idle") ? "Coordinator self status is sampled from the session host and may read idle while the coordinator is generating this response." : null;
+      const sessionId = readStringValue(record8?.sessionId) || "unknown";
+      const turn = resolveSessionTurnPresentation({
+        sessionId: sessionId === "unknown" ? void 0 : sessionId,
+        providerStatus: chatStatus || state2,
+        providerType: readStringValue(record8?.providerType) || void 0,
+        surface: "mesh_status"
+      });
+      if (turn.authority === "turn_reducer") chatStatus = turn.status;
+      const stopped = /stopped|exited|terminated|failed/.test(`${state2 || ""} ${record8?.lifecycle || ""}`);
+      const liveApproval = record8?.activeChat?.providerApproval !== void 0 ? record8.activeChat.providerApproval : record8?.providerApproval;
+      const rawApproval = liveApproval !== void 0 ? liveApproval : meta2.providerApproval === void 0 ? void 0 : providerApprovalSnapshot(meta2.providerApproval);
+      const providerApproval = stopped || record8?.activeInteractivePrompt || record8?.activeChat?.activeInteractivePrompt ? null : projectProviderApproval(readProviderDecision(
+        rawApproval,
+        /approval/.test(chatStatus || state2 || ""),
+        !!record8?.activeChat?.activeModal?.buttons?.length
+      ), sessionId, readStringValue(record8?.providerType) || "");
+      return {
+        sessionId,
+        providerType: readStringValue(record8?.providerType),
+        state: state2,
+        chatStatus,
+        providerApproval,
+        ...turn.authority === "turn_reducer" ? { turn, attemptId: turn.attemptId, turnStage: turn.stage } : {},
+        lifecycle: readStringValue(record8?.lifecycle),
+        surfaceKind: (0, import_session_host_core5.getSessionHostSurfaceKind)(record8),
+        recoveryState: readStringValue(meta2.runtimeRecoveryState) ?? null,
+        workspace: readStringValue(record8?.workspace) ?? null,
+        title: readStringValue(record8?.displayName, record8?.workspaceLabel) ?? null,
+        role: isSelfCoordinator ? "coordinator" : readStringValue(meta2.meshRole, meta2.role) ?? null,
+        isSelfCoordinator,
+        statusNote,
+        createdAt: toIsoTimestamp(record8?.createdAt ?? record8?.created_at),
+        startedAt: toIsoTimestamp(record8?.startedAt ?? record8?.started_at ?? record8?.spawnedAtMs ?? record8?.spawned_at_ms),
+        lastActivityAt: toIsoTimestamp(record8?.updatedAt ?? record8?.lastActivityAt ?? record8?.last_activity_at),
+        isCached: false,
+        ...workerMcp ? { workerMcp } : {}
+      };
+    }
+    function liveSessionRecordMatchesMeshNode(record8, meshId, nodeId, nodeWorkspace = "", nodeIsMissingLocalWorktree = false) {
+      const recordNodeId = readStringValue(record8?.meta?.meshNodeId);
+      if (!recordNodeId || !daemonIdsEquivalent5(recordNodeId, nodeId)) return false;
+      if (nodeIsMissingLocalWorktree) return false;
+      const recordWorkspace = readStringValue(record8?.workspace);
+      if (nodeWorkspace && recordWorkspace && !meshWorkspacesEquivalent(recordWorkspace, nodeWorkspace)) return false;
+      const recordMeshId = readStringValue(record8?.meta?.meshNodeFor);
+      return !recordMeshId || recordMeshId === meshId;
+    }
+    function liveSessionRecordMatchesMeshWorkspace(record8, meshId, workspace) {
+      const recordWorkspace = readStringValue(record8?.workspace);
+      if (!recordWorkspace || !workspace || !meshWorkspacesEquivalent(recordWorkspace, workspace)) return false;
+      const recordMeshId = readStringValue(record8?.meta?.meshNodeFor);
+      if (recordMeshId) return recordMeshId === meshId;
+      return record8?.meta?.launchedByCoordinator === true || !!readStringValue(record8?.meta?.meshNodeId);
+    }
+    function readLiveMeshNodeWorkspace(args) {
+      const directNodeWorkspace = args.liveSessionRecords.find((record8) => liveSessionRecordMatchesMeshNode(record8, args.meshId, args.nodeId) && readStringValue(record8?.workspace));
+      if (directNodeWorkspace) {
+        return readStringValue(directNodeWorkspace.workspace) || "";
+      }
+      if (args.allowCoordinatorSession) {
+        const coordinatorWorkspace = args.liveSessionRecords.find((record8) => readStringValue(record8?.meta?.meshCoordinatorFor) === args.meshId && readStringValue(record8?.workspace));
+        if (coordinatorWorkspace) {
+          return readStringValue(coordinatorWorkspace.workspace) || "";
+        }
+      }
+      return "";
+    }
+    function collectLiveMeshSessionRecords(args) {
+      const nodeWorkspace = readStringValue(args.node?.workspace);
+      const nodeIsMissingLocalWorktree = args.node?.isLocalWorktree === true && !!nodeWorkspace && !fs20.existsSync(nodeWorkspace);
+      const matches = args.liveSessionRecords.filter((record8) => {
+        const recordNodeId = readStringValue(record8?.meta?.meshNodeId);
+        if (recordNodeId && !daemonIdsEquivalent5(recordNodeId, args.nodeId)) return false;
+        if (liveSessionRecordMatchesMeshNode(record8, args.meshId, args.nodeId, nodeWorkspace || "", nodeIsMissingLocalWorktree)) return true;
+        if (nodeIsMissingLocalWorktree) return false;
+        return !!nodeWorkspace && liveSessionRecordMatchesMeshWorkspace(record8, args.meshId, nodeWorkspace);
+      });
+      if (args.allowCoordinatorSession) {
+        for (const record8 of args.liveSessionRecords) {
+          if (readStringValue(record8?.meta?.meshCoordinatorFor) !== args.meshId) continue;
+          const sessionId = readStringValue(record8?.sessionId);
+          if (sessionId && matches.some((entry) => sessionIdsEquivalent(readStringValue(entry?.sessionId), sessionId))) continue;
+          matches.push(record8);
+        }
+      }
+      return matches;
+    }
+    function buildHistoricalMeshSessions(args) {
+      const liveNodeIds = /* @__PURE__ */ new Set();
+      const liveWorkspaces = /* @__PURE__ */ new Set();
+      const missingLocalWorktreeNodeIds = /* @__PURE__ */ new Set();
+      for (const node of args.nodes || []) {
+        const nodeId = normalizeMeshNodeId(node);
+        const workspace = readStringValue(node?.workspace);
+        if (nodeId) liveNodeIds.add(nodeId);
+        if (workspace) liveWorkspaces.add(workspace);
+        if (nodeId && node?.isLocalWorktree === true && workspace && !fs20.existsSync(workspace)) {
+          missingLocalWorktreeNodeIds.add(nodeId);
+        }
+      }
+      const sessions = [];
+      for (const record8 of args.liveSessionRecords || []) {
+        const meta2 = readObjectRecord(record8?.meta);
+        const recordMeshId = readStringValue(meta2.meshNodeFor, meta2.meshCoordinatorFor);
+        if (recordMeshId !== args.meshId) continue;
+        const recordNodeId = readStringValue(meta2.meshNodeId);
+        const workspace = readStringValue(record8?.workspace);
+        const removedNode = !!recordNodeId && (!liveNodeIds.has(recordNodeId) || missingLocalWorktreeNodeIds.has(recordNodeId));
+        const orphanedWorkspace = !!workspace && !liveWorkspaces.has(workspace) && meta2.meshCoordinatorFor !== args.meshId;
+        if (!removedNode && !orphanedWorkspace) continue;
+        sessions.push({
+          ...summarizeMeshSessionRecord(record8),
+          classification: removedNode ? "removedNode" : "orphanedSession",
+          historical: true,
+          meshNodeId: recordNodeId || null,
+          reason: removedNode ? "Session is tagged to a mesh node that is no longer in live membership." : "Session workspace is no longer attached to a live mesh node."
+        });
+      }
+      if (sessions.length === 0) return void 0;
+      return {
+        count: sessions.length,
+        sessions: sessions.slice(0, 5),
+        instruction: "These sessions are separated from normal node activeSessions because their mesh node/workspace is no longer live. Use mesh_cleanup_sessions only if cleanup is intended."
+      };
+    }
+    function readLiveMeshSessionState(record8) {
+      return readStringValue(
+        record8?.meta?.sessionStatus,
+        record8?.meta?.status,
+        record8?.meta?.providerStatus,
+        record8?.status,
+        record8?.state,
+        record8?.lifecycle
+      );
+    }
+    var fs20;
+    var init_mesh_node_sessions = __esm2({
+      "src/mesh/mesh-node-sessions.ts"() {
+        "use strict";
+        init_dist();
+        init_provider_approval();
+        init_mesh_node_record_readers();
+        init_mesh_node_identity();
+        init_mesh_node_record_readers();
+        init_worker_mcp_isolation();
+        init_mesh_turn_presentation();
+        init_runtime_surface();
+        init_dist();
+        fs20 = __toESM2(require("fs"));
+      }
+    });
+    function readMeshNodeLinkPresence(connection) {
+      const record8 = readRecord2(connection);
+      if (record8.linkIsPresence !== true || record8.source !== "mesh_peer_status") return null;
+      return record8.state === "connected" ? "online" : "offline";
+    }
+    function applyMeshNodeLinkPresence(status) {
+      const presence = readMeshNodeLinkPresence(status.connection);
+      if (!presence) return null;
+      status.machineStatus = presence;
+      if (presence === "offline") {
+        status.health = "offline";
+        status.launchReady = false;
+      }
+      return presence;
+    }
+    var init_mesh_node_link_presence = __esm2({
+      "src/mesh/mesh-node-link-presence.ts"() {
+        "use strict";
+        init_dist();
+      }
+    });
+    function hasGitWorktreeChanges(git12) {
+      return countGitWorktreeChanges2(git12) > 0;
+    }
+    function countGitWorktreeChanges2(git12) {
+      if (!git12) return 0;
+      return Number(git12.staged || 0) + Number(git12.modified || 0) + Number(git12.untracked || 0) + Number(git12.deleted || 0) + Number(git12.renamed || 0);
+    }
+    function getGitSubmoduleDriftState(git12) {
+      const submodules = Array.isArray(git12?.submodules) ? git12.submodules : [];
+      let dirty = false;
+      let outOfSync = false;
+      for (const entry of submodules) {
+        const submodule = readObjectRecord(entry);
+        if (readBooleanValue(submodule.dirty) === true) dirty = true;
+        if (readBooleanValue(submodule.outOfSync) === true || !!readStringValue(submodule.error)) outOfSync = true;
+      }
+      return { dirty, outOfSync };
+    }
+    function isInlineMeshAutoFastForwardEligible(git12) {
+      if (!git12) return false;
+      if (readBooleanValue(git12.isGitRepo) !== true) return false;
+      if (!readStringValue(git12.branch)) return false;
+      if (!readStringValue(git12.upstream)) return false;
+      const upstreamStatus = readStringValue(git12.upstreamStatus, git12.upstream_status);
+      if (upstreamStatus !== "fresh") return false;
+      if ((readNumberValue(git12.ahead) ?? 0) !== 0) return false;
+      if ((readNumberValue(git12.behind) ?? 0) <= 0) return false;
+      const hasConflicts = readBooleanValue(git12.hasConflicts) ?? (Array.isArray(git12.conflictFiles) && git12.conflictFiles.length > 0);
+      if (hasConflicts) return false;
+      if ((readNumberValue(git12.stashCount, git12.stash_count) ?? 0) > 0) return false;
+      const submoduleDrift = getGitSubmoduleDriftState(git12);
+      if (submoduleDrift.dirty || submoduleDrift.outOfSync) return false;
+      const dirty = readBooleanValue(git12.dirty) ?? countGitWorktreeChanges2(git12) > 0;
+      return dirty !== true && countGitWorktreeChanges2(git12) === 0;
+    }
+    function deriveMeshNodeHealthFromGit(git12) {
+      if (!git12 || readBooleanValue(git12.isGitRepo) === false) return "degraded";
+      const branch = readStringValue(git12.branch);
+      if (!branch) return "degraded";
+      const submoduleDrift = getGitSubmoduleDriftState(git12);
+      if (submoduleDrift.outOfSync) return "degraded";
+      if (submoduleDrift.dirty || hasGitWorktreeChanges(git12)) return "dirty";
+      return "online";
+    }
+    function resolveEffectiveMeshNodeHealth(node) {
+      const explicit = (readStringValue(node?.health) ?? "").toLowerCase();
+      if (explicit) return explicit;
+      const cachedStatus = readObjectRecord(node?.cachedStatus);
+      const cachedHealth = (readStringValue(cachedStatus.health) ?? "").toLowerCase();
+      if (cachedHealth) return cachedHealth;
+      const git12 = readObjectRecord(node?.git);
+      if (Object.keys(git12).length > 0) return deriveMeshNodeHealthFromGit(git12).toLowerCase();
+      const cachedGit = readObjectRecord(cachedStatus.git);
+      if (Object.keys(cachedGit).length > 0) return deriveMeshNodeHealthFromGit(cachedGit).toLowerCase();
+      return "unknown";
+    }
+    function isMeshNodeHealthLaunchable(node) {
+      const health = resolveEffectiveMeshNodeHealth(node);
+      return health === "online" || health === "unknown";
+    }
+    function resolveEffectiveNodeGit(node) {
+      const git12 = readObjectRecord(node?.git);
+      if (Object.keys(git12).length > 0) return git12;
+      const cachedStatus = readObjectRecord(node?.cachedStatus);
+      return readObjectRecord(cachedStatus.git);
+    }
+    function isMeshNodeFreshEnoughToLaunch2(node, opts) {
+      const git12 = resolveEffectiveNodeGit(node);
+      if (Object.keys(git12).length === 0) return true;
+      if (readBooleanValue(git12.isGitRepo) === false) return true;
+      const submoduleDrift = getGitSubmoduleDriftState(git12);
+      if (submoduleDrift.outOfSync) return false;
+      const behind = readNumberValue(git12.behind);
+      if (behind === void 0) return true;
+      const maxBehind = Number.isFinite(opts?.maxBehind) && opts?.maxBehind >= 0 ? Math.floor(opts.maxBehind) : 0;
+      return behind <= maxBehind;
+    }
+    function summarizeInlineMeshBranchConvergence(nodes) {
+      const followUps = nodes.filter((node) => {
+        if (readObjectRecord(node.branchConvergence).needsConvergence !== true) return false;
+        const workspace = typeof node.workspace === "string" ? node.workspace : "";
+        if (workspace && !fs21.existsSync(workspace)) return false;
+        return true;
+      }).map((node) => {
+        const convergence = readObjectRecord(node.branchConvergence);
+        return {
+          nodeId: node.nodeId,
+          workspace: node.workspace,
+          branch: convergence.branch,
+          status: convergence.status,
+          reason: convergence.reason,
+          nextStep: convergence.nextStep
+        };
+      });
+      return {
+        needsFollowUp: followUps.length > 0,
+        unresolvedCount: followUps.length,
+        requiredFinalStates: ["merged_to_main", "pushed_feature_branch_needs_merge", "blocked_review", "cleanup_candidate", "not_mergeable"],
+        followUps
+      };
+    }
+    function synthesizeMeshNodeFreshnessFromConnection(status) {
+      const connection = readObjectRecord(status.connection);
+      const connectionFreshAt = toIsoTimestamp(connection.lastCommandAt ?? connection.lastConnectedAt ?? connection.lastStateChangeAt);
+      const git12 = readObjectRecord(status.git);
+      const gitCheckedAt = toIsoTimestamp(git12.lastCheckedAt);
+      if (!status.lastSeenAt && connectionFreshAt) status.lastSeenAt = connectionFreshAt;
+      if (!status.updatedAt && (gitCheckedAt || connectionFreshAt)) {
+        status.updatedAt = gitCheckedAt ?? connectionFreshAt;
+      }
+    }
+    function classifyMeshNodeStaleness(dataSource, ageMs2) {
+      if (dataSource === "self" || dataSource === "live") return "fresh";
+      if (ageMs2 === null) return "unknown";
+      if (ageMs2 < MESH_FRESHNESS_FRESH_MS) return "fresh";
+      if (ageMs2 < MESH_FRESHNESS_RECENT_MS) return "recent";
+      return "stale";
+    }
+    function buildMeshNodeDataFreshness(args) {
+      const { status, node, isSelfNode, daemonId, liveTruthProbed, directTruthUnavailable } = args;
+      const now = args.now ?? Date.now;
+      const connection = readObjectRecord(status.connection);
+      const connectionState = readStringValue(connection.state);
+      const directPeerTruthSatisfied = readBooleanValue(connection.directPeerTruthSatisfied);
+      const git12 = readObjectRecord(status.git);
+      const hasGit = readBooleanValue(git12.isGitRepo) === true || !!readStringValue(git12.branch, git12.headCommit, git12.head, git12.upstream);
+      const connectionFreshAt = toIsoTimestamp(connection.lastCommandAt ?? connection.lastConnectedAt ?? connection.lastStateChangeAt);
+      const liveGitCheckedAt = liveTruthProbed ? toIsoTimestamp(git12.lastCheckedAt) : null;
+      const heldGit = readObjectRecord(node?.lastGit ?? node?.last_git);
+      const heldCheckedAt = toIsoTimestamp(heldGit.checkedAt ?? heldGit.checked_at);
+      const cachedStatus = readObjectRecord(node?.cachedStatus);
+      const cachedGitCheckedAt = toIsoTimestamp(readObjectRecord(cachedStatus.git).lastCheckedAt);
+      const lastProbeAt = liveGitCheckedAt ?? heldCheckedAt ?? cachedGitCheckedAt ?? toIsoTimestamp(git12.lastCheckedAt) ?? connectionFreshAt ?? toIsoTimestamp(status.updatedAt) ?? toIsoTimestamp(status.lastSeenAt);
+      const connectionReachable = connectionState === "connected" ? true : !connectionState || connectionState === "unknown" || connectionState === "connecting" ? connectionState === "connecting" ? true : null : false;
+      let dataSource;
+      let reachable;
+      if (isSelfNode) {
+        dataSource = "self";
+        reachable = true;
+      } else if (liveTruthProbed) {
+        dataSource = "live";
+        reachable = true;
+      } else if (readBooleanValue(status.gitProbePending) === true) {
+        dataSource = "pending";
+        reachable = connectionReachable;
+      } else if (hasGit) {
+        dataSource = "cached";
+        reachable = directTruthUnavailable ? false : connectionReachable;
+      } else if (directTruthUnavailable) {
+        dataSource = "unreachable";
+        reachable = false;
+      } else if (!daemonId) {
+        dataSource = "unconfigured";
+        reachable = null;
+      } else if (connectionState === "connected") {
+        dataSource = "empty";
+        reachable = true;
+      } else {
+        dataSource = "unreachable";
+        reachable = false;
+      }
+      const probeOk = dataSource === "live" || dataSource === "self";
+      let ageMs2 = null;
+      if (lastProbeAt) {
+        const parsed = Date.parse(lastProbeAt);
+        if (Number.isFinite(parsed)) ageMs2 = Math.max(0, now() - parsed);
+      }
+      const staleness = classifyMeshNodeStaleness(dataSource, ageMs2);
+      return {
+        dataSource,
+        probeOk,
+        reachable,
+        directPeerTruthSatisfied: isSelfNode || liveTruthProbed ? true : directPeerTruthSatisfied ?? false,
+        projection: dataSource === "cached" ? "cached" : "live_or_absent",
+        lastProbeAt: lastProbeAt ?? null,
+        ageMs: ageMs2,
+        staleness
+      };
+    }
+    function buildMeshNodeProbeFreshness(args) {
+      const { git: git12, liveTruthProbed, isSelfNode, daemonId, node, now } = args;
+      const status = {
+        git: git12,
+        connection: { state: liveTruthProbed ? "connected" : "disconnected" }
+      };
+      if (liveTruthProbed) status[MESH_NODE_LIVE_TRUTH_MARKER] = true;
+      return buildMeshNodeDataFreshness({
+        status,
+        node,
+        isSelfNode,
+        daemonId,
+        liveTruthProbed,
+        directTruthUnavailable: !liveTruthProbed && !!daemonId,
+        now
+      });
+    }
+    function finalizeMeshNodeStatus(args) {
+      const { status, node, daemonId, isSelfNode, directTruthUnavailable } = args;
+      if (!readStringValue(status.machineStatus)) {
+        const cachedStatus = readObjectRecord(node?.cachedStatus);
+        const machineStatus = readStringValue(cachedStatus.machineStatus, cachedStatus.machine_status, node?.machineStatus);
+        if (machineStatus) status.machineStatus = machineStatus;
+      }
+      applyMeshNodeLinkPresence(status);
+      synthesizeMeshNodeFreshnessFromConnection(status);
+      const liveTruthProbed = readBooleanValue(status[MESH_NODE_LIVE_TRUTH_MARKER]) === true;
+      delete status[MESH_NODE_LIVE_TRUTH_MARKER];
+      status.dataFreshness = buildMeshNodeDataFreshness({
+        status,
+        node,
+        isSelfNode,
+        daemonId,
+        liveTruthProbed,
+        directTruthUnavailable
+      });
+      const gitForBuildLag = readObjectRecord(status.git);
+      if (gitForBuildLag.daemonBuildBehind && typeof gitForBuildLag.daemonBuildBehind === "object") {
+        status.staleDaemonBuild = gitForBuildLag.daemonBuildBehind;
+      }
+      const bootstrap = readObjectRecord(node?.worktreeBootstrap);
+      if (node?.isLocalWorktree && readStringValue(bootstrap.status)) {
+        status.worktreeBootstrap = bootstrap;
+        if (bootstrap.status === "failed" && bootstrap.required !== false) {
+          status.launchReady = false;
+          status.launchBlockedReason = "worktree_bootstrap_failed";
+          status.launchBlockedMessage = readStringValue(bootstrap.error) || "Required worktree bootstrap failed; resolve it before launching an agent into this node.";
+          status.recoveryHint = "Run mesh_retry_node_bootstrap(node_id) to retry";
+          return;
+        }
+        if (bootstrap.status === "running" && bootstrap.required !== false) {
+          if (!(isWorktreeBootstrapStaleRunning(node, Date.now()) || isRemoteWorktreeBootstrapStaleRunning(node, Date.now()))) {
+            status.launchReady = false;
+            status.launchBlockedReason = "worktree_bootstrap_running";
+            status.launchBlockedMessage = "Required worktree bootstrap is still running; wait for it to finish before launching an agent into this node.";
+            return;
+          }
+        }
+      }
+      const connectionState = readStringValue(readObjectRecord(status.connection).state);
+      status.launchReady = !!daemonId && (readStringValue(status.machineStatus) === "online" || connectionState === "connected" || isSelfNode);
+    }
+    function applyCachedInlineMeshNodeStatus(status, node, options) {
+      const cachedStatus = readObjectRecord(node?.cachedStatus);
+      const liveGit = buildInlineMeshTransitGitStatus(node);
+      const git12 = options?.skipGit ? void 0 : liveGit ?? buildCachedInlineMeshGitStatus(node);
+      const error = options?.skipError ? void 0 : liveGit ? void 0 : readStringValue(cachedStatus.error, node?.error);
+      const health = options?.skipHealth ? void 0 : liveGit ? void 0 : readStringValue(cachedStatus.health, node?.health);
+      const machineStatus = readStringValue(cachedStatus.machineStatus, node?.machineStatus);
+      const lastSeenAt = toIsoTimestamp(cachedStatus.lastSeenAt ?? cachedStatus.last_seen_at ?? node?.lastSeenAt ?? node?.last_seen_at);
+      const updatedAt = toIsoTimestamp(cachedStatus.updatedAt ?? cachedStatus.updated_at ?? node?.updatedAt ?? node?.updated_at);
+      const activeSessions = readCachedInlineMeshActiveSessions(node);
+      const activeSessionDetails = readCachedInlineMeshActiveSessionDetails(node);
+      if (!git12 && !error && !health && !machineStatus && !lastSeenAt && !updatedAt && activeSessions.length === 0) return false;
+      if (git12) status.git = git12;
+      if (error) status.error = error;
+      if (machineStatus) status.machineStatus = machineStatus;
+      if (lastSeenAt) status.lastSeenAt = lastSeenAt;
+      if (updatedAt) status.updatedAt = updatedAt;
+      if (activeSessions.length > 0) status.activeSessions = activeSessions;
+      if (activeSessionDetails.length > 0) status.activeSessionDetails = activeSessionDetails;
+      if (health) {
+        status.health = health;
+        return true;
+      }
+      if (git12) {
+        status.health = deriveMeshNodeHealthFromGit(git12);
+        return true;
+      }
+      return activeSessions.length > 0 || !!machineStatus || !!lastSeenAt || !!updatedAt;
+    }
+    var fs21;
+    var MESH_NODE_LIVE_TRUTH_MARKER;
+    var MESH_FRESHNESS_FRESH_MS;
+    var MESH_FRESHNESS_RECENT_MS;
+    var init_mesh_node_freshness = __esm2({
+      "src/mesh/mesh-node-freshness.ts"() {
+        "use strict";
+        init_mesh_node_record_readers();
+        init_mesh_inline_mesh_cache();
+        fs21 = __toESM2(require("fs"));
+        init_worktree_bootstrap_config();
+        init_mesh_node_sessions();
+        init_mesh_node_record_readers();
+        init_mesh_node_link_presence();
+        MESH_NODE_LIVE_TRUTH_MARKER = "__liveTruthProbed";
+        MESH_FRESHNESS_FRESH_MS = 3e4;
+        MESH_FRESHNESS_RECENT_MS = 3e5;
+      }
+    });
     function projectSlugBase(repoIdentity) {
       const parts = String(repoIdentity ?? "").replace(/\.git$/i, "").split(/[/:]+/).filter(Boolean);
       return (parts[parts.length - 1] ?? "").toLowerCase();
@@ -68764,6 +70975,9 @@ ${mergeTreeErr?.stderr || ""}`;
         MAX_PATH_CHARS = 4096;
       }
     });
+    function hasUncommittedChanges(git12) {
+      return countGitWorktreeChanges2(git12) > 0 || Array.isArray(git12.submodules) && git12.submodules.some((entry) => !!entry && typeof entry === "object" && entry.dirty === true);
+    }
     function readRuntimeHeld(response) {
       const root = readRecord2(response);
       const held = root.runtimeHeld ?? readRecord2(root.result).runtimeHeld;
@@ -68791,7 +71005,7 @@ ${mergeTreeErr?.stderr || ""}`;
       }
       return null;
     }
-    var fs17;
+    var fs222;
     var MESH_NODE_STATE_REPORT_COMMAND;
     var MESH_NODE_STATE_PUSH_CHECK_MS;
     var MESH_NODE_STATE_PUSH_HEARTBEAT_MS;
@@ -68807,8 +71021,9 @@ ${mergeTreeErr?.stderr || ""}`;
         init_dist();
         init_logger();
         init_runtime_defaults();
-        fs17 = __toESM2(require("fs"));
+        fs222 = __toESM2(require("fs"));
         init_mesh_node_git_state();
+        init_mesh_node_freshness();
         init_mesh_node_runtime_summary();
         init_mesh_remote_worktree_membership();
         MESH_NODE_STATE_REPORT_COMMAND = "mesh_node_git_report";
@@ -69052,7 +71267,7 @@ ${mergeTreeErr?.stderr || ""}`;
             const key6 = this.key(coordinator, readText(meshId), readText(nodeId));
             if (!this.subscriptions.has(key6)) {
               const path140 = readText(workspace);
-              if (!path140 || !fs17.existsSync(path140)) return false;
+              if (!path140 || !fs222.existsSync(path140)) return false;
               if (!this.selfRegister({ coordinatorDaemonId: coordinator, meshId, nodeId, workspace: path140 })) return false;
               LOG.info("MeshNodeState", `pushing state of node ${nodeId} (mesh ${meshId}) to coordinator ${coordinator.slice(0, 12)}`);
             }
@@ -69201,7 +71416,7 @@ ${mergeTreeErr?.stderr || ""}`;
             const heartbeatDue = force || sub.lastPushedAt === null || now - sub.lastPushedAt >= this.heartbeatMs;
             const upstreamRefreshEvery = force ? Math.min(MESH_NODE_STATE_NUDGE_UPSTREAM_MIN_MS, this.heartbeatMs) : this.heartbeatMs;
             const refreshUpstream = sub.lastUpstreamRefreshAt === null || now - sub.lastUpstreamRefreshAt >= upstreamRefreshEvery;
-            const reuse = !force && !heartbeatDue && !refreshUpstream && sub.gitDirty !== true && !!sub.lastGit && this.isGitWatched(sub.workspace);
+            const reuse = !force && !heartbeatDue && !refreshUpstream && sub.gitDirty !== true && !!sub.lastGit && !hasUncommittedChanges(sub.lastGit) && this.isGitWatched(sub.workspace);
             let git12 = null;
             if (reuse) {
               git12 = sub.lastGit;
@@ -69443,2217 +71658,6 @@ ${mergeTreeErr?.stderr || ""}`;
             }
           }
         };
-      }
-    });
-    function awaitWithWarmupDeadline(work, opts) {
-      const pollMs = Math.max(1, Math.min(opts.pollIntervalMs ?? 200, opts.connectTimeoutMs));
-      return new Promise((resolve76, reject) => {
-        let done = false;
-        let poll2;
-        let responseTimer;
-        const startedAt = Date.now();
-        const cleanup = () => {
-          if (poll2) {
-            clearInterval(poll2);
-            poll2 = void 0;
-          }
-          if (responseTimer) {
-            clearTimeout(responseTimer);
-            responseTimer = void 0;
-          }
-        };
-        const settle2 = (fn) => {
-          if (done) return;
-          done = true;
-          cleanup();
-          fn();
-        };
-        const armResponse = () => {
-          if (responseTimer || done) return;
-          responseTimer = setTimeout(
-            () => settle2(() => reject(new Error("timeout"))),
-            opts.responseTimeoutMs
-          );
-          if (typeof responseTimer.unref === "function") responseTimer.unref();
-        };
-        const onPoll = () => {
-          if (done) return;
-          if (opts.isConnected()) {
-            if (poll2) {
-              clearInterval(poll2);
-              poll2 = void 0;
-            }
-            armResponse();
-            return;
-          }
-          if (Date.now() - startedAt >= opts.connectTimeoutMs) {
-            settle2(() => reject(new Error("timeout")));
-          }
-        };
-        if (opts.isConnected()) {
-          armResponse();
-        } else {
-          poll2 = setInterval(onPoll, pollMs);
-          if (typeof poll2.unref === "function") poll2.unref();
-        }
-        work.then(
-          (val) => settle2(() => resolve76(val)),
-          (err2) => settle2(() => reject(err2))
-        );
-      });
-    }
-    function readWarmupConnectionState(connection) {
-      const state2 = connection?.state;
-      return typeof state2 === "string" && state2.length > 0 ? state2 : void 0;
-    }
-    function resolveWarmupDeadlineOpts(opts) {
-      const { getConnection, daemonId, connectTimeoutMs, responseTimeoutMs } = opts;
-      if (getConnection) {
-        return {
-          isConnected: () => readWarmupConnectionState(getConnection(daemonId)) === "connected",
-          connectTimeoutMs,
-          responseTimeoutMs
-        };
-      }
-      opts.onMissingGetter?.(daemonId);
-      return {
-        isConnected: () => false,
-        connectTimeoutMs: connectTimeoutMs + responseTimeoutMs,
-        responseTimeoutMs
-      };
-    }
-    var init_mesh_warmup_deadline = __esm2({
-      "src/mesh/mesh-warmup-deadline.ts"() {
-        "use strict";
-      }
-    });
-    function workingDirBasename(p) {
-      return (p || "").split(/[\\/]/).filter(Boolean).pop() || "session";
-    }
-    var init_working_dir = __esm2({
-      "src/providers/working-dir.ts"() {
-        "use strict";
-      }
-    });
-    function readObjectRecord(value) {
-      return value && typeof value === "object" && !Array.isArray(value) ? value : {};
-    }
-    function readStringValue(...values) {
-      for (const value of values) {
-        if (typeof value === "string" && value.trim()) return value.trim();
-      }
-      return void 0;
-    }
-    function readNumberValue(...values) {
-      for (const value of values) {
-        if (typeof value === "number" && Number.isFinite(value)) return value;
-      }
-      return void 0;
-    }
-    function readBooleanValue(...values) {
-      for (const value of values) {
-        if (typeof value === "boolean") return value;
-      }
-      return void 0;
-    }
-    function toIsoTimestamp(value) {
-      if (typeof value === "number" && Number.isFinite(value)) return new Date(value).toISOString();
-      const stringValue = readStringValue(value);
-      return stringValue || null;
-    }
-    var init_mesh_node_record_readers = __esm2({
-      "src/mesh/mesh-node-record-readers.ts"() {
-        "use strict";
-      }
-    });
-    function normalizeInlineMeshGitStatus(status, node, options) {
-      return normalizeGitStatus(status, readObjectRecord(node), options);
-    }
-    function buildInlineMeshTransitGitStatus(node) {
-      return pickBestTransitGitStatus(readObjectRecord(node));
-    }
-    function shouldRefreshStalePendingAggregate(snapshot, options) {
-      if (options?.requireDirectPeerTruth !== true || !Array.isArray(snapshot?.nodes)) return false;
-      return snapshot.nodes.some((node) => {
-        if (node?.gitProbePending !== true) return false;
-        const git12 = readObjectRecord(node?.git);
-        return !readBooleanValue(git12.isGitRepo) && !readStringValue(git12.branch, git12.headCommit, git12.upstream);
-      });
-    }
-    function buildLivePeerGitConnection(connection, timestamp2 = (/* @__PURE__ */ new Date()).toISOString()) {
-      const source2 = readStringValue(connection.source);
-      const transport = readStringValue(connection.transport);
-      return {
-        ...connection,
-        perspective: readStringValue(connection.perspective) ?? "selected_coordinator",
-        source: source2 && source2 !== "not_reported" ? source2 : "mesh_peer_status",
-        state: "connected",
-        transport: transport && transport !== "unknown" ? transport : "direct",
-        reported: true,
-        directPeerTruthSatisfied: true,
-        authority: "live_peer",
-        cached: false,
-        reason: "Live peer git snapshot reported by the selected coordinator.",
-        lastStateChangeAt: readStringValue(connection.lastStateChangeAt) ?? timestamp2
-      };
-    }
-    function recordInlineMeshDirectGitTruth(node, git12, source2) {
-      if (!node || typeof node !== "object" || Array.isArray(node)) {
-        return {
-          reporterPlatform: null,
-          reporterArch: null,
-          reporterMachineNickname: null,
-          reporterProviderVersions: null,
-          reporterDaemonBuildVersion: null,
-          reportedMemberState: null,
-          nodeFacts: null
-        };
-      }
-      const checkedAt = readNumberValue(git12.lastCheckedAt) ?? Date.now();
-      const updatedAt = new Date(checkedAt).toISOString();
-      const nextGit = {
-        ...git12,
-        lastCheckedAt: checkedAt
-      };
-      node.lastGit = {
-        source: source2,
-        checkedAt,
-        status: nextGit
-      };
-      node.last_git = node.lastGit;
-      node.machineStatus = "online";
-      node.updatedAt = updatedAt;
-      node.lastSeenAt = updatedAt;
-      const repoRoot = readStringValue(nextGit.repoRoot);
-      if (repoRoot && !readStringValue(node.repoRoot)) node.repoRoot = repoRoot;
-      const isLocalSource = source2 === "selected_coordinator_local_git";
-      const reporterPlatform = readStringValue(git12.reporterPlatform) ?? (isLocalSource ? process.platform : null);
-      const reporterArch = readStringValue(git12.reporterArch) ?? (isLocalSource ? process.arch : null);
-      stampNodeReporterPlatform(node, reporterPlatform, reporterArch);
-      if (reporterPlatform) node.reportedPlatform = reporterPlatform;
-      if (reporterArch) node.reportedArch = reporterArch;
-      const reporterMachineNickname = readStringValue(git12.reporterMachineNickname) ?? null;
-      if (reporterMachineNickname) node.machineNickname = reporterMachineNickname;
-      const unified = normalizeReportedMemberState(git12.reporterMemberState);
-      const reporterProviderVersions = (unified?.providerVersions ? readProviderVersionsRecord(unified.providerVersions) : null) ?? readProviderVersionsRecord(git12.reporterProviderVersions) ?? (isLocalSource ? readLocalReporterProviderVersions() : null);
-      if (reporterProviderVersions) node.reportedProviderVersions = reporterProviderVersions;
-      const reporterDaemonBuildVersion = readStringValue(unified?.daemonBuildVersion) ?? readStringValue(git12.reporterDaemonBuildVersion) ?? (isLocalSource ? readLocalReporterDaemonBuildVersion() : null) ?? null;
-      if (reporterDaemonBuildVersion) node.reportedDaemonBuildVersion = reporterDaemonBuildVersion;
-      if (!isLocalSource) {
-        const mirrored = {
-          ...reporterProviderVersions ? { providerVersions: reporterProviderVersions } : {},
-          ...reporterDaemonBuildVersion ? { daemonBuildVersion: reporterDaemonBuildVersion } : {},
-          lastReportedAt: readNumberValue(unified?.lastReportedAt) ?? checkedAt
-        };
-        if (mirrored.providerVersions || mirrored.daemonBuildVersion) {
-          node.reportedMemberState = mirrored;
-        }
-      }
-      if (!isLocalSource) {
-        const remoteFacts = normalizeMeshNodeFacts(git12.reporterNodeFacts);
-        if (remoteFacts) node.nodeFacts = selectReportedQuotaFacts(node.nodeFacts, remoteFacts, Date.now());
-      } else {
-        try {
-          let localNickname = null;
-          try {
-            localNickname = readStringValue(getMachineNickname()) ?? null;
-          } catch {
-          }
-          node.nodeFacts = buildLocalNodeFacts({
-            providerVersions: reporterProviderVersions ?? null,
-            machineNickname: localNickname
-          });
-        } catch {
-        }
-      }
-      return {
-        reporterPlatform,
-        reporterArch,
-        reporterMachineNickname,
-        reporterProviderVersions,
-        reporterDaemonBuildVersion,
-        reportedMemberState: !isLocalSource ? node.reportedMemberState ?? null : null,
-        // Bundle rides to persistence so the facts (incl. build COMMIT — the
-        // deploy-lag anchor) survive a config reload / coordinator restart.
-        nodeFacts: node.nodeFacts ?? null
-      };
-    }
-    function recordReportedNodeFacts(node, rawFacts) {
-      if (!node || typeof node !== "object" || Array.isArray(node)) return null;
-      const normalized = normalizeMeshNodeFacts(rawFacts);
-      if (!normalized) return null;
-      const facts = selectReportedQuotaFacts(node.nodeFacts, normalized, Date.now());
-      const platform10 = readStringValue(facts.platform) ?? null;
-      const arch2 = readStringValue(facts.arch) ?? null;
-      const nickname = readStringValue(facts.machineNickname) ?? null;
-      const providerVersions = readProviderVersionsRecord(facts.providerVersions);
-      const buildVersion = readStringValue(readObjectRecord(facts.daemonBuild).version) ?? null;
-      const buildCommit = readStringValue(readObjectRecord(facts.daemonBuild).commit) ?? null;
-      const previousCommit = readStringValue(readObjectRecord(readObjectRecord(node.nodeFacts).daemonBuild).commit) ?? null;
-      const quotaChanged = JSON.stringify(facts.quota) !== JSON.stringify(readObjectRecord(node.nodeFacts).quota);
-      const configChanged = platform10 && platform10 !== readStringValue(node.reportedPlatform) || arch2 && arch2 !== readStringValue(node.reportedArch) || nickname && nickname !== readStringValue(node.machineNickname) || buildVersion && buildVersion !== readStringValue(node.reportedDaemonBuildVersion) || buildCommit && buildCommit !== previousCommit || providerVersions && JSON.stringify(providerVersions) !== JSON.stringify(readProviderVersionsRecord(node.reportedProviderVersions));
-      stampNodeReporterPlatform(node, platform10, arch2);
-      if (platform10) node.reportedPlatform = platform10;
-      if (arch2) node.reportedArch = arch2;
-      if (nickname) node.machineNickname = nickname;
-      if (providerVersions) node.reportedProviderVersions = providerVersions;
-      if (buildVersion) node.reportedDaemonBuildVersion = buildVersion;
-      if (providerVersions || buildVersion) {
-        node.reportedMemberState = {
-          ...providerVersions ? { providerVersions } : {},
-          ...buildVersion ? { daemonBuildVersion: buildVersion } : {},
-          lastReportedAt: facts.reportedAt
-        };
-      }
-      node.nodeFacts = facts;
-      if (!configChanged && !quotaChanged) return null;
-      return {
-        reporterPlatform: platform10,
-        reporterArch: arch2,
-        reporterMachineNickname: nickname,
-        reporterProviderVersions: providerVersions,
-        reporterDaemonBuildVersion: buildVersion,
-        reportedMemberState: node.reportedMemberState ?? null,
-        nodeFacts: facts
-      };
-    }
-    function normalizeReportedMemberState(value) {
-      if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-      const raw = value;
-      const providerVersions = readProviderVersionsRecord(raw.providerVersions);
-      const daemonBuildVersion = readStringValue(raw.daemonBuildVersion);
-      const lastReportedAt = readNumberValue(raw.lastReportedAt);
-      if (!providerVersions && !daemonBuildVersion && lastReportedAt === void 0) {
-        return null;
-      }
-      return {
-        ...providerVersions ? { providerVersions } : {},
-        ...daemonBuildVersion ? { daemonBuildVersion } : {},
-        ...lastReportedAt !== void 0 ? { lastReportedAt } : {}
-      };
-    }
-    function readProviderVersionsRecord(value) {
-      if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-      const out = {};
-      for (const [key6, raw] of Object.entries(value)) {
-        if (typeof key6 !== "string" || !key6.trim()) continue;
-        const version2 = typeof raw === "string" ? raw.trim() : "";
-        if (!version2) continue;
-        out[key6] = version2;
-      }
-      return Object.keys(out).length > 0 ? out : null;
-    }
-    function readLocalReporterProviderVersions() {
-      try {
-        return readProviderVersionsRecord(getCachedProviderVersions());
-      } catch {
-        return null;
-      }
-    }
-    function buildFreshLocalNodeFacts() {
-      try {
-        let localNickname = null;
-        try {
-          localNickname = readStringValue(getMachineNickname()) ?? null;
-        } catch {
-        }
-        return buildLocalNodeFacts({ providerVersions: readLocalReporterProviderVersions(), machineNickname: localNickname });
-      } catch {
-        return null;
-      }
-    }
-    function readLocalReporterDaemonBuildVersion() {
-      try {
-        const version2 = getDaemonBuildInfo().version;
-        return typeof version2 === "string" && version2.trim() && version2 !== "unknown" ? version2.trim() : null;
-      } catch {
-        return null;
-      }
-    }
-    function stampNodeReporterPlatform(node, platform10, arch2) {
-      if (!node || typeof node !== "object" || Array.isArray(node)) return;
-      if (!platform10 && !arch2) return;
-      const overrides2 = node.userOverrides && typeof node.userOverrides === "object" && !Array.isArray(node.userOverrides) ? node.userOverrides : {};
-      let changed = false;
-      if (platform10 && !readStringValue(overrides2.platform)) {
-        overrides2.platform = platform10;
-        changed = true;
-      }
-      if (arch2 && !readStringValue(overrides2.arch)) {
-        overrides2.arch = arch2;
-        changed = true;
-      }
-      if (changed) node.userOverrides = overrides2;
-    }
-    function persistNodeReporterPlatform(meshSource, mesh, nodeId, reporter) {
-      if (meshSource !== "local_config") return;
-      const meshId = readStringValue(mesh?.id);
-      if (!meshId || !nodeId) return;
-      const reportedPlatform = reporter.reporterPlatform ?? void 0;
-      const reportedArch = reporter.reporterArch ?? void 0;
-      const reportedMachineNickname = reporter.reporterMachineNickname ?? void 0;
-      const reportedProviderVersions = reporter.reporterProviderVersions ?? void 0;
-      const reportedDaemonBuildVersion = reporter.reporterDaemonBuildVersion ?? void 0;
-      const reportedMemberState = reporter.reportedMemberState ?? void 0;
-      const nodeFacts = reporter.nodeFacts ?? void 0;
-      if (!reportedPlatform && !reportedArch && !reportedMachineNickname && !reportedProviderVersions && !reportedDaemonBuildVersion && !reportedMemberState && !nodeFacts) {
-        return;
-      }
-      void Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports)).then(({ updateNode: updateNode2 }) => updateNode2(meshId, nodeId, {
-        reportedPlatform,
-        reportedArch,
-        reportedMachineNickname,
-        reportedProviderVersions,
-        reportedDaemonBuildVersion,
-        reportedMemberState,
-        nodeFacts
-      })).catch(() => {
-      });
-    }
-    function buildCachedInlineMeshGitStatus(node) {
-      const liveGit = buildInlineMeshTransitGitStatus(node);
-      if (liveGit) return liveGit;
-      const cachedStatus = readObjectRecord(node?.cachedStatus);
-      const cachedGit = readObjectRecord(cachedStatus.git);
-      if (!Object.keys(cachedGit).length) return void 0;
-      return normalizeInlineMeshGitStatus(cachedGit, node);
-    }
-    function shouldDiscardCachedInlineMeshStatus(node) {
-      const cachedStatus = readObjectRecord(node?.cachedStatus);
-      if (!Object.keys(cachedStatus).length) return false;
-      const cachedGit = readObjectRecord(cachedStatus.git);
-      const workspaceError = readStringValue(cachedStatus.error, node?.error);
-      if (workspaceError && /workspace must be an existing directory/i.test(workspaceError)) return true;
-      const isGitRepo = readBooleanValue(cachedGit.isGitRepo);
-      const branch = readStringValue(cachedGit.branch);
-      const headCommit = readStringValue(cachedGit.headCommit);
-      return isGitRepo === false && !branch && !headCommit;
-    }
-    function stripInlineMeshTransientNodeState(node) {
-      if (!node || typeof node !== "object" || Array.isArray(node)) return node;
-      const {
-        cachedStatus,
-        lastGit: _lastGit,
-        last_git: _lastGitLegacy,
-        lastProbe: _lastProbe,
-        last_probe: _lastProbeLegacy,
-        error: _error,
-        health: _health,
-        machineStatus: _machineStatus,
-        lastSeenAt: _lastSeenAt,
-        last_seen_at: _lastSeenAtLegacy,
-        updatedAt: _updatedAt,
-        updated_at: _updatedAtLegacy,
-        activeSession: _activeSession,
-        active_session: _activeSessionLegacy,
-        activeSessionId: _activeSessionId,
-        active_session_id: _activeSessionIdLegacy,
-        sessionId: _sessionId,
-        session_id: _sessionIdLegacy,
-        providerType: _providerType,
-        provider_type: _providerTypeLegacy,
-        originGrantPublicKey: _originGrantPublicKey,
-        ...rest
-      } = node;
-      if (cachedStatus && !shouldDiscardCachedInlineMeshStatus(node)) {
-        return { ...rest, cachedStatus };
-      }
-      return rest;
-    }
-    function stripUntrustedInlineMeshGrantKeys(inlineMesh) {
-      if (!inlineMesh || typeof inlineMesh !== "object" || Array.isArray(inlineMesh)) return inlineMesh;
-      let changed = false;
-      let meshHost = inlineMesh.meshHost;
-      if (meshHost && typeof meshHost === "object" && !Array.isArray(meshHost) && "originGrantPublicKey" in meshHost) {
-        const { originGrantPublicKey: _ignored, ...restHost } = meshHost;
-        meshHost = restHost;
-        changed = true;
-      }
-      let nodes = inlineMesh.nodes;
-      if (Array.isArray(nodes)) {
-        let nodesChanged = false;
-        const nextNodes = nodes.map((node) => {
-          if (node && typeof node === "object" && !Array.isArray(node) && "originGrantPublicKey" in node) {
-            const { originGrantPublicKey: _ignored, ...restNode } = node;
-            nodesChanged = true;
-            return restNode;
-          }
-          return node;
-        });
-        if (nodesChanged) {
-          nodes = nextNodes;
-          changed = true;
-        }
-      }
-      if (!changed) return inlineMesh;
-      return {
-        ...inlineMesh,
-        ...meshHost !== inlineMesh.meshHost ? { meshHost } : {},
-        ...nodes !== inlineMesh.nodes ? { nodes } : {}
-      };
-    }
-    function hasInlineMeshTransientNodeState(node) {
-      if (!node || typeof node !== "object" || Array.isArray(node)) return false;
-      return "cachedStatus" in node || "lastGit" in node || "last_git" in node || "lastProbe" in node || "last_probe" in node || "error" in node || "health" in node || "machineStatus" in node || "lastSeenAt" in node || "last_seen_at" in node || "updatedAt" in node || "updated_at" in node || "activeSession" in node || "active_session" in node || "activeSessionId" in node || "active_session_id" in node || "sessionId" in node || "session_id" in node || "providerType" in node || "provider_type" in node;
-    }
-    function inlineMeshCarriesTransientNodeTruth(inlineMesh) {
-      if (!inlineMesh || typeof inlineMesh !== "object" || Array.isArray(inlineMesh)) return false;
-      if (!Array.isArray(inlineMesh.nodes) || inlineMesh.nodes.length === 0) return false;
-      return inlineMesh.nodes.some((node) => hasInlineMeshTransientNodeState(node));
-    }
-    function readInlineMeshNodeId(node) {
-      return normalizeMeshNodeId(node) ?? "";
-    }
-    function isDeadLocalWorktreeNode(node) {
-      if (node?.isLocalWorktree !== true) return false;
-      const workspace = readStringValue(node?.workspace);
-      if (!workspace) return false;
-      return !fs18.existsSync(workspace);
-    }
-    function foldMeshNodeIdentityToCanonical(node) {
-      if (!node || typeof node !== "object" || Array.isArray(node)) return node;
-      const canonical2 = normalizeMeshNodeId(node);
-      if (canonical2 === void 0) return node;
-      if (node.id === canonical2 && node.nodeId === canonical2 && node.node_id === void 0) return node;
-      node.id = canonical2;
-      node.nodeId = canonical2;
-      if ("node_id" in node) delete node.node_id;
-      return node;
-    }
-    function normalizeInlineMeshNodeIdentity(inlineMesh) {
-      if (!inlineMesh || typeof inlineMesh !== "object" || Array.isArray(inlineMesh)) return inlineMesh;
-      if (!Array.isArray(inlineMesh.nodes) || inlineMesh.nodes.length === 0) return inlineMesh;
-      for (const node of inlineMesh.nodes) foldMeshNodeIdentityToCanonical(node);
-      return inlineMesh;
-    }
-    function sanitizeInlineMesh(inlineMesh) {
-      if (!inlineMesh || typeof inlineMesh !== "object" || Array.isArray(inlineMesh)) return inlineMesh;
-      const stripped = stripUntrustedInlineMeshGrantKeys(inlineMesh);
-      if (!Array.isArray(stripped.nodes)) return stripped;
-      let changed = false;
-      const nodes = stripped.nodes.map((node) => {
-        if (!hasInlineMeshTransientNodeState(node)) return node;
-        changed = true;
-        return stripInlineMeshTransientNodeState(node);
-      });
-      if (!changed) return stripped;
-      return {
-        ...stripped,
-        nodes
-      };
-    }
-    function reconcileInlineMeshCache(rawCached, rawIncoming, removedNodeIds) {
-      const cached5 = stripUntrustedInlineMeshGrantKeys(rawCached);
-      const incoming = stripUntrustedInlineMeshGrantKeys(rawIncoming);
-      if (!cached5 || typeof cached5 !== "object" || Array.isArray(cached5)) return incoming;
-      if (!incoming || typeof incoming !== "object" || Array.isArray(incoming)) return cached5;
-      const cachedNodes = Array.isArray(cached5.nodes) ? cached5.nodes : [];
-      const incomingNodes = Array.isArray(incoming.nodes) ? incoming.nodes : [];
-      if (!cachedNodes.length || !incomingNodes.length) return { ...cached5, ...incoming };
-      const cachedUpdatedAt = Date.parse(readStringValue(cached5.updatedAt, cached5.updated_at) || "");
-      const incomingUpdatedAt = Date.parse(readStringValue(incoming.updatedAt, incoming.updated_at) || "");
-      const cacheFieldsWinOnConflict = Number.isFinite(cachedUpdatedAt) && (!Number.isFinite(incomingUpdatedAt) || cachedUpdatedAt > incomingUpdatedAt);
-      const cachedById = /* @__PURE__ */ new Map();
-      for (const node of cachedNodes) {
-        const nodeId = readInlineMeshNodeId(node);
-        if (nodeId) cachedById.set(nodeId, node);
-      }
-      const mergedIncomingIds = /* @__PURE__ */ new Set();
-      const nodes = incomingNodes.map((incomingNode) => {
-        const nodeId = readInlineMeshNodeId(incomingNode);
-        const cachedNode = nodeId ? cachedById.get(nodeId) : void 0;
-        if (nodeId) mergedIncomingIds.add(nodeId);
-        if (!cachedNode) return incomingNode;
-        if (hasInlineMeshTransientNodeState(incomingNode)) {
-          return cacheFieldsWinOnConflict ? { ...incomingNode, ...cachedNode } : { ...cachedNode, ...incomingNode };
-        }
-        return { ...stripInlineMeshTransientNodeState(cachedNode), ...incomingNode };
-      });
-      const droppedNodeIds = [];
-      for (const cachedNode of cachedNodes) {
-        const nodeId = readInlineMeshNodeId(cachedNode);
-        if (!nodeId || mergedIncomingIds.has(nodeId)) continue;
-        if (removedNodeIds?.has(nodeId)) {
-          droppedNodeIds.push(nodeId);
-          continue;
-        }
-        nodes.push(cachedNode);
-      }
-      if (droppedNodeIds.length > 0) {
-        LOG.info("Mesh", `[NodeMembershipMerge] mesh=${String(cached5.id || incoming.id || "unknown")} droppedNodeIds=${JSON.stringify(droppedNodeIds)} reason=tombstoned_removal cachedCount=${cachedNodes.length} incomingCount=${incomingNodes.length}`);
-      }
-      return {
-        ...cached5,
-        ...incoming,
-        nodes
-      };
-    }
-    var fs18;
-    var init_mesh_inline_mesh_cache = __esm2({
-      "src/mesh/mesh-inline-mesh-cache.ts"() {
-        "use strict";
-        init_dist();
-        init_mesh_node_record_readers();
-        init_config();
-        init_node_facts();
-        init_cli_detector();
-        init_build_info();
-        fs18 = __toESM2(require("fs"));
-        init_logger();
-        init_reported_snapshot();
-      }
-    });
-    function truncateString22(value, maxChars) {
-      if (value.length <= maxChars) return value;
-      if (maxChars <= 12) return value.slice(0, Math.max(0, maxChars));
-      return `${value.slice(0, maxChars - 12)}...[truncated]`;
-    }
-    function trimStructuredStrings(value, maxChars) {
-      if (typeof value === "string") return truncateString22(value, maxChars);
-      if (Array.isArray(value)) return value.map((item) => trimStructuredStrings(item, maxChars));
-      if (!value || typeof value !== "object") return value;
-      return Object.fromEntries(
-        Object.entries(value).map(([key6, nested]) => [key6, trimStructuredStrings(nested, maxChars)])
-      );
-    }
-    function estimateBytes(value) {
-      try {
-        return JSON.stringify(value).length;
-      } catch {
-        return String(value ?? "").length;
-      }
-    }
-    function trimMessageForStatus(message, stringLimit) {
-      if (!message || typeof message !== "object") return message;
-      const { _src, ...rest } = message;
-      void _src;
-      return trimStructuredStrings(rest, stringLimit);
-    }
-    function normalizeMessageTime(message) {
-      if (!message || typeof message !== "object") return message;
-      const msg = message;
-      if (msg.receivedAt == null) {
-        const fallback = msg.timestamp ?? msg.createdAt;
-        if (fallback != null) {
-          const ts2 = typeof fallback === "string" ? Date.parse(fallback) : Number(fallback);
-          if (Number.isFinite(ts2) && ts2 > 0) msg.receivedAt = ts2;
-        }
-      }
-      return msg;
-    }
-    function trimMessagesForStatus(messages, options) {
-      if (!options.includeMessages || options.messageLimit <= 0 || options.totalBytesLimit <= 0) return [];
-      if (!Array.isArray(messages) || messages.length === 0) return [];
-      const recent = messages.slice(-options.messageLimit);
-      const kept = [];
-      let totalBytes = 0;
-      for (let i = recent.length - 1; i >= 0; i -= 1) {
-        let normalized = normalizeMessageTime(trimMessageForStatus(recent[i], options.stringLimit));
-        let size = estimateBytes(normalized);
-        if (size > options.totalBytesLimit) {
-          normalized = normalizeMessageTime(trimMessageForStatus(recent[i], options.fallbackStringLimit));
-          size = estimateBytes(normalized);
-        }
-        if (kept.length > 0 && totalBytes + size > options.totalBytesLimit) {
-          continue;
-        }
-        kept.push(normalized);
-        totalBytes += size;
-      }
-      return kept.reverse();
-    }
-    function hasApprovalButtons(activeModal) {
-      return (activeModal?.buttons?.length ?? 0) > 0;
-    }
-    function normalizeManagedStatus(status, opts) {
-      if (hasApprovalButtons(opts?.activeModal)) return "waiting_approval";
-      return normalizeSessionStatus(status) ?? "idle";
-    }
-    function isManagedStatusWorking(status) {
-      return normalizeManagedStatus(status) === "generating";
-    }
-    function isManagedStatusWaiting(status, opts) {
-      return normalizeManagedStatus(status, opts) === "waiting_approval";
-    }
-    function normalizeActiveChatData(activeChat, options = FULL_STATUS_ACTIVE_CHAT_OPTIONS) {
-      if (!activeChat) return activeChat;
-      const resolvedOptions = {
-        ...FULL_STATUS_ACTIVE_CHAT_OPTIONS,
-        ...options
-      };
-      const {
-        messages: _messages,
-        ...rest
-      } = activeChat;
-      const normalized = {
-        ...rest,
-        status: normalizeManagedStatus(activeChat.status, { activeModal: activeChat.activeModal }),
-        activeModal: resolvedOptions.includeActiveModal && activeChat.activeModal ? {
-          message: truncateString22(activeChat.activeModal.message || "", STATUS_MODAL_MESSAGE_LIMIT),
-          buttons: (activeChat.activeModal.buttons || []).map(
-            (button) => truncateString22(String(button || ""), STATUS_MODAL_BUTTON_LIMIT)
-          )
-        } : null,
-        inputContent: resolvedOptions.includeInputContent && activeChat.inputContent ? truncateString22(activeChat.inputContent, 2 * 1024) : void 0
-      };
-      if (resolvedOptions.includeMessages) {
-        normalized.messages = trimMessagesForStatus(activeChat.messages, resolvedOptions);
-      }
-      return normalized;
-    }
-    var FULL_STATUS_ACTIVE_CHAT_OPTIONS;
-    var LIVE_STATUS_ACTIVE_CHAT_OPTIONS;
-    var METADATA_STATUS_ACTIVE_CHAT_OPTIONS;
-    var STATUS_MODAL_MESSAGE_LIMIT;
-    var STATUS_MODAL_BUTTON_LIMIT;
-    var init_normalize = __esm2({
-      "src/status/normalize.ts"() {
-        "use strict";
-        init_dist();
-        FULL_STATUS_ACTIVE_CHAT_OPTIONS = {
-          includeMessages: true,
-          includeInputContent: true,
-          includeActiveModal: true,
-          messageLimit: 60,
-          totalBytesLimit: 96 * 1024,
-          stringLimit: 4 * 1024,
-          fallbackStringLimit: 1024
-        };
-        LIVE_STATUS_ACTIVE_CHAT_OPTIONS = {
-          includeMessages: false,
-          includeInputContent: false,
-          includeActiveModal: false,
-          messageLimit: 0,
-          totalBytesLimit: 0,
-          stringLimit: 512,
-          fallbackStringLimit: 256
-        };
-        METADATA_STATUS_ACTIVE_CHAT_OPTIONS = {
-          ...LIVE_STATUS_ACTIVE_CHAT_OPTIONS,
-          includeActiveModal: true
-        };
-        STATUS_MODAL_MESSAGE_LIMIT = 2 * 1024;
-        STATUS_MODAL_BUTTON_LIMIT = 120;
-      }
-    });
-    function isTerminalTurnStage(stage) {
-      return TURN_TERMINAL_STAGES.has(stage);
-    }
-    function isoOrNull(ms3) {
-      return typeof ms3 === "number" && Number.isFinite(ms3) ? new Date(ms3).toISOString() : null;
-    }
-    function surfaceStageOfAttempt(attempt) {
-      const setup = attempt.data?.providerSuspension;
-      if (setup?.providerSetup && setup.generation === attempt.generation && setup.resolvedAt === null && (attempt.state === "accepted" || attempt.state === "delivered")) return "waiting_approval";
-      if (attempt.state === "suspended") return attempt.suspension === "choice" ? "waiting_choice" : "waiting_approval";
-      return attempt.state;
-    }
-    function presentationRowFromAttempt(attempt, updatedAtMs) {
-      const terminal = attempt.terminal;
-      return {
-        attemptId: attempt.attemptId,
-        meshId: attempt.meshId,
-        taskId: attempt.taskId,
-        attemptSeq: attempt.attemptNo + 1,
-        generation: attempt.generation,
-        providerSuspension: attempt.data.providerSuspension,
-        sessionId: attempt.sessionId || null,
-        nodeId: attempt.nodeId,
-        providerType: attempt.providerType,
-        stage: surfaceStageOfAttempt(attempt),
-        acceptedAt: isoOrNull(attempt.acceptedAt),
-        deliveredAt: isoOrNull(attempt.deliveredAt),
-        consumedAt: isoOrNull(attempt.consumedAt),
-        terminalOutcome: terminal ? terminal.outcome : null,
-        terminalReason: terminal ? terminal.reason : null,
-        terminalAt: terminal ? isoOrNull(terminal.at) : null,
-        updatedAt: new Date(updatedAtMs).toISOString()
-      };
-    }
-    function turnStageToSurfaceStatus(stage) {
-      switch (stage) {
-        case "accepted":
-        case "delivered":
-          return "starting";
-        case "consumed":
-        case "generating":
-          return "generating";
-        case "waiting_approval":
-          return "waiting_approval";
-        case "waiting_choice":
-          return "waiting_choice";
-        case "finalizing":
-        case "stopping":
-          return "finalizing";
-        case "completed":
-        case "blocked":
-          return "idle";
-        case "failed":
-          return "error";
-        case "cancelled":
-          return "stopped";
-      }
-    }
-    function ageMs(nowMs2, iso) {
-      const raw = rawAgeMs(nowMs2, iso);
-      return raw === null ? null : Math.max(0, raw);
-    }
-    function rawAgeMs(nowMs2, iso) {
-      if (!iso) return null;
-      const ts2 = Date.parse(iso);
-      return Number.isFinite(ts2) ? nowMs2 - ts2 : null;
-    }
-    function isStaleTurnAttemptAuthority(row2, nowMs2) {
-      if (!STALE_GATED_STAGES.has(row2.stage)) return false;
-      const age = rawAgeMs(nowMs2, row2.updatedAt ?? null);
-      if (age === null) return false;
-      if (age < -FUTURE_UPDATED_AT_SKEW_TOLERANCE_MS) return true;
-      return age > STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS;
-    }
-    function presentationFromAttemptRow(row2, nowMs2 = Date.now()) {
-      const stage = row2.stage;
-      return {
-        authority: "turn_reducer",
-        status: turnStageToSurfaceStatus(stage),
-        stage,
-        terminalOutcome: row2.terminalOutcome ?? null,
-        terminalReason: row2.terminalReason ?? null,
-        meshId: row2.meshId,
-        taskId: row2.taskId,
-        attemptId: row2.attemptId,
-        attemptSeq: row2.attemptSeq,
-        sessionId: row2.sessionId ?? null,
-        nodeId: row2.nodeId ?? null,
-        providerType: row2.providerType ?? null,
-        acceptedAt: row2.acceptedAt ?? null,
-        deliveredAt: row2.deliveredAt ?? null,
-        consumedAt: row2.consumedAt ?? null,
-        terminalAt: row2.terminalAt ?? null,
-        updatedAt: row2.updatedAt ?? null,
-        projectionAgeMs: ageMs(nowMs2, row2.updatedAt),
-        approvalAgeMs: stage === "waiting_approval" && row2.providerSuspension?.generation === row2.generation ? ageMs(nowMs2, isoOrNull(row2.providerSuspension?.at)) : null,
-        choiceAgeMs: stage === "waiting_choice" ? ageMs(nowMs2, row2.updatedAt) : null,
-        finalizingAgeMs: stage === "finalizing" ? ageMs(nowMs2, row2.updatedAt) : null
-      };
-    }
-    function resolveTurnAttemptRow(lookup3) {
-      try {
-        const turns = MeshRuntimeStore.getInstance().turnStore();
-        const meshId = typeof lookup3.meshId === "string" && lookup3.meshId.trim() ? lookup3.meshId.trim() : null;
-        const taskId = typeof lookup3.taskId === "string" && lookup3.taskId.trim() ? lookup3.taskId.trim() : null;
-        if (meshId && taskId) {
-          const found = turns.findPresentationAttemptForTask(meshId, taskId);
-          if (found) return presentationRowFromAttempt(found.attempt, found.updatedAt);
-        }
-        const sessionId = typeof lookup3.sessionId === "string" && lookup3.sessionId.trim() ? lookup3.sessionId.trim() : null;
-        if (sessionId) {
-          const found = turns.findPresentationAttemptForSession(sessionId);
-          return found ? presentationRowFromAttempt(found.attempt, found.updatedAt) : null;
-        }
-        return null;
-      } catch {
-        return null;
-      }
-    }
-    function resolveSessionTurnPresentation(args) {
-      const nowMs2 = args.nowMs ?? Date.now();
-      const row2 = resolveTurnAttemptRow(args);
-      if (row2 && !isStaleTurnAttemptAuthority(row2, nowMs2)) {
-        const presentation = presentationFromAttemptRow(row2, nowMs2);
-        recordProjectionSource("turn_reducer");
-        observePresentationAges(presentation);
-        return presentation;
-      }
-      recordProjectionSource("provider_fsm_fallback");
-      return {
-        authority: "provider_fsm_fallback",
-        status: normalizeManagedStatus(args.providerStatus),
-        stage: null,
-        terminalOutcome: null,
-        terminalReason: null,
-        meshId: null,
-        taskId: null,
-        attemptId: null,
-        attemptSeq: null,
-        sessionId: typeof args.sessionId === "string" ? args.sessionId : null,
-        nodeId: null,
-        providerType: args.providerType ?? null,
-        acceptedAt: null,
-        deliveredAt: null,
-        consumedAt: null,
-        terminalAt: null,
-        updatedAt: null,
-        projectionAgeMs: null,
-        approvalAgeMs: null,
-        choiceAgeMs: null,
-        finalizingAgeMs: null
-      };
-    }
-    function isRestartBlockingPresentation(presentation, providerBlocking) {
-      if (presentation.authority !== "turn_reducer") return providerBlocking;
-      return presentation.stage !== null && !isTerminalTurnStage(presentation.stage);
-    }
-    function getTurnPresentationMetrics() {
-      return {
-        projectionSource: { ...presentationMetrics.projectionSource },
-        maxProjectionAgeMs: presentationMetrics.maxProjectionAgeMs,
-        maxFinalizingAgeMs: presentationMetrics.maxFinalizingAgeMs,
-        maxApprovalAgeMs: presentationMetrics.maxApprovalAgeMs,
-        maxChoiceAgeMs: presentationMetrics.maxChoiceAgeMs
-      };
-    }
-    function recordProjectionSource(source2) {
-      presentationMetrics.projectionSource[source2] += 1;
-    }
-    function observePresentationAges(p) {
-      if (p.projectionAgeMs !== null) presentationMetrics.maxProjectionAgeMs = Math.max(presentationMetrics.maxProjectionAgeMs, p.projectionAgeMs);
-      if (p.finalizingAgeMs !== null) presentationMetrics.maxFinalizingAgeMs = Math.max(presentationMetrics.maxFinalizingAgeMs, p.finalizingAgeMs);
-      if (p.approvalAgeMs !== null) presentationMetrics.maxApprovalAgeMs = Math.max(presentationMetrics.maxApprovalAgeMs, p.approvalAgeMs);
-      if (p.choiceAgeMs !== null) presentationMetrics.maxChoiceAgeMs = Math.max(presentationMetrics.maxChoiceAgeMs, p.choiceAgeMs);
-    }
-    var TURN_TERMINAL_STAGES;
-    var STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS;
-    var STALE_GATED_STAGES;
-    var FUTURE_UPDATED_AT_SKEW_TOLERANCE_MS;
-    var presentationMetrics;
-    var init_mesh_turn_presentation = __esm2({
-      "src/mesh/mesh-turn-presentation.ts"() {
-        "use strict";
-        init_mesh_runtime_store();
-        init_normalize();
-        TURN_TERMINAL_STAGES = /* @__PURE__ */ new Set(["completed", "blocked", "failed", "cancelled"]);
-        STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS = 30 * 60 * 1e3;
-        STALE_GATED_STAGES = /* @__PURE__ */ new Set(["generating", "consumed"]);
-        FUTURE_UPDATED_AT_SKEW_TOLERANCE_MS = 2e3;
-        presentationMetrics = {
-          projectionSource: { turn_reducer: 0, provider_fsm_fallback: 0 },
-          maxProjectionAgeMs: 0,
-          maxFinalizingAgeMs: 0,
-          maxApprovalAgeMs: 0,
-          maxChoiceAgeMs: 0
-        };
-      }
-    });
-    function projectProviderApproval(approval, sessionId, providerType, waiting2 = false) {
-      if (approval === null) return null;
-      if (!approval) return waiting2 ? { source: "status_only", compatibility: "unknown", type: "unknown", evidence: "unavailable", lifecycle: "pending", modalKey: null, createdAt: null, resolvedAt: null, description: "", buttons: [], actionable: false, sessionId, providerType } : null;
-      const candidate = resolveTurnAttemptRow({ sessionId });
-      const row2 = approval.attemptId && candidate?.attemptId !== approval.attemptId || approval.type === "provider_setup" && !approval.attemptId && candidate && ["completed", "failed", "cancelled"].includes(candidate.stage) ? null : candidate;
-      const suspended = row2?.providerSuspension;
-      const current5 = suspended?.generation === row2?.generation && suspended?.modalKey === approval.modalKey;
-      const boundElsewhere = row2?.providerSuspension && !current5;
-      const terminal = row2 && ["completed", "failed", "cancelled"].includes(row2.stage);
-      return {
-        ...approval,
-        sessionId,
-        providerType,
-        nodeId: row2?.nodeId ?? approval.nodeId ?? null,
-        meshId: row2?.meshId ?? approval.meshId ?? null,
-        taskId: row2?.taskId ?? approval.taskId ?? null,
-        attemptId: row2?.attemptId ?? approval.attemptId ?? null,
-        generation: row2?.generation ?? approval.generation ?? null,
-        createdAt: current5 ? suspended.at : approval.createdAt,
-        resolvedAt: current5 ? suspended.resolvedAt ?? approval.resolvedAt : approval.resolvedAt,
-        lifecycle: terminal || current5 && suspended.resolvedAt !== null ? "resolved" : approval.lifecycle,
-        actionable: approval.actionable && !boundElsewhere && !terminal && !(current5 && suspended.resolvedAt !== null)
-      };
-    }
-    function matchesProviderApprovalTarget(approval, target2) {
-      return !!approval && approval.source === "provider_modal" && approval.type === "tool_permission" && approval.evidence === "live" && approval.lifecycle === "pending" && approval.actionable && !!approval.modalKey && Array.isArray(approval.buttons) && approval.buttons.some((button) => typeof button === "string" && button.trim()) && approval.modalKey === target2.modalKey && (approval.attemptId ?? null) === target2.attemptId && (approval.generation ?? null) === target2.generation;
-    }
-    var init_provider_approval = __esm2({
-      "src/status/provider-approval.ts"() {
-        "use strict";
-        init_mesh_turn_presentation();
-      }
-    });
-    var import_session_host_core5;
-    var init_runtime_surface = __esm2({
-      "src/session-host/runtime-surface.ts"() {
-        "use strict";
-        import_session_host_core5 = require_dist();
-      }
-    });
-    function readCachedInlineMeshActiveSessions(node) {
-      const cachedStatus = readObjectRecord(node?.cachedStatus);
-      const activeSession = readObjectRecord(cachedStatus.activeSession);
-      const fallbackSession = Object.keys(activeSession).length ? activeSession : readObjectRecord(node?.activeSession ?? node?.active_session);
-      const sessionId = readStringValue(fallbackSession.id, fallbackSession.sessionId, fallbackSession.session_id, node?.activeSessionId, node?.active_session_id, node?.sessionId, node?.session_id);
-      return sessionId ? [sessionId] : [];
-    }
-    function collectMeshNodeHostedSessionIds(node) {
-      const ids = /* @__PURE__ */ new Set();
-      for (const id4 of readCachedInlineMeshActiveSessions(node)) ids.add(id4);
-      const cachedStatus = readObjectRecord(node?.cachedStatus);
-      for (const value of [
-        node?.activeSessions,
-        node?.active_sessions,
-        node?.activeSessionDetails,
-        node?.active_session_details,
-        node?.sessions,
-        node?.sessionDetails,
-        node?.session_details,
-        readObjectRecord(node?.lastProbe).sessions,
-        readObjectRecord(node?.last_probe).sessions,
-        cachedStatus.activeSessions,
-        cachedStatus.active_sessions,
-        cachedStatus.activeSessionDetails,
-        cachedStatus.active_session_details,
-        cachedStatus.sessions
-      ]) {
-        if (!Array.isArray(value)) continue;
-        for (const item of value) {
-          if (typeof item === "string") {
-            const id5 = readStringValue(item);
-            if (id5) ids.add(id5);
-            continue;
-          }
-          const record8 = readObjectRecord(item);
-          const id4 = readStringValue(record8.id, record8.sessionId, record8.session_id, record8.runtimeSessionId, record8.instanceId);
-          if (id4) ids.add(id4);
-        }
-      }
-      return ids;
-    }
-    function resolveMeshNodeAttribution(node) {
-      const record8 = readObjectRecord(node);
-      return {
-        daemonId: readMeshNodeDaemonId(record8),
-        machineName: readMeshNodeDisplayMachineName(record8)
-      };
-    }
-    function readCachedInlineMeshActiveSessionDetails(node) {
-      const cachedStatus = readObjectRecord(node?.cachedStatus);
-      const activeSession = readObjectRecord(cachedStatus.activeSession);
-      const fallbackSession = Object.keys(activeSession).length ? activeSession : readObjectRecord(node?.activeSession ?? node?.active_session);
-      const sessionId = readStringValue(
-        fallbackSession.id,
-        fallbackSession.sessionId,
-        fallbackSession.session_id,
-        node?.activeSessionId,
-        node?.active_session_id,
-        node?.sessionId,
-        node?.session_id
-      );
-      if (!sessionId) return [];
-      return [{
-        sessionId,
-        providerType: readStringValue(
-          fallbackSession.providerType,
-          fallbackSession.provider_type,
-          fallbackSession.cliType,
-          fallbackSession.cli_type,
-          fallbackSession.provider,
-          node?.providerType,
-          node?.provider_type
-        ),
-        state: readStringValue(fallbackSession.status, fallbackSession.state, fallbackSession.lifecycle),
-        chatStatus: readStringValue(fallbackSession.chatStatus, fallbackSession.chat_status),
-        lifecycle: readStringValue(fallbackSession.lifecycle),
-        title: readStringValue(fallbackSession.title, fallbackSession.displayName, fallbackSession.display_name) ?? null,
-        workspace: readStringValue(fallbackSession.workspace, node?.workspace) ?? null,
-        role: readStringValue(fallbackSession.role) ?? null,
-        isSelfCoordinator: fallbackSession.isSelfCoordinator === true || fallbackSession.is_self_coordinator === true,
-        createdAt: readStringValue(fallbackSession.createdAt, fallbackSession.created_at) ?? null,
-        startedAt: readStringValue(fallbackSession.startedAt, fallbackSession.started_at) ?? null,
-        lastActivityAt: readStringValue(fallbackSession.lastActivityAt, fallbackSession.last_activity_at) ?? null,
-        recoveryState: readStringValue(fallbackSession.recoveryState, fallbackSession.recovery_state) ?? null,
-        // [T2] Carry the worker-computed last-message preview through the cached inline-mesh
-        // active-session entry. The worker's get_status_metadata slim now ships these
-        // (mesh-tools.ts), and this is the surface the coordinator's inbox-preview path reads
-        // (buildDaemonMetadataUpdateForSubscription → stampLocalAssistantPreviewOnCachedEntry).
-        // Without carrying them here, the coordinator could only derive the preview from a live
-        // in-process instance it doesn't host for a remote worker, so the inbox stuck on the
-        // dispatched user task. Only present when the worker reported them.
-        ...readStringValue(fallbackSession.lastMessagePreview, fallbackSession.last_message_preview) ? { lastMessagePreview: readStringValue(fallbackSession.lastMessagePreview, fallbackSession.last_message_preview) } : {},
-        ...readStringValue(fallbackSession.lastMessageRole, fallbackSession.last_message_role) ? { lastMessageRole: readStringValue(fallbackSession.lastMessageRole, fallbackSession.last_message_role) } : {},
-        ...readNumberValue(fallbackSession.lastMessageAt, fallbackSession.last_message_at) !== void 0 ? { lastMessageAt: readNumberValue(fallbackSession.lastMessageAt, fallbackSession.last_message_at) } : {},
-        // RESTORE-STICK: carry the worker's AUTHORITATIVE dashboard hide/mute state and the
-        // raw per-session user override (userHidden/userMuted) through the cached inline-mesh
-        // active-session entry. The worker's mesh_status slim (mcp-server mesh-tools-status.ts)
-        // now ships these from its own status/builders resolution, which already honors a
-        // manual restore/un-mute. Without carrying them here, the coordinator's cloud snapshot
-        // append re-derives hide/mute purely from mesh policy and overwrites the user's manual
-        // un-hide every snapshot — the restore flickered visible then re-hid.
-        ...readBooleanValue(fallbackSession.surfaceHidden) !== void 0 ? { surfaceHidden: readBooleanValue(fallbackSession.surfaceHidden) } : {},
-        ...readBooleanValue(fallbackSession.muted) !== void 0 ? { muted: readBooleanValue(fallbackSession.muted) } : {},
-        ...readBooleanValue(fallbackSession.userHidden, fallbackSession.user_hidden) !== void 0 ? { userHidden: readBooleanValue(fallbackSession.userHidden, fallbackSession.user_hidden) } : {},
-        ...readBooleanValue(fallbackSession.userMuted, fallbackSession.user_muted) !== void 0 ? { userMuted: readBooleanValue(fallbackSession.userMuted, fallbackSession.user_muted) } : {},
-        providerApproval: fallbackSession.providerApproval === void 0 ? void 0 : providerApprovalSnapshot(fallbackSession.providerApproval),
-        isCached: true
-      }];
-    }
-    function readWorkerMcpDeliveryFromMeta(meta2) {
-      const delivered = readBooleanValue(meta2.workerMcpDelivered);
-      if (delivered === void 0) return void 0;
-      const rawReason = readStringValue(meta2.workerMcpDeliveryReason);
-      const reason = rawReason && WORKER_MCP_DELIVERY_REASONS.includes(rawReason) ? rawReason : void 0;
-      return { delivered, ...reason ? { reason } : {} };
-    }
-    function summarizeMeshSessionRecord(record8) {
-      const meta2 = readObjectRecord(record8?.meta);
-      const workerMcp = readWorkerMcpDeliveryFromMeta(meta2);
-      const isSelfCoordinator = Boolean(readStringValue(meta2.meshCoordinatorFor));
-      let chatStatus = readStringValue(record8?.chatStatus, record8?.activeChat?.status, meta2.chatStatus, meta2.sessionStatus);
-      const state2 = readLiveMeshSessionState(record8);
-      const statusNote = isSelfCoordinator && (!chatStatus || chatStatus === "idle" || state2 === "idle") ? "Coordinator self status is sampled from the session host and may read idle while the coordinator is generating this response." : null;
-      const sessionId = readStringValue(record8?.sessionId) || "unknown";
-      const turn = resolveSessionTurnPresentation({
-        sessionId: sessionId === "unknown" ? void 0 : sessionId,
-        providerStatus: chatStatus || state2,
-        providerType: readStringValue(record8?.providerType) || void 0,
-        surface: "mesh_status"
-      });
-      if (turn.authority === "turn_reducer") chatStatus = turn.status;
-      const stopped = /stopped|exited|terminated|failed/.test(`${state2 || ""} ${record8?.lifecycle || ""}`);
-      const liveApproval = record8?.activeChat?.providerApproval !== void 0 ? record8.activeChat.providerApproval : record8?.providerApproval;
-      const rawApproval = liveApproval !== void 0 ? liveApproval : meta2.providerApproval === void 0 ? void 0 : providerApprovalSnapshot(meta2.providerApproval);
-      const providerApproval = stopped || record8?.activeInteractivePrompt || record8?.activeChat?.activeInteractivePrompt ? null : projectProviderApproval(readProviderDecision(
-        rawApproval,
-        /approval/.test(chatStatus || state2 || ""),
-        !!record8?.activeChat?.activeModal?.buttons?.length
-      ), sessionId, readStringValue(record8?.providerType) || "");
-      return {
-        sessionId,
-        providerType: readStringValue(record8?.providerType),
-        state: state2,
-        chatStatus,
-        providerApproval,
-        ...turn.authority === "turn_reducer" ? { turn, attemptId: turn.attemptId, turnStage: turn.stage } : {},
-        lifecycle: readStringValue(record8?.lifecycle),
-        surfaceKind: (0, import_session_host_core5.getSessionHostSurfaceKind)(record8),
-        recoveryState: readStringValue(meta2.runtimeRecoveryState) ?? null,
-        workspace: readStringValue(record8?.workspace) ?? null,
-        title: readStringValue(record8?.displayName, record8?.workspaceLabel) ?? null,
-        role: isSelfCoordinator ? "coordinator" : readStringValue(meta2.meshRole, meta2.role) ?? null,
-        isSelfCoordinator,
-        statusNote,
-        createdAt: toIsoTimestamp(record8?.createdAt ?? record8?.created_at),
-        startedAt: toIsoTimestamp(record8?.startedAt ?? record8?.started_at ?? record8?.spawnedAtMs ?? record8?.spawned_at_ms),
-        lastActivityAt: toIsoTimestamp(record8?.updatedAt ?? record8?.lastActivityAt ?? record8?.last_activity_at),
-        isCached: false,
-        ...workerMcp ? { workerMcp } : {}
-      };
-    }
-    function liveSessionRecordMatchesMeshNode(record8, meshId, nodeId, nodeWorkspace = "", nodeIsMissingLocalWorktree = false) {
-      const recordNodeId = readStringValue(record8?.meta?.meshNodeId);
-      if (!recordNodeId || !daemonIdsEquivalent5(recordNodeId, nodeId)) return false;
-      if (nodeIsMissingLocalWorktree) return false;
-      const recordWorkspace = readStringValue(record8?.workspace);
-      if (nodeWorkspace && recordWorkspace && !meshWorkspacesEquivalent(recordWorkspace, nodeWorkspace)) return false;
-      const recordMeshId = readStringValue(record8?.meta?.meshNodeFor);
-      return !recordMeshId || recordMeshId === meshId;
-    }
-    function liveSessionRecordMatchesMeshWorkspace(record8, meshId, workspace) {
-      const recordWorkspace = readStringValue(record8?.workspace);
-      if (!recordWorkspace || !workspace || !meshWorkspacesEquivalent(recordWorkspace, workspace)) return false;
-      const recordMeshId = readStringValue(record8?.meta?.meshNodeFor);
-      if (recordMeshId) return recordMeshId === meshId;
-      return record8?.meta?.launchedByCoordinator === true || !!readStringValue(record8?.meta?.meshNodeId);
-    }
-    function readLiveMeshNodeWorkspace(args) {
-      const directNodeWorkspace = args.liveSessionRecords.find((record8) => liveSessionRecordMatchesMeshNode(record8, args.meshId, args.nodeId) && readStringValue(record8?.workspace));
-      if (directNodeWorkspace) {
-        return readStringValue(directNodeWorkspace.workspace) || "";
-      }
-      if (args.allowCoordinatorSession) {
-        const coordinatorWorkspace = args.liveSessionRecords.find((record8) => readStringValue(record8?.meta?.meshCoordinatorFor) === args.meshId && readStringValue(record8?.workspace));
-        if (coordinatorWorkspace) {
-          return readStringValue(coordinatorWorkspace.workspace) || "";
-        }
-      }
-      return "";
-    }
-    function collectLiveMeshSessionRecords(args) {
-      const nodeWorkspace = readStringValue(args.node?.workspace);
-      const nodeIsMissingLocalWorktree = args.node?.isLocalWorktree === true && !!nodeWorkspace && !fs19.existsSync(nodeWorkspace);
-      const matches = args.liveSessionRecords.filter((record8) => {
-        const recordNodeId = readStringValue(record8?.meta?.meshNodeId);
-        if (recordNodeId && !daemonIdsEquivalent5(recordNodeId, args.nodeId)) return false;
-        if (liveSessionRecordMatchesMeshNode(record8, args.meshId, args.nodeId, nodeWorkspace || "", nodeIsMissingLocalWorktree)) return true;
-        if (nodeIsMissingLocalWorktree) return false;
-        return !!nodeWorkspace && liveSessionRecordMatchesMeshWorkspace(record8, args.meshId, nodeWorkspace);
-      });
-      if (args.allowCoordinatorSession) {
-        for (const record8 of args.liveSessionRecords) {
-          if (readStringValue(record8?.meta?.meshCoordinatorFor) !== args.meshId) continue;
-          const sessionId = readStringValue(record8?.sessionId);
-          if (sessionId && matches.some((entry) => sessionIdsEquivalent(readStringValue(entry?.sessionId), sessionId))) continue;
-          matches.push(record8);
-        }
-      }
-      return matches;
-    }
-    function buildHistoricalMeshSessions(args) {
-      const liveNodeIds = /* @__PURE__ */ new Set();
-      const liveWorkspaces = /* @__PURE__ */ new Set();
-      const missingLocalWorktreeNodeIds = /* @__PURE__ */ new Set();
-      for (const node of args.nodes || []) {
-        const nodeId = normalizeMeshNodeId(node);
-        const workspace = readStringValue(node?.workspace);
-        if (nodeId) liveNodeIds.add(nodeId);
-        if (workspace) liveWorkspaces.add(workspace);
-        if (nodeId && node?.isLocalWorktree === true && workspace && !fs19.existsSync(workspace)) {
-          missingLocalWorktreeNodeIds.add(nodeId);
-        }
-      }
-      const sessions = [];
-      for (const record8 of args.liveSessionRecords || []) {
-        const meta2 = readObjectRecord(record8?.meta);
-        const recordMeshId = readStringValue(meta2.meshNodeFor, meta2.meshCoordinatorFor);
-        if (recordMeshId !== args.meshId) continue;
-        const recordNodeId = readStringValue(meta2.meshNodeId);
-        const workspace = readStringValue(record8?.workspace);
-        const removedNode = !!recordNodeId && (!liveNodeIds.has(recordNodeId) || missingLocalWorktreeNodeIds.has(recordNodeId));
-        const orphanedWorkspace = !!workspace && !liveWorkspaces.has(workspace) && meta2.meshCoordinatorFor !== args.meshId;
-        if (!removedNode && !orphanedWorkspace) continue;
-        sessions.push({
-          ...summarizeMeshSessionRecord(record8),
-          classification: removedNode ? "removedNode" : "orphanedSession",
-          historical: true,
-          meshNodeId: recordNodeId || null,
-          reason: removedNode ? "Session is tagged to a mesh node that is no longer in live membership." : "Session workspace is no longer attached to a live mesh node."
-        });
-      }
-      if (sessions.length === 0) return void 0;
-      return {
-        count: sessions.length,
-        sessions: sessions.slice(0, 5),
-        instruction: "These sessions are separated from normal node activeSessions because their mesh node/workspace is no longer live. Use mesh_cleanup_sessions only if cleanup is intended."
-      };
-    }
-    function readLiveMeshSessionState(record8) {
-      return readStringValue(
-        record8?.meta?.sessionStatus,
-        record8?.meta?.status,
-        record8?.meta?.providerStatus,
-        record8?.status,
-        record8?.state,
-        record8?.lifecycle
-      );
-    }
-    var fs19;
-    var init_mesh_node_sessions = __esm2({
-      "src/mesh/mesh-node-sessions.ts"() {
-        "use strict";
-        init_dist();
-        init_provider_approval();
-        init_mesh_node_record_readers();
-        init_mesh_node_identity();
-        init_mesh_node_record_readers();
-        init_worker_mcp_isolation();
-        init_mesh_turn_presentation();
-        init_runtime_surface();
-        init_dist();
-        fs19 = __toESM2(require("fs"));
-      }
-    });
-    function readMeshNodeLinkPresence(connection) {
-      const record8 = readRecord2(connection);
-      if (record8.linkIsPresence !== true || record8.source !== "mesh_peer_status") return null;
-      return record8.state === "connected" ? "online" : "offline";
-    }
-    function applyMeshNodeLinkPresence(status) {
-      const presence = readMeshNodeLinkPresence(status.connection);
-      if (!presence) return null;
-      status.machineStatus = presence;
-      if (presence === "offline") {
-        status.health = "offline";
-        status.launchReady = false;
-      }
-      return presence;
-    }
-    var init_mesh_node_link_presence = __esm2({
-      "src/mesh/mesh-node-link-presence.ts"() {
-        "use strict";
-        init_dist();
-      }
-    });
-    function hasGitWorktreeChanges(git12) {
-      return countGitWorktreeChanges2(git12) > 0;
-    }
-    function countGitWorktreeChanges2(git12) {
-      if (!git12) return 0;
-      return Number(git12.staged || 0) + Number(git12.modified || 0) + Number(git12.untracked || 0) + Number(git12.deleted || 0) + Number(git12.renamed || 0);
-    }
-    function getGitSubmoduleDriftState(git12) {
-      const submodules = Array.isArray(git12?.submodules) ? git12.submodules : [];
-      let dirty = false;
-      let outOfSync = false;
-      for (const entry of submodules) {
-        const submodule = readObjectRecord(entry);
-        if (readBooleanValue(submodule.dirty) === true) dirty = true;
-        if (readBooleanValue(submodule.outOfSync) === true || !!readStringValue(submodule.error)) outOfSync = true;
-      }
-      return { dirty, outOfSync };
-    }
-    function isInlineMeshAutoFastForwardEligible(git12) {
-      if (!git12) return false;
-      if (readBooleanValue(git12.isGitRepo) !== true) return false;
-      if (!readStringValue(git12.branch)) return false;
-      if (!readStringValue(git12.upstream)) return false;
-      const upstreamStatus = readStringValue(git12.upstreamStatus, git12.upstream_status);
-      if (upstreamStatus !== "fresh") return false;
-      if ((readNumberValue(git12.ahead) ?? 0) !== 0) return false;
-      if ((readNumberValue(git12.behind) ?? 0) <= 0) return false;
-      const hasConflicts = readBooleanValue(git12.hasConflicts) ?? (Array.isArray(git12.conflictFiles) && git12.conflictFiles.length > 0);
-      if (hasConflicts) return false;
-      if ((readNumberValue(git12.stashCount, git12.stash_count) ?? 0) > 0) return false;
-      const submoduleDrift = getGitSubmoduleDriftState(git12);
-      if (submoduleDrift.dirty || submoduleDrift.outOfSync) return false;
-      const dirty = readBooleanValue(git12.dirty) ?? countGitWorktreeChanges2(git12) > 0;
-      return dirty !== true && countGitWorktreeChanges2(git12) === 0;
-    }
-    function deriveMeshNodeHealthFromGit(git12) {
-      if (!git12 || readBooleanValue(git12.isGitRepo) === false) return "degraded";
-      const branch = readStringValue(git12.branch);
-      if (!branch) return "degraded";
-      const submoduleDrift = getGitSubmoduleDriftState(git12);
-      if (submoduleDrift.outOfSync) return "degraded";
-      if (submoduleDrift.dirty || hasGitWorktreeChanges(git12)) return "dirty";
-      return "online";
-    }
-    function resolveEffectiveMeshNodeHealth(node) {
-      const explicit = (readStringValue(node?.health) ?? "").toLowerCase();
-      if (explicit) return explicit;
-      const cachedStatus = readObjectRecord(node?.cachedStatus);
-      const cachedHealth = (readStringValue(cachedStatus.health) ?? "").toLowerCase();
-      if (cachedHealth) return cachedHealth;
-      const git12 = readObjectRecord(node?.git);
-      if (Object.keys(git12).length > 0) return deriveMeshNodeHealthFromGit(git12).toLowerCase();
-      const cachedGit = readObjectRecord(cachedStatus.git);
-      if (Object.keys(cachedGit).length > 0) return deriveMeshNodeHealthFromGit(cachedGit).toLowerCase();
-      return "unknown";
-    }
-    function isMeshNodeHealthLaunchable(node) {
-      const health = resolveEffectiveMeshNodeHealth(node);
-      return health === "online" || health === "unknown";
-    }
-    function resolveEffectiveNodeGit(node) {
-      const git12 = readObjectRecord(node?.git);
-      if (Object.keys(git12).length > 0) return git12;
-      const cachedStatus = readObjectRecord(node?.cachedStatus);
-      return readObjectRecord(cachedStatus.git);
-    }
-    function isMeshNodeFreshEnoughToLaunch2(node, opts) {
-      const git12 = resolveEffectiveNodeGit(node);
-      if (Object.keys(git12).length === 0) return true;
-      if (readBooleanValue(git12.isGitRepo) === false) return true;
-      const submoduleDrift = getGitSubmoduleDriftState(git12);
-      if (submoduleDrift.outOfSync) return false;
-      const behind = readNumberValue(git12.behind);
-      if (behind === void 0) return true;
-      const maxBehind = Number.isFinite(opts?.maxBehind) && opts?.maxBehind >= 0 ? Math.floor(opts.maxBehind) : 0;
-      return behind <= maxBehind;
-    }
-    function summarizeInlineMeshBranchConvergence(nodes) {
-      const followUps = nodes.filter((node) => {
-        if (readObjectRecord(node.branchConvergence).needsConvergence !== true) return false;
-        const workspace = typeof node.workspace === "string" ? node.workspace : "";
-        if (workspace && !fs20.existsSync(workspace)) return false;
-        return true;
-      }).map((node) => {
-        const convergence = readObjectRecord(node.branchConvergence);
-        return {
-          nodeId: node.nodeId,
-          workspace: node.workspace,
-          branch: convergence.branch,
-          status: convergence.status,
-          reason: convergence.reason,
-          nextStep: convergence.nextStep
-        };
-      });
-      return {
-        needsFollowUp: followUps.length > 0,
-        unresolvedCount: followUps.length,
-        requiredFinalStates: ["merged_to_main", "pushed_feature_branch_needs_merge", "blocked_review", "cleanup_candidate", "not_mergeable"],
-        followUps
-      };
-    }
-    function synthesizeMeshNodeFreshnessFromConnection(status) {
-      const connection = readObjectRecord(status.connection);
-      const connectionFreshAt = toIsoTimestamp(connection.lastCommandAt ?? connection.lastConnectedAt ?? connection.lastStateChangeAt);
-      const git12 = readObjectRecord(status.git);
-      const gitCheckedAt = toIsoTimestamp(git12.lastCheckedAt);
-      if (!status.lastSeenAt && connectionFreshAt) status.lastSeenAt = connectionFreshAt;
-      if (!status.updatedAt && (gitCheckedAt || connectionFreshAt)) {
-        status.updatedAt = gitCheckedAt ?? connectionFreshAt;
-      }
-    }
-    function classifyMeshNodeStaleness(dataSource, ageMs2) {
-      if (dataSource === "self" || dataSource === "live") return "fresh";
-      if (ageMs2 === null) return "unknown";
-      if (ageMs2 < MESH_FRESHNESS_FRESH_MS) return "fresh";
-      if (ageMs2 < MESH_FRESHNESS_RECENT_MS) return "recent";
-      return "stale";
-    }
-    function buildMeshNodeDataFreshness(args) {
-      const { status, node, isSelfNode, daemonId, liveTruthProbed, directTruthUnavailable } = args;
-      const now = args.now ?? Date.now;
-      const connection = readObjectRecord(status.connection);
-      const connectionState = readStringValue(connection.state);
-      const directPeerTruthSatisfied = readBooleanValue(connection.directPeerTruthSatisfied);
-      const git12 = readObjectRecord(status.git);
-      const hasGit = readBooleanValue(git12.isGitRepo) === true || !!readStringValue(git12.branch, git12.headCommit, git12.head, git12.upstream);
-      const connectionFreshAt = toIsoTimestamp(connection.lastCommandAt ?? connection.lastConnectedAt ?? connection.lastStateChangeAt);
-      const liveGitCheckedAt = liveTruthProbed ? toIsoTimestamp(git12.lastCheckedAt) : null;
-      const heldGit = readObjectRecord(node?.lastGit ?? node?.last_git);
-      const heldCheckedAt = toIsoTimestamp(heldGit.checkedAt ?? heldGit.checked_at);
-      const cachedStatus = readObjectRecord(node?.cachedStatus);
-      const cachedGitCheckedAt = toIsoTimestamp(readObjectRecord(cachedStatus.git).lastCheckedAt);
-      const lastProbeAt = liveGitCheckedAt ?? heldCheckedAt ?? cachedGitCheckedAt ?? toIsoTimestamp(git12.lastCheckedAt) ?? connectionFreshAt ?? toIsoTimestamp(status.updatedAt) ?? toIsoTimestamp(status.lastSeenAt);
-      const connectionReachable = connectionState === "connected" ? true : !connectionState || connectionState === "unknown" || connectionState === "connecting" ? connectionState === "connecting" ? true : null : false;
-      let dataSource;
-      let reachable;
-      if (isSelfNode) {
-        dataSource = "self";
-        reachable = true;
-      } else if (liveTruthProbed) {
-        dataSource = "live";
-        reachable = true;
-      } else if (readBooleanValue(status.gitProbePending) === true) {
-        dataSource = "pending";
-        reachable = connectionReachable;
-      } else if (hasGit) {
-        dataSource = "cached";
-        reachable = directTruthUnavailable ? false : connectionReachable;
-      } else if (directTruthUnavailable) {
-        dataSource = "unreachable";
-        reachable = false;
-      } else if (!daemonId) {
-        dataSource = "unconfigured";
-        reachable = null;
-      } else if (connectionState === "connected") {
-        dataSource = "empty";
-        reachable = true;
-      } else {
-        dataSource = "unreachable";
-        reachable = false;
-      }
-      const probeOk = dataSource === "live" || dataSource === "self";
-      let ageMs2 = null;
-      if (lastProbeAt) {
-        const parsed = Date.parse(lastProbeAt);
-        if (Number.isFinite(parsed)) ageMs2 = Math.max(0, now() - parsed);
-      }
-      const staleness = classifyMeshNodeStaleness(dataSource, ageMs2);
-      return {
-        dataSource,
-        probeOk,
-        reachable,
-        directPeerTruthSatisfied: isSelfNode || liveTruthProbed ? true : directPeerTruthSatisfied ?? false,
-        projection: dataSource === "cached" ? "cached" : "live_or_absent",
-        lastProbeAt: lastProbeAt ?? null,
-        ageMs: ageMs2,
-        staleness
-      };
-    }
-    function buildMeshNodeProbeFreshness(args) {
-      const { git: git12, liveTruthProbed, isSelfNode, daemonId, node, now } = args;
-      const status = {
-        git: git12,
-        connection: { state: liveTruthProbed ? "connected" : "disconnected" }
-      };
-      if (liveTruthProbed) status[MESH_NODE_LIVE_TRUTH_MARKER] = true;
-      return buildMeshNodeDataFreshness({
-        status,
-        node,
-        isSelfNode,
-        daemonId,
-        liveTruthProbed,
-        directTruthUnavailable: !liveTruthProbed && !!daemonId,
-        now
-      });
-    }
-    function finalizeMeshNodeStatus(args) {
-      const { status, node, daemonId, isSelfNode, directTruthUnavailable } = args;
-      if (!readStringValue(status.machineStatus)) {
-        const cachedStatus = readObjectRecord(node?.cachedStatus);
-        const machineStatus = readStringValue(cachedStatus.machineStatus, cachedStatus.machine_status, node?.machineStatus);
-        if (machineStatus) status.machineStatus = machineStatus;
-      }
-      applyMeshNodeLinkPresence(status);
-      synthesizeMeshNodeFreshnessFromConnection(status);
-      const liveTruthProbed = readBooleanValue(status[MESH_NODE_LIVE_TRUTH_MARKER]) === true;
-      delete status[MESH_NODE_LIVE_TRUTH_MARKER];
-      status.dataFreshness = buildMeshNodeDataFreshness({
-        status,
-        node,
-        isSelfNode,
-        daemonId,
-        liveTruthProbed,
-        directTruthUnavailable
-      });
-      const gitForBuildLag = readObjectRecord(status.git);
-      if (gitForBuildLag.daemonBuildBehind && typeof gitForBuildLag.daemonBuildBehind === "object") {
-        status.staleDaemonBuild = gitForBuildLag.daemonBuildBehind;
-      }
-      const bootstrap = readObjectRecord(node?.worktreeBootstrap);
-      if (node?.isLocalWorktree && readStringValue(bootstrap.status)) {
-        status.worktreeBootstrap = bootstrap;
-        if (bootstrap.status === "failed" && bootstrap.required !== false) {
-          status.launchReady = false;
-          status.launchBlockedReason = "worktree_bootstrap_failed";
-          status.launchBlockedMessage = readStringValue(bootstrap.error) || "Required worktree bootstrap failed; resolve it before launching an agent into this node.";
-          status.recoveryHint = "Run mesh_retry_node_bootstrap(node_id) to retry";
-          return;
-        }
-        if (bootstrap.status === "running" && bootstrap.required !== false) {
-          if (!(isWorktreeBootstrapStaleRunning(node, Date.now()) || isRemoteWorktreeBootstrapStaleRunning(node, Date.now()))) {
-            status.launchReady = false;
-            status.launchBlockedReason = "worktree_bootstrap_running";
-            status.launchBlockedMessage = "Required worktree bootstrap is still running; wait for it to finish before launching an agent into this node.";
-            return;
-          }
-        }
-      }
-      const connectionState = readStringValue(readObjectRecord(status.connection).state);
-      status.launchReady = !!daemonId && (readStringValue(status.machineStatus) === "online" || connectionState === "connected" || isSelfNode);
-    }
-    function applyCachedInlineMeshNodeStatus(status, node, options) {
-      const cachedStatus = readObjectRecord(node?.cachedStatus);
-      const liveGit = buildInlineMeshTransitGitStatus(node);
-      const git12 = options?.skipGit ? void 0 : liveGit ?? buildCachedInlineMeshGitStatus(node);
-      const error = options?.skipError ? void 0 : liveGit ? void 0 : readStringValue(cachedStatus.error, node?.error);
-      const health = options?.skipHealth ? void 0 : liveGit ? void 0 : readStringValue(cachedStatus.health, node?.health);
-      const machineStatus = readStringValue(cachedStatus.machineStatus, node?.machineStatus);
-      const lastSeenAt = toIsoTimestamp(cachedStatus.lastSeenAt ?? cachedStatus.last_seen_at ?? node?.lastSeenAt ?? node?.last_seen_at);
-      const updatedAt = toIsoTimestamp(cachedStatus.updatedAt ?? cachedStatus.updated_at ?? node?.updatedAt ?? node?.updated_at);
-      const activeSessions = readCachedInlineMeshActiveSessions(node);
-      const activeSessionDetails = readCachedInlineMeshActiveSessionDetails(node);
-      if (!git12 && !error && !health && !machineStatus && !lastSeenAt && !updatedAt && activeSessions.length === 0) return false;
-      if (git12) status.git = git12;
-      if (error) status.error = error;
-      if (machineStatus) status.machineStatus = machineStatus;
-      if (lastSeenAt) status.lastSeenAt = lastSeenAt;
-      if (updatedAt) status.updatedAt = updatedAt;
-      if (activeSessions.length > 0) status.activeSessions = activeSessions;
-      if (activeSessionDetails.length > 0) status.activeSessionDetails = activeSessionDetails;
-      if (health) {
-        status.health = health;
-        return true;
-      }
-      if (git12) {
-        status.health = deriveMeshNodeHealthFromGit(git12);
-        return true;
-      }
-      return activeSessions.length > 0 || !!machineStatus || !!lastSeenAt || !!updatedAt;
-    }
-    var fs20;
-    var MESH_NODE_LIVE_TRUTH_MARKER;
-    var MESH_FRESHNESS_FRESH_MS;
-    var MESH_FRESHNESS_RECENT_MS;
-    var init_mesh_node_freshness = __esm2({
-      "src/mesh/mesh-node-freshness.ts"() {
-        "use strict";
-        init_mesh_node_record_readers();
-        init_mesh_inline_mesh_cache();
-        fs20 = __toESM2(require("fs"));
-        init_worktree_bootstrap_config();
-        init_mesh_node_sessions();
-        init_mesh_node_record_readers();
-        init_mesh_node_link_presence();
-        MESH_NODE_LIVE_TRUTH_MARKER = "__liveTruthProbed";
-        MESH_FRESHNESS_FRESH_MS = 3e4;
-        MESH_FRESHNESS_RECENT_MS = 3e5;
-      }
-    });
-    async function probeRemoteMeshGitStatus(args) {
-      if (!args.dispatchMeshCommand) return null;
-      const dispatch2 = args.dispatchMeshCommand(
-        args.daemonId,
-        "git_status",
-        withStatusProbeMarker2({ ...args.extraArgs ?? {}, workspace: args.workspace, refreshUpstream: true })
-      );
-      const remoteResult = await awaitWithWarmupDeadline(dispatch2, resolveWarmupDeadlineOpts({
-        getConnection: args.getConnection,
-        daemonId: args.daemonId,
-        connectTimeoutMs: args.connectTimeoutMs,
-        responseTimeoutMs: args.responseTimeoutMs,
-        onMissingGetter: warnMeshWarmupGetterMissingOnce
-      }));
-      const remoteGit = remoteResult?.status ?? remoteResult?.git ?? remoteResult;
-      if (!remoteGit || typeof remoteGit !== "object" || typeof remoteGit.isGitRepo !== "boolean") return null;
-      const reporterPlatform = readStringValue(remoteResult?.reporterPlatform);
-      const reporterArch = readStringValue(remoteResult?.reporterArch);
-      const reporterMachineNickname = readStringValue(remoteResult?.reporterMachineNickname);
-      const git12 = remoteGit;
-      if (reporterPlatform) git12.reporterPlatform = reporterPlatform;
-      if (reporterArch) git12.reporterArch = reporterArch;
-      if (reporterMachineNickname) git12.reporterMachineNickname = reporterMachineNickname;
-      const reporterProviderVersions = readProviderVersionsRecord(remoteResult?.reporterProviderVersions);
-      if (reporterProviderVersions) git12.reporterProviderVersions = reporterProviderVersions;
-      const reporterDaemonBuildVersion = readStringValue(remoteResult?.reporterDaemonBuildVersion);
-      if (reporterDaemonBuildVersion) git12.reporterDaemonBuildVersion = reporterDaemonBuildVersion;
-      const reporterMemberState = normalizeReportedMemberState(remoteResult?.reporterMemberState);
-      if (reporterMemberState) git12.reporterMemberState = reporterMemberState;
-      const reporterNodeFacts = normalizeMeshNodeFacts(remoteResult?.reporterNodeFacts);
-      if (reporterNodeFacts) git12.reporterNodeFacts = reporterNodeFacts;
-      return git12;
-    }
-    function readMeshConnectionState(connection) {
-      return readStringValue(connection?.state);
-    }
-    function warnMeshWarmupGetterMissingOnce(daemonId) {
-      if (meshWarmupGetterMissingWarned.has(daemonId)) return;
-      meshWarmupGetterMissingWarned.add(daemonId);
-      LOG.warn("Mesh", `Mesh peer connection getter unavailable for ${String(daemonId).slice(0, 12)}; warmup deadline degraded to the combined connect+response window (cannot observe DataChannel open). This avoids a cold-open false-timeout but loses warm/cold precision \u2014 wire getMeshPeerConnectionStatus on this daemon.`);
-    }
-    function isMeshConnectionDefinitivelyDown(connection) {
-      if (!connection) return true;
-      const state2 = readMeshConnectionState(connection);
-      return state2 === "failed" || state2 === "closed" || state2 === "disconnected";
-    }
-    async function probeRemoteMeshGitStatusWithRetry(args) {
-      if (args.getConnection && isMeshConnectionDefinitivelyDown(args.getConnection(args.daemonId))) {
-        return null;
-      }
-      for (let attempt = 0; attempt <= MESH_DIRECT_PROBE_MAX_RETRIES; attempt += 1) {
-        if (attempt > 0) {
-          const connection = args.getConnection?.(args.daemonId);
-          if (args.getConnection && readMeshConnectionState(connection) !== "connected") break;
-          if (connection) args.onConnection?.(connection);
-          await new Promise((resolve76) => setTimeout(resolve76, 250 * 2 ** (attempt - 1)));
-        }
-        try {
-          const remoteGit = await probeRemoteMeshGitStatus({
-            dispatchMeshCommand: args.dispatchMeshCommand,
-            daemonId: args.daemonId,
-            workspace: args.workspace,
-            responseTimeoutMs: attempt === 0 ? args.timeoutMs : args.retryTimeoutMs ?? args.timeoutMs,
-            connectTimeoutMs: args.connectTimeoutMs ?? MESH_DIRECT_PROBE_CONNECT_TIMEOUT_MS,
-            getConnection: args.getConnection,
-            extraArgs: args.extraArgs
-          });
-          if (remoteGit) return remoteGit;
-        } catch {
-        }
-      }
-      return null;
-    }
-    async function hydrateInlineMeshDirectTruth(args) {
-      const nodes = Array.isArray(args.mesh?.nodes) ? args.mesh.nodes : [];
-      if (!nodes.length) {
-        return {
-          directEvidenceCount: 0,
-          localConfirmedCount: 0,
-          peerAttemptedCount: 0,
-          peerConfirmedCount: 0,
-          standingEvidenceCount: 0,
-          unavailableNodeIds: [],
-          deadNodeIds: []
-        };
-      }
-      const selectedCoordinatorNodeId = readStringValue(
-        args.mesh?.coordinator?.preferredNodeId,
-        nodes[0]?.id,
-        nodes[0]?.nodeId
-      );
-      let localConfirmedCount = 0;
-      let standingEvidenceCount = 0;
-      const unavailableNodeIds = [];
-      const deadNodeIds = [];
-      const classifyNode = async (nodeIndex, node) => {
-        const nodeId = normalizeMeshNodeId(node) || `node_${nodeIndex}`;
-        const workspace = readStringValue(node?.workspace);
-        const daemonId = readStringValue(node?.daemonId);
-        const isSelfNode = Boolean(
-          nodeId && selectedCoordinatorNodeId && daemonIdsEquivalent5(nodeId, selectedCoordinatorNodeId)
-        ) || Boolean(
-          daemonId && (daemonIdsEquivalent5(daemonId, args.localMachineId) || daemonIdsEquivalent5(daemonId, args.statusInstanceId))
-        ) || Boolean(args.meshSource !== "local_config" && nodeIndex === 0);
-        const isSelfDaemonNode = Boolean(
-          daemonId && (daemonIdsEquivalent5(daemonId, args.localMachineId) || daemonIdsEquivalent5(daemonId, args.statusInstanceId))
-        );
-        if ((isSelfNode || isSelfDaemonNode) && isDeadLocalWorktreeNode(node)) {
-          return { kind: "dead", nodeId };
-        }
-        if (!workspace) {
-          return !isSelfNode && daemonId ? { kind: "unavailable", nodeId } : { kind: "skip" };
-        }
-        if (fs21.existsSync(workspace)) {
-          try {
-            const runLocalProbe = () => getGitRepoStatus(workspace, { timeoutMs: 1e4, refreshUpstream: true });
-            const localGit = args.probeCache ? await args.probeCache.probeLocal(workspace, runLocalProbe) : await runLocalProbe();
-            if (localGit?.isGitRepo) {
-              const reporter = recordInlineMeshDirectGitTruth(node, localGit, "selected_coordinator_local_git");
-              persistNodeReporterPlatform(args.meshSource, args.mesh, nodeId, reporter);
-              return { kind: "local" };
-            }
-          } catch {
-          }
-        }
-        const standingGit = buildInlineMeshTransitGitStatus(node);
-        if (standingGit) {
-          return { kind: "standing" };
-        }
-        return { kind: "skip" };
-      };
-      const nodeEntries = [...nodes.entries()];
-      const settledResults = await Promise.allSettled(
-        nodeEntries.map(([nodeIndex, node]) => classifyNode(nodeIndex, node))
-      );
-      settledResults.forEach((settled, i) => {
-        const [nodeIndex, node] = nodeEntries[i];
-        const result = settled.status === "fulfilled" ? settled.value : (() => {
-          const nodeId = normalizeMeshNodeId(node) || `node_${nodeIndex}`;
-          const daemonId = readStringValue(node?.daemonId);
-          const isSelfNode = Boolean(
-            nodeId && selectedCoordinatorNodeId && daemonIdsEquivalent5(nodeId, selectedCoordinatorNodeId)
-          ) || Boolean(
-            daemonId && (daemonIdsEquivalent5(daemonId, args.localMachineId) || daemonIdsEquivalent5(daemonId, args.statusInstanceId))
-          );
-          return !isSelfNode && daemonId ? { kind: "unavailable", nodeId } : { kind: "skip" };
-        })();
-        switch (result.kind) {
-          case "dead":
-            deadNodeIds.push(result.nodeId);
-            break;
-          case "unavailable":
-            unavailableNodeIds.push(result.nodeId);
-            break;
-          case "local":
-            localConfirmedCount += 1;
-            break;
-          case "standing":
-            standingEvidenceCount += 1;
-            break;
-          case "skip":
-          default:
-            break;
-        }
-      });
-      return {
-        directEvidenceCount: localConfirmedCount + standingEvidenceCount,
-        localConfirmedCount,
-        // No remote peer is probed on this path (see the doc comment above).
-        peerAttemptedCount: 0,
-        peerConfirmedCount: 0,
-        standingEvidenceCount,
-        unavailableNodeIds,
-        deadNodeIds
-      };
-    }
-    var fs21;
-    var MESH_DIRECT_PROBE_TIMEOUT_MS;
-    var MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS;
-    var MESH_DIRECT_PROBE_CONNECT_TIMEOUT_MS;
-    var MESH_DIRECT_PROBE_REUSE_MS;
-    var MeshGitProbeCache;
-    var MESH_DIRECT_PROBE_MAX_RETRIES;
-    var meshWarmupGetterMissingWarned;
-    var init_mesh_node_git_probe = __esm2({
-      "src/mesh/mesh-node-git-probe.ts"() {
-        "use strict";
-        init_runtime_defaults();
-        init_dist();
-        init_mesh_warmup_deadline();
-        init_mesh_node_record_readers();
-        init_mesh_inline_mesh_cache();
-        init_logger();
-        fs21 = __toESM2(require("fs"));
-        init_git_status();
-        MESH_DIRECT_PROBE_TIMEOUT_MS = readMeshTimeoutEnvMs("MESH_DIRECT_PROBE_TIMEOUT_MS", 25e3);
-        MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS = readMeshTimeoutEnvMs("MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS", 25e3);
-        MESH_DIRECT_PROBE_CONNECT_TIMEOUT_MS = MESH_CONNECT_TIMEOUT_MS;
-        MESH_DIRECT_PROBE_REUSE_MS = readMeshTimeoutEnvMs("MESH_DIRECT_PROBE_REUSE_MS", 12e3);
-        MeshGitProbeCache = class {
-          constructor(reuseMs, now = Date.now) {
-            this.reuseMs = reuseMs;
-            this.now = now;
-          }
-          inflight = /* @__PURE__ */ new Map();
-          recent = /* @__PURE__ */ new Map();
-          async probeLocal(workspace, probe) {
-            const key6 = workspace;
-            const cached5 = this.recent.get(key6);
-            if (cached5 && this.now() - cached5.at < this.reuseMs) {
-              return cached5.value;
-            }
-            const existing = this.inflight.get(key6);
-            if (existing) return existing;
-            const pending = (async () => {
-              const result = await probe();
-              if (result) this.recent.set(key6, { at: this.now(), value: result });
-              return result;
-            })();
-            this.inflight.set(key6, pending);
-            try {
-              return await pending;
-            } finally {
-              if (this.inflight.get(key6) === pending) this.inflight.delete(key6);
-            }
-          }
-        };
-        MESH_DIRECT_PROBE_MAX_RETRIES = 2;
-        meshWarmupGetterMissingWarned = /* @__PURE__ */ new Set();
-      }
-    });
-    function readMeshNodeLabel(status, node) {
-      return readStringValue(status.nodeId, normalizeMeshNodeId(node)) ?? "unknown";
-    }
-    function buildInlineMeshBranchConvergence(args) {
-      const git12 = readObjectRecord(args.status.git);
-      const nodeLabel = readMeshNodeLabel(args.status, args.node);
-      const defaultBranch = readStringValue(args.mesh?.defaultBranch) ?? "main";
-      const branch = readStringValue(git12.branch, args.node?.worktreeBranch) ?? null;
-      const upstream = readStringValue(git12.upstream) ?? null;
-      const upstreamStatus = readStringValue(git12.upstreamStatus, git12.upstream_status) ?? (upstream ? "unchecked" : "no_upstream");
-      const ahead = readNumberValue(git12.ahead) ?? 0;
-      const behind = readNumberValue(git12.behind) ?? 0;
-      const uncommittedChanges = countGitWorktreeChanges2(git12);
-      const hasConflicts = readBooleanValue(git12.hasConflicts) ?? (Array.isArray(git12.conflictFiles) && git12.conflictFiles.length > 0);
-      const base = {
-        defaultBranch,
-        branch,
-        upstream,
-        upstreamStatus,
-        ahead,
-        behind,
-        isWorktree: args.node?.isLocalWorktree === true || args.status.isLocalWorktree === true,
-        isDefaultBranch: branch === defaultBranch
-      };
-      const isGitRepo = readBooleanValue(git12.isGitRepo);
-      const headCommit = readStringValue(git12.headCommit, git12.head);
-      if (isGitRepo === void 0 || isGitRepo === true && !readStringValue(git12.branch) && !headCommit) {
-        const worktreeGoneEarly = args.node?.isLocalWorktree === true && isGitRepo === void 0 && !!readStringValue(args.node?.workspace) && !(() => {
-          try {
-            return fs222.existsSync(readStringValue(args.node?.workspace));
-          } catch {
-            return true;
-          }
-        })();
-        if (!worktreeGoneEarly) {
-          return {
-            ...base,
-            status: "unknown",
-            needsConvergence: false,
-            reason: isGitRepo === void 0 ? "git_status_unavailable" : "branch_unknown",
-            nextStep: null
-          };
-        }
-      }
-      if (isGitRepo !== true) {
-        const ghostPath = readStringValue(args.node?.workspace);
-        const worktreeGone = args.node?.isLocalWorktree === true && !!ghostPath && !(() => {
-          try {
-            return fs222.existsSync(ghostPath);
-          } catch {
-            return true;
-          }
-        })();
-        if (worktreeGone) {
-          return {
-            ...base,
-            status: "cleanup_candidate",
-            needsConvergence: false,
-            reason: "worktree_path_missing",
-            nextStep: `The worktree directory for node '${nodeLabel}' no longer exists, so there is no git status to resolve. Remove the stale node with mesh_remove_node (or let the worktree-node retention pass reclaim it); any unmerged branch ref is preserved, never deleted.`
-          };
-        }
-        return {
-          ...base,
-          status: "blocked_review",
-          needsConvergence: true,
-          reason: "git_status_unavailable",
-          nextStep: `Resolve git status for node '${nodeLabel}' before marking the task complete.`
-        };
-      }
-      if (!branch) {
-        return {
-          ...base,
-          status: "blocked_review",
-          needsConvergence: true,
-          reason: "branch_unknown",
-          nextStep: `Inspect node '${nodeLabel}' git branch before deciding whether it is merged to ${defaultBranch}.`
-        };
-      }
-      if (hasConflicts || uncommittedChanges > 0) {
-        return {
-          ...base,
-          status: "not_mergeable",
-          needsConvergence: true,
-          reason: hasConflicts ? "conflicts_present" : "dirty_workspace",
-          nextStep: `Commit, checkpoint, or resolve node '${nodeLabel}' before any main convergence step.`
-        };
-      }
-      if (branch === defaultBranch) {
-        if (upstream && upstreamStatus !== "fresh") {
-          return {
-            ...base,
-            status: "blocked_review",
-            needsConvergence: true,
-            reason: "default_branch_upstream_unverified",
-            nextStep: `Refresh ${defaultBranch}'s upstream refs or resolve the fetch failure before declaring convergence complete for node '${nodeLabel}'.`
-          };
-        }
-        if (ahead > 0 || behind > 0) {
-          return {
-            ...base,
-            status: "blocked_review",
-            needsConvergence: true,
-            reason: "default_branch_not_even_with_upstream",
-            nextStep: `Bring ${defaultBranch} even with its upstream before declaring convergence complete.`
-          };
-        }
-        return {
-          ...base,
-          status: "merged_to_main",
-          needsConvergence: false,
-          reason: "clean_default_branch",
-          nextStep: null
-        };
-      }
-      if (args.node?.isLocalWorktree === true || args.status.isLocalWorktree === true) {
-        return {
-          ...base,
-          status: "cleanup_candidate",
-          needsConvergence: true,
-          reason: "clean_non_default_worktree_branch",
-          nextStep: `Branch '${branch}' is a clean worktree off ${defaultBranch}. Report cleanup_candidate. Merging is the next step only when the request or the done criteria include landing.`
-        };
-      }
-      if (upstream && upstreamStatus !== "fresh") {
-        return {
-          ...base,
-          status: "blocked_review",
-          needsConvergence: true,
-          reason: "feature_branch_upstream_unverified",
-          nextStep: `Refresh branch '${branch}' upstream refs or resolve the fetch failure before deciding whether it is ready to merge into ${defaultBranch}.`
-        };
-      }
-      if (!upstream || ahead > 0 || behind > 0) {
-        return {
-          ...base,
-          status: "blocked_review",
-          needsConvergence: true,
-          reason: !upstream ? "feature_branch_missing_upstream" : "feature_branch_not_even_with_upstream",
-          nextStep: `Push or reconcile branch '${branch}', then merge it into ${defaultBranch} or mark it not_mergeable with a reason.`
-        };
-      }
-      return {
-        ...base,
-        status: "pushed_feature_branch_needs_merge",
-        needsConvergence: true,
-        reason: "clean_non_default_branch",
-        nextStep: `Branch '${branch}' is even with its upstream and off ${defaultBranch}. Report pushed_feature_branch_needs_merge. Merging is the next step only when the request or the done criteria include landing.`
-      };
-    }
-    function applyInlineMeshBranchConvergence(mesh, node, status) {
-      const git12 = readObjectRecord(status.git);
-      if (Object.keys(git12).length === 0 && !status.gitProbePending) return;
-      const uncommittedChanges = countGitWorktreeChanges2(git12);
-      status.isDirty = uncommittedChanges > 0;
-      status.uncommittedChanges = uncommittedChanges;
-      status.branchConvergence = buildInlineMeshBranchConvergence({ mesh, node, status });
-      status.autoFastForwardEligible = isInlineMeshAutoFastForwardEligible(git12);
-      if (status.autoFastForwardEligible) {
-        status.suggestedAction = "auto_fast_forward";
-      } else {
-        delete status.suggestedAction;
-      }
-    }
-    var fs222;
-    var init_mesh_branch_convergence = __esm2({
-      "src/mesh/mesh-branch-convergence.ts"() {
-        "use strict";
-        fs222 = __toESM2(require("fs"));
-        init_dist();
-        init_mesh_node_identity();
-      }
-    });
-    var mesh_node_identity_exports = {};
-    __export2(mesh_node_identity_exports, {
-      MESH_DIRECT_PROBE_CONNECT_TIMEOUT_MS: () => MESH_DIRECT_PROBE_CONNECT_TIMEOUT_MS,
-      MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS: () => MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS,
-      MESH_DIRECT_PROBE_REUSE_MS: () => MESH_DIRECT_PROBE_REUSE_MS,
-      MESH_DIRECT_PROBE_TIMEOUT_MS: () => MESH_DIRECT_PROBE_TIMEOUT_MS,
-      MESH_NODE_LIVE_TRUTH_MARKER: () => MESH_NODE_LIVE_TRUTH_MARKER,
-      MeshGitProbeCache: () => MeshGitProbeCache,
-      applyCachedInlineMeshNodeStatus: () => applyCachedInlineMeshNodeStatus,
-      applyInlineMeshBranchConvergence: () => applyInlineMeshBranchConvergence,
-      awaitWithWarmupDeadline: () => awaitWithWarmupDeadline,
-      buildFreshLocalNodeFacts: () => buildFreshLocalNodeFacts,
-      buildHistoricalMeshSessions: () => buildHistoricalMeshSessions,
-      buildInlineMeshTransitGitStatus: () => buildInlineMeshTransitGitStatus,
-      buildLivePeerGitConnection: () => buildLivePeerGitConnection,
-      buildMeshNodeCheckoutLabel: () => buildMeshNodeCheckoutLabel,
-      buildMeshNodeDataFreshness: () => buildMeshNodeDataFreshness,
-      buildMeshNodeDisplayLabel: () => buildMeshNodeDisplayLabel,
-      buildMeshNodeMachineIdentity: () => buildMeshNodeMachineIdentity,
-      buildMeshNodeMachineLabel: () => buildMeshNodeMachineLabel,
-      buildMeshNodeProbeFreshness: () => buildMeshNodeProbeFreshness,
-      collectLiveMeshSessionRecords: () => collectLiveMeshSessionRecords,
-      collectMeshNodeHostedSessionIds: () => collectMeshNodeHostedSessionIds,
-      countGitWorktreeChanges: () => countGitWorktreeChanges2,
-      deriveMeshNodeHealthFromGit: () => deriveMeshNodeHealthFromGit,
-      finalizeMeshNodeStatus: () => finalizeMeshNodeStatus,
-      foldMeshNodeIdentityToCanonical: () => foldMeshNodeIdentityToCanonical,
-      hydrateInlineMeshDirectTruth: () => hydrateInlineMeshDirectTruth,
-      inlineMeshCarriesTransientNodeTruth: () => inlineMeshCarriesTransientNodeTruth,
-      isDeadLocalWorktreeNode: () => isDeadLocalWorktreeNode,
-      isInlineMeshAutoFastForwardEligible: () => isInlineMeshAutoFastForwardEligible,
-      isMeshNodeFreshEnoughToLaunch: () => isMeshNodeFreshEnoughToLaunch2,
-      isMeshNodeHealthLaunchable: () => isMeshNodeHealthLaunchable,
-      logRepoMeshStatusDebug: () => logRepoMeshStatusDebug,
-      normalizeInlineMeshNodeIdentity: () => normalizeInlineMeshNodeIdentity,
-      normalizeProviderRoles: () => normalizeProviderRoles,
-      persistNodeReporterPlatform: () => persistNodeReporterPlatform,
-      probeRemoteMeshGitStatusWithRetry: () => probeRemoteMeshGitStatusWithRetry,
-      readBooleanValue: () => readBooleanValue,
-      readCachedInlineMeshActiveSessionDetails: () => readCachedInlineMeshActiveSessionDetails,
-      readCachedInlineMeshActiveSessions: () => readCachedInlineMeshActiveSessions,
-      readInlineMeshNodeId: () => readInlineMeshNodeId,
-      readLiveMeshNodeWorkspace: () => readLiveMeshNodeWorkspace,
-      readMeshNodeDaemonId: () => readMeshNodeDaemonId,
-      readMeshNodeDisplayMachineName: () => readMeshNodeDisplayMachineName,
-      readMeshNodeHostname: () => readMeshNodeHostname,
-      readMeshNodeMachineId: () => readMeshNodeMachineId,
-      readNumberValue: () => readNumberValue,
-      readObjectRecord: () => readObjectRecord,
-      readProviderPriorityFromPolicy: () => readProviderPriorityFromPolicy,
-      readStringValue: () => readStringValue,
-      reconcileInlineMeshCache: () => reconcileInlineMeshCache,
-      recordInlineMeshDirectGitTruth: () => recordInlineMeshDirectGitTruth,
-      recordReportedNodeFacts: () => recordReportedNodeFacts,
-      resolveEffectiveMeshNodeHealth: () => resolveEffectiveMeshNodeHealth,
-      resolveMeshNodeAttribution: () => resolveMeshNodeAttribution,
-      resolveProviderTypeFromPriority: () => resolveProviderTypeFromPriority,
-      sanitizeInlineMesh: () => sanitizeInlineMesh,
-      shouldRefreshStalePendingAggregate: () => shouldRefreshStalePendingAggregate,
-      stripUntrustedInlineMeshGrantKeys: () => stripUntrustedInlineMeshGrantKeys,
-      summarizeInlineMeshBranchConvergence: () => summarizeInlineMeshBranchConvergence,
-      summarizeMeshSessionRecord: () => summarizeMeshSessionRecord,
-      summarizeRepoMeshStatusDebug: () => summarizeRepoMeshStatusDebug
-    });
-    function readProviderPriorityFromPolicy(policy) {
-      const record8 = policy && typeof policy === "object" && !Array.isArray(policy) ? policy : {};
-      const derived = deriveProviderPriorityFromSlots2(record8.slots);
-      if (derived.length) return derived;
-      const raw = record8.providerPriority;
-      if (Array.isArray(raw)) {
-        const seen2 = /* @__PURE__ */ new Set();
-        const explicit = raw.map((type2) => typeof type2 === "string" ? type2.trim() : "").filter(Boolean).filter((type2) => {
-          if (seen2.has(type2)) return false;
-          seen2.add(type2);
-          return true;
-        });
-        if (explicit.length) return explicit;
-      }
-      return [];
-    }
-    function normalizeProviderRoles(value) {
-      if (!Array.isArray(value)) return [];
-      const byType = /* @__PURE__ */ new Map();
-      for (const raw of value) {
-        if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
-        const rec8 = raw;
-        const providerType = typeof rec8.providerType === "string" ? rec8.providerType.trim() : "";
-        if (!providerType) continue;
-        const entry = { providerType };
-        const maxParallel = Number(rec8.maxParallel);
-        if (Number.isFinite(maxParallel) && maxParallel >= 0) entry.maxParallel = Math.floor(maxParallel);
-        byType.set(providerType.toLowerCase(), entry);
-      }
-      return [...byType.values()];
-    }
-    function summarizeRepoMeshStatusDebug(status) {
-      const nodes = Array.isArray(status?.nodes) ? status.nodes : [];
-      return {
-        success: status?.success,
-        meshId: readStringValue(status?.meshId, status?.mesh_id) ?? null,
-        refreshedAt: readStringValue(status?.refreshedAt, status?.refreshed_at) ?? null,
-        sourceOfTruth: status?.sourceOfTruth ?? null,
-        branchConvergenceSummary: status?.branchConvergenceSummary ?? status?.branch_convergence_summary ?? null,
-        nodeCount: nodes.length,
-        nodes: nodes.map((node) => ({
-          // Status emits the id under `nodeId` (3-way input absorbed). The
-          // inline cache keeps `id` and `nodeId` equal, so this serialized form
-          // round-trips back through the cache without flipping shape.
-          nodeId: normalizeMeshNodeId(node) ?? null,
-          daemonId: readStringValue(node?.daemonId, node?.daemon_id) ?? null,
-          workspace: readStringValue(node?.workspace, node?.git?.workspace) ?? null,
-          health: readStringValue(node?.health) ?? null,
-          machineStatus: readStringValue(node?.machineStatus, node?.machine_status) ?? null,
-          connection: node?.connection && typeof node.connection === "object" ? {
-            state: readStringValue(node.connection.state) ?? null,
-            transport: readStringValue(node.connection.transport) ?? null,
-            source: readStringValue(node.connection.source) ?? null,
-            reported: readBooleanValue(node.connection.reported) ?? null
-          } : null,
-          gitProbePending: node?.gitProbePending === true,
-          launchReady: node?.launchReady === true,
-          git: summarizeGitShape(node?.git),
-          branchConvergence: node?.branchConvergence ?? node?.branch_convergence ?? null
-        }))
-      };
-    }
-    function logRepoMeshStatusDebug(event, fields) {
-      try {
-        LOG.info("MeshStatusDebug", `[RepoMeshStatusDebug] ${JSON.stringify({ event, ...fields })}`);
-      } catch {
-        LOG.info("MeshStatusDebug", `[RepoMeshStatusDebug] ${event}`);
-      }
-    }
-    function buildMeshNodeMachineLabel(node, nodeId) {
-      const machineName = readMeshNodeDisplayMachineName(node);
-      if (machineName) {
-        return machineName === readMeshNodeHostname(node) ? machineName.replace(/\.local$/i, "") : machineName;
-      }
-      const id4 = readStringValue(node.daemonId, node.daemon_id, node.machineId, node.machine_id);
-      if (id4) return id4.length > 16 ? `${id4.slice(0, 12)}\u2026` : id4;
-      return nodeId || "unidentified mesh node";
-    }
-    function buildMeshNodeCheckoutLabel(node, nodeId) {
-      const branch = readStringValue(node.worktreeBranch, node.worktree_branch);
-      if (branch) return `\u2387 ${branch}`;
-      const workspace = readStringValue(node.workspace, node.repoRoot, node.repo_root);
-      const basename38 = workspace ? workingDirBasename(workspace) : void 0;
-      return basename38 || (nodeId ? nodeId.slice(0, 8) : "node");
-    }
-    function buildMeshNodeDisplayLabel(node, nodeId, _providerPriority) {
-      return buildMeshNodeMachineLabel(node, nodeId);
-    }
-    function normalizeMeshHostname(value) {
-      const hostname6 = readStringValue(value);
-      if (!hostname6) return void 0;
-      return hostname6.toLowerCase().replace(/\.$/, "");
-    }
-    function readMeshNodeMachineId(node) {
-      return readStringValue(
-        node.machineId,
-        node.machine_id,
-        readObjectRecord(node.machine)?.id,
-        readObjectRecord(node.machine)?.machineId,
-        readObjectRecord(node.lastProbe)?.machineId,
-        readObjectRecord(node.last_probe)?.machine_id,
-        readObjectRecord(readObjectRecord(node.lastProbe)?.machine)?.id,
-        readObjectRecord(readObjectRecord(node.lastProbe)?.machine)?.machineId,
-        readObjectRecord(readObjectRecord(node.last_probe)?.machine)?.id,
-        readObjectRecord(readObjectRecord(node.last_probe)?.machine)?.machine_id
-      );
-    }
-    function readMeshNodeDaemonId(node) {
-      return readStringValue(
-        node.daemonId,
-        node.daemon_id,
-        readObjectRecord(node.machine)?.daemonId,
-        readObjectRecord(node.machine)?.daemon_id,
-        readObjectRecord(node.lastProbe)?.daemonId,
-        readObjectRecord(node.last_probe)?.daemon_id,
-        readObjectRecord(readObjectRecord(node.lastProbe)?.machine)?.daemonId,
-        readObjectRecord(readObjectRecord(node.lastProbe)?.machine)?.daemon_id,
-        readObjectRecord(readObjectRecord(node.last_probe)?.machine)?.daemonId,
-        readObjectRecord(readObjectRecord(node.last_probe)?.machine)?.daemon_id
-      );
-    }
-    function readMeshNodeHostname(node) {
-      return readStringValue(
-        node.hostname,
-        node.host,
-        node.machineHostname,
-        node.machine_hostname,
-        readObjectRecord(node.machine)?.hostname,
-        readObjectRecord(node.machine)?.host,
-        readObjectRecord(node.lastProbe)?.hostname,
-        readObjectRecord(node.last_probe)?.hostname,
-        readObjectRecord(readObjectRecord(node.lastProbe)?.machine)?.hostname,
-        readObjectRecord(readObjectRecord(node.last_probe)?.machine)?.hostname
-      );
-    }
-    function readMeshNodeDisplayMachineName(node) {
-      return readStringValue(
-        node.machineName,
-        node.machine_name,
-        node.machineLabel,
-        node.machine_label,
-        node.machineNickname,
-        node.machine_nickname,
-        node.alias,
-        readObjectRecord(node.machine)?.name,
-        readObjectRecord(node.machine)?.displayName,
-        readObjectRecord(node.machine)?.display_name,
-        readObjectRecord(node.lastProbe)?.machineName,
-        readObjectRecord(node.last_probe)?.machine_name,
-        readObjectRecord(readObjectRecord(node.lastProbe)?.machine)?.name,
-        readObjectRecord(readObjectRecord(node.last_probe)?.machine)?.name,
-        readMeshNodeHostname(node)
-      );
-    }
-    function compactMeshIdentityEvidence(value) {
-      if (!value) return void 0;
-      return value.length > 24 ? `${value.slice(0, 12)}\u2026${value.slice(-8)}` : value;
-    }
-    function buildMeshNodeMachineIdentity(node, opts) {
-      const machineId = readMeshNodeMachineId(node);
-      const daemonId = readMeshNodeDaemonId(node);
-      const hostname6 = readMeshNodeHostname(node);
-      const machineName = readMeshNodeDisplayMachineName(node);
-      const coordinatorHostname = readStringValue(opts.coordinatorHostname);
-      const machineIdMatches = Boolean(opts.localMachineId && machineId && daemonIdsEquivalent5(opts.localMachineId, machineId));
-      const daemonIdMatches = Boolean(opts.localDaemonId && daemonId && daemonIdsEquivalent5(opts.localDaemonId, daemonId));
-      const hostnameMatches = Boolean(
-        normalizeMeshHostname(hostname6) && normalizeMeshHostname(coordinatorHostname) && normalizeMeshHostname(hostname6) === normalizeMeshHostname(coordinatorHostname)
-      );
-      const sameMachine = opts.isSelfNode === true || machineIdMatches || daemonIdMatches || hostnameMatches;
-      const evidence = [];
-      for (const [label2, value] of [["machineName", machineName], ["hostname", hostname6], ["machineId", machineId], ["daemonId", daemonId]]) {
-        const compact2 = compactMeshIdentityEvidence(value);
-        if (compact2) evidence.push(`${label2}:${compact2}`);
-      }
-      const locality = sameMachine ? "same_machine" : evidence.length > 0 ? "remote_known" : "remote_or_unknown";
-      const localityReason = sameMachine ? machineIdMatches ? "matched coordinator machine id" : daemonIdMatches ? "matched coordinator daemon id" : hostnameMatches ? "matched coordinator hostname" : "selected coordinator node" : evidence.length > 0 ? `known remote/other machine identity; no local coordinator match (${evidence.join(", ")})` : "no useful machine identity evidence available";
-      return {
-        daemonId,
-        machineId,
-        hostname: hostname6,
-        machineName,
-        displayName: machineName || hostname6 || daemonId || machineId,
-        coordinatorHostname,
-        sameMachine,
-        locality,
-        localityReason,
-        identityEvidence: evidence
-      };
-    }
-    async function resolveProviderTypeFromPriority(args) {
-      if (!args.providerPriority.length) {
-        return { error: `Node '${args.nodeId}' has no providerPriority policy; pass cliType explicitly or configure node.policy.providerPriority` };
-      }
-      const failed = [];
-      for (const requestedType of args.providerPriority) {
-        const normalizedType = args.providerLoader.resolveAlias(requestedType);
-        if (!args.providerLoader.isMachineProviderEnabled(normalizedType)) {
-          failed.push(`${requestedType}: disabled`);
-          continue;
-        }
-        const detected = await detectCLI(normalizedType, args.providerLoader, { includeVersion: false });
-        args.providerLoader.setCliDetectionResults([{
-          id: normalizedType,
-          installed: !!detected,
-          path: detected?.path
-        }], false);
-        args.onStatusChange?.();
-        if (detected) return { providerType: normalizedType };
-        failed.push(`${requestedType}: not detected`);
-      }
-      return { error: `No usable provider detected for node '${args.nodeId}' from providerPriority: ${failed.join("; ")}` };
-    }
-    var init_mesh_node_identity = __esm2({
-      "src/mesh/mesh-node-identity.ts"() {
-        "use strict";
-        init_cli_detector();
-        init_dist();
-        init_logger();
-        init_mesh_warmup_deadline();
-        init_working_dir();
-        init_mesh_node_record_readers();
-        init_mesh_node_record_readers();
-        init_mesh_inline_mesh_cache();
-        init_mesh_node_freshness();
-        init_mesh_node_sessions();
-        init_mesh_node_git_probe();
-        init_mesh_branch_convergence();
       }
     });
     function readInstanceIdentity(inst) {

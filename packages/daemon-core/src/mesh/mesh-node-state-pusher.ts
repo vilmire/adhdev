@@ -64,8 +64,14 @@ import { LOG } from '../logging/logger.js';
 import { readMeshTimeoutEnvMs } from '../runtime-defaults.js';
 import * as fs from 'fs';
 import { carryUpstreamFreshness, computeMeshNodeGitSignature, digestMeshNodeStateSignature, sanitizeObservedGit } from './mesh-node-git-state.js';
+import { countGitWorktreeChanges } from './mesh-node-freshness.js';
 import { computeMeshNodeRuntimeSignature, sanitizeMeshNodeRuntimeSummary, type MeshNodeRuntimeSummary } from './mesh-node-runtime-summary.js';
 import { sanitizeMemberWorktreeNodes, type MemberWorktreeNodeRecord } from './mesh-remote-worktree-membership.js';
+
+function hasUncommittedChanges(git: Record<string, unknown>): boolean {
+    return countGitWorktreeChanges(git) > 0
+        || (Array.isArray(git.submodules) && git.submodules.some((entry) => !!entry && typeof entry === 'object' && (entry as Record<string, unknown>).dirty === true));
+}
 
 export const MESH_NODE_STATE_REPORT_COMMAND = 'mesh_node_git_report';
 /** How often a subscribed workspace's git is re-read. */
@@ -599,8 +605,12 @@ export class MeshNodeStatePusher {
         // A watched workspace whose git dir has not moved is not re-read on the
         // check tick (no git spawn when nothing changed): the last read stands until
         // the detector fires, the heartbeat refreshes the upstream, or a push is forced.
+        // EXCEPT while that read showed uncommitted changes: cleaning a tree (deleting
+        // untracked files, discarding edits) moves nothing the git-dir detector watches,
+        // so a dirty read would otherwise be served as current for a whole heartbeat
+        // (live: mesh_status kept a node degraded/dirty after mesh_git_status was clean).
         const reuse = !force && !heartbeatDue && !refreshUpstream && sub.gitDirty !== true
-            && !!sub.lastGit && this.isGitWatched(sub.workspace);
+            && !!sub.lastGit && !hasUncommittedChanges(sub.lastGit) && this.isGitWatched(sub.workspace);
         let git: Record<string, unknown> | null = null;
         if (reuse) {
             git = sub.lastGit!;
