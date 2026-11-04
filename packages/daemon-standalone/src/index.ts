@@ -72,6 +72,7 @@ import {
 } from '@adhdev/daemon-core';
 import {
   ensureSessionHostReady,
+  getSessionHostWedgeRecovery,
   getStandaloneSessionHostAppName,
   getStandaloneSessionHostAppNameWarning,
   proxySessionHostAttach,
@@ -324,6 +325,7 @@ export class StandaloneServer {
     // with host events, and a stable write-owner id that survives restarts.
     this.sessionHost = await bootSessionHost({
       ensureReady: ensureSessionHostReady,
+      wedgeRecovery: getSessionHostWedgeRecovery(),
       clientId: statusInstanceId,
       managedBy: 'adhdev-standalone',
       onHostEvent: () => {

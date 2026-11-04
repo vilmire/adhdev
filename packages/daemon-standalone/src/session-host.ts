@@ -48,6 +48,10 @@ function buildSessionHostEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return managedHost.buildEnv(baseEnv);
 }
 
+export function getSessionHostWedgeRecovery() {
+  return managedHost.wedgeRecoveryDeps();
+}
+
 export function stopManagedSessionHostProcess(): boolean {
   return managedHost.stopManagedSessionHostProcess();
 }
