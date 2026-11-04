@@ -69,6 +69,7 @@ const EXPECTED_CLASSES: Record<string, string> = {
     mesh_host_handoff_status: 'roster',
     mesh_host_handoff_discard: 'roster',
     mesh_host_handoff_certificate: 'roster',
+    mesh_host_handoff_member_probe: 'roster',
 };
 
 describe('mesh sender policy — registry', () => {

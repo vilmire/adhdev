@@ -1408,6 +1408,13 @@
             "close": "Close",
             "open": "Move host…",
             "disabled": "Host handoff is experimental and off on this machine (experimental.hostHandoff).",
+            "enable": "Turn on here",
+            "enableTarget": "Turn on there",
+            "targetDisabled": "Host moves are off on the target machine.",
+            "pair": "Pair target",
+            "pairExplain": "The target must pin this host's key before a move. This uses a one-time code between the two machines; nothing stops.",
+            "restored": "The previous coordinator was started again.",
+            "restoreFailed": "The previous coordinator did not start again ({{reason}}). Launch it from the project.",
             "canaryUnsupported": "The current source is not stopped. A supported probe declares version 1 host enforcement of 15 seconds and 16384 output bytes, with tools and private context disabled, and real arguments for the fixed prompt and the selected model. Thinking arguments are added only when a level is selected. Native billable turn and output-token caps are not guaranteed, and a placeholder for those caps is refused.",
             "canaryHostBound": "This probe passed under host enforcement only: 15 seconds and a 16384-byte output limit. Native billable turn and output-token caps are not guaranteed.",
             "explain": "The host keeps the queue, missions and decisions. Moving it copies them to the chosen machine, checks the copy, and only then switches. Running work is not interrupted; new work is held until it finishes.",
@@ -1438,6 +1445,10 @@
                 "switch": "Switch"
             },
             "check": {
+                "host_key_pinned": "Target has pinned this host's key",
+                "fleet_members": "Other machines can follow the move",
+                "state_preservation": "Project state is complete and readable",
+                "launch_selection": "Coordinator selection is available",
                 "is_host": "This machine is the host",
                 "target_not_self": "Target is another machine",
                 "target_is_member": "Target is a member of this project",
@@ -1450,6 +1461,11 @@
                 "no_open_writer_checkpoint": "No unfinished worker stop"
             },
             "code": {
+                "host_key_unpinned": "The target has not paired with this host",
+                "host_key_mismatch": "The target pinned a different key for this host",
+                "member_protocol_unsupported": "Update these machines first",
+                "snapshot_conflict": "The target holds conflicting records",
+                "state_preservation_unverified": "Finish open work first",
                 "not_host": "This machine is not the host",
                 "target_is_self": "Choose another machine",
                 "target_not_member": "The machine is not part of this project",

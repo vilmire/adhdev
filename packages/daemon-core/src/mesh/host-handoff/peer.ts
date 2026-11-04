@@ -8,8 +8,8 @@
 import type { HandoffAck, HandoffLaunchPlan, HandoffManifest, HostTransferCertificate, PeerResult } from './types.js';
 
 export interface HandoffPeerClient {
-    capability(a: { handoffId: string; meshId: string; fromDaemonId: string; launchPlan?: HandoffLaunchPlan }): Promise<PeerResult & {
-        protocol?: number; targetDaemonId?: string; originGrantPublicKey?: string;
+    capability(a: { handoffId: string; meshId: string; fromDaemonId: string; launchPlan?: HandoffLaunchPlan; sourcePublicKey?: string; offeredMesh?: Record<string, unknown> | null }): Promise<PeerResult & {
+        protocol?: number; targetDaemonId?: string; originGrantPublicKey?: string; hostKeyPinned?: boolean; diskFreeBytes?: number;
         ready?: { coordinatorLaunchable: boolean; diskOk: boolean; checks?: Array<{ id: string; ok: boolean; detail?: string }> };
     }>;
     manifest(a: { handoffId: string; meshId: string; manifest: HandoffManifest }): Promise<PeerResult & { have?: number[] }>;
@@ -20,6 +20,7 @@ export interface HandoffPeerClient {
         Promise<PeerResult & { applied?: boolean; coordinatorReady?: boolean; coordinatorSessionId?: string }>;
     status(a: { handoffId: string; meshId: string }): Promise<PeerResult & { phase?: string; epoch?: number }>;
     discard(a: { handoffId: string; meshId: string }): Promise<PeerResult>;
+    memberProbe?(a: { meshId: string }): Promise<PeerResult & { protocol?: number }>;
 }
 
 export interface HandoffAckClient {

@@ -1411,6 +1411,13 @@
             "close": "Cerrar",
             "open": "Trasladar host…",
             "disabled": "El traslado de host es experimental y está desactivado en esta máquina (experimental.hostHandoff).",
+            "enable": "Activar aquí",
+            "enableTarget": "Activar allí",
+            "targetDisabled": "Los traslados de host están desactivados en la máquina de destino.",
+            "pair": "Emparejar destino",
+            "pairExplain": "El destino debe fijar la clave de este host antes de un traslado. Se usa un código de un solo uso entre las dos máquinas; nada se detiene.",
+            "restored": "El coordinador anterior se inició de nuevo.",
+            "restoreFailed": "El coordinador anterior no se inició de nuevo ({{reason}}). Inícialo desde el proyecto.",
             "canaryUnsupported": "El origen actual no se detiene. Una sonda admitida declara la versión 1 con aplicación en el host de 15 segundos y 16384 bytes de salida, herramientas y contexto privado desactivados, y argumentos reales para el prompt fijo y el modelo elegido. Los argumentos de pensamiento se añaden solo cuando hay un nivel elegido. No se garantizan topes nativos de turnos ni de tokens de salida, y un marcador de esos topes se rechaza.",
             "canaryHostBound": "Esta sonda pasó solo con aplicación en el host: 15 segundos y un límite de 16384 bytes de salida. No se garantizan topes nativos de turnos ni de tokens de salida.",
             "explain": "El host guarda la cola, las misiones y las decisiones. Trasladarlo las copia a la máquina elegida, verifica la copia y solo entonces cambia. El trabajo en curso no se interrumpe; el trabajo nuevo queda retenido hasta terminar.",
@@ -1441,6 +1448,10 @@
                 "switch": "Cambiar"
             },
             "check": {
+                "host_key_pinned": "El destino fijó la clave de este host",
+                "fleet_members": "Las otras máquinas pueden seguir el traslado",
+                "state_preservation": "El estado del proyecto está completo y es legible",
+                "launch_selection": "La selección de coordinador está disponible",
                 "is_host": "Esta máquina es el host",
                 "target_not_self": "El destino es otra máquina",
                 "target_is_member": "El destino es miembro de este proyecto",
@@ -1453,6 +1464,11 @@
                 "no_open_writer_checkpoint": "Ninguna parada de trabajador sin terminar"
             },
             "code": {
+                "host_key_unpinned": "El destino no está emparejado con este host",
+                "host_key_mismatch": "El destino fijó otra clave para este host",
+                "member_protocol_unsupported": "Actualiza primero estas máquinas",
+                "snapshot_conflict": "El destino tiene registros en conflicto",
+                "state_preservation_unverified": "Termina primero el trabajo en curso",
                 "not_host": "Esta máquina no es el host",
                 "target_is_self": "Elige otra máquina",
                 "target_not_member": "La máquina no es parte de este proyecto",

@@ -122,8 +122,20 @@ const PROBE_COMMANDS = new Set<string>([
   'get_pending_mesh_events',
 ]);
 
+// Host handoff peer verbs. Capability runs a bounded provider canary (15s) plus git and
+// census checks; chunk stages 256KB and seal verifies the whole snapshot on the target
+// (tens of seconds on a large project); activate may run a canary and apply a large snapshot.
+// Losing an activate reply is safe (source goes `uncertain` and probes) but needlessly slow.
+export const HOST_HANDOFF_RPC_TIMEOUT_MS = readTimeoutEnv('MESH_RPC_HOST_HANDOFF_TIMEOUT_MS', 110_000);
+const HOST_HANDOFF_COMMANDS = new Set<string>([
+  'mesh_host_handoff_capability',
+  'mesh_host_handoff_chunk',
+  'mesh_host_handoff_activate',
+]);
+
 /** Select the result deadline for a command. Pure — unit tested. */
 export function resultTimeoutForCommand(command: string): number {
+  if (HOST_HANDOFF_COMMANDS.has(command)) return HOST_HANDOFF_RPC_TIMEOUT_MS;
   if (GIT_COMMANDS.has(command)) return GIT_COMMAND_TIMEOUT_MS;
   if (REPO_MUTATION_COMMANDS.has(command)) return REPO_MUTATION_COMMAND_TIMEOUT_MS;
   if (GIT_STATUS_PROBE_COMMANDS.has(command)) return GIT_STATUS_PROBE_TIMEOUT_MS;

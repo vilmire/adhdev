@@ -13,6 +13,7 @@ import type { CertificatePort, HandoffClock, HandoffDataPort, HandoffLog, Handof
 import { verifyStagedSnapshot } from './snapshot-import.js';
 import { sha256Hex } from './snapshot-export.js';
 import { verifyHostTransferCertificate } from './certificate.js';
+import { originGrantPublicKeysEqual } from '../origin-grant-keypair.js';
 import { HOST_HANDOFF_PROTOCOL, type HandoffLaunchPlan, type HandoffAck, type HandoffManifest, type HandoffRecord, type HostTransferCertificate, type PeerResult, type TargetPhase } from './types.js';
 
 export interface TargetDeps {
@@ -30,6 +31,11 @@ export interface TargetDeps {
 
 /** Staged-but-never-activated handoffs are discarded after this long without contact. */
 export const TARGET_STAGE_TTL_MS = 30 * 60_000;
+/** The canary already proved this exact selection moments ago; do not bill it again after apply. */
+const POST_APPLY_CANARY_MAX_AGE_MS = 15 * 60_000;
+const LAUNCH_RETRY_MS = 60_000;
+const LAUNCH_MAX_ATTEMPTS = 5;
+const LAUNCH_CONVERGE_WINDOW_MS = 60 * 60_000;
 
 const fail = (code: string, error?: string, extra: Record<string, unknown> = {}): PeerResult => ({ success: false, code, ...(error ? { error } : {}), ...extra });
 
@@ -51,15 +57,25 @@ export class HostHandoffTarget {
         return daemonIdsEquivalent(rec.peerDaemonId, sender) ? null : fail('wrong_peer');
     }
 
-    async capability(a: { handoffId: string; meshId: string; fromDaemonId: string; launchPlan?: HandoffLaunchPlan }, sender: string): Promise<PeerResult & { protocol?: number; targetDaemonId?: string; originGrantPublicKey?: string; ready?: { coordinatorLaunchable: boolean; diskOk: boolean; checks?: Array<{ id: string; ok: boolean; detail?: string }> } }> {
-        const view = this.d.mesh.read(a.meshId);
+    /** Local record first; a worker daemon may know the project only through its pairing record. */
+    private memberView(meshId: string, sender: string) {
+        return this.d.mesh.read(meshId) ?? this.d.mesh.describeMember?.(meshId, sender) ?? null;
+    }
+
+    async capability(a: { handoffId: string; meshId: string; fromDaemonId: string; launchPlan?: HandoffLaunchPlan; sourcePublicKey?: string; offeredMesh?: Record<string, unknown> | null }, sender: string): Promise<PeerResult & { protocol?: number; targetDaemonId?: string; originGrantPublicKey?: string; hostKeyPinned?: boolean; diskFreeBytes?: number; ready?: { coordinatorLaunchable: boolean; diskOk: boolean; checks?: Array<{ id: string; ok: boolean; detail?: string }> } }> {
+        const view = this.memberView(a.meshId, sender);
         if (!view || view.role !== 'member') return fail('target_not_member', 'this daemon is not a member of the mesh');
         if (!view.hostDaemonId || !daemonIdsEquivalent(view.hostDaemonId, sender)) return fail('wrong_peer', 'sender is not this member\'s host');
         const active = this.d.journal.findActive(a.meshId, 'target');
         if (active && active.handoffId !== a.handoffId) return fail('handoff_in_progress');
-        const readiness = await this.d.coordinator.readiness?.(a.meshId, a.launchPlan);
+        // Compared here, never adopted here: a key offered over the wire is not a pin.
+        if (view.hostPublicKey && a.sourcePublicKey && !originGrantPublicKeysEqual(view.hostPublicKey, a.sourcePublicKey)) {
+            return fail('host_key_mismatch', 'the host key pinned on this machine differs from the key the host presents');
+        }
+        const readiness = await this.d.coordinator.readiness?.(a.meshId, a.launchPlan, { offeredMesh: a.offeredMesh ?? null });
         return {
             success: true, protocol: HOST_HANDOFF_PROTOCOL, targetDaemonId: this.d.selfDaemonId, originGrantPublicKey: this.d.certificate.ownPublicKey(),
+            hostKeyPinned: !!view.hostPublicKey, diskFreeBytes: this.d.data.freeDiskBytes(),
             ready: { coordinatorLaunchable: readiness?.ok ?? this.d.coordinator.canLaunch(a.meshId), ...(readiness ? { checks: readiness.checks } : {}), diskOk: this.d.data.freeDiskBytes() > 64 * 1024 * 1024 },
         };
     }
@@ -68,9 +84,9 @@ export class HostHandoffTarget {
         const m = a.manifest;
         if (!m || m.protocol !== HOST_HANDOFF_PROTOCOL || m.handoffId !== a.handoffId || m.meshId !== a.meshId) return fail('manifest_mismatch');
         if (!daemonIdsEquivalent(m.fromDaemonId, sender) || !daemonIdsEquivalent(m.toDaemonId, this.d.selfDaemonId)) return fail('wrong_peer');
-        const view = this.d.mesh.read(a.meshId);
+        const view = this.memberView(a.meshId, sender);
         if (!view || view.role !== 'member' || !view.hostDaemonId || !daemonIdsEquivalent(view.hostDaemonId, sender)) return fail('wrong_peer');
-        if (m.nextEpoch !== view.hostEpoch + 1 || m.hostEpoch !== view.hostEpoch) return fail('stale_epoch');
+        if (m.nextEpoch !== m.hostEpoch + 1 || (!view.unrecorded && m.hostEpoch !== view.hostEpoch)) return fail('stale_epoch');
         const existing = this.d.journal.get(a.handoffId, 'target');
         if (existing) {
             if (existing.phase === 'discarded') return fail('handoff_aborted');
@@ -129,6 +145,16 @@ export class HostHandoffTarget {
             this.discardInternal(rec, `verify:${result.code}`);
             return fail(result.code, result.detail);
         }
+        // The real import inside a rolled-back transaction. A conflict found here costs a
+        // coordinator restart on the source. Found after the certificate, it would strand the project.
+        try {
+            this.d.data.dryRunApply?.(rec.meshId, result.payload, { handoffId: rec.handoffId, sourceDaemonId: rec.peerDaemonId, snapshotDigest: manifest.digest, epoch: rec.epoch });
+        } catch (e) {
+            const detail = (e as Error)?.message ?? String(e);
+            this.log(`snapshot would not apply: ${detail}`);
+            this.discardInternal(rec, `snapshot_conflict:${detail}`);
+            return fail('snapshot_conflict', detail);
+        }
         this.move(a.handoffId, 'staged');
         this.move(a.handoffId, 'verified', { rowCounts: result.rowCounts });
         const ack: HandoffAck = {
@@ -168,13 +194,13 @@ export class HostHandoffTarget {
         if (rec.phase === 'active' || rec.phase === 'activating') {
             if (!saved || saved.signature !== a.certificate?.signature) return fail('certificate_invalid');
         } else {
-            const view = this.d.mesh.read(rec.meshId);
+            const view = this.memberView(rec.meshId, rec.peerDaemonId);
             const cert = a.certificate;
             const valid = cert && cert.sourceStopped === true && cert.handoffId === rec.handoffId
                 && cert.hostEpoch === rec.epoch && daemonIdsEquivalent(cert.newHostDaemonId, this.d.selfDaemonId)
                 && cert.newHostPublicKey === this.d.certificate.ownPublicKey() && view?.hostPublicKey
                 && verifyHostTransferCertificate(cert, { meshId: rec.meshId, pinnedHostDaemonId: rec.peerDaemonId,
-                    pinnedHostPublicKey: view.hostPublicKey, heldEpoch: view.hostEpoch }).ok;
+                    pinnedHostPublicKey: view.hostPublicKey, heldEpoch: view.unrecorded ? rec.epoch - 1 : view.hostEpoch }).ok;
             if (!valid) return fail('certificate_invalid', 'verified source stop certificate required', { applied: false });
         }
         // An active authority is not evidence of a ready coordinator process.
@@ -191,9 +217,12 @@ export class HostHandoffTarget {
         if (!verified.ok) { this.discardInternal(rec, `reverify:${verified.code}`); return fail(verified.code, verified.detail, { applied: false, discarded: true, phase: 'discarded', epoch: rec.epoch }); }
         if (manifest.launchPlan && manifest.launchPlan.targetNodeId !== a.certificate.newHostNodeId) return fail('certificate_invalid');
         if (this.d.coordinator.readiness) {
-            const readiness = await this.d.coordinator.readiness(rec.meshId, manifest.launchPlan);
+            const readiness = await this.d.coordinator.readiness(rec.meshId, manifest.launchPlan, { offeredMesh: verified.payload.config });
             const current = this.d.journal.get(rec.handoffId, 'target');
-            if (!current || current.phase !== rec.phase) return fail('handoff_in_progress');
+            // The ACK's own reply can land during this await and move verified -> acked. That is the
+            // handoff going right, not a concurrent change: only a discard or a new phase refuses.
+            const stillStaged = (phase?: string) => phase === 'verified' || phase === 'acked';
+            if (!current || (current.phase !== rec.phase && !(stillStaged(current.phase) && stillStaged(rec.phase)))) return fail('handoff_in_progress');
             if (!readiness.ok) {
                 const failed = readiness.checks.filter(check => !check.ok).map(check => check.id).join(',') || 'unknown';
                 this.log(`target readiness refused: ${failed}`);
@@ -202,12 +231,27 @@ export class HostHandoffTarget {
                 return fail('target_not_launchable', 'Target readiness changed; staged authority discarded.', { applied: false, discarded: true, phase: 'discarded', epoch: rec.epoch });
             }
         }
+        const firstApply = rec.phase !== 'activating';
         this.d.journal.putCertificate(a.handoffId, a.certificate);
         this.move(a.handoffId, 'activating');
         try {
+            const pinned = this.memberView(rec.meshId, rec.peerDaemonId);
+            if (pinned?.unrecorded) this.d.mesh.materializeMember?.(rec.meshId, verified.payload.config, rec.peerDaemonId, pinned.hostPublicKey!);
             this.d.mesh.setFence(rec.meshId, { handoffId: rec.handoffId, epoch: rec.epoch });
             this.d.data.freezeWrites?.(rec.meshId, rec.handoffId, rec.epoch);
-            this.d.data.applySnapshot(rec.meshId, verified.payload, { handoffId: rec.handoffId, sourceDaemonId: rec.peerDaemonId, snapshotDigest: manifest.digest, epoch: rec.epoch });
+            try {
+                this.d.data.applySnapshot(rec.meshId, verified.payload, { handoffId: rec.handoffId, sourceDaemonId: rec.peerDaemonId, snapshotDigest: manifest.digest, epoch: rec.epoch });
+            } catch (e) {
+                // One rolled-back transaction, on the first attempt: nothing was applied and no
+                // authority exists here. This is the one failure a retained tombstone can prove.
+                if (firstApply && (e as { handoffNoEffect?: boolean }).handoffNoEffect === true) {
+                    this.d.mesh.setFence(rec.meshId, null, rec.handoffId);
+                    this.log(`snapshot apply rolled back: ${(e as Error)?.message ?? e}`);
+                    this.discardActivation(rec, `apply_rolled_back:${(e as Error)?.message ?? e}`);
+                    return fail('snapshot_conflict', (e as Error)?.message, { applied: false, discarded: true, phase: 'discarded', epoch: rec.epoch });
+                }
+                throw e;
+            }
             this.d.mesh.applyConfig(rec.meshId, verified.payload.config);
             this.d.mesh.writeHost(rec.meshId, {
                 role: 'host', hostDaemonId: this.d.selfDaemonId, ...((rec.targetNodeId ?? this.d.selfNodeId?.(rec.meshId)) ? { hostNodeId: (rec.targetNodeId ?? this.d.selfNodeId?.(rec.meshId))! } : {}), hostEpoch: rec.epoch,
@@ -223,19 +267,44 @@ export class HostHandoffTarget {
 
     private async finishActivation(handoffId: string, cert?: HostTransferCertificate): Promise<PeerResult & { applied?: boolean; coordinatorReady?: boolean; coordinatorSessionId?: string }> {
         const rec = this.d.journal.get(handoffId, 'target')!;
-        if (this.d.coordinator.readiness && !(await this.d.coordinator.readiness(rec.meshId, rec.launchPlan)).ok) {
+        if (this.d.coordinator.readiness && !(await this.d.coordinator.readiness(rec.meshId, rec.launchPlan, { canaryMaxAgeMs: POST_APPLY_CANARY_MAX_AGE_MS })).ok) {
             return fail('target_not_launchable', 'Applied activation remains fenced until target readiness recovers.');
         }
         this.move(handoffId, 'active');
         this.d.mesh.setFence(rec.meshId, null, handoffId);
         this.d.journal.clearStage(handoffId);
-        let launched: { success: boolean; sessionId?: string; ready: boolean } = { success: false, ready: false };
-        try { launched = await this.d.coordinator.launch(rec.meshId, handoffId, rec.launchPlan); } catch (e) { this.log(`coordinator launch failed: ${(e as Error)?.message ?? e}`); }
+        const launched = await this.launchOnce(handoffId);
         if (cert) {
             const view = this.d.mesh.read(rec.meshId);
             void this.d.certificate.broadcast(rec.meshId, cert, [this.d.selfDaemonId, rec.peerDaemonId, ...(view ? [] : [])]).catch(() => undefined);
         }
         return { success: true, applied: true, coordinatorReady: launched.ready, ...(launched.sessionId ? { coordinatorSessionId: launched.sessionId } : {}) };
+    }
+
+    /** Authority first, runtime second. Every attempt is journalled before the launch leaves. */
+    private async launchOnce(handoffId: string): Promise<{ success: boolean; sessionId?: string; ready: boolean }> {
+        const rec = this.d.journal.get(handoffId, 'target')!;
+        const now = this.d.clock.now();
+        this.d.journal.update(handoffId, 'target', { launchAttempts: (rec.launchAttempts ?? 0) + 1, lastLaunchAt: now });
+        let launched: { success: boolean; sessionId?: string; ready: boolean } = { success: false, ready: false };
+        try { launched = await this.d.coordinator.launch(rec.meshId, handoffId, rec.launchPlan); }
+        catch (e) { this.log(`coordinator launch failed: ${(e as Error)?.message ?? e}`); }
+        if (launched.ready) this.d.journal.update(handoffId, 'target', { coordinatorReadyAt: this.d.clock.now() });
+        return launched;
+    }
+
+    /** Active with no proved coordinator (a crash or failed launch after authority moved).
+     * Launch only on an authoritative empty census: unknown never launches a second one. */
+    private async convergeLaunch(rec: HandoffRecord): Promise<void> {
+        if (!this.d.coordinator.observe || rec.coordinatorReadyAt !== undefined) return;
+        const now = this.d.clock.now();
+        if (now - rec.updatedAt >= LAUNCH_CONVERGE_WINDOW_MS || (rec.launchAttempts ?? 0) >= LAUNCH_MAX_ATTEMPTS) return;
+        if (rec.lastLaunchAt !== undefined && now - rec.lastLaunchAt < LAUNCH_RETRY_MS) return;
+        const seen = await this.d.coordinator.observe(rec.meshId, rec.launchPlan);
+        if (seen.ready) { this.d.journal.update(rec.handoffId, 'target', { coordinatorReadyAt: now }); return; }
+        if (!seen.runtimeVerified || (seen.liveCount ?? 0) !== 0) return;
+        this.log(`target ${rec.handoffId} is host with no coordinator; launching`);
+        await this.launchOnce(rec.handoffId);
     }
 
     async status(a: { handoffId: string; meshId: string }, sender: string): Promise<PeerResult & { phase?: string; epoch?: number }> {
@@ -246,7 +315,8 @@ export class HostHandoffTarget {
         const view = this.d.mesh.read(rec.meshId);
         let observation: import('./ports.js').CoordinatorObservation | undefined;
         try { observation = await this.d.coordinator.observe?.(rec.meshId, rec.launchPlan); } catch { /* no observation is unknown */ }
-        return { success: true, phase: rec.phase, epoch: rec.epoch, actualHostDaemonId: view?.hostDaemonId, actualHostNodeId: view?.hostNodeId, observation };
+        return { success: true, phase: rec.phase, epoch: rec.epoch, actualHostDaemonId: view?.hostDaemonId, actualHostNodeId: view?.hostNodeId, observation,
+            ...(rec.launchAttempts !== undefined ? { launchAttempts: rec.launchAttempts } : {}), ...(rec.coordinatorReadyAt !== undefined ? { coordinatorReadyAt: rec.coordinatorReadyAt } : {}) };
     }
 
     discard(a: { handoffId: string; meshId: string }, sender: string): PeerResult {
@@ -264,6 +334,12 @@ export class HostHandoffTarget {
     private discardInternal(rec: HandoffRecord, reason: string): void {
         const cur = this.d.journal.get(rec.handoffId, 'target');
         if (!cur || cur.phase === 'discarded' || cur.phase === 'active') return;
+        this.move(rec.handoffId, 'discarded', { abortReason: reason });
+        this.d.journal.clearStage(rec.handoffId);
+    }
+
+    /** The discard an `activating` record may take: its only effect was a transaction that rolled back. */
+    private discardActivation(rec: HandoffRecord, reason: string): void {
         this.move(rec.handoffId, 'discarded', { abortReason: reason });
         this.d.journal.clearStage(rec.handoffId);
     }
@@ -290,6 +366,7 @@ export class HostHandoffTarget {
         const now = this.d.clock.now();
         for (const rec of this.d.journal.list().filter(r => r.role === 'target')) {
             if (this.activations.has(rec.handoffId)) continue;
+            if (rec.phase === 'active') { try { await this.convergeLaunch(rec); } catch (e) { this.log(`launch convergence: ${(e as Error)?.message ?? e}`); } continue; }
             if ((rec.phase === 'importing' || rec.phase === 'staged' || rec.phase === 'verified' || rec.phase === 'acked') && now - rec.updatedAt >= TARGET_STAGE_TTL_MS) {
                 this.discardInternal(rec, 'stage_ttl');
             }

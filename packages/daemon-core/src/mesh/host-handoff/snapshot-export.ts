@@ -42,6 +42,9 @@ export const HOST_SNAPSHOT_TABLES: readonly TableSpec[] = [
     { table: 'assistant_metric_daily', meshColumn: 'mesh_id', orderBy: 'day' },
 ];
 
+/** Local storage key of a project-scoped history table (see history-identity.ts). Never leaves the machine. */
+export const HISTORY_ROW_ID = 'row_id';
+
 type Db = { prepare(sql: string): { all(...a: unknown[]): unknown[] }; transaction?<T>(fn: () => T): () => T };
 
 export interface SnapshotPayload {
@@ -78,12 +81,12 @@ export function sanitizeConfigForSnapshot(value: unknown): { value: unknown; rem
 
 export function readTable(db: Db, spec: TableSpec, meshId: string): { columns: string[]; rows: unknown[][] } {
     const objs = db.prepare(`SELECT * FROM ${spec.table} WHERE ${spec.scopeSql ?? `${spec.meshColumn} = ?`} ORDER BY ${spec.orderBy}`).all(meshId) as Array<Record<string, unknown>>;
-    const columns = objs.length ? Object.keys(objs[0]!) : tableColumns(db, spec.table);
+    const columns = objs.length ? Object.keys(objs[0]!).filter(c => c !== HISTORY_ROW_ID) : tableColumns(db, spec.table);
     return { columns, rows: objs.map(o => columns.map(c => o[c] ?? null)) };
 }
 
 export function tableColumns(db: Db, table: string): string[] {
-    return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(r => r.name);
+    return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(r => r.name).filter(c => c !== HISTORY_ROW_ID);
 }
 
 export interface ExportInput {

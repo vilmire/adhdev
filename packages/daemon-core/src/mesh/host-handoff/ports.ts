@@ -18,6 +18,8 @@ export interface HostMeshView {
     hostPublicKey?: string;
     handedOff: boolean;
     handoffFence?: { handoffId: string; epoch: number };
+    /** No local record: a worker daemon known only through its pairing/host record. Holds no epoch of its own. */
+    unrecorded?: boolean;
     /** Daemons on the mesh roster (nodes), excluding nobody — callers filter self. */
     memberDaemonIds: string[];
     /** Raw mesh config entry (sanitised by the exporter). */
@@ -36,6 +38,10 @@ export interface HostMetaWrite {
 
 export interface HandoffMeshPort {
     read(meshId: string): HostMeshView | null;
+    /** A daemon with no local project record whose durable host record names `sender`. */
+    describeMember?(meshId: string, sender: string): HostMeshView | null;
+    /** Create the local member record a config-less worker daemon needs before it can take authority. */
+    materializeMember?(meshId: string, config: Record<string, unknown> | null, hostDaemonId: string, hostPublicKey: string): void;
     /** Persist before source stop. Absence of a response never releases this fence. */
     setFence(meshId: string, fence: { handoffId: string; epoch: number } | null, expectedHandoffId?: string): void;
     /** Durable write of the host fields of the mesh's meshHost metadata. */
@@ -51,6 +57,8 @@ export interface HandoffDataPort {
     localColumns(table: string): string[];
     /** One transaction: replace the mesh's host-owned rows with the snapshot. */
     applySnapshot(meshId: string, payload: SnapshotPayload, provenance?: { handoffId: string; sourceDaemonId: string; snapshotDigest: string; epoch?: number }): Record<string, number>;
+    /** Prove the snapshot would apply, then roll everything back. Throws the conflict the real apply would hit. */
+    dryRunApply?(meshId: string, payload: SnapshotPayload, provenance?: { handoffId: string; sourceDaemonId: string; snapshotDigest: string; epoch?: number }): void;
     freeDiskBytes(): number;
     /** Source: record that the mesh's host-owned data is now read-only history. */
     markHandedOff(row: { meshId: string; handoffId: string; newHostDaemonId: string; epoch: number; handedOffAt: number; retainUntil: number }): void;
@@ -74,13 +82,15 @@ export interface SourceCoordinatorPort {
     selectLaunch?(meshId: string, targetNodeId?: string): HandoffLaunchPlan;
     /** Resolve only after the trusted runtime census proves all project coordinators stopped. */
     stopSource(meshId: string): Promise<void | HostTransferCertificate['sourceStopProof']>;
+    /** Only after the handoff can no longer activate: bring back the coordinator this handoff stopped. */
+    restoreSource?(meshId: string): Promise<{ success: boolean; sessionId?: string; error?: string }>;
 }
 
 export interface CoordinatorObservation { liveCount?: number; ready: boolean; sessionId?: string; runtimeVerified: boolean; checkedAt: number }
 
 export interface TargetCoordinatorPort {
     observe?(meshId: string, plan?: HandoffLaunchPlan): Promise<CoordinatorObservation>;
-    readiness?(meshId: string, plan: HandoffLaunchPlan | undefined): Promise<{ ok: boolean; checks: Array<{ id: string; ok: boolean; detail?: string }> }>;
+    readiness?(meshId: string, plan: HandoffLaunchPlan | undefined, opts?: { offeredMesh?: Record<string, unknown> | null; canaryMaxAgeMs?: number }): Promise<{ ok: boolean; checks: Array<{ id: string; ok: boolean; detail?: string }> }>;
     canLaunch(meshId: string): boolean;
     /** Launch the coordinator on the new host with the restart brief; `ready` = it reached ready. */
     launch(meshId: string, handoffId: string, plan?: HandoffLaunchPlan): Promise<{ success: boolean; sessionId?: string; ready: boolean }>;
@@ -92,6 +102,8 @@ export interface CertificatePort {
     ownPublicKey(): string;
     /** Push the certificate to the other mesh members (best-effort, idempotent). */
     broadcast(meshId: string, cert: HostTransferCertificate, exceptDaemonIds: string[]): Promise<void>;
+    /** Deliver to one member and report whether it adopted (or already holds) the transfer. */
+    deliver?(daemonId: string, meshId: string, cert: HostTransferCertificate): Promise<boolean>;
 }
 
 export interface HandoffClock {

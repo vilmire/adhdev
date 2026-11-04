@@ -9,6 +9,7 @@ import { HOST_SNAPSHOT_TABLES, readTable, manifestDigest, sha256Hex, tableColumn
 import type { HandoffManifest } from './types.js';
 import { verifyProjectApprovalFiles } from './project-files.js';
 import { resolveAssistantProject } from '../../assistant/assistant-projects.js';
+import { ensureProjectScopedHistory, historyIdentityColumns, PROJECT_SCOPED_HISTORY_TABLES } from './history-identity.js';
 
 export function approvalProjectResolver(config: SnapshotPayload['config'], meshId: string): (ref: string) => string | null {
     return ref => {
@@ -108,7 +109,15 @@ export function applySnapshotTables(db: Db, meshId: string, payload: SnapshotPay
     const mutable = new Set(['mesh_queue', 'mesh_missions', 'mesh_mission_items', 'mesh_handoff_note_text', 'mesh_idle_reminder',
         'assistant_threads', 'mesh_operating_notes', 'mesh_scheduler_cursor', 'mesh_releases', 'mesh_release_missions',
         'assistant_decision_answer_log', 'assistant_metric_daily']);
-    const surrogate: Record<string, string> = { mesh_mission_events: 'seq', mesh_release_events: 'seq', mesh_tool_call_log: 'id', assistant_procedure_signals: 'id' };
+    const surrogate: Record<string, string> = { mesh_mission_events: 'seq', mesh_release_events: 'seq', ...(historyIdentity === 'preserve-exact' ? {} : { mesh_tool_call_log: 'id', assistant_procedure_signals: 'id' }) };
+    /** Per-daemon logs whose integer id is a private rowid no API exposes: they append, identified by content. */
+    const appendOnly = historyIdentity === 'preserve-exact' ? new Set(['mesh_tool_call_log', 'assistant_procedure_signals']) : new Set<string>();
+    /** Rows this daemon observed for itself as a worker. Same id with different local delivery
+     * bookkeeping is expected, not a divergence: the local row stays, and the incoming one is archived above. */
+    const observed = new Set(['mesh_topic_index', 'mesh_local_records', 'session_artifacts', 'turn_events']);
+    const sourceWins = (table: string, row: unknown[], columns: string[], existing: Record<string, unknown>): boolean =>
+        (table === 'turn_events' && row[columns.indexOf('publish_state')] === 'pending')
+        || (table === 'session_artifacts' && existing.origin_daemon_id === source);
     const apply = db.transaction(() => {
         const counts: Record<string, number> = {};
         const retained = db.prepare('SELECT snapshot_digest FROM mesh_host_handoff_archive WHERE handoff_id=? AND side=?').all(handoffId, 'source-snapshot')[0] as { snapshot_digest: string } | undefined;
@@ -120,11 +129,29 @@ export function applySnapshotTables(db: Db, meshId: string, payload: SnapshotPay
             .run(handoffId, 'source-snapshot', meshId, digest, JSON.stringify(payload));
         for (const spec of HOST_SNAPSHOT_TABLES) {
             const t = payload.tables[spec.table]!;
-            const pk = (db.prepare(`PRAGMA table_info(${spec.table})`).all() as Array<{ name: string; pk: number }>)
-                .filter(c => c.pk).sort((a, b) => a.pk - b.pk).map(c => c.name);
+            if (appendOnly.has(spec.table)) {
+                const keep = t.columns.filter(c => c !== surrogateIdOf(spec.table));
+                const at = keep.map(c => t.columns.indexOf(c));
+                const held = db.prepare(`SELECT 1 FROM ${spec.table} WHERE ${keep.map(c => `${c} IS ?`).join(' AND ')} LIMIT 1`);
+                const add = db.prepare(`INSERT INTO ${spec.table} (${keep.join(', ')}) VALUES (${keep.map(() => '?').join(', ')})`);
+                for (const row of t.rows) {
+                    const values = at.map(i => row[i]);
+                    if (!held.all(...values).length) add.run(...values);
+                }
+                counts[spec.table] = t.rows.length;
+                continue;
+            }
+            // Mission and release event seqs are exposed per project. Another project's event
+            // with the same number is not a collision: both keep their exact id.
+            if (historyIdentity === 'preserve-exact' && PROJECT_SCOPED_HISTORY_TABLES.has(spec.table)) {
+                const seqAt = t.columns.indexOf('seq');
+                const foreign = db.prepare(`SELECT 1 FROM ${spec.table} WHERE seq = ? AND mesh_id != ? LIMIT 1`);
+                if (t.rows.some(row => foreign.all(row[seqAt], meshId).length)) ensureProjectScopedHistory(db as never, spec.table);
+            }
+            const pk = historyIdentityColumns(db as never, spec.table);
             if (!pk.length) throw new Error(`snapshot table has no identity: ${spec.table}`);
             const select = db.prepare(`SELECT * FROM ${spec.table} WHERE ${pk.map(k => `${k} = ?`).join(' AND ')}`);
-            const insert = db.prepare(`INSERT INTO ${spec.table} (${t.columns.join(', ')}) VALUES (${t.columns.map(() => '?').join(', ')})`);
+            const insert = db.prepare(`INSERT ${observed.has(spec.table) ? 'OR IGNORE ' : ''}INTO ${spec.table} (${t.columns.join(', ')}) VALUES (${t.columns.map(() => '?').join(', ')})`);
             const coordinate = surrogate[spec.table];
             const needsRemap = coordinate && t.rows.some(row => {
                 const key = JSON.stringify(pk.map(k => row[t.columns.indexOf(k)]));
@@ -167,7 +194,9 @@ export function applySnapshotTables(db: Db, meshId: string, payload: SnapshotPay
                     const scopeMatches = spec.parentTable
                         ? before[spec.table]!.rows.some(r => pk.every(k => r[before[spec.table]!.columns.indexOf(k)] === row[t.columns.indexOf(k)]))
                         : existing[spec.meshColumn] === meshId;
-                    if (!scopeMatches || !mutable.has(spec.table)) throw new Error(`snapshot conflicts with retained local state: ${spec.table}`);
+                    if (!scopeMatches) throw new Error(`snapshot conflicts with retained local state: ${spec.table}`);
+                    if (observed.has(spec.table) && !sourceWins(spec.table, row, t.columns, existing)) continue;
+                    if (!observed.has(spec.table) && !mutable.has(spec.table)) throw new Error(`snapshot conflicts with retained local state: ${spec.table}`);
                     db.prepare(`UPDATE ${spec.table} SET ${t.columns.map(c => `${c}=?`).join(',')} WHERE ${pk.map(k => `${k}=?`).join(' AND ')}`)
                         .run(...row, ...pk.map(k => row[t.columns.indexOf(k)]));
                 } else insert.run(...row);
@@ -178,6 +207,8 @@ export function applySnapshotTables(db: Db, meshId: string, payload: SnapshotPay
     });
     return apply();
 }
+
+function surrogateIdOf(table: string): string { return table === 'mesh_tool_call_log' || table === 'assistant_procedure_signals' ? 'id' : ''; }
 
 export function localTableColumns(db: Db): (table: string) => string[] {
     return (table) => tableColumns(db as never, table);

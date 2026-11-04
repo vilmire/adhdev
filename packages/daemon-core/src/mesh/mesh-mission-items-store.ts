@@ -311,7 +311,9 @@ export class MissionItemStore {
         const res = this.db.prepare(
             'INSERT INTO mesh_mission_events (mission_id, mesh_id, type, actor, payload_json, at) VALUES (?, ?, ?, ?, ?, ?)',
         ).run(missionId, meshId, type, actor ?? null, boundEventPayload(payload), new Date().toISOString());
-        return Number(res.lastInsertRowid);
+        // A project-scoped table's rowid is local storage; `seq` is the exposed id.
+        const row = this.db.prepare('SELECT seq FROM mesh_mission_events WHERE rowid = ?').get(res.lastInsertRowid) as { seq: number } | undefined;
+        return Number(row?.seq ?? res.lastInsertRowid);
     }
 
     listEvents(meshId: string, missionId: string, opts?: { limit?: number; types?: readonly MissionEventType[] }): MissionEventRecord[] {

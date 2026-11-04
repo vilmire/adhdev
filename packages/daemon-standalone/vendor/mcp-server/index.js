@@ -43155,13 +43155,15 @@ ${error.message || ""}`;
     var HOST_HANDOFF_CHUNK_BYTES;
     var HOST_HANDOFF_FREEZE_TIMEOUT_MS;
     var HOST_HANDOFF_ACK_TIMEOUT_MS;
+    var HOST_HANDOFF_CHUNK_ATTEMPTS;
+    var HOST_HANDOFF_ADVERTISE_INTERVAL_MS;
     var HOST_HANDOFF_PROBE_BASE_MS;
     var HOST_HANDOFF_PROBE_MAX_MS;
     var HOST_HANDOFF_RETENTION_MS;
     var init_types2 = __esm2({
       "src/mesh/host-handoff/types.ts"() {
         "use strict";
-        HOST_HANDOFF_PROTOCOL = 2;
+        HOST_HANDOFF_PROTOCOL = 3;
         HOST_HANDOFF_VERB = {
           owner: "mesh_host_handoff",
           capability: "mesh_host_handoff_capability",
@@ -43171,11 +43173,15 @@ ${error.message || ""}`;
           status: "mesh_host_handoff_status",
           discard: "mesh_host_handoff_discard",
           /** Previous host (or the new one) -> other members: the signed host transfer certificate. */
-          certificate: "mesh_host_handoff_certificate"
+          certificate: "mesh_host_handoff_certificate",
+          /** Source -> roster member during preflight: which protocol does this build speak. Read-only. */
+          memberProbe: "mesh_host_handoff_member_probe"
         };
         HOST_HANDOFF_CHUNK_BYTES = 256 * 1024;
         HOST_HANDOFF_FREEZE_TIMEOUT_MS = 5 * 6e4;
         HOST_HANDOFF_ACK_TIMEOUT_MS = 2 * 6e4;
+        HOST_HANDOFF_CHUNK_ATTEMPTS = 3;
+        HOST_HANDOFF_ADVERTISE_INTERVAL_MS = 5 * 6e4;
         HOST_HANDOFF_PROBE_BASE_MS = 3e4;
         HOST_HANDOFF_PROBE_MAX_MS = 5 * 6e4;
         HOST_HANDOFF_RETENTION_MS = 14 * 24 * 60 * 6e4;
@@ -43205,11 +43211,11 @@ ${error.message || ""}`;
     }
     function readTable(db3, spec, meshId) {
       const objs = db3.prepare(`SELECT * FROM ${spec.table} WHERE ${spec.scopeSql ?? `${spec.meshColumn} = ?`} ORDER BY ${spec.orderBy}`).all(meshId);
-      const columns = objs.length ? Object.keys(objs[0]) : tableColumns(db3, spec.table);
+      const columns = objs.length ? Object.keys(objs[0]).filter((c) => c !== HISTORY_ROW_ID) : tableColumns(db3, spec.table);
       return { columns, rows: objs.map((o) => columns.map((c) => o[c] ?? null)) };
     }
     function tableColumns(db3, table) {
-      return db3.prepare(`PRAGMA table_info(${table})`).all().map((r) => r.name);
+      return db3.prepare(`PRAGMA table_info(${table})`).all().map((r) => r.name).filter((c) => c !== HISTORY_ROW_ID);
     }
     function manifestDigest(m) {
       return sha256Hex(JSON.stringify([
@@ -43267,6 +43273,7 @@ ${error.message || ""}`;
     }
     var import_node_crypto7;
     var HOST_SNAPSHOT_TABLES;
+    var HISTORY_ROW_ID;
     var SECRET_KEY;
     var init_snapshot_export = __esm2({
       "src/mesh/host-handoff/snapshot-export.ts"() {
@@ -43318,6 +43325,7 @@ ${error.message || ""}`;
           { table: "assistant_memory_entry", meshColumn: "project_ref", scopeSql: "scope = 'project' AND project_ref = ?", orderBy: "seq" },
           { table: "assistant_metric_daily", meshColumn: "mesh_id", orderBy: "day" }
         ];
+        HISTORY_ROW_ID = "row_id";
         SECRET_KEY = /(secret|token|password|passphrase|credential|private_?key|api_?key|authorization)/i;
       }
     });
@@ -43371,7 +43379,10 @@ ${error.message || ""}`;
       if (!current5) return;
       if (current5.handoff_id !== handoffId) throw new Error("project write fence identity changed");
       if (history) db3.prepare("UPDATE mesh_host_write_fences SET mode='history' WHERE mesh_id=? AND handoff_id=?").run(meshId, handoffId);
-      else db3.prepare("DELETE FROM mesh_host_write_fences WHERE mesh_id=? AND handoff_id=?").run(meshId, handoffId);
+      else {
+        db3.prepare("DELETE FROM mesh_host_write_fences WHERE mesh_id=? AND handoff_id=?").run(meshId, handoffId);
+        db3.prepare("DELETE FROM mesh_host_frozen_rows WHERE mesh_id=?").run(meshId);
+      }
     }
     function withHandoffImport(db3, meshId, operation) {
       const state2 = permits.get(db3);
@@ -45880,7 +45891,8 @@ ${error.message || ""}`;
             const res = this.db.prepare(
               "INSERT INTO mesh_mission_events (mission_id, mesh_id, type, actor, payload_json, at) VALUES (?, ?, ?, ?, ?, ?)"
             ).run(missionId, meshId, type2, actor ?? null, boundEventPayload(payload), (/* @__PURE__ */ new Date()).toISOString());
-            return Number(res.lastInsertRowid);
+            const row2 = this.db.prepare("SELECT seq FROM mesh_mission_events WHERE rowid = ?").get(res.lastInsertRowid);
+            return Number(row2?.seq ?? res.lastInsertRowid);
           }
           listEvents(meshId, missionId, opts) {
             const limit = Math.max(1, Math.min(opts?.limit ?? 50, 500));
@@ -47660,6 +47672,7 @@ ${error.message || ""}`;
         );
     `);
       if (db3.prepare && !db3.prepare("PRAGMA table_info(mesh_host_handoff)").all().some((c) => c.name === "launch_plan_json")) db3.exec("ALTER TABLE mesh_host_handoff ADD COLUMN launch_plan_json TEXT");
+      if (db3.prepare && !db3.prepare("PRAGMA table_info(mesh_host_handoff)").all().some((c) => c.name === "ext_json")) db3.exec("ALTER TABLE mesh_host_handoff ADD COLUMN ext_json TEXT");
       if (db3.function && db3.prepare) initializeHandoffWriteFences(db3);
     }
     var init_schema2 = __esm2({
@@ -110509,6 +110522,45 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         return false;
       }
     }
+    function transferMeshHostRecord(meshId, next, opts) {
+      const mesh = meshId.trim();
+      if (!mesh) return false;
+      const configDir = getConfigDir2(opts?.env);
+      try {
+        const all = readAll(configDir);
+        const existing = all[mesh];
+        if (!next) {
+          if (!existing) return false;
+          delete all[mesh];
+          writeAll(all, configDir);
+          return true;
+        }
+        const host = next.hostDaemonId.trim();
+        if (!host) return false;
+        const pinned = isValidOriginGrantPublicKey(next.originGrantPublicKey) ? next.originGrantPublicKey.trim() : void 0;
+        const keepPairing = existing?.source === "pairing" && !!pinned;
+        all[mesh] = {
+          meshId: mesh,
+          hostDaemonId: host,
+          source: keepPairing ? "pairing" : existing?.source === "pairing" ? "session_stamp" : existing?.source ?? "session_stamp",
+          recordedAt: (/* @__PURE__ */ new Date()).toISOString(),
+          ...keepPairing ? { originGrantPublicKey: pinned, pairingVerified: true } : {}
+        };
+        writeAll(all, configDir);
+        if (pinned) {
+          authenticatedPeerPublicKeys.set(peerKey(mesh, host, configDir), pinned);
+          try {
+            const peerKeys = readPeerGrantKeysFile(configDir);
+            peerKeys[peerStoreKey(mesh, host)] = pinned;
+            writePeerGrantKeysFile(peerKeys, configDir);
+          } catch {
+          }
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    }
     function canAcceptPeerOriginGrantPublicKey(meshId, peerDaemonId, originGrantPublicKey, opts) {
       const mesh = typeof meshId === "string" ? meshId.trim() : "";
       const peer = typeof peerDaemonId === "string" ? peerDaemonId.trim() : "";
@@ -140047,23 +140099,23 @@ ${tail}` : ""
       verifyProjectApprovalFiles(files, meshId, resolveProject3);
       return files;
     }
+    function assertDestination(path141, data) {
+      const consumed = `${path141}.consumed`;
+      if ((0, import_node_fs45.existsSync)(consumed)) {
+        const stat2 = (0, import_node_fs45.lstatSync)(consumed);
+        if (!stat2.isFile() || stat2.isSymbolicLink()) throw new Error("approval consent receipt is not a local file");
+        throw new Error("approval consent receipt already retained");
+      }
+      if ((0, import_node_fs45.existsSync)(path141)) verifyExisting(path141, data);
+    }
+    function assertProjectApprovalDestinations(configDir, files) {
+      for (const file of files) assertDestination((0, import_node_path37.join)(configDir, "assistant", file.area, file.name), file.data);
+    }
     function importProjectApprovalFiles(configDir, meshId, files, resolveProject3) {
       verifyProjectApprovalFiles(files, meshId, resolveProject3);
-      const verifyExisting = (path141, data) => {
-        const stat2 = (0, import_node_fs45.lstatSync)(path141);
-        if (!stat2.isFile() || stat2.isSymbolicLink() || (0, import_node_fs45.readFileSync)(path141, "utf8") !== data) throw new Error("approval destination conflicts with retained data");
-      };
       const destinations = files.map((file) => {
         const path141 = (0, import_node_path37.join)(safeDir(configDir, file.area, true), file.name);
-        const consumed = `${path141}.consumed`;
-        if ((0, import_node_fs45.existsSync)(consumed)) {
-          const stat2 = (0, import_node_fs45.lstatSync)(consumed);
-          if (!stat2.isFile() || stat2.isSymbolicLink()) throw new Error("approval consent receipt is not a local file");
-          throw new Error("approval consent receipt already retained");
-        }
-        if ((0, import_node_fs45.existsSync)(path141)) {
-          verifyExisting(path141, file.data);
-        }
+        assertDestination(path141, file.data);
         return { file, path: path141 };
       });
       for (const { file, path: path141 } of destinations) {
@@ -140105,6 +140157,7 @@ ${tail}` : ""
     var MAX_BYTES;
     var digest6;
     var record5;
+    var verifyExisting;
     var init_project_files = __esm2({
       "src/mesh/host-handoff/project-files.ts"() {
         "use strict";
@@ -140116,6 +140169,48 @@ ${tail}` : ""
         MAX_BYTES = 20 * 1024 * 1024;
         digest6 = (data) => (0, import_node_crypto61.createHash)("sha256").update(data).digest("hex");
         record5 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : null;
+        verifyExisting = (path141, data) => {
+          const stat2 = (0, import_node_fs45.lstatSync)(path141);
+          if (!stat2.isFile() || stat2.isSymbolicLink() || (0, import_node_fs45.readFileSync)(path141, "utf8") !== data) throw new Error("approval destination conflicts with retained data");
+        };
+      }
+    });
+    function columnsOf(db3, table) {
+      return db3.prepare(`PRAGMA table_info(${table})`).all();
+    }
+    function historyIdentityColumns(db3, table) {
+      const columns = columnsOf(db3, table);
+      if (columns.some((c) => c.name === HISTORY_ROW_ID)) return ["mesh_id", "seq"];
+      return columns.filter((c) => c.pk).sort((a, b) => a.pk - b.pk).map((c) => c.name);
+    }
+    function ensureProjectScopedHistory(db3, table) {
+      if (!PROJECT_SCOPED_HISTORY_TABLES.has(table)) throw new Error(`not a project-scoped history table: ${table}`);
+      const columns = columnsOf(db3, table);
+      if (columns.some((c) => c.name === HISTORY_ROW_ID)) return;
+      const rest = columns.filter((c) => c.name !== "seq");
+      const indexes = db3.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL").all(table).map((r) => r.sql);
+      const declared = rest.map((c) => `${c.name} ${c.type}${c.notnull ? " NOT NULL" : ""}${c.dflt_value !== null ? ` DEFAULT ${c.dflt_value}` : ""}`);
+      const names = rest.map((c) => c.name).join(", ");
+      db3.transaction(() => {
+        db3.exec(`CREATE TABLE ${table}__scoped (${HISTORY_ROW_ID} INTEGER PRIMARY KEY AUTOINCREMENT, seq INTEGER, ${declared.join(", ")}, UNIQUE (mesh_id, seq));
+            INSERT INTO ${table}__scoped (${HISTORY_ROW_ID}, seq, ${names}) SELECT seq, seq, ${names} FROM ${table};
+            DROP TABLE ${table};
+            ALTER TABLE ${table}__scoped RENAME TO ${table};
+            CREATE INDEX IF NOT EXISTS idx_${table}_seq ON ${table}(seq);
+            CREATE TRIGGER ${table}_assign_seq AFTER INSERT ON ${table} WHEN NEW.seq IS NULL BEGIN
+                UPDATE ${table} SET seq = MAX(NEW.${HISTORY_ROW_ID}, (SELECT COALESCE(MAX(seq), 0) + 1 FROM ${table})) WHERE ${HISTORY_ROW_ID} = NEW.${HISTORY_ROW_ID};
+            END;`);
+        for (const sql of indexes) db3.exec(sql);
+        initializeHandoffWriteFences(db3);
+      })();
+    }
+    var PROJECT_SCOPED_HISTORY_TABLES;
+    var init_history_identity = __esm2({
+      "src/mesh/host-handoff/history-identity.ts"() {
+        "use strict";
+        init_write_fence();
+        init_snapshot_export();
+        PROJECT_SCOPED_HISTORY_TABLES = /* @__PURE__ */ new Set(["mesh_mission_events", "mesh_release_events"]);
       }
     });
     var snapshot_import_exports = {};
@@ -140218,7 +140313,10 @@ ${tail}` : ""
         "assistant_decision_answer_log",
         "assistant_metric_daily"
       ]);
-      const surrogate = { mesh_mission_events: "seq", mesh_release_events: "seq", mesh_tool_call_log: "id", assistant_procedure_signals: "id" };
+      const surrogate = { mesh_mission_events: "seq", mesh_release_events: "seq", ...historyIdentity === "preserve-exact" ? {} : { mesh_tool_call_log: "id", assistant_procedure_signals: "id" } };
+      const appendOnly = historyIdentity === "preserve-exact" ? /* @__PURE__ */ new Set(["mesh_tool_call_log", "assistant_procedure_signals"]) : /* @__PURE__ */ new Set();
+      const observed2 = /* @__PURE__ */ new Set(["mesh_topic_index", "mesh_local_records", "session_artifacts", "turn_events"]);
+      const sourceWins = (table, row2, columns, existing) => table === "turn_events" && row2[columns.indexOf("publish_state")] === "pending" || table === "session_artifacts" && existing.origin_daemon_id === source2;
       const apply = db3.transaction(() => {
         const counts2 = {};
         const retained = db3.prepare("SELECT snapshot_digest FROM mesh_host_handoff_archive WHERE handoff_id=? AND side=?").all(handoffId, "source-snapshot")[0];
@@ -140228,10 +140326,27 @@ ${tail}` : ""
         db3.prepare("INSERT OR IGNORE INTO mesh_host_handoff_archive (handoff_id,side,mesh_id,snapshot_digest,payload_json) VALUES (?,?,?,?,?)").run(handoffId, "source-snapshot", meshId, digest7, JSON.stringify(payload));
         for (const spec of HOST_SNAPSHOT_TABLES) {
           const t = payload.tables[spec.table];
-          const pk = db3.prepare(`PRAGMA table_info(${spec.table})`).all().filter((c) => c.pk).sort((a, b) => a.pk - b.pk).map((c) => c.name);
+          if (appendOnly.has(spec.table)) {
+            const keep = t.columns.filter((c) => c !== surrogateIdOf(spec.table));
+            const at = keep.map((c) => t.columns.indexOf(c));
+            const held = db3.prepare(`SELECT 1 FROM ${spec.table} WHERE ${keep.map((c) => `${c} IS ?`).join(" AND ")} LIMIT 1`);
+            const add = db3.prepare(`INSERT INTO ${spec.table} (${keep.join(", ")}) VALUES (${keep.map(() => "?").join(", ")})`);
+            for (const row2 of t.rows) {
+              const values = at.map((i) => row2[i]);
+              if (!held.all(...values).length) add.run(...values);
+            }
+            counts2[spec.table] = t.rows.length;
+            continue;
+          }
+          if (historyIdentity === "preserve-exact" && PROJECT_SCOPED_HISTORY_TABLES.has(spec.table)) {
+            const seqAt = t.columns.indexOf("seq");
+            const foreign = db3.prepare(`SELECT 1 FROM ${spec.table} WHERE seq = ? AND mesh_id != ? LIMIT 1`);
+            if (t.rows.some((row2) => foreign.all(row2[seqAt], meshId).length)) ensureProjectScopedHistory(db3, spec.table);
+          }
+          const pk = historyIdentityColumns(db3, spec.table);
           if (!pk.length) throw new Error(`snapshot table has no identity: ${spec.table}`);
           const select = db3.prepare(`SELECT * FROM ${spec.table} WHERE ${pk.map((k) => `${k} = ?`).join(" AND ")}`);
-          const insert = db3.prepare(`INSERT INTO ${spec.table} (${t.columns.join(", ")}) VALUES (${t.columns.map(() => "?").join(", ")})`);
+          const insert = db3.prepare(`INSERT ${observed2.has(spec.table) ? "OR IGNORE " : ""}INTO ${spec.table} (${t.columns.join(", ")}) VALUES (${t.columns.map(() => "?").join(", ")})`);
           const coordinate = surrogate[spec.table];
           const needsRemap = coordinate && t.rows.some((row2) => {
             const key7 = JSON.stringify(pk.map((k) => row2[t.columns.indexOf(k)]));
@@ -140271,7 +140386,9 @@ ${tail}` : ""
             }
             if (existing) {
               const scopeMatches = spec.parentTable ? before[spec.table].rows.some((r) => pk.every((k) => r[before[spec.table].columns.indexOf(k)] === row2[t.columns.indexOf(k)])) : existing[spec.meshColumn] === meshId;
-              if (!scopeMatches || !mutable.has(spec.table)) throw new Error(`snapshot conflicts with retained local state: ${spec.table}`);
+              if (!scopeMatches) throw new Error(`snapshot conflicts with retained local state: ${spec.table}`);
+              if (observed2.has(spec.table) && !sourceWins(spec.table, row2, t.columns, existing)) continue;
+              if (!observed2.has(spec.table) && !mutable.has(spec.table)) throw new Error(`snapshot conflicts with retained local state: ${spec.table}`);
               db3.prepare(`UPDATE ${spec.table} SET ${t.columns.map((c) => `${c}=?`).join(",")} WHERE ${pk.map((k) => `${k}=?`).join(" AND ")}`).run(...row2, ...pk.map((k) => row2[t.columns.indexOf(k)]));
             } else insert.run(...row2);
           }
@@ -140280,6 +140397,9 @@ ${tail}` : ""
         return counts2;
       });
       return apply();
+    }
+    function surrogateIdOf(table) {
+      return table === "mesh_tool_call_log" || table === "assistant_procedure_signals" ? "id" : "";
     }
     function localTableColumns(db3) {
       return (table) => tableColumns(db3, table);
@@ -140297,6 +140417,7 @@ ${tail}` : ""
         init_snapshot_export();
         init_project_files();
         init_assistant_projects();
+        init_history_identity();
       }
     });
     function retentionStatePath() {
@@ -143645,8 +143766,13 @@ ${grant.exp}`).digest("hex");
     function isTerminalPhase(role, phase) {
       return TERMINAL4[role].has(phase);
     }
+    function extOf(r) {
+      const ext = Object.fromEntries(EXT_KEYS.filter((k) => r[k] !== void 0).map((k) => [k, r[k]]));
+      return Object.keys(ext).length ? JSON.stringify(ext) : null;
+    }
     function fromRow2(r) {
       return {
+        ...r.ext_json ? JSON.parse(r.ext_json) : {},
         ...r.launch_plan_json ? { launchPlan: JSON.parse(r.launch_plan_json) } : {},
         handoffId: r.handoff_id,
         role: r.role,
@@ -143667,6 +143793,7 @@ ${grant.exp}`).digest("hex");
       };
     }
     var TERMINAL4;
+    var EXT_KEYS;
     var SqliteHandoffJournal;
     var init_journal = __esm2({
       "src/mesh/host-handoff/journal.ts"() {
@@ -143675,6 +143802,7 @@ ${grant.exp}`).digest("hex");
           source: /* @__PURE__ */ new Set(["committed", "aborted"]),
           target: /* @__PURE__ */ new Set(["active", "discarded"])
         };
+        EXT_KEYS = ["coordinatorReadyAt", "launchAttempts", "lastLaunchAt", "memberAcks", "lastAdvertiseAt", "restore"];
         SqliteHandoffJournal = class {
           constructor(db3) {
             this.db = db3;
@@ -143689,11 +143817,11 @@ ${grant.exp}`).digest("hex");
             return hit ? fromRow2(hit) : null;
           }
           put(r) {
-            this.db.prepare(`INSERT INTO mesh_host_handoff (handoff_id, role, mesh_id, peer_daemon_id, phase, epoch, manifest_digest, row_counts_json, target_node_id, created_at, updated_at, abort_reason, commit_intent_at, probe_count, last_probe_at, target_public_key, launch_plan_json)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            this.db.prepare(`INSERT INTO mesh_host_handoff (handoff_id, role, mesh_id, peer_daemon_id, phase, epoch, manifest_digest, row_counts_json, target_node_id, created_at, updated_at, abort_reason, commit_intent_at, probe_count, last_probe_at, target_public_key, launch_plan_json, ext_json)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(handoff_id, role) DO UPDATE SET mesh_id=excluded.mesh_id, peer_daemon_id=excluded.peer_daemon_id, phase=excluded.phase, epoch=excluded.epoch,
               manifest_digest=excluded.manifest_digest, row_counts_json=excluded.row_counts_json, target_node_id=excluded.target_node_id, updated_at=excluded.updated_at,
-              abort_reason=excluded.abort_reason, commit_intent_at=excluded.commit_intent_at, probe_count=excluded.probe_count, last_probe_at=excluded.last_probe_at, target_public_key=excluded.target_public_key, launch_plan_json=excluded.launch_plan_json`).run(
+              abort_reason=excluded.abort_reason, commit_intent_at=excluded.commit_intent_at, probe_count=excluded.probe_count, last_probe_at=excluded.last_probe_at, target_public_key=excluded.target_public_key, launch_plan_json=excluded.launch_plan_json, ext_json=excluded.ext_json`).run(
               r.handoffId,
               r.role,
               r.meshId,
@@ -143710,7 +143838,8 @@ ${grant.exp}`).digest("hex");
               r.probeCount ?? null,
               r.lastProbeAt ?? null,
               r.targetPublicKey ?? null,
-              r.launchPlan ? JSON.stringify(r.launchPlan) : null
+              r.launchPlan ? JSON.stringify(r.launchPlan) : null,
+              extOf(r)
             );
           }
           update(id4, role, patch) {
@@ -150220,14 +150349,37 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         init_origin_grant_keypair();
       }
     });
-    function applyHostTransferToMember(mesh, selfDaemonId, meshId, certificate) {
+    function applyHostTransferToMember(mesh, selfDaemonId, meshId, certificate, adoption) {
       const cert = certificate;
       if (!cert || typeof cert !== "object" || cert.meshId !== meshId) return { success: false, code: "certificate_wrong_mesh" };
       const view2 = mesh.read(meshId);
-      if (!view2) return { success: false, code: "certificate_wrong_mesh", error: "mesh unknown here" };
+      const followed = (from2) => {
+        adoption?.writeRecord(meshId, { hostDaemonId: cert.newHostDaemonId, originGrantPublicKey: cert.newHostPublicKey });
+        adoption?.reanchorSessions?.(meshId, from2, cert.newHostDaemonId);
+        return { success: true, adopted: true };
+      };
+      if (!view2) {
+        const record8 = adoption?.readRecord(meshId);
+        if (!record8) return { success: false, code: "certificate_wrong_mesh", error: "mesh unknown here" };
+        if (daemonIdsEquivalent5(record8.hostDaemonId, cert.newHostDaemonId)) return { success: true, duplicate: true };
+        if (record8.originGrantPublicKey) {
+          const verdict = verifyHostTransferCertificate(cert, { meshId, pinnedHostDaemonId: record8.hostDaemonId, pinnedHostPublicKey: record8.originGrantPublicKey, heldEpoch: cert.hostEpoch - 1 });
+          if (!verdict.ok) return { success: false, code: verdict.code };
+        } else if (!daemonIdsEquivalent5(record8.hostDaemonId, adoption.sender) || !daemonIdsEquivalent5(record8.hostDaemonId, cert.previousHostDaemonId)) {
+          return { success: false, code: "certificate_wrong_signer" };
+        }
+        return followed(record8.hostDaemonId);
+      }
+      if (view2.role === "member" && view2.hostDaemonId && !view2.hostPublicKey && adoption && daemonIdsEquivalent5(view2.hostDaemonId, adoption.sender) && daemonIdsEquivalent5(view2.hostDaemonId, cert.previousHostDaemonId) && Number.isSafeInteger(cert.hostEpoch) && cert.hostEpoch > view2.hostEpoch) {
+        const from2 = view2.hostDaemonId;
+        mesh.writeHost(meshId, { role: "member", hostDaemonId: cert.newHostDaemonId, ...cert.newHostNodeId ? { hostNodeId: cert.newHostNodeId } : {}, hostEpoch: cert.hostEpoch, hostPublicKey: cert.newHostPublicKey });
+        return followed(from2);
+      }
       if (view2.role !== "member" || !view2.hostDaemonId || !view2.hostPublicKey) {
         return { success: false, code: view2.role === "host" ? "certificate_stale_epoch" : "certificate_invalid", error: "no pinned host key to verify against" };
       }
+      if (daemonIdsEquivalent5(view2.hostDaemonId, cert.newHostDaemonId) && view2.hostEpoch === cert.hostEpoch && adoption) return { success: true, duplicate: true };
+      const from = view2.hostDaemonId;
       const adopted = adoptHostTransfer(cert, { meshId, hostDaemonId: view2.hostDaemonId, hostPublicKey: view2.hostPublicKey, hostEpoch: view2.hostEpoch });
       if (!adopted.ok) return { success: false, code: adopted.code };
       mesh.writeHost(meshId, {
@@ -150238,11 +150390,12 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         hostPublicKey: adopted.next.hostPublicKey
       });
       void selfDaemonId;
-      return { success: true, adopted: true };
+      return adoption ? followed(from) : { success: true, adopted: true };
     }
     var init_member_adopt = __esm2({
       "src/mesh/host-handoff/member-adopt.ts"() {
         "use strict";
+        init_dist();
         init_certificate();
       }
     });
@@ -150257,12 +150410,13 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         return engines2.certificate && meshId ? engines2.certificate({ meshId, certificate: args.certificate }, sender) : { success: false, code: "peer_capability_unconfirmed" };
       }
       if (!sender) return { success: false, code: "wrong_peer", error: "no authenticated sender" };
+      if (verb === HOST_HANDOFF_VERB.memberProbe) return { success: true, protocol: HOST_HANDOFF_PROTOCOL };
       if (!handoffId || !meshId) return { success: false, code: "invalid_args", error: "handoffId and meshId are required" };
       const target2 = engines2.target;
       const source2 = engines2.source;
       switch (verb) {
         case HOST_HANDOFF_VERB.capability:
-          return target2 ? target2.capability({ handoffId, meshId, fromDaemonId: str18(args.fromDaemonId), launchPlan: args.launchPlan }, sender) : { success: false, code: "peer_capability_unconfirmed" };
+          return target2 ? target2.capability({ handoffId, meshId, fromDaemonId: str18(args.fromDaemonId), launchPlan: args.launchPlan, sourcePublicKey: str18(args.sourcePublicKey) || void 0, offeredMesh: args.offeredMesh ?? null }, sender) : { success: false, code: "peer_capability_unconfirmed" };
         case HOST_HANDOFF_VERB.chunk: {
           if (!target2) return { success: false, code: "peer_capability_unconfirmed" };
           const op = str18(args.op);
@@ -150292,7 +150446,8 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         seal: (a) => send(HOST_HANDOFF_VERB.chunk, { op: "seal", ...a }),
         activate: (a) => send(HOST_HANDOFF_VERB.activate, a),
         status: (a) => send(HOST_HANDOFF_VERB.status, a),
-        discard: (a) => send(HOST_HANDOFF_VERB.discard, a)
+        discard: (a) => send(HOST_HANDOFF_VERB.discard, a),
+        memberProbe: (a) => send(HOST_HANDOFF_VERB.memberProbe, a)
       };
     }
     function createWireAckClient(dispatch2) {
@@ -150304,6 +150459,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         init_types2();
       }
     });
+    var MEMBER_UNREACHABLE;
     var refuse6;
     var HostHandoffSource;
     var init_source_machine = __esm2({
@@ -150312,6 +150468,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         init_dist();
         init_snapshot_export();
         init_types2();
+        MEMBER_UNREACHABLE = /PEER_NOT_CONNECTED|NO_PEER|NO_TRANSPORT|QUEUE_OVERFLOW|CONNECT_TIMEOUT|not connected|signaling|not available/i;
         refuse6 = (code, error, extra = {}) => ({ success: false, code, error, ...extra });
         HostHandoffSource = class {
           constructor(d) {
@@ -150322,6 +150479,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           busy = /* @__PURE__ */ new Set();
           starting = /* @__PURE__ */ new Set();
           activating = /* @__PURE__ */ new Set();
+          advertising = /* @__PURE__ */ new Set();
           /** Await background work (tests). */
           async idle() {
             while (this.inflight.size) await Promise.allSettled([...this.inflight]);
@@ -150365,28 +150523,57 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             if (checks.every((c) => c.ok)) {
               const probeId = input.handoffId ?? "probe";
               let cap;
+              const offeredMesh = view2?.config ? sanitizeConfigForSnapshot(view2.config).value : null;
               try {
-                cap = await this.d.peer(input.targetDaemonId).capability({ handoffId: probeId, meshId: input.meshId, fromDaemonId: this.d.selfDaemonId, launchPlan });
+                cap = await this.d.peer(input.targetDaemonId).capability({ handoffId: probeId, meshId: input.meshId, fromDaemonId: this.d.selfDaemonId, launchPlan, sourcePublicKey: this.d.certificate.ownPublicKey(), offeredMesh });
               } catch {
                 cap = void 0;
               }
               const capable = !!cap && cap.success === true && cap.protocol === HOST_HANDOFF_PROTOCOL;
               add("peer_capability", capable, "peer_capability_unconfirmed", capable ? void 0 : String(cap?.code ?? "no_response"));
               if (capable) {
+                add("host_key_pinned", cap.hostKeyPinned === true, "host_key_unpinned", cap.hostKeyPinned === true ? void 0 : "Pair the target with this host first (create_mesh_host_pairing_token, then join_mesh_host_pairing on the target).");
                 add("target_launchable", cap.ready?.coordinatorLaunchable === true, "target_not_launchable", JSON.stringify(cap.ready?.checks ?? []));
                 targetPublicKey = cap.originGrantPublicKey;
                 try {
                   const snap = this.d.data.exportSnapshot({ meshId: input.meshId, handoffId: probeId, fromDaemonId: this.d.selfDaemonId, toDaemonId: input.targetDaemonId, hostEpoch: view2.hostEpoch, meshConfig: view2.config, launchPlan });
                   estimateBytes2 = snapshotBytes(snap);
-                  add("disk_space", this.d.data.freeDiskBytes() >= estimateBytes2 * 2 && cap.ready?.diskOk !== false, "insufficient_disk");
+                  const targetFree = cap.diskFreeBytes;
+                  add("disk_space", this.d.data.freeDiskBytes() >= estimateBytes2 * 2 && cap.ready?.diskOk !== false && (targetFree === void 0 || targetFree >= estimateBytes2 * 3), "insufficient_disk");
                 } catch (e) {
                   add("snapshot_readable", false, "verify_failed", e?.message);
                 }
               }
+              if (capable) await this.checkFleetMembers(input, view2?.memberDaemonIds ?? [], checks);
               const freeze = await this.d.freeze.check(input.meshId);
               add("no_open_writer_checkpoint", freeze.ready || freeze.code !== "writer_checkpoint_pending", "writer_checkpoint_pending", freeze.ready ? void 0 : freeze.detail);
             }
             return { ok: checks.every((c) => c.ok), checks, ...launchPlan ? { launchPlan } : {}, ...targetPublicKey ? { targetPublicKey } : {}, ...estimateBytes2 !== void 0 ? { estimateBytes: estimateBytes2 } : {} };
+          }
+          /** Every online roster member must speak this protocol, or it could never adopt the new host. */
+          async checkFleetMembers(input, members, checks) {
+            const others = [...new Set(members)].filter((id4) => !daemonIdsEquivalent5(id4, this.d.selfDaemonId) && !daemonIdsEquivalent5(id4, input.targetDaemonId));
+            const stale = [], offline = [];
+            await Promise.all(others.map(async (id4) => {
+              if (!this.d.peerOnline(id4)) {
+                offline.push(id4);
+                return;
+              }
+              const probe = this.d.peer(id4).memberProbe;
+              let answer2;
+              try {
+                answer2 = await probe?.({ meshId: input.meshId });
+              } catch (e) {
+                const failure8 = e;
+                if (MEMBER_UNREACHABLE.test(`${String(failure8.code ?? "")} ${String(failure8.message ?? "")}`)) {
+                  offline.push(id4);
+                  return;
+                }
+              }
+              if (answer2?.success !== true || answer2.protocol !== HOST_HANDOFF_PROTOCOL) stale.push(id4);
+            }));
+            const detail = [stale.length ? `not on protocol ${HOST_HANDOFF_PROTOCOL}: ${stale.join(", ")}` : "", offline.length ? `offline, adopts on reconnect: ${offline.join(", ")}` : ""].filter(Boolean).join("; ");
+            checks.push({ id: "fleet_members", ok: stale.length === 0, ...stale.length ? { code: "member_protocol_unsupported" } : {}, ...detail ? { detail } : {} });
           }
           // ── start ────────────────────────────────────────────────────────────────
           async start(input) {
@@ -150522,11 +150709,20 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
               const have = new Set(m.have ?? []);
               for (const c of snap.chunks) {
                 if (have.has(c.seq)) continue;
-                const r = await peer.chunk({ handoffId: rec8.handoffId, meshId: rec8.meshId, seq: c.seq, sha256: c.sha256, data: c.data });
-                if (!r.success) return { ok: false, code: String(r.code ?? "chunk_hash_mismatch") };
+                for (let attempt = 1; ; attempt++) {
+                  try {
+                    const r = await peer.chunk({ handoffId: rec8.handoffId, meshId: rec8.meshId, seq: c.seq, sha256: c.sha256, data: c.data });
+                    if (!r.success) return { ok: false, code: String(r.code ?? "chunk_hash_mismatch") };
+                    break;
+                  } catch (e) {
+                    if (attempt >= HOST_HANDOFF_CHUNK_ATTEMPTS) throw e;
+                  }
+                }
+                this.d.journal.update(rec8.handoffId, "source", { updatedAt: this.d.clock.now() });
               }
               const sealed = await peer.seal({ handoffId: rec8.handoffId, meshId: rec8.meshId });
               if (!sealed.success) return { ok: false, code: String(sealed.code ?? "verify_failed") };
+              this.d.journal.update(rec8.handoffId, "source", { updatedAt: this.d.clock.now() });
               return { ok: true };
             } catch (e) {
               return { ok: false, code: `transfer_interrupted:${e?.message ?? e}` };
@@ -150635,8 +150831,9 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             this.d.hold.release(rec8.meshId, handoffId);
             const view2 = this.d.mesh.read(rec8.meshId);
             const certificate = cert ?? this.d.journal.getCertificate(handoffId);
-            if (certificate) void this.d.certificate.broadcast(rec8.meshId, certificate, [this.d.selfDaemonId, rec8.peerDaemonId]).catch(() => void 0);
+            if (certificate && !this.d.certificate.deliver) void this.d.certificate.broadcast(rec8.meshId, certificate, [this.d.selfDaemonId, rec8.peerDaemonId]).catch(() => void 0);
             void view2;
+            await this.advertise(handoffId, true);
             void info;
           }
           // ── abort ────────────────────────────────────────────────────────────────
@@ -150662,11 +150859,55 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             this.move(rec8.handoffId, "aborted", { abortReason: reason });
             this.snapshots.delete(rec8.handoffId);
             this.d.hold.release(rec8.meshId, rec8.handoffId);
+            const stopped = this.d.journal.getCertificate(rec8.handoffId)?.sourceStopProof?.sessionIds ?? [];
+            if (stopped.length && this.d.coordinator.restoreSource) {
+              const run5 = this.restore(rec8.handoffId, rec8.meshId);
+              this.inflight.add(run5);
+              void run5.finally(() => this.inflight.delete(run5));
+            }
             if (!targetAlreadyDiscarded) {
               try {
                 await this.d.peer(rec8.peerDaemonId).discard({ handoffId: rec8.handoffId, meshId: rec8.meshId });
               } catch {
               }
+            }
+          }
+          async restore(handoffId, meshId) {
+            let restore;
+            try {
+              const out = await this.d.coordinator.restoreSource(meshId);
+              restore = { ok: out.success === true, ...out.sessionId ? { sessionId: out.sessionId } : {}, ...out.error ? { error: out.error } : {}, at: this.d.clock.now() };
+            } catch (e) {
+              restore = { ok: false, error: e?.message ?? String(e), at: this.d.clock.now() };
+            }
+            this.log(`source coordinator restore ${restore.ok ? "ok" : `failed: ${restore.error ?? "unknown"}`}`);
+            this.d.journal.update(handoffId, "source", { restore });
+          }
+          /** Offer the transfer to every roster member that has not taken it. Members offline at
+           * commit adopt here when they return, for as long as the source retains the handoff. */
+          async advertise(handoffId, force) {
+            const deliver = this.d.certificate.deliver;
+            if (!deliver || this.advertising.has(handoffId)) return;
+            const rec8 = this.d.journal.get(handoffId, "source");
+            const cert = this.d.journal.getCertificate(handoffId);
+            if (!rec8 || rec8.phase !== "committed" || !cert) return;
+            const now = this.d.clock.now();
+            if (!force && rec8.lastAdvertiseAt !== void 0 && now - rec8.lastAdvertiseAt < HOST_HANDOFF_ADVERTISE_INTERVAL_MS) return;
+            const acks = new Set(rec8.memberAcks ?? []);
+            const members = [...new Set(this.d.mesh.read(rec8.meshId)?.memberDaemonIds ?? [])].filter((id4) => !daemonIdsEquivalent5(id4, this.d.selfDaemonId) && !daemonIdsEquivalent5(id4, rec8.peerDaemonId) && ![...acks].some((a) => daemonIdsEquivalent5(a, id4)));
+            if (!members.length) return;
+            this.advertising.add(handoffId);
+            try {
+              for (const id4 of members) {
+                if (!this.d.peerOnline(id4)) continue;
+                try {
+                  if (await deliver(id4, rec8.meshId, cert)) acks.add(id4);
+                } catch {
+                }
+              }
+              this.d.journal.update(handoffId, "source", { memberAcks: [...acks], lastAdvertiseAt: now });
+            } finally {
+              this.advertising.delete(handoffId);
             }
           }
           /** Owner abort. After `activate` was sent, only a target-confirmed discard permits it. */
@@ -150700,7 +150941,8 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             const now = this.d.clock.now();
             for (const rec8 of this.d.journal.list().filter((r) => r.role === "source")) {
               if (rec8.phase === "freezing" || rec8.phase === "frozen") await this.advance(rec8.handoffId);
-              else if (rec8.phase === "awaiting_ack" && now - rec8.updatedAt >= HOST_HANDOFF_ACK_TIMEOUT_MS) await this.abortInternal(rec8, "ack_timeout");
+              else if (rec8.phase === "awaiting_ack" && !this.busy.has(rec8.handoffId) && now - rec8.updatedAt >= HOST_HANDOFF_ACK_TIMEOUT_MS) await this.abortInternal(rec8, "ack_timeout");
+              else if (rec8.phase === "committed" && now - rec8.updatedAt < HOST_HANDOFF_RETENTION_MS) await this.advertise(rec8.handoffId, false);
               else if (rec8.phase === "uncertain" || rec8.phase === "activating" && !this.activating.has(rec8.handoffId) && rec8.commitIntentAt) await this.probe(rec8.handoffId, false);
             }
           }
@@ -150759,10 +151001,17 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             const rec8 = this.d.journal.get(handoffId, "source");
             if (!rec8) return { success: false, code: "handoff_unknown" };
             if (rec8.phase === "awaiting_ack") {
-              const sent = await this.transfer(rec8);
-              if (!sent.ok) {
-                await this.abortInternal(rec8, sent.code);
-                return { success: false, code: sent.code, phase: "aborted" };
+              if (this.busy.has(handoffId)) return { success: true, phase: "awaiting_ack", transferring: true };
+              this.busy.add(handoffId);
+              try {
+                const sent = await this.transfer(rec8);
+                if (!sent.ok) {
+                  this.busy.delete(handoffId);
+                  await this.abortInternal(rec8, sent.code);
+                  return { success: false, code: sent.code, phase: "aborted" };
+                }
+              } finally {
+                this.busy.delete(handoffId);
               }
               this.d.journal.update(handoffId, "source", { updatedAt: this.d.clock.now() });
               return { success: true, phase: "awaiting_ack" };
@@ -150815,6 +151064,10 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       }
     });
     var TARGET_STAGE_TTL_MS;
+    var POST_APPLY_CANARY_MAX_AGE_MS;
+    var LAUNCH_RETRY_MS;
+    var LAUNCH_MAX_ATTEMPTS;
+    var LAUNCH_CONVERGE_WINDOW_MS;
     var fail10;
     var HostHandoffTarget;
     var init_target_machine = __esm2({
@@ -150824,8 +151077,13 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         init_snapshot_import();
         init_snapshot_export();
         init_certificate();
+        init_origin_grant_keypair();
         init_types2();
         TARGET_STAGE_TTL_MS = 30 * 6e4;
+        POST_APPLY_CANARY_MAX_AGE_MS = 15 * 6e4;
+        LAUNCH_RETRY_MS = 6e4;
+        LAUNCH_MAX_ATTEMPTS = 5;
+        LAUNCH_CONVERGE_WINDOW_MS = 60 * 6e4;
         fail10 = (code, error, extra = {}) => ({ success: false, code, ...error ? { error } : {}, ...extra });
         HostHandoffTarget = class {
           constructor(d) {
@@ -150847,18 +151105,27 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           requireSource(rec8, sender) {
             return daemonIdsEquivalent5(rec8.peerDaemonId, sender) ? null : fail10("wrong_peer");
           }
+          /** Local record first; a worker daemon may know the project only through its pairing record. */
+          memberView(meshId, sender) {
+            return this.d.mesh.read(meshId) ?? this.d.mesh.describeMember?.(meshId, sender) ?? null;
+          }
           async capability(a, sender) {
-            const view2 = this.d.mesh.read(a.meshId);
+            const view2 = this.memberView(a.meshId, sender);
             if (!view2 || view2.role !== "member") return fail10("target_not_member", "this daemon is not a member of the mesh");
             if (!view2.hostDaemonId || !daemonIdsEquivalent5(view2.hostDaemonId, sender)) return fail10("wrong_peer", "sender is not this member's host");
             const active = this.d.journal.findActive(a.meshId, "target");
             if (active && active.handoffId !== a.handoffId) return fail10("handoff_in_progress");
-            const readiness = await this.d.coordinator.readiness?.(a.meshId, a.launchPlan);
+            if (view2.hostPublicKey && a.sourcePublicKey && !originGrantPublicKeysEqual(view2.hostPublicKey, a.sourcePublicKey)) {
+              return fail10("host_key_mismatch", "the host key pinned on this machine differs from the key the host presents");
+            }
+            const readiness = await this.d.coordinator.readiness?.(a.meshId, a.launchPlan, { offeredMesh: a.offeredMesh ?? null });
             return {
               success: true,
               protocol: HOST_HANDOFF_PROTOCOL,
               targetDaemonId: this.d.selfDaemonId,
               originGrantPublicKey: this.d.certificate.ownPublicKey(),
+              hostKeyPinned: !!view2.hostPublicKey,
+              diskFreeBytes: this.d.data.freeDiskBytes(),
               ready: { coordinatorLaunchable: readiness?.ok ?? this.d.coordinator.canLaunch(a.meshId), ...readiness ? { checks: readiness.checks } : {}, diskOk: this.d.data.freeDiskBytes() > 64 * 1024 * 1024 }
             };
           }
@@ -150866,9 +151133,9 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             const m = a.manifest;
             if (!m || m.protocol !== HOST_HANDOFF_PROTOCOL || m.handoffId !== a.handoffId || m.meshId !== a.meshId) return fail10("manifest_mismatch");
             if (!daemonIdsEquivalent5(m.fromDaemonId, sender) || !daemonIdsEquivalent5(m.toDaemonId, this.d.selfDaemonId)) return fail10("wrong_peer");
-            const view2 = this.d.mesh.read(a.meshId);
+            const view2 = this.memberView(a.meshId, sender);
             if (!view2 || view2.role !== "member" || !view2.hostDaemonId || !daemonIdsEquivalent5(view2.hostDaemonId, sender)) return fail10("wrong_peer");
-            if (m.nextEpoch !== view2.hostEpoch + 1 || m.hostEpoch !== view2.hostEpoch) return fail10("stale_epoch");
+            if (m.nextEpoch !== m.hostEpoch + 1 || !view2.unrecorded && m.hostEpoch !== view2.hostEpoch) return fail10("stale_epoch");
             const existing = this.d.journal.get(a.handoffId, "target");
             if (existing) {
               if (existing.phase === "discarded") return fail10("handoff_aborted");
@@ -150938,6 +151205,14 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
               this.discardInternal(rec8, `verify:${result.code}`);
               return fail10(result.code, result.detail);
             }
+            try {
+              this.d.data.dryRunApply?.(rec8.meshId, result.payload, { handoffId: rec8.handoffId, sourceDaemonId: rec8.peerDaemonId, snapshotDigest: manifest.digest, epoch: rec8.epoch });
+            } catch (e) {
+              const detail = e?.message ?? String(e);
+              this.log(`snapshot would not apply: ${detail}`);
+              this.discardInternal(rec8, `snapshot_conflict:${detail}`);
+              return fail10("snapshot_conflict", detail);
+            }
             this.move(a.handoffId, "staged");
             this.move(a.handoffId, "verified", { rowCounts: result.rowCounts });
             const ack = {
@@ -150985,13 +151260,13 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             if (rec8.phase === "active" || rec8.phase === "activating") {
               if (!saved || saved.signature !== a.certificate?.signature) return fail10("certificate_invalid");
             } else {
-              const view2 = this.d.mesh.read(rec8.meshId);
+              const view2 = this.memberView(rec8.meshId, rec8.peerDaemonId);
               const cert = a.certificate;
               const valid = cert && cert.sourceStopped === true && cert.handoffId === rec8.handoffId && cert.hostEpoch === rec8.epoch && daemonIdsEquivalent5(cert.newHostDaemonId, this.d.selfDaemonId) && cert.newHostPublicKey === this.d.certificate.ownPublicKey() && view2?.hostPublicKey && verifyHostTransferCertificate(cert, {
                 meshId: rec8.meshId,
                 pinnedHostDaemonId: rec8.peerDaemonId,
                 pinnedHostPublicKey: view2.hostPublicKey,
-                heldEpoch: view2.hostEpoch
+                heldEpoch: view2.unrecorded ? rec8.epoch - 1 : view2.hostEpoch
               }).ok;
               if (!valid) return fail10("certificate_invalid", "verified source stop certificate required", { applied: false });
             }
@@ -151011,9 +151286,10 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             }
             if (manifest.launchPlan && manifest.launchPlan.targetNodeId !== a.certificate.newHostNodeId) return fail10("certificate_invalid");
             if (this.d.coordinator.readiness) {
-              const readiness = await this.d.coordinator.readiness(rec8.meshId, manifest.launchPlan);
+              const readiness = await this.d.coordinator.readiness(rec8.meshId, manifest.launchPlan, { offeredMesh: verified.payload.config });
               const current5 = this.d.journal.get(rec8.handoffId, "target");
-              if (!current5 || current5.phase !== rec8.phase) return fail10("handoff_in_progress");
+              const stillStaged = (phase) => phase === "verified" || phase === "acked";
+              if (!current5 || current5.phase !== rec8.phase && !(stillStaged(current5.phase) && stillStaged(rec8.phase))) return fail10("handoff_in_progress");
               if (!readiness.ok) {
                 const failed = readiness.checks.filter((check) => !check.ok).map((check) => check.id).join(",") || "unknown";
                 this.log(`target readiness refused: ${failed}`);
@@ -151022,12 +151298,25 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
                 return fail10("target_not_launchable", "Target readiness changed; staged authority discarded.", { applied: false, discarded: true, phase: "discarded", epoch: rec8.epoch });
               }
             }
+            const firstApply = rec8.phase !== "activating";
             this.d.journal.putCertificate(a.handoffId, a.certificate);
             this.move(a.handoffId, "activating");
             try {
+              const pinned = this.memberView(rec8.meshId, rec8.peerDaemonId);
+              if (pinned?.unrecorded) this.d.mesh.materializeMember?.(rec8.meshId, verified.payload.config, rec8.peerDaemonId, pinned.hostPublicKey);
               this.d.mesh.setFence(rec8.meshId, { handoffId: rec8.handoffId, epoch: rec8.epoch });
               this.d.data.freezeWrites?.(rec8.meshId, rec8.handoffId, rec8.epoch);
-              this.d.data.applySnapshot(rec8.meshId, verified.payload, { handoffId: rec8.handoffId, sourceDaemonId: rec8.peerDaemonId, snapshotDigest: manifest.digest, epoch: rec8.epoch });
+              try {
+                this.d.data.applySnapshot(rec8.meshId, verified.payload, { handoffId: rec8.handoffId, sourceDaemonId: rec8.peerDaemonId, snapshotDigest: manifest.digest, epoch: rec8.epoch });
+              } catch (e) {
+                if (firstApply && e.handoffNoEffect === true) {
+                  this.d.mesh.setFence(rec8.meshId, null, rec8.handoffId);
+                  this.log(`snapshot apply rolled back: ${e?.message ?? e}`);
+                  this.discardActivation(rec8, `apply_rolled_back:${e?.message ?? e}`);
+                  return fail10("snapshot_conflict", e?.message, { applied: false, discarded: true, phase: "discarded", epoch: rec8.epoch });
+                }
+                throw e;
+              }
               this.d.mesh.applyConfig(rec8.meshId, verified.payload.config);
               this.d.mesh.writeHost(rec8.meshId, {
                 role: "host",
@@ -151043,23 +151332,48 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           }
           async finishActivation(handoffId, cert) {
             const rec8 = this.d.journal.get(handoffId, "target");
-            if (this.d.coordinator.readiness && !(await this.d.coordinator.readiness(rec8.meshId, rec8.launchPlan)).ok) {
+            if (this.d.coordinator.readiness && !(await this.d.coordinator.readiness(rec8.meshId, rec8.launchPlan, { canaryMaxAgeMs: POST_APPLY_CANARY_MAX_AGE_MS })).ok) {
               return fail10("target_not_launchable", "Applied activation remains fenced until target readiness recovers.");
             }
             this.move(handoffId, "active");
             this.d.mesh.setFence(rec8.meshId, null, handoffId);
             this.d.journal.clearStage(handoffId);
+            const launched = await this.launchOnce(handoffId);
+            if (cert) {
+              const view2 = this.d.mesh.read(rec8.meshId);
+              void this.d.certificate.broadcast(rec8.meshId, cert, [this.d.selfDaemonId, rec8.peerDaemonId, ...view2 ? [] : []]).catch(() => void 0);
+            }
+            return { success: true, applied: true, coordinatorReady: launched.ready, ...launched.sessionId ? { coordinatorSessionId: launched.sessionId } : {} };
+          }
+          /** Authority first, runtime second. Every attempt is journalled before the launch leaves. */
+          async launchOnce(handoffId) {
+            const rec8 = this.d.journal.get(handoffId, "target");
+            const now = this.d.clock.now();
+            this.d.journal.update(handoffId, "target", { launchAttempts: (rec8.launchAttempts ?? 0) + 1, lastLaunchAt: now });
             let launched = { success: false, ready: false };
             try {
               launched = await this.d.coordinator.launch(rec8.meshId, handoffId, rec8.launchPlan);
             } catch (e) {
               this.log(`coordinator launch failed: ${e?.message ?? e}`);
             }
-            if (cert) {
-              const view2 = this.d.mesh.read(rec8.meshId);
-              void this.d.certificate.broadcast(rec8.meshId, cert, [this.d.selfDaemonId, rec8.peerDaemonId, ...view2 ? [] : []]).catch(() => void 0);
+            if (launched.ready) this.d.journal.update(handoffId, "target", { coordinatorReadyAt: this.d.clock.now() });
+            return launched;
+          }
+          /** Active with no proved coordinator (a crash or failed launch after authority moved).
+           * Launch only on an authoritative empty census: unknown never launches a second one. */
+          async convergeLaunch(rec8) {
+            if (!this.d.coordinator.observe || rec8.coordinatorReadyAt !== void 0) return;
+            const now = this.d.clock.now();
+            if (now - rec8.updatedAt >= LAUNCH_CONVERGE_WINDOW_MS || (rec8.launchAttempts ?? 0) >= LAUNCH_MAX_ATTEMPTS) return;
+            if (rec8.lastLaunchAt !== void 0 && now - rec8.lastLaunchAt < LAUNCH_RETRY_MS) return;
+            const seen2 = await this.d.coordinator.observe(rec8.meshId, rec8.launchPlan);
+            if (seen2.ready) {
+              this.d.journal.update(rec8.handoffId, "target", { coordinatorReadyAt: now });
+              return;
             }
-            return { success: true, applied: true, coordinatorReady: launched.ready, ...launched.sessionId ? { coordinatorSessionId: launched.sessionId } : {} };
+            if (!seen2.runtimeVerified || (seen2.liveCount ?? 0) !== 0) return;
+            this.log(`target ${rec8.handoffId} is host with no coordinator; launching`);
+            await this.launchOnce(rec8.handoffId);
           }
           async status(a, sender) {
             const rec8 = this.d.journal.get(a.handoffId, "target");
@@ -151073,7 +151387,16 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
               observation = await this.d.coordinator.observe?.(rec8.meshId, rec8.launchPlan);
             } catch {
             }
-            return { success: true, phase: rec8.phase, epoch: rec8.epoch, actualHostDaemonId: view2?.hostDaemonId, actualHostNodeId: view2?.hostNodeId, observation };
+            return {
+              success: true,
+              phase: rec8.phase,
+              epoch: rec8.epoch,
+              actualHostDaemonId: view2?.hostDaemonId,
+              actualHostNodeId: view2?.hostNodeId,
+              observation,
+              ...rec8.launchAttempts !== void 0 ? { launchAttempts: rec8.launchAttempts } : {},
+              ...rec8.coordinatorReadyAt !== void 0 ? { coordinatorReadyAt: rec8.coordinatorReadyAt } : {}
+            };
           }
           discard(a, sender) {
             if (this.activations.has(a.handoffId)) return fail10("already_committed", "activation readiness or apply in progress");
@@ -151090,6 +151413,11 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           discardInternal(rec8, reason) {
             const cur = this.d.journal.get(rec8.handoffId, "target");
             if (!cur || cur.phase === "discarded" || cur.phase === "active") return;
+            this.move(rec8.handoffId, "discarded", { abortReason: reason });
+            this.d.journal.clearStage(rec8.handoffId);
+          }
+          /** The discard an `activating` record may take: its only effect was a transaction that rolled back. */
+          discardActivation(rec8, reason) {
             this.move(rec8.handoffId, "discarded", { abortReason: reason });
             this.d.journal.clearStage(rec8.handoffId);
           }
@@ -151112,6 +151440,14 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             const now = this.d.clock.now();
             for (const rec8 of this.d.journal.list().filter((r) => r.role === "target")) {
               if (this.activations.has(rec8.handoffId)) continue;
+              if (rec8.phase === "active") {
+                try {
+                  await this.convergeLaunch(rec8);
+                } catch (e) {
+                  this.log(`launch convergence: ${e?.message ?? e}`);
+                }
+                continue;
+              }
               if ((rec8.phase === "importing" || rec8.phase === "staged" || rec8.phase === "verified" || rec8.phase === "acked") && now - rec8.updatedAt >= TARGET_STAGE_TTL_MS) {
                 this.discardInternal(rec8, "stage_ttl");
               }
@@ -151361,10 +151697,36 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             hostEpoch: status.hostEpoch ?? 0,
             handedOff: !!status.handedOffTo,
             config: mesh,
-            hostPublicKey: raw.meshHost?.originGrantPublicKey,
+            // Pairing pins into the host record for a daemon that holds no project record, and
+            // into both once it does. Only authenticated pairing or a verified transfer writes either.
+            hostPublicKey: raw.meshHost?.originGrantPublicKey ?? (status.role === "member" && status.hostDaemonId ? readAuthenticatedPeerOriginGrantPublicKey(meshId, status.hostDaemonId) ?? void 0 : void 0),
             handoffFence: raw.meshHost?.handoffFence,
             memberDaemonIds: (raw.nodes ?? []).map((n) => String(n.daemonId ?? "")).filter(Boolean)
           };
+        },
+        describeMember(meshId, sender) {
+          const record8 = readMeshHostRecord(meshId);
+          if (!record8 || !daemonIdsEquivalent5(record8.hostDaemonId, sender)) return null;
+          return {
+            role: "member",
+            hostDaemonId: record8.hostDaemonId,
+            hostEpoch: 0,
+            unrecorded: true,
+            handedOff: false,
+            memberDaemonIds: [],
+            config: null,
+            hostPublicKey: readAuthenticatedPeerOriginGrantPublicKey(meshId, record8.hostDaemonId) ?? void 0
+          };
+        },
+        materializeMember(meshId, snapshotConfig, hostDaemonId, hostPublicKey) {
+          withHandoffConfigWrite(meshId, () => withMeshConfigWriteLock(() => {
+            const config = loadMeshConfig();
+            if (locate(config.meshes, meshId)) return;
+            if (!snapshotConfig) throw new Error("handoff snapshot carries no project config");
+            const { meshHost: _hostOwned, ...incoming } = snapshotConfig;
+            config.meshes.push({ ...incoming, id: meshId, meshHost: { role: "member", hostDaemonId, originGrantPublicKey: hostPublicKey } });
+            saveMeshConfig(config);
+          }));
         },
         setFence(meshId, fence, expectedHandoffId) {
           withHandoffConfigWrite(meshId, () => withStrictMeshConfigWriteLock(() => {
@@ -151416,6 +151778,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
             saveMeshConfig(config);
           }));
+          if (meta2.role === "host") transferMeshHostRecord(meshId, null);
         },
         applyConfig(meshId, snapshotConfig) {
           if (!snapshotConfig) return;
@@ -151465,13 +151828,32 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         localColumns: localTableColumns(db2()),
         applySnapshot: (meshId, payload, provenance) => {
           const store5 = MeshRuntimeStore.getInstance().db;
-          const counts2 = withHandoffImport(MeshRuntimeStore.getInstance().db, meshId, () => store5.transaction(() => {
-            const applied = applySnapshotTables(db2(), meshId, payload, provenance);
-            adoptPendingNoticeReceipts(db2(), meshId, payload, provenance);
-            return applied;
-          })());
+          let counts2;
+          try {
+            counts2 = withHandoffImport(MeshRuntimeStore.getInstance().db, meshId, () => store5.transaction(() => {
+              const applied = applySnapshotTables(db2(), meshId, payload, provenance);
+              adoptPendingNoticeReceipts(db2(), meshId, payload, provenance);
+              return applied;
+            })());
+          } catch (e) {
+            throw Object.assign(e, { handoffNoEffect: true });
+          }
           importProjectApprovalFiles(getConfigDir2(), meshId, payload.files, approvalProjectResolver(payload.config, meshId));
           return counts2;
+        },
+        dryRunApply: (meshId, payload, provenance) => {
+          const store5 = MeshRuntimeStore.getInstance().db;
+          const rollback = new Error("handoff dry run");
+          try {
+            withHandoffImport(MeshRuntimeStore.getInstance().db, meshId, () => store5.transaction(() => {
+              applySnapshotTables(db2(), meshId, payload, provenance);
+              adoptPendingNoticeReceipts(db2(), meshId, payload, provenance);
+              throw rollback;
+            })());
+          } catch (e) {
+            if (e !== rollback) throw e;
+          }
+          assertProjectApprovalDestinations(getConfigDir2(), payload.files);
         },
         freeDiskBytes: () => {
           try {
@@ -151530,6 +151912,10 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       return {
         sign: (u) => signHostTransferCertificate(u, getOrCreateHostKeyPair(host.selfDaemonId).privateKeyObj),
         ownPublicKey: () => getOrCreateHostKeyPair(host.selfDaemonId).publicKey,
+        async deliver(daemonId, meshId, cert) {
+          const answer2 = await host.dispatch(daemonId, "mesh_host_handoff_certificate", { meshId, handoffId: cert.handoffId, certificate: cert });
+          return answer2.success === true;
+        },
         async broadcast(meshId, cert, except) {
           const view2 = createLiveMeshPort(host.selfDaemonId).read(meshId);
           for (const daemonId of view2?.memberDaemonIds ?? []) {
@@ -151560,7 +151946,11 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         data,
         hold: createLiveHoldPort(),
         freeze: { check: liveFreezeCheck(host) },
-        coordinator: { selectLaunch: (m, n) => host.selectLaunch(m, n), stopSource: (meshId) => host.stopCoordinators(meshId) },
+        coordinator: {
+          selectLaunch: (m, n) => host.selectLaunch(m, n),
+          stopSource: (meshId) => host.stopCoordinators(meshId),
+          ...host.restoreCoordinator ? { restoreSource: (meshId) => host.restoreCoordinator(meshId) } : {}
+        },
         certificate,
         peer: (target2) => createWirePeerClient(host.dispatch, target2),
         peerOnline: (d) => host.peerOnline(d),
@@ -151578,7 +151968,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           clock,
           certificate,
           log,
-          coordinator: { observe: (m, p) => host.observeCoordinator(m, p), readiness: (m, p) => host.readiness(m, p), canLaunch: (m) => host.canLaunchCoordinator(m), launch: (m, h, p) => host.launchCoordinator(m, h, p) },
+          coordinator: { observe: (m, p) => host.observeCoordinator(m, p), readiness: (m, p, o) => host.readiness(m, p, o), canLaunch: (m) => host.canLaunchCoordinator(m), launch: (m, h, p) => host.launchCoordinator(m, h, p) },
           ackClient: createWireAckClient(host.dispatch),
           selfNodeId: (m) => host.selfNodeId(m)
         })
@@ -151599,6 +151989,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         init_origin_grant_keypair();
         init_mesh_runtime_store();
         init_mesh_host_ownership();
+        init_mesh_host_memory();
         init_new_work_hold();
         init_certificate();
         init_journal();
@@ -151701,6 +152092,15 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         if (!Object.prototype.hasOwnProperty.call(substitutions, key7)) throw new Error("unknown registered canary substitution");
         return substitutions[key7];
       }));
+    }
+    function recentCanaryProof(provider, selection, maxAgeMs) {
+      const hit = recentProofs.get(proofKey(provider, selection));
+      return hit && Date.now() - hit.at <= maxAgeMs ? hit.evidence : void 0;
+    }
+    async function runTargetCanaryCached(provider, selection) {
+      const evidence = await runTargetCanary(provider, selection);
+      if (evidence.ok) recentProofs.set(proofKey(provider, selection), { evidence, at: Date.now() });
+      return evidence;
     }
     async function runTargetCanary(provider, selection, options = {}) {
       const startedAt = Date.now(), canaryId = (0, import_node_crypto69.randomUUID)();
@@ -151814,6 +152214,8 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
     var HANDOFF_CANARY_PROMPT;
     var HANDOFF_CANARY_OUTPUT;
     var HANDOFF_CANARY_TIMEOUT_MS;
+    var recentProofs;
+    var proofKey;
     var init_target_canary = __esm2({
       "src/mesh/host-handoff/target-canary.ts"() {
         "use strict";
@@ -151826,6 +152228,8 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         HANDOFF_CANARY_PROMPT = "Reply exactly ADHDEV_HANDOFF_READY. Do not use tools, read files, run commands, or modify any state.";
         HANDOFF_CANARY_OUTPUT = "ADHDEV_HANDOFF_READY";
         HANDOFF_CANARY_TIMEOUT_MS = HANDOFF_CANARY_HOST_TIMEOUT_MS;
+        recentProofs = /* @__PURE__ */ new Map();
+        proofKey = (provider, selection) => JSON.stringify([provider.type, provider.spawn.command, selection.provider, selection.model ?? "", selection.thinkingLevel ?? ""]);
       }
     });
     async function inspectTargetReadiness(p) {
@@ -151877,7 +152281,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       add("coordinator_capability", !!plan && !!workspace && p.coordinatorCapable(plan, workspace));
       if (checks.every((c) => c.ok) && provider && plan) {
         try {
-          const evidence = await runTargetCanary(provider, plan);
+          const evidence = (p.canaryMaxAgeMs ? recentCanaryProof(provider, plan, p.canaryMaxAgeMs) : void 0) ?? await runTargetCanaryCached(provider, plan);
           add("provider_auth_canary", evidence.ok && evidence.terminated, evidence.ok ? `host-enforced ${evidence.hostTimeoutMs}ms ${evidence.hostMaxOutputBytes} output bytes; nativeTurnCap false; nativeOutputTokenCap false; canary ${evidence.canaryId}; terminated` : evidence.detail ?? evidence.code);
         } catch {
           add("provider_auth_canary", false, "Canary could not be verified.");
@@ -151931,7 +152335,11 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           if (!dispatch2) throw new Error("mesh transport unavailable");
           return unwrapMeshRelayResult(await dispatch2(daemonId, verb, args), { command: verb, peerDaemonId: daemonId });
         },
-        peerOnline: (daemonId) => ctx.deps.getMeshPeerConnectionStatus ? !!ctx.deps.getMeshPeerConnectionStatus(daemonId) : !!ctx.deps.dispatchMeshCommand,
+        peerOnline: (daemonId) => {
+          if (!ctx.deps.getMeshPeerConnectionStatus) return !!ctx.deps.dispatchMeshCommand;
+          const peer = ctx.deps.getMeshPeerConnectionStatus(daemonId);
+          return !peer || peer.state !== "failed" && peer.state !== "disconnected" && peer.state !== "closed";
+        },
         coordinatorState: (meshId) => listLocalCoordinatorSessions(ctx.deps, meshId),
         stopCoordinators: async (meshId) => {
           if (!ctx.deps.sessionHostControl?.listSessions) throw new Error("trusted runtime census unavailable");
@@ -151979,13 +152387,26 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           if (!targetNodeId) throw new Error("An explicit target project workspace is required.");
           return { ...resolved.selection, targetNodeId };
         },
-        readiness: async (meshId, plan) => {
-          const mesh = readLiveHandoffMesh(meshId, selfDaemonId);
+        restoreCoordinator: async (meshId) => {
+          const out = await host.exec("launch_mesh_coordinator", { meshId, managedByAssistant: true });
+          return { success: out?.success === true, ...str19(out?.sessionId) ? { sessionId: str19(out.sessionId) } : {}, ...str19(out?.error) ? { error: str19(out.error) } : {} };
+        },
+        meshAuthorityChanged: (meshId) => {
+          const inline = ctx.inlineMeshCache;
+          inline?.delete(meshId);
+          try {
+            ctx.invalidateAggregateMeshStatus?.(meshId);
+          } catch {
+          }
+        },
+        readiness: async (meshId, plan, opts) => {
+          const mesh = readLiveHandoffMesh(meshId, selfDaemonId) ?? opts?.offeredMesh;
           if (!mesh) return { ok: false, checks: [{ id: "target_project", ok: false }] };
           return inspectTargetReadiness({
             selfDaemonId,
             mesh,
             plan,
+            ...opts?.canaryMaxAgeMs ? { canaryMaxAgeMs: opts.canaryMaxAgeMs } : {},
             validateSelection: (selection) => {
               const { targetNodeId: _targetNodeId, ...override } = selection;
               const resolved = resolveRoleLaunch(ctx, "coordinator", override);
@@ -152016,6 +152437,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         },
         launchCoordinator: async (meshId, handoffId, plan) => {
           if (!plan?.targetNodeId) return { success: false, ready: false };
+          liveHost(ctx).meshAuthorityChanged?.(meshId);
           const census2 = await liveHost(ctx).observeCoordinator(meshId, plan);
           if (!census2.runtimeVerified) return { success: false, ready: false };
           if (census2.liveCount) return { success: !!census2.sessionId, sessionId: census2.sessionId, ready: census2.ready };
@@ -152066,17 +152488,84 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       if (!hostHandoffEnabled()) return disabled();
       return enginesFor(ctx).source.start(input);
     }
+    async function ownerJob(key7, work) {
+      let job = ownerJobs.get(key7);
+      if (!job) {
+        const created = { run: Promise.resolve() };
+        created.run = work().then((result) => {
+          created.done = result;
+        }, (e) => {
+          created.done = { success: false, code: "verify_failed", error: e?.message ?? String(e) };
+        });
+        ownerJobs.set(key7, job = created);
+      }
+      let timer;
+      await Promise.race([job.run, new Promise((resolve76) => {
+        timer = setTimeout(resolve76, OWNER_JOB_ANSWER_WAIT_MS);
+      })]);
+      if (timer) clearTimeout(timer);
+      if (!job.done) return { success: true, pending: true };
+      ownerJobs.delete(key7);
+      return job.done;
+    }
+    function setHostHandoffEnabled(enabled) {
+      updateConfig({ experimental: { ...loadConfig().experimental ?? {}, hostHandoff: enabled } });
+      return { success: true, enabled: hostHandoffEnabled() };
+    }
+    async function pairTargetWithHost(ctx, args) {
+      const meshId = str19(args?.meshId), token = str19(args?.token), hostDaemonId = str19(args?.hostDaemonId), nodeId = str19(args?.targetNodeId), workspace = str19(args?.workspace);
+      const selfDaemonId = str19(ctx.deps.statusInstanceId);
+      if (!meshId || !token || !hostDaemonId || !nodeId || !workspace) return { success: false, code: "invalid_args", error: "meshId, token, hostDaemonId, targetNodeId and workspace are required" };
+      if (!ctx.deps.dispatchMeshCommand) return { success: false, code: "peer_capability_unconfirmed", error: "mesh transport unavailable" };
+      const answer2 = unwrapMeshRelayResult(await ctx.deps.dispatchMeshCommand(hostDaemonId, "apply_mesh_host_join", {
+        meshId,
+        token,
+        memberNode: { id: nodeId, workspace, daemonId: selfDaemonId, role: "member" }
+      }), { command: "apply_mesh_host_join", peerDaemonId: hostDaemonId });
+      if (answer2.success !== true) return { success: false, code: str19(answer2.code) || "mesh_host_join_rejected", error: str19(answer2.error) || "The host refused the pairing." };
+      const key7 = str19(answer2.originGrantPublicKey) || str19(answer2.meshHost?.originGrantPublicKey);
+      if (!key7) return { success: false, code: "host_key_unpinned", error: "The host accepted the pairing but returned no key." };
+      const secret = str19(answer2.peerSecret);
+      if (secret) putPeerSecret({ meshId, peerDaemonId: canonicalDaemonId2(hostDaemonId) || hostDaemonId, role: "member", secret, originGrantPublicKey: key7, createdAt: (/* @__PURE__ */ new Date()).toISOString() });
+      writeMeshHostRecord(meshId, hostDaemonId, "pairing", key7, { pairingVerified: true });
+      return { success: true, pinned: true };
+    }
+    function memberAdoption(ctx, sender) {
+      return {
+        sender,
+        readRecord: (meshId) => {
+          const record8 = readMeshHostRecord(meshId);
+          if (!record8) return null;
+          const pin = readAuthenticatedPeerOriginGrantPublicKey(meshId, record8.hostDaemonId);
+          return { hostDaemonId: record8.hostDaemonId, ...pin ? { originGrantPublicKey: pin } : {} };
+        },
+        writeRecord: (meshId, next) => {
+          transferMeshHostRecord(meshId, next);
+        },
+        reanchorSessions: (meshId, from, to) => {
+          const instances2 = ctx.deps.instanceManager;
+          for (const id4 of instances2?.listInstanceIds?.() ?? []) {
+            const instance = instances2.getInstance?.(id4);
+            const settings2 = instance?.getState?.()?.settings;
+            if (settings2?.meshNodeFor !== meshId || !daemonIdsEquivalent5(str19(settings2.meshCoordinatorDaemonId), from)) continue;
+            instance?.updateSettings?.({ meshCoordinatorDaemonId: to, meshCoordinatorSessionId: void 0 });
+          }
+        }
+      };
+    }
     function peerVerb(verb) {
       return async (ctx, args) => {
-        if (!hostHandoffEnabled()) return { success: false, code: "peer_capability_unconfirmed" };
-        const e = enginesFor(ctx);
+        if (!hostHandoffEnabled() && !MEMBER_VERBS_WITHOUT_FLAG.has(verb)) return { success: false, code: "peer_capability_unconfirmed" };
         const sender = str19(args?._meshSenderDaemonId) || (await Promise.resolve().then(() => (init_mesh_sender(), mesh_sender_exports))).readMeshSender(args);
         const mesh = createLiveMeshPort(str19(ctx.deps.statusInstanceId));
-        return handlePeerVerb({
-          source: e.source,
-          target: e.target,
-          certificate: (a) => applyHostTransferToMember(mesh, str19(ctx.deps.statusInstanceId), a.meshId, a.certificate)
-        }, verb, args ?? {}, sender);
+        const certificate = (a, from) => {
+          const result = applyHostTransferToMember(mesh, str19(ctx.deps.statusInstanceId), a.meshId, a.certificate, memberAdoption(ctx, from));
+          if (result.success) liveHost(ctx).meshAuthorityChanged?.(a.meshId);
+          return result;
+        };
+        if (MEMBER_VERBS_WITHOUT_FLAG.has(verb)) return handlePeerVerb({ certificate }, verb, args ?? {}, sender);
+        const e = enginesFor(ctx);
+        return handlePeerVerb({ source: e.source, target: e.target, certificate }, verb, args ?? {}, sender);
       };
     }
     function startHostHandoffTicker(components) {
@@ -152102,7 +152591,10 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
     }
     var disabled;
     var HANDOFF_PEER_VERBS;
+    var MEMBER_VERBS_WITHOUT_FLAG;
     var engines;
+    var OWNER_JOB_ANSWER_WAIT_MS;
+    var ownerJobs;
     var ownerVerb;
     var meshHostHandoffHandlers;
     var meshHostHandoffSpecs;
@@ -152130,6 +152622,9 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         init_mesh_coordinator();
         init_target_readiness();
         init_command_args();
+        init_config();
+        init_mesh_host_memory();
+        init_mesh_peer_secrets();
         disabled = () => ({ success: false, code: "host_handoff_disabled", error: "Host handoff is an experimental feature; turn on experimental.hostHandoff in the daemon config." });
         HANDOFF_PEER_VERBS = [
           HOST_HANDOFF_VERB.capability,
@@ -152138,18 +152633,25 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           HOST_HANDOFF_VERB.activate,
           HOST_HANDOFF_VERB.status,
           HOST_HANDOFF_VERB.discard,
-          HOST_HANDOFF_VERB.certificate
+          HOST_HANDOFF_VERB.certificate,
+          HOST_HANDOFF_VERB.memberProbe
         ];
+        MEMBER_VERBS_WITHOUT_FLAG = /* @__PURE__ */ new Set([HOST_HANDOFF_VERB.certificate, HOST_HANDOFF_VERB.memberProbe]);
         engines = null;
+        OWNER_JOB_ANSWER_WAIT_MS = 2e4;
+        ownerJobs = /* @__PURE__ */ new Map();
         ownerVerb = async (ctx, args) => {
           if (!isTrustedOwnerIngress(args)) return { success: false, code: "owner_auth_required", error: "Host handoff requires verified owner ingress." };
           if (!hostHandoffEnabled()) {
+            if (str19(args?.op) === "set_enabled") return setHostHandoffEnabled(args?.enabled === true);
             return str19(args?.op) === "status" && !str19(args?.meshId) ? { success: true, enabled: false } : disabled();
           }
+          if (str19(args?.op) === "set_enabled") return setHostHandoffEnabled(args?.enabled === true);
           const e = enginesFor(ctx);
           const op = str19(args?.op);
           const meshId = str19(args?.meshId);
           const handoffId = str19(args?.handoffId);
+          if (op === "pair_host") return pairTargetWithHost(ctx, args);
           if (op === "status") {
             if (!meshId && !handoffId) return { success: true, enabled: true };
             const source2 = e.source.status({ ...handoffId ? { handoffId } : {}, ...meshId ? { meshId } : {} });
@@ -152161,17 +152663,18 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             const targetDaemonId = str19(args?.targetDaemonId);
             if (!meshId || !targetDaemonId) return { success: false, code: "invalid_args", error: "meshId and targetDaemonId required" };
             const input = { meshId, targetDaemonId, ...str19(args?.targetNodeId) ? { targetNodeId: str19(args.targetNodeId) } : {}, ...handoffId ? { handoffId } : {} };
-            if (op === "preflight") {
+            const key7 = JSON.stringify([op, meshId, targetDaemonId, input.targetNodeId ?? ""]);
+            if (op === "preflight") return ownerJob(key7, async () => {
               const pf = await e.source.preflight(input);
               return { success: pf.ok, ok: pf.ok, checks: pf.checks, ...pf.estimateBytes !== void 0 ? { estimateBytes: pf.estimateBytes } : {} };
-            }
-            return startHostHandoff(ctx, input);
+            });
+            return ownerJob(key7, async () => startHostHandoff(ctx, input));
           }
           if (op === "abort" || op === "retry") {
             if (!handoffId) return { success: false, code: "invalid_args", error: "handoffId required" };
             return op === "abort" ? e.source.abort(handoffId) : e.source.retry(handoffId);
           }
-          return { success: false, code: "invalid_args", error: "op must be preflight, start, status, abort or retry" };
+          return { success: false, code: "invalid_args", error: "op must be preflight, start, status, abort, retry, set_enabled or pair_host" };
         };
         meshHostHandoffHandlers = {
           [HOST_HANDOFF_VERB.owner]: ownerVerb,
@@ -166065,7 +166568,14 @@ ${defangRelayBody(text9)}`;
     var PROBE_COMMANDS = /* @__PURE__ */ new Set([
       "get_pending_mesh_events"
     ]);
+    var HOST_HANDOFF_RPC_TIMEOUT_MS = readTimeoutEnv("MESH_RPC_HOST_HANDOFF_TIMEOUT_MS", 11e4);
+    var HOST_HANDOFF_COMMANDS = /* @__PURE__ */ new Set([
+      "mesh_host_handoff_capability",
+      "mesh_host_handoff_chunk",
+      "mesh_host_handoff_activate"
+    ]);
     function resultTimeoutForCommand(command) {
+      if (HOST_HANDOFF_COMMANDS.has(command)) return HOST_HANDOFF_RPC_TIMEOUT_MS;
       if (GIT_COMMANDS.has(command)) return GIT_COMMAND_TIMEOUT_MS;
       if (REPO_MUTATION_COMMANDS.has(command)) return REPO_MUTATION_COMMAND_TIMEOUT_MS;
       if (GIT_STATUS_PROBE_COMMANDS.has(command)) return GIT_STATUS_PROBE_TIMEOUT_MS;
@@ -256513,16 +257023,20 @@ ${lines.join("\n\n")}`;
 // src/tools/project-host-handoff.ts
 var PROJECT_HOST_HANDOFF_TOOL = {
   name: "project_host_handoff",
-  description: "Move the actual project main coordinator host to an owner-selected member machine. Requires an owner-authenticated local management connection. Preflight verifies target readiness; status reports durable migration state. This does not change worker routing.",
+  description: "Move the actual project main coordinator host to an owner-selected member machine. Requires an owner-authenticated local management connection. Both machines need set_enabled first, and the target needs pair_host once. Preflight verifies target readiness and bills one short provider probe; status reports durable migration state. This does not change worker routing.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
     properties: {
-      op: { type: "string", enum: ["preflight", "start", "status", "abort", "retry"] },
+      op: { type: "string", enum: ["preflight", "start", "status", "abort", "retry", "set_enabled", "pair_host"] },
       meshId: { type: "string" },
       targetDaemonId: { type: "string" },
       targetNodeId: { type: "string" },
-      handoffId: { type: "string" }
+      handoffId: { type: "string" },
+      enabled: { type: "boolean", description: "set_enabled only: turn host moves on or off on the connected daemon." },
+      token: { type: "string", description: "pair_host only, run on the target: the one-time code from create_mesh_host_pairing_token on the host." },
+      hostDaemonId: { type: "string", description: "pair_host only." },
+      workspace: { type: "string", description: "pair_host only: the target node workspace on the host roster." }
     },
     required: ["op"]
   }
@@ -256531,8 +257045,8 @@ function canAdvertiseOwnerHandoff(opts, env2 = process.env) {
   return opts.mode === "local" && !!opts.password && !opts.daemonAuthFile && !opts.worker && !opts.assistant && !opts.meshId && !env2.ADHDEV_MCP_SESSION_CREDENTIAL && !env2.ADHDEV_WORKER_SESSION_BIND && !env2.ADHDEV_WORKER_TASK_TOKEN;
 }
 async function projectHostHandoff(transport, args) {
-  const allowed = /* @__PURE__ */ new Set(["op", "meshId", "targetDaemonId", "targetNodeId", "handoffId"]);
-  if (Object.keys(args).some((k) => !allowed.has(k)) || !["preflight", "start", "status", "abort", "retry"].includes(String(args.op))) {
+  const allowed = /* @__PURE__ */ new Set(["op", "meshId", "targetDaemonId", "targetNodeId", "handoffId", "enabled", "token", "hostDaemonId", "workspace"]);
+  if (Object.keys(args).some((k) => !allowed.has(k)) || !["preflight", "start", "status", "abort", "retry", "set_enabled", "pair_host"].includes(String(args.op))) {
     return JSON.stringify({ success: false, code: "invalid_args" });
   }
   return JSON.stringify(await transport.command("mesh_host_handoff", args));

@@ -23,6 +23,11 @@ describe('owner management host handoff tool', () => {
         assert.deepEqual(JSON.parse(await projectHostHandoff({ command } as never, args)), { success: true, handoffId: 'same', phase: 'frozen' });
         assert.deepEqual(command.mock.calls.map(call => call.arguments), [['mesh_host_handoff', args]]);
         command.mock.resetCalls();
+        for (const owner of [{ op: 'set_enabled', enabled: true }, { op: 'pair_host', meshId: 'project', token: 'one-time', hostDaemonId: 'host', targetNodeId: 'node', workspace: '/w' }]) {
+            assert.equal(JSON.parse(await projectHostHandoff({ command } as never, owner)).success, true);
+        }
+        assert.equal(command.mock.callCount(), 2);
+        command.mock.resetCalls();
         assert.deepEqual(JSON.parse(await projectHostHandoff({ command } as never, { ...args, command: 'arbitrary-shell' })), { success: false, code: 'invalid_args' });
         assert.equal(command.mock.callCount(), 0);
     });

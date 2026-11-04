@@ -70,14 +70,24 @@ type Db = { prepare(sql: string): { get(...a: unknown[]): unknown; all(...a: unk
 
 interface Row {
     launch_plan_json?: string | null;
+    ext_json?: string | null;
     handoff_id: string; role: HandoffRole; mesh_id: string; peer_daemon_id: string; phase: string; epoch: number;
     manifest_digest: string | null; row_counts_json: string | null; target_node_id: string | null;
     created_at: number; updated_at: number; abort_reason: string | null; commit_intent_at: number | null;
     probe_count: number | null; last_probe_at: number | null; target_public_key: string | null;
 }
 
+/** Bookkeeping that does not need its own column. Unknown keys are ignored. */
+const EXT_KEYS = ['coordinatorReadyAt', 'launchAttempts', 'lastLaunchAt', 'memberAcks', 'lastAdvertiseAt', 'restore'] as const;
+
+function extOf(r: HandoffRecord): string | null {
+    const ext = Object.fromEntries(EXT_KEYS.filter(k => r[k] !== undefined).map(k => [k, r[k]]));
+    return Object.keys(ext).length ? JSON.stringify(ext) : null;
+}
+
 function fromRow(r: Row): HandoffRecord {
     return {
+        ...(r.ext_json ? JSON.parse(r.ext_json) as Partial<HandoffRecord> : {}),
         ...(r.launch_plan_json ? { launchPlan: JSON.parse(r.launch_plan_json) } : {}),
         handoffId: r.handoff_id, role: r.role, meshId: r.mesh_id, peerDaemonId: r.peer_daemon_id,
         phase: r.phase as HandoffRecord['phase'], epoch: r.epoch,
@@ -105,13 +115,13 @@ export class SqliteHandoffJournal implements HandoffJournal {
         return hit ? fromRow(hit) : null;
     }
     put(r: HandoffRecord) {
-        this.db.prepare(`INSERT INTO mesh_host_handoff (handoff_id, role, mesh_id, peer_daemon_id, phase, epoch, manifest_digest, row_counts_json, target_node_id, created_at, updated_at, abort_reason, commit_intent_at, probe_count, last_probe_at, target_public_key, launch_plan_json)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        this.db.prepare(`INSERT INTO mesh_host_handoff (handoff_id, role, mesh_id, peer_daemon_id, phase, epoch, manifest_digest, row_counts_json, target_node_id, created_at, updated_at, abort_reason, commit_intent_at, probe_count, last_probe_at, target_public_key, launch_plan_json, ext_json)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(handoff_id, role) DO UPDATE SET mesh_id=excluded.mesh_id, peer_daemon_id=excluded.peer_daemon_id, phase=excluded.phase, epoch=excluded.epoch,
               manifest_digest=excluded.manifest_digest, row_counts_json=excluded.row_counts_json, target_node_id=excluded.target_node_id, updated_at=excluded.updated_at,
-              abort_reason=excluded.abort_reason, commit_intent_at=excluded.commit_intent_at, probe_count=excluded.probe_count, last_probe_at=excluded.last_probe_at, target_public_key=excluded.target_public_key, launch_plan_json=excluded.launch_plan_json`)
+              abort_reason=excluded.abort_reason, commit_intent_at=excluded.commit_intent_at, probe_count=excluded.probe_count, last_probe_at=excluded.last_probe_at, target_public_key=excluded.target_public_key, launch_plan_json=excluded.launch_plan_json, ext_json=excluded.ext_json`)
             .run(r.handoffId, r.role, r.meshId, r.peerDaemonId, r.phase, r.epoch, r.manifestDigest ?? null, r.rowCounts ? JSON.stringify(r.rowCounts) : null,
-                r.targetNodeId ?? null, r.createdAt, r.updatedAt, r.abortReason ?? null, r.commitIntentAt ?? null, r.probeCount ?? null, r.lastProbeAt ?? null, r.targetPublicKey ?? null, r.launchPlan ? JSON.stringify(r.launchPlan) : null);
+                r.targetNodeId ?? null, r.createdAt, r.updatedAt, r.abortReason ?? null, r.commitIntentAt ?? null, r.probeCount ?? null, r.lastProbeAt ?? null, r.targetPublicKey ?? null, r.launchPlan ? JSON.stringify(r.launchPlan) : null, extOf(r));
     }
     update(id: string, role: HandoffRole, patch: Partial<HandoffRecord>) {
         const cur = this.get(id, role);

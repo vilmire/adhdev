@@ -95,12 +95,13 @@ describe('production preservation boundary', () => {
         inventory(world.src.dir, world.src.meshRecord);
         approval(world.src.dir);
         populate(world.src.db);
-        world.dst.db.prepare("INSERT INTO mesh_mission_events (seq, mission_id, mesh_id, type, actor, payload_json, at) VALUES (1, 'foreign-mission', 'unrelated', 'created', 'owner', '{}', 'now')").run();
+        world.dst.db.prepare("INSERT INTO mesh_missions (id, mesh_id, title, goal, status, created_at, updated_at) VALUES ('m1', ?, 't', 'g', 'active', 'now', 'now')").run(MESH);
+        world.dst.db.prepare("INSERT INTO mesh_mission_events (seq, mission_id, mesh_id, type, actor, payload_json, at) VALUES (1, 'm1', ?, 'different', 'owner', '{}', 'now')").run(MESH);
         const before = world.dst.db.prepare('SELECT COUNT(*) AS n FROM mesh_mission_events').get();
         const exported = exportSnapshot({ db: world.src.db as never, meshId: MESH, handoffId: 'h1', fromDaemonId: SRC, toDaemonId: DST, hostEpoch: 0, meshConfig: world.src.meshRecord, projectFiles: [] });
         const verified = verifyStagedSnapshot(exported.manifest, exported.chunks, localTableColumns(world.dst.db as never));
         if (!verified.ok) throw new Error(verified.detail);
-        expect(() => adopt(world.dst.db, verified.payload)).toThrow('owner compatibility decision');
+        expect(() => adopt(world.dst.db, verified.payload)).toThrow('history identity collision');
         expect(world.dst.db.prepare('SELECT COUNT(*) AS n FROM mesh_mission_events').get()).toEqual(before);
         expect(world.dst.db.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'mesh_host_notice_receipts'").get()).toBeUndefined();
     });

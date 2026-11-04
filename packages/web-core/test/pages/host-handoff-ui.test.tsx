@@ -5,12 +5,13 @@
  * abort once activation started, and says so plainly when the daemon has the
  * feature off. Cards for session control / host handoff parse from the staged list.
  */
+import { readFileSync } from 'node:fs'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MeshHostHandoffDialog } from '../../src/pages/repo-mesh/MeshHostHandoffDialog'
 import {
-    canAbortHandoff, canRetryHandoff, canaryProbeRefusal, canaryProbeSucceeded, parseHandoffStatus, parsePreflight, parseStartResult, phaseToStep,
+    canAbortHandoff, canRetryHandoff, canaryProbeRefusal, canaryProbeSucceeded, isHandoffPending, needsTargetEnable, needsTargetPairing, parseHandoffStatus, parsePreflight, parseStartResult, phaseToStep,
 } from '../../src/pages/repo-mesh/host-handoff'
 import { parseStagedList } from '../../src/components/dashboard/assistant-staged'
 import { parseFailoverModes } from '../../src/components/dashboard/AssistantControlSettings'
@@ -41,6 +42,32 @@ describe('host-handoff parsing', () => {
         const passed = JSON.stringify([{ id: 'provider_auth_canary', ok: true, detail: 'host-enforced 15000ms 16384 output bytes; nativeTurnCap false; nativeOutputTokenCap false; canary id; terminated' }])
         expect(canaryProbeSucceeded([{ id: 'target_launchable', ok: true, detail: passed }])).toBe(true)
         expect(canaryProbeSucceeded([{ id: 'target_launchable', ok: false, detail: nested }])).toBe(false)
+    })
+})
+
+describe('host-handoff owner guidance', () => {
+    it('offers to turn the target on, or to pair it, only for the refusal that needs it', () => {
+        const off = [{ id: 'peer_capability', ok: false, code: 'peer_capability_unconfirmed', detail: 'peer_capability_unconfirmed' }]
+        expect(needsTargetEnable(off)).toBe(true)
+        expect(needsTargetPairing(off)).toBe(false)
+        expect(needsTargetPairing([{ id: 'host_key_pinned', ok: false, code: 'host_key_unpinned' }])).toBe(true)
+        expect(needsTargetPairing([{ id: 'peer_capability', ok: false, detail: 'target_not_member' }])).toBe(true)
+        expect(needsTargetPairing([{ id: 'host_key_pinned', ok: true }])).toBe(false)
+        expect(needsTargetEnable([{ id: 'peer_capability', ok: false, detail: 'host_key_mismatch' }])).toBe(false)
+        expect(isHandoffPending({ success: true, result: { success: true, pending: true } })).toBe(true)
+        expect(isHandoffPending({ success: true, ok: true, checks: [] })).toBe(false)
+    })
+    it('reads a coordinator restore result on the record', () => {
+        expect(parseHandoffStatus({ success: true, enabled: true, source: { handoffId: 'h', phase: 'aborted', restore: { ok: false, error: 'no slot', at: 1 } } }).source?.restore).toEqual({ ok: false, error: 'no slot' })
+    })
+    it('every locale names the new checks and refusals', async () => {
+        for (const locale of ['en', 'ko', 'ja', 'zh-CN', 'es']) {
+            const file = JSON.parse(readFileSync(`${process.cwd()}/src/i18n/locales/${locale}/common.json`, 'utf8'))
+            const h = file.mesh.handoff
+            for (const key of ['enable', 'enableTarget', 'targetDisabled', 'pair', 'pairExplain', 'restored', 'restoreFailed']) expect(h[key], `${locale} ${key}`).toBeTruthy()
+            for (const id of ['host_key_pinned', 'fleet_members', 'state_preservation', 'launch_selection']) expect(h.check[id], `${locale} ${id}`).toBeTruthy()
+            for (const code of ['host_key_unpinned', 'host_key_mismatch', 'member_protocol_unsupported', 'snapshot_conflict', 'state_preservation_unverified']) expect(h.code[code], `${locale} ${code}`).toBeTruthy()
+        }
     })
 })
 

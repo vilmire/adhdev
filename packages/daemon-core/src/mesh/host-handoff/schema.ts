@@ -68,5 +68,6 @@ export function ensureHostHandoffSchema(db: HandoffSchemaDb): void {
         );
     `);
     if (db.prepare && !db.prepare('PRAGMA table_info(mesh_host_handoff)').all().some((c: { name: string }) => c.name === 'launch_plan_json')) db.exec('ALTER TABLE mesh_host_handoff ADD COLUMN launch_plan_json TEXT');
+    if (db.prepare && !db.prepare('PRAGMA table_info(mesh_host_handoff)').all().some((c: { name: string }) => c.name === 'ext_json')) db.exec('ALTER TABLE mesh_host_handoff ADD COLUMN ext_json TEXT');
     if (db.function && db.prepare) initializeHandoffWriteFences(db as Parameters<typeof initializeHandoffWriteFences>[0]);
 }
