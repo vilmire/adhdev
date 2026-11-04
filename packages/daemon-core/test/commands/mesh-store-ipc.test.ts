@@ -21,6 +21,7 @@ vi.mock('../../src/config/config.js', () => ({
     getMachineNickname: () => null,
 }));
 vi.mock('../../src/config/mesh-config.js', () => ({
+    recoverLocalNodeIdentity: vi.fn(),
     getMesh: vi.fn(() => undefined),
     getMeshByRepo: vi.fn(),
     listMeshes: vi.fn(() => [] as any[]),
@@ -32,7 +33,7 @@ vi.mock('../../src/config/mesh-config-routing.js', async (importOriginal) => ({
 
 import { turnLedgerIpcHandlers, turnLedgerIpcSpecs } from '../../src/commands/low-family/turn-ledger-ipc.js';
 import { meshStoreIpcHandlers } from '../../src/commands/low-family/mesh-store-ipc.js';
-import { __resetMeshRuntimeStoreForTests, getQueue } from '../../src/mesh/mesh-work-queue.js';
+import { __resetMeshRuntimeStoreForTests, getQueue, enqueueTask, getQueueEntryById } from '../../src/mesh/mesh-work-queue.js';
 import { readLocalRecords } from '../../src/mesh/mesh-local-records.js';
 import { seedLocalRecord } from '../helpers/local-records.js';
 import { seedMeshAttempt } from '../helpers/turn-attempt-seed.js';
@@ -281,5 +282,118 @@ describe('queue mutations carry THIS daemon\'s mesh role (requireMeshHostQueueOw
         // The host's cancel still works.
         const hostCancel = await callAs('host', 'queue_cancel', { v, meshId, taskId: entry.id, reason: 'x' });
         expect(hostCancel.task).toMatchObject({ status: 'cancelled' });
+    });
+});
+
+
+describe('authenticated existing local node identity recovery', () => {
+    async function fixture() {
+        const { execFileSync } = await import('node:child_process');
+        const actual = await vi.importActual<typeof import('../../src/config/mesh-config.js')>('../../src/config/mesh-config.js');
+        const root = fs.mkdtempSync(path.join(tmpdir(), 'identity-recovery-'));
+        const anchor = path.join(root, 'anchor'), target = path.join(root, 'target');
+        fs.mkdirSync(anchor); fs.mkdirSync(testConfigDir, { recursive: true });
+        const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-C', cwd, ...args], { stdio: 'pipe' });
+        git(anchor, 'init', '--initial-branch=main');
+        fs.writeFileSync(path.join(anchor, 'file.ts'), 'export {};'); git(anchor, 'add', 'file.ts');
+        git(anchor, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-m', 'Fixture');
+        execFileSync('git', ['clone', '--no-hardlinks', anchor, target], { stdio: 'pipe' });
+        for (const cwd of [anchor, target]) git(cwd, 'remote', ...(cwd === anchor ? ['add', 'origin'] : ['set-url', 'origin']), 'https://example.test/repo.git');
+        const node = { id: 'existing', workspace: fs.realpathSync(target), policy: { readOnly: false }, capabilities: ['keep'] };
+        const mesh = { id: meshId, repoIdentity: 'example.test/repo', meshHost: { role: 'host', hostDaemonId: 'daemon_mach_local' },
+            nodes: [{ id: 'anchor', workspace: fs.realpathSync(anchor), daemonId: 'daemon_mach_local', machineId: 'mach_local', policy: {} }, node] };
+        const configPath = path.join(testConfigDir, 'meshes.json');
+        const save = () => fs.writeFileSync(configPath, JSON.stringify({ meshes: [mesh] })); save();
+        const request = { v: 1 as const, expectedDaemonId: null, expectedMachineId: null, expectedWorkspace: node.workspace, dryRun: true };
+        const host = { actor: 'daemon_mach_local', machineId: 'mach_local', refineryRunning: false };
+        const repair = (r = request, h = host) => actual.recoverLocalNodeIdentity(meshId, node.id, r, h);
+        return { root, target, anchor, node, mesh, configPath, save, request, host, repair, git };
+    }
+    it('previews without writes, applies exact receipt CAS and preserves node/task IDs, policy and audit', async () => {
+        const f = await fixture();
+        try {
+            const pending = enqueueTask(meshId, 'Keep task history', { difficulty: 'medium', targetNodeId: 'existing' });
+            const taskBefore = getQueueEntryById(meshId, pending.id);
+            const before = fs.readFileSync(f.configPath, 'utf8');
+            const preview = f.repair(); expect(fs.readFileSync(f.configPath, 'utf8')).toBe(before);
+            const applied = f.repair({ ...f.request, dryRun: false, expectedFingerprint: preview.receipt.fingerprint } as any);
+            expect(applied.node).toMatchObject({ id: 'existing', daemonId: f.host.actor, machineId: f.host.machineId, policy: { readOnly: false }, capabilities: ['keep'] });
+            expect(getQueueEntryById(meshId, pending.id)).toEqual(taskBefore);
+            expect((applied.node as any).identityRecoveryHistory).toHaveLength(1);
+            expect((applied.node as any).identityRecoveryHistory[0].previous).toEqual({ daemonId: null, machineId: null });
+            expect(() => f.repair({ ...f.request, dryRun: false, expectedFingerprint: preview.receipt.fingerprint } as any)).toThrow(/stale_node_identity/);
+        } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+    });
+    it('refuses foreign identities, wrong repository, stale workspace and fingerprint without writes', async () => {
+        const f = await fixture();
+        try {
+            const before = fs.readFileSync(f.configPath, 'utf8');
+            expect(() => f.repair({ ...f.request, expectedWorkspace: f.anchor })).toThrow(/stale_node_workspace/);
+            expect(() => f.repair({ ...f.request, dryRun: false, expectedFingerprint: 'a'.repeat(64) } as any)).toThrow(/stale_node_identity_fingerprint/);
+            expect(fs.readFileSync(f.configPath, 'utf8')).toBe(before);
+            Object.assign(f.node, { daemonId: 'daemon_mach_foreign' }); f.save();
+            expect(() => f.repair({ ...f.request, expectedDaemonId: 'daemon_mach_foreign' } as any)).toThrow(/foreign_node_identity/);
+            delete (f.node as any).daemonId; f.save();
+            f.git(f.target, 'remote', 'set-url', 'origin', 'https://example.test/foreign.git');
+            expect(() => f.repair()).toThrow(/local_repository_mismatch/);
+        } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+    });
+    it('rejects ambiguous workspace aliases, writable resources, invalid authority and record changes after preview', async () => {
+        const f = await fixture();
+        try {
+            expect(() => f.repair(f.request, { ...f.host, actor: 'daemon_mach_foreign' })).toThrow(/authenticated_local_mesh_host_required/);
+            const preview = f.repair();
+            const index = path.join(f.target, '.git', 'index');
+            fs.renameSync(index, `${index}.old`); fs.copyFileSync(`${index}.old`, index);
+            expect(() => f.repair({ ...f.request, dryRun: false, expectedFingerprint: preview.receipt.fingerprint } as any)).toThrow(/stale_node_identity_fingerprint/);
+            const nextPreview = f.repair();
+            f.node.capabilities.push('changed'); f.save();
+            expect(() => f.repair({ ...f.request, dryRun: false, expectedFingerprint: nextPreview.receipt.fingerprint } as any)).toThrow(/stale_node_identity_fingerprint/);
+            fs.chmodSync(f.target, 0o777);
+            expect(() => f.repair()).toThrow(/local_resource_owner_unproven/);
+            fs.chmodSync(f.target, 0o755);
+            f.mesh.nodes.push({ ...f.node, id: 'duplicate' } as any); f.save();
+            expect(() => f.repair()).toThrow(/ambiguous_node_workspace/);
+        } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+    });
+    it('authenticated handler refuses denied callers and combined identity grants before repair', async () => {
+        await import('../../src/commands/router.js'); // Enter through the normal registry root, not the cyclic leaf.
+        const { meshNodeLifecycleHandlers } = await import('../../src/commands/med-family/mesh-node-lifecycle.js');
+        const { meshCrudSpecs } = await import('../../src/commands/med-family/mesh-crud.js');
+        expect(meshCrudSpecs.find(s => s.name === 'recover_mesh_node_identity')?.sources).toEqual(['ipc', 'standalone']);
+        const mocked = await import('../../src/config/mesh-config.js');
+        const repair = vi.mocked(mocked.recoverLocalNodeIdentity); repair.mockClear();
+        const ctx = { requireMeshHostMutationOwner: vi.fn(async () => ({ success: false, error: 'owner_required' })) } as any;
+        const args = { meshId, nodeId: 'existing', identityRecovery: { v: 1, dryRun: true } };
+        expect(await meshNodeLifecycleHandlers.recover_mesh_node_identity(ctx, args)).toMatchObject({ success: false, error: 'owner_required' });
+        ctx.requireMeshHostMutationOwner.mockResolvedValue(null);
+        expect(await meshNodeLifecycleHandlers.recover_mesh_node_identity(ctx, { ...args, daemonId: 'spoof' })).toMatchObject({ success: false, error: 'invalid_node_identity_recovery_envelope' });
+        expect(repair).not.toHaveBeenCalled();
+    });
+    it('refuses a real assigned queue claim without changing its task or identity', async () => {
+        const f = await fixture();
+        try {
+            const pending = enqueueTask(meshId, 'Active writer', { difficulty: 'medium', targetNodeId: 'existing', ownedPaths: ['file.ts'] });
+            const { MeshRuntimeStore } = await import('../../src/mesh/mesh-runtime-store.js');
+            const store = MeshRuntimeStore.getInstance();
+            expect(store.claimNextQueueTask(meshId, 'existing', 'writer', [], { providerType: 'codex-cli', assignedModel: 'gpt-5.4', allowedTaskDifficulties: ['medium'] })?.id).toBe(pending.id);
+            const before = fs.readFileSync(f.configPath, 'utf8');
+            expect(() => f.repair()).toThrow(/active_claims/);
+            expect(fs.readFileSync(f.configPath, 'utf8')).toBe(before);
+            expect(getQueueEntryById(meshId, pending.id)?.status).toBe('assigned');
+        } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+    });
+    it('refuses active claims, direct attempts and unsettled Refinery but ignores unrelated mesh work', async () => {
+        const f = await fixture();
+        try {
+            expect(() => f.repair(f.request, { ...f.host, refineryRunning: true })).toThrow(/refinery_active/);
+            seedLocalRecord(meshId, { kind: 'task_dispatched', nodeId: 'existing', payload: { source: 'refine_mesh_node_async_job', refineJob: { jobId: 'job' } } });
+            expect(() => f.repair()).toThrow(/refinery_active/);
+            seedLocalRecord(meshId, { kind: 'task_completed', nodeId: 'existing', payload: { refineJob: { jobId: 'job' } } });
+            seedMeshAttempt({ meshId: 'unrelated', taskId: 'other', sessionId: 'other', stage: 'generating' });
+            expect(f.repair().dryRun).toBe(true);
+            seedMeshAttempt({ meshId, taskId: 'active', sessionId: 'active', stage: 'generating' });
+            expect(() => f.repair()).toThrow(/active_claims/);
+        } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
     });
 });

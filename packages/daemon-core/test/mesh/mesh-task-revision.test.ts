@@ -255,3 +255,44 @@ describe('atomic ownership admission', () => {
         expect(JSON.stringify(admission.conflicts)).toContain('unproven_active_physical_resource');
     });
 });
+
+
+it('previews integration ownership and preserves parking until explicit scheduling revision', () => {
+    const original = task(); const store = MeshRuntimeStore.getInstance();
+    const parked = { ...store.findQueueEntryById(meshId, original.id)!, autoLaunch: { status: 'parked', reason: 'auto_launch_spawn_cap_parked', attempts: 5 } } as any;
+    store.updateQueueEntry(parked);
+    const before = store.findQueueEntryById(meshId, original.id)!;
+    const patch = { ownedPaths: ['file.ts'], phase: 'integration' as const };
+    const preview = revisePendingTask(meshId, original.id, before.revision!, patch, { ...context(), dryRun: true });
+    expect(preview.ownershipScope?.phase).toBe('integration');
+    expect(store.findQueueEntryById(meshId, original.id)).toEqual(before);
+    const edited = revisePendingTask(meshId, original.id, before.revision!, patch, { ...context(), deferScheduling: true });
+    expect(edited.autoLaunch).toEqual(before.autoLaunch);
+    expect(edited.id).toBe(original.id);
+    expect(edited.revisionHistory?.at(-1)?.before.ownedPaths).toEqual(before.ownedPaths);
+    expect(edited.revision).toBe(before.revision! + 1);
+    expect(() => revisePendingTask(meshId, original.id, before.revision!, patch, context())).toThrow(/stale_revision/);
+});
+
+it('source phase rejects oss gitlink but accepts a narrow nested source file', () => {
+    mkdirSync(join(worktree, 'oss', 'src'), { recursive: true });
+    writeFileSync(join(worktree, 'oss', 'src', 'repair.ts'), 'export {};');
+    const original = task();
+    expect(() => revisePendingTask(meshId, original.id, 0, { ownedPaths: ['oss'], phase: 'source' }, context())).toThrow(/source_phase_path_forbidden: oss/);
+    expect(revisePendingTask(meshId, original.id, 0, { ownedPaths: ['oss/src/repair.ts'], phase: 'source' }, context()).ownedPaths?.paths).toEqual([{ path: 'oss/src/repair.ts', subtree: false }]);
+});
+
+
+it('IPC preview/deferred ownership repair never invokes the scheduler or releases parked state', async () => {
+    const original = task(); const store = MeshRuntimeStore.getInstance();
+    const row = { ...store.findQueueEntryById(meshId, original.id)!, parked: { reason: 'auto_launch_spawn_cap_parked' } } as any;
+    store.updateQueueEntry(row); const before = store.findQueueEntryById(meshId, original.id)!;
+    state.mesh = { id: meshId, repoIdentity: 'repo', meshHost: { role: 'host', hostDaemonId: 'daemon-host' }, nodes: [{ id: 'node', daemonId: 'daemon-host', workspace: worktree }] };
+    const ctx = { deps: { statusInstanceId: 'daemon-host' }, components: () => { throw new Error('scheduler must not be called'); } } as any;
+    const req = { v: TURN_IPC_PROTOCOL_VERSION, meshId, taskId: original.id, expectedRevision: before.revision!, patch: { phase: 'integration', ownedPaths: ['file.ts'] } };
+    expect(await meshStoreIpcHandlers.queue_revise(ctx, { ...req, dryRun: true })).toMatchObject({ success: true });
+    expect(store.findQueueEntryById(meshId, original.id)).toEqual(before);
+    expect(await meshStoreIpcHandlers.queue_revise(ctx, { ...req, deferScheduling: true })).toMatchObject({ success: true });
+    expect(store.findQueueEntryById(meshId, original.id)?.parked).toEqual(before.parked);
+    expect(state.trigger).not.toHaveBeenCalled();
+});

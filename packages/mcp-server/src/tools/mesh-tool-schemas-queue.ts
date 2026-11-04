@@ -242,12 +242,14 @@ export const MESH_QUEUE_REQUEUE_TOOL = {
 
 export const MESH_QUEUE_REVISE_TOOL = {
     name: 'mesh_queue_revise',
-    description: 'Atomically revise an existing PENDING task by expected revision (legacy revision is 0). Preserves id, mission, history and dependents. Edits message, ownership, source/integration phase or dependency graph; releases stale holds and reschedules immediately. Physical source migration requires an existing local node pin, attested by the host. Assigned/open attempts refuse; no force or active handoff in version 1. Source completion is uncommitted/not_mergeable, never release acceptance.',
+    description: 'Atomically revise an existing PENDING task by expected revision (legacy revision is 0). Preserves id, mission, history and dependents. Edits message, ownership, source/integration phase or dependency graph; By default releases stale holds and reschedules immediately. dry_run validates without mutation; defer_scheduling applies the revision while preserving holds/parking and does not trigger scheduling. Physical source migration requires an existing local node pin, attested by the host. Assigned/open attempts refuse; no force or active handoff in version 1. Source completion is uncommitted/not_mergeable, never release acceptance.',
     inputSchema: {
         type: 'object' as const, additionalProperties: false,
         required: ['task_id', 'expected_revision', 'patch'],
         properties: {
             task_id: { type: 'string' }, expected_revision: { type: 'integer', minimum: 0 },
+            dry_run: { type: 'boolean', description: 'Validate the same CAS/ownership/collision gates without saving or scheduling.' },
+            defer_scheduling: { type: 'boolean', description: 'Preserve existing parking and holds; do not trigger scheduling. Does not pause an otherwise runnable task.' },
             patch: { type: 'object', additionalProperties: false, minProperties: 1,
                 properties: {
                     message: { type: 'string', minLength: 1 },

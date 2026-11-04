@@ -504,16 +504,21 @@ export interface QueueReviseRequest {
     meshId: string
     taskId: string
     expectedRevision: number
+    dryRun?: boolean
+    deferScheduling?: boolean
     patch: { message?: string; ownedPaths?: string[]; phase?: 'source' | 'integration'; dependsOn?: string[]; routingPreferences?: import('./task-source-phase').MeshRoutingPreferences; review?: import('./task-source-phase').MeshReviewConstraint; requestQuotaOverride?: true }
 }
 export type QueueReviseResponse = QueueRequeueResponse
 export function decodeQueueReviseRequest(value: unknown): QueueReviseRequest | null {
-    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'taskId', 'expectedRevision', 'patch'])
+    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'taskId', 'expectedRevision', 'patch', 'dryRun', 'deferScheduling'])
         || value.v !== TURN_IPC_PROTOCOL_VERSION || !isEvidenceIdentifier(value.meshId) || !isEvidenceIdentifier(value.taskId)
         || !Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 0
         || !isRecord(value.patch) || !Object.keys(value.patch).length
         || !hasOnlyKeys(value.patch, ['message', 'ownedPaths', 'phase', 'dependsOn', 'routingPreferences', 'review', 'requestQuotaOverride'])) return null
+    if (value.dryRun !== undefined && typeof value.dryRun !== 'boolean') return null
+    if (value.deferScheduling !== undefined && typeof value.deferScheduling !== 'boolean') return null
     const p = value.patch
+    if (p.requestQuotaOverride && (value.dryRun !== undefined || value.deferScheduling !== undefined)) return null
     if (p.requestQuotaOverride !== undefined && (p.requestQuotaOverride !== true || Object.keys(p).length !== 1)) return null
     if (p.message !== undefined && (typeof p.message !== 'string' || !p.message.trim())) return null
     if (p.phase !== undefined && p.phase !== 'source' && p.phase !== 'integration') return null

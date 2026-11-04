@@ -403,6 +403,35 @@ async function removeMeshNode(ctx: MedFamilyContext, args: any): Promise<Command
 }
 
 export const meshNodeLifecycleHandlers: Record<string, MedFamilyHandler> = {
+    recover_mesh_node_identity: async (ctx: MedFamilyContext, args: any) => {
+        const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+        const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
+        if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
+        const denied = await ctx.requireMeshHostMutationOwner(meshId, undefined, 'node identity recovery');
+        if (denied) return denied;
+        try {
+            if (Object.keys(args).some(k => !['meshId', 'nodeId', 'identityRecovery'].includes(k))) throw new Error('invalid_node_identity_recovery_envelope');
+            const { recoverLocalNodeIdentity } = await import('../../config/mesh-config.js');
+            await ctx.getMeshForCommand(meshId, undefined);
+            const cached = ctx.getCachedInlineMesh(meshId);
+            const cachedNode = cached?.nodes?.find((n: any) => n.id === nodeId);
+            if (cached && !cachedNode) throw new Error('node_identity_cache_conflict');
+            const router = ctx.components().router;
+            if (args.identityRecovery?.dryRun === false) ctx.invalidateAggregateMeshStatus(meshId);
+            const result = recoverLocalNodeIdentity(meshId, nodeId, args.identityRecovery, {
+                actor: ctx.deps.statusInstanceId || '', machineId: getMachineId() || '',
+                cachedNode, runningRefineMeshIds: [...router.runningRefineBatchJobs.keys(), ...[...router.runningRefineJobs.keys()].map(k => k.split(':')[0])], refineryLeaseRoots: [...router.refineBaseLeases.keys()].map(k => k.split('::')[0]), refineryRunning: router.runningRefineBatchJobs.has(meshId)
+                    || [...router.runningRefineJobs.keys()].some(k => k.startsWith(`${meshId}:`)),
+            });
+            if (!result.dryRun && result.node && cached) {
+                router.inlineMeshCache.set(meshId, { ...cached, nodes: cached.nodes.map((n: any) => n.id === nodeId
+                    ? { ...n, daemonId: result.node!.daemonId, machineId: result.node!.machineId,
+                        identityRecoveryHistory: (result.node as any).identityRecoveryHistory } : n) });
+            }
+            return result;
+        } catch (e: any) { return { success: false, error: e?.message || String(e) }; }
+    },
+
     add_mesh_node: async (ctx: MedFamilyContext, args: any) => {
         const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         const workspace = typeof args?.workspace === 'string' ? args.workspace.trim() : '';

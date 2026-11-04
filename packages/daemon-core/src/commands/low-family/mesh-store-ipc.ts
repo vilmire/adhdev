@@ -475,11 +475,11 @@ const queueRevise: LowFamilyHandler = async (ctx, args: unknown) => {
             return { success: true, task: queueWire(MeshRuntimeStore.getInstance().findQueueEntryById(req.meshId, req.taskId)), quotaOverrideRequested: { decisionId: asked.itemId, alreadyAsked: asked.deduped, options: asked.options } };
         }
         const edited = revisePendingTask(req.meshId, req.taskId, req.expectedRevision, req.patch as Parameters<typeof revisePendingTask>[3], {
-            actor: self, repoIdentity: mesh.repoIdentity, machineId,
+            actor: self, repoIdentity: mesh.repoIdentity, machineId, dryRun: req.dryRun, deferScheduling: req.deferScheduling,
             ...(localNode ? { nodeId: localNode.id, workspace: localNode.workspace } : {}),
         });
         // Admission commits first. Trigger from the host boundary, including non-MCP clients.
-        try { void triggerMeshQueue(ctx.components(), req.meshId).catch(e => LOG.warn('MeshQueue', `Revision reschedule: ${String(e)}`)); } catch { /* boot drain will retry */ }
+        if (!req.dryRun && !req.deferScheduling) try { void triggerMeshQueue(ctx.components(), req.meshId).catch(e => LOG.warn('MeshQueue', `Revision reschedule: ${String(e)}`)); } catch { /* boot drain will retry */ }
         return { success: true, task: queueWire(edited) };
     } catch (e) { return failure(e); }
 };

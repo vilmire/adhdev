@@ -6,7 +6,15 @@
  * uses this file as the single source of truth.
  */
 
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
+import { realpathSync, statSync } from 'node:fs';
+import { resolve, isAbsolute } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
+import { readLocalRecords } from '../mesh/mesh-local-records.js';
+import { selectOpenRefineDispatches } from '../mesh/mesh-refine-zombie-sweep.js';
+import { pendingLaunchReservation } from '../mesh/mesh-task-routing-contract.js';
+import { attestLocalOwnership } from '../mesh/mesh-physical-ownership.js';
 import { getMachineNickname } from './config.js';
 import type {
     AssistantRemoteAccessBinding,
@@ -28,8 +36,8 @@ import {
     isAssistantFollowerAllowedOp,
 } from '@adhdev/mesh-shared';
 import { mergePolicyOverrides, normalizePolicyOverrides, MESH_POLICY_STORAGE_VERSION } from '../repo-mesh-types.js';
-import { createDefaultMeshHostMetadata } from '../mesh/mesh-host-ownership.js';
-import { withMeshConfigWriteLock, loadMeshConfigEntry, loadMeshConfig, normalizeCapabilityTags, saveMeshConfig, normalizeRepoIdentity, peekMeshNodes } from './mesh-config-store.js';
+import { resolveMeshHostStatus, createDefaultMeshHostMetadata } from '../mesh/mesh-host-ownership.js';
+import { withStrictMeshConfigWriteLock, readMeshConfigFromDisk, saveMeshConfigDurable, withMeshConfigWriteLock, loadMeshConfigEntry, loadMeshConfig, normalizeCapabilityTags, saveMeshConfig, normalizeRepoIdentity, peekMeshNodes } from './mesh-config-store.js';
 import { assertMeshNodeCapacity } from './mesh-node-limit.js';
 import { stripRemovedCoordinatorPromptFields } from './mesh-json-config.js';
 import { selectReportedQuotaFacts } from '../quota/reported-snapshot.js';
@@ -478,3 +486,114 @@ function updateNodeUnlocked(
     return node;
 }
 
+
+/** A recovery of this existing record only, never a caller-supplied identity grant. */
+export interface LocalNodeIdentityRecovery {
+    v: 1;
+    expectedDaemonId: string | null;
+    expectedMachineId: string | null;
+    expectedWorkspace: string;
+    dryRun: boolean;
+    expectedFingerprint?: string;
+}
+
+/** Local authenticated handler only. No await between proof, CAS and persistence. */
+export function recoverLocalNodeIdentity(meshId: string, nodeId: string, request: LocalNodeIdentityRecovery,
+    host: { actor: string; machineId: string; refineryRunning: boolean; refineryLeaseRoots?: string[]; runningRefineMeshIds?: string[]; cachedNode?: Partial<LocalMeshNodeEntry> }) {
+    if (!request || typeof request !== 'object' || Array.isArray(request)
+        || Object.keys(request).some(k => !['v', 'expectedDaemonId', 'expectedMachineId', 'expectedWorkspace', 'dryRun', 'expectedFingerprint'].includes(k))
+        || request.v !== 1 || typeof request.dryRun !== 'boolean'
+        || ![request.expectedDaemonId, request.expectedMachineId].every(x => x === null || (typeof x === 'string' && !!x.trim()))
+        || typeof request.expectedWorkspace !== 'string' || !isAbsolute(request.expectedWorkspace)
+        || (request.expectedFingerprint !== undefined && !/^[a-f0-9]{64}$/.test(request.expectedFingerprint))
+        || (!request.dryRun && !request.expectedFingerprint)) throw new Error('invalid_node_identity_recovery');
+    const store = MeshRuntimeStore.getInstance();
+    return store.transaction(() => withStrictMeshConfigWriteLock(() => {
+        const config = readMeshConfigFromDisk();
+        const mesh = config?.meshes.find(m => m.id === meshId);
+        const node = mesh?.nodes.find(n => n.id === nodeId);
+        if (!config || !mesh || !node) throw new Error('node_not_found');
+        const cached = host.cachedNode;
+        if (cached && (cached.workspace !== node.workspace || cached.daemonId !== node.daemonId || cached.machineId !== node.machineId)) throw new Error('node_identity_cache_conflict');
+        const owner = resolveMeshHostStatus(mesh, { localDaemonId: host.actor });
+        if (!host.actor || !host.machineId || !daemonIdsEquivalent(host.actor, host.machineId)
+            || !mesh.meshHost?.hostDaemonId || !daemonIdsEquivalent(mesh.meshHost.hostDaemonId, host.actor)
+            || owner.role !== 'host' || !daemonIdsEquivalent(owner.hostDaemonId, host.actor)) throw new Error('authenticated_local_mesh_host_required');
+        if ((node.daemonId ?? null) !== request.expectedDaemonId || (node.machineId ?? null) !== request.expectedMachineId)
+            throw new Error('stale_node_identity');
+        for (const id of [node.daemonId, node.machineId]) {
+            if (id != null && (!id || !daemonIdsEquivalent(id, host.actor))) throw new Error('foreign_node_identity');
+        }
+        const localNodes = mesh.nodes.filter(n => n.id !== node.id && n.daemonId && n.machineId
+            && daemonIdsEquivalent(n.daemonId, host.actor) && daemonIdsEquivalent(n.machineId, host.machineId));
+        if (!localNodes.length) throw new Error('local_repo_anchor_required');
+        const git = (workspace: string, ...args: string[]) => execFileSync('git', ['-C', workspace, ...args], {
+            windowsHide: true, timeout: 5000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+        }).trim();
+        const owned = (p: string) => {
+            const canonical = realpathSync.native(p); const st = statSync(canonical);
+            if (typeof process.getuid !== 'function' || st.uid !== process.getuid() || (st.mode & 0o022)) throw new Error('local_resource_owner_unproven');
+            return { path: canonical, dev: st.dev, ino: st.ino, uid: st.uid };
+        };
+        const inspect = (workspace: string) => {
+            const root = owned(workspace);
+            if (root.path !== workspace || realpathSync.native(git(workspace, 'rev-parse', '--show-toplevel')) !== workspace)
+                throw new Error('canonical_worktree_root_required');
+            const gitDir = owned(git(workspace, 'rev-parse', '--absolute-git-dir'));
+            const common = owned(resolve(workspace, git(workspace, 'rev-parse', '--git-common-dir')));
+            const repo = normalizeRepoIdentity(git(workspace, 'remote', 'get-url', 'origin'));
+            if (!repo || repo !== normalizeRepoIdentity(mesh.repoIdentity)) throw new Error('local_repository_mismatch');
+            const head = git(workspace, 'rev-parse', '--verify', 'HEAD');
+            return { root, gitDir, common, repo, head };
+        };
+        if (node.workspace !== request.expectedWorkspace) throw new Error('stale_node_workspace');
+        const target = inspect(node.workspace);
+        if (node.repoRoot && realpathSync.native(node.repoRoot) !== target.root.path) throw new Error('node_repository_root_mismatch');
+        const anchors = localNodes.flatMap(n => {
+            try { return [{ nodeId: n.id, proof: inspect(n.workspace) }]; } catch { return []; }
+        });
+        if (!anchors.length) throw new Error('local_repo_anchor_required');
+        // An independent clone must prove a shared immutable object, not only an origin string.
+        if (!anchors.some(a => {
+            try { git(a.proof.root.path, 'cat-file', '-e', `${target.head}^{commit}`); return true; } catch { return false; }
+        })) throw new Error('local_repository_object_unproven');
+        if (mesh.nodes.some(n => {
+            if (n.id === node.id) return false;
+            if (n.workspace === target.root.path) return true;
+            try { return realpathSync.native(n.workspace) === target.root.path; } catch { return false; }
+        })) throw new Error('ambiguous_node_workspace');
+        const relatedMeshIds = config.meshes.filter(m => normalizeRepoIdentity(m.repoIdentity) === target.repo).map(m => m.id);
+        const sharedRoots = new Set([target.root.path, target.common.path, ...anchors.flatMap(a => [a.proof.root.path, a.proof.common.path])]);
+        const leased = (host.refineryLeaseRoots ?? []).some(root => sharedRoots.has(realpathSync.native(root)));
+        if (host.refineryRunning || leased || host.runningRefineMeshIds?.some(id => relatedMeshIds.includes(id))
+            || relatedMeshIds.some(id => selectOpenRefineDispatches(readLocalRecords(id, { kind: ['task_dispatched', 'task_completed', 'task_failed'], turnTerminals: false })).length))
+            throw new Error('node_identity_refinery_active');
+        // This recovery attests integration resources: every writer in this repository mesh conflicts.
+        // Only meshes with this verified repository identity are consulted; reserved launches also own a future writer.
+        if (relatedMeshIds.some(id => store.assignedRowsMeshWide(id).length || store.turnStore().listOpenAttempts({ meshId: id }).length
+            || store.getQueueEntries(id, ['pending']).some(t => pendingLaunchReservation(t))))
+            throw new Error('node_identity_active_claims');
+        const scope = attestLocalOwnership({ repoIdentity: mesh.repoIdentity, machineId: host.machineId, nodeId: node.id,
+            workspace: node.workspace, phase: 'integration', paths: { paths: [] } });
+        const resourceProofs: Array<ReturnType<typeof owned>> = [];
+        for (const p of [...Object.values(scope.gitResources), ...scope.resources.map(r => r.path)]) {
+            // Hooks can legitimately be absent; prove their containing Git directory above.
+            try { resourceProofs.push(owned(p)); } catch (e: any) { if (e?.code !== 'ENOENT') throw e; }
+        }
+        const fingerprint = createHash('sha256').update(JSON.stringify({ meshId, repoIdentity: mesh.repoIdentity,
+            host: { actor: host.actor, machineId: host.machineId }, node, target, anchors, scope, resourceProofs })).digest('hex');
+        if (!request.dryRun && request.expectedFingerprint !== fingerprint) throw new Error('stale_node_identity_fingerprint');
+        const receipt = { v: 1, meshId, nodeId, fingerprint, previous: { daemonId: node.daemonId ?? null, machineId: node.machineId ?? null },
+            next: { daemonId: host.actor, machineId: host.machineId }, workspace: node.workspace, proof: target };
+        if (request.dryRun) return { success: true, dryRun: true, receipt };
+        const record = node as LocalMeshNodeEntry & { identityRecoveryHistory?: unknown[] };
+        record.identityRecoveryHistory = [...(record.identityRecoveryHistory ?? []), { ...receipt, actor: host.actor, at: new Date().toISOString() }];
+        node.daemonId = host.actor; node.machineId = host.machineId;
+        const saved = saveMeshConfigDurable(config);
+        if (!saved.ok && !saved.committed) throw new Error(`node_identity_persistence_failed:${saved.reason}`);
+        return saved.ok
+            ? { success: true, dryRun: false, changed: true, durable: true, receipt, node }
+            : { success: false, dryRun: false, changed: true, code: 'node_identity_durability_unconfirmed',
+                error: 'Registry replace committed; durability unconfirmed. Inspect before retrying.', receipt, node };
+    }));
+}

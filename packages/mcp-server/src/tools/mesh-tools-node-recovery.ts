@@ -72,3 +72,18 @@ export async function meshDirectCancel(
     }
     return JSON.stringify(out, null, 2);
 }
+
+
+/** Existing-node recovery is local to the authenticated host; never route by an unproven node identity. */
+export async function meshRecoverNodeIdentity(ctx: MeshContext, args: {
+    node_id: string; expected_identity: { daemon_id: string | null; machine_id: string | null };
+    expected_workspace: string; dry_run: boolean; expected_fingerprint?: string;
+}): Promise<string> {
+    return JSON.stringify(await ctx.transport.command('recover_mesh_node_identity', {
+        meshId: ctx.mesh.id, nodeId: args.node_id,
+        identityRecovery: { v: 1, expectedDaemonId: args.expected_identity?.daemon_id, expectedMachineId: args.expected_identity?.machine_id,
+            expectedWorkspace: args.expected_workspace, dryRun: args.dry_run,
+            ...(args.expected_fingerprint !== undefined ? { expectedFingerprint: args.expected_fingerprint } : {}),
+        },
+    }));
+}

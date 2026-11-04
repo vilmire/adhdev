@@ -704,6 +704,7 @@ export const meshCrudSpecs = defineCommandSpecs('med', meshCrudHandlers, {
     reattach_mesh_source_parent: { invalidates: ['daemon.metadata'] },
     add_mesh_node: { invalidates: ['daemon.metadata'] },
     update_mesh_node: { invalidates: ['daemon.metadata'] },
+    recover_mesh_node_identity: { sources: ['ipc', 'standalone'], meshSender: undefined, invalidates: ['daemon.metadata'] },
     // DASHBOARD-GHOST-LINGER: deleted sessions linger as ghost rows until the next
     // heartbeat without an immediate daemon.metadata flush.
     cleanup_mesh_sessions: { invalidates: ['daemon.metadata'] },

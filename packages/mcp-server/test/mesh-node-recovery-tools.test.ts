@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { CANONICAL_MESH_TOOL_NAMES } from '@adhdev/mesh-shared';
-import { ALL_MESH_TOOLS, meshDirectCancel, meshRetryNodeBootstrap } from '../src/tools/mesh-tools.js';
+import { ALL_MESH_TOOLS, meshDirectCancel, meshRetryNodeBootstrap, meshRecoverNodeIdentity } from '../src/tools/mesh-tools.js';
 import { resolveMeshToolHandler } from '../src/tools/mesh-tool-dispatch.js';
 import { TOOL_ANNOTATIONS } from '../src/tools/tool-annotations.js';
 import { validateMeshToolArgs } from '../src/tools/validate-tool-args.js';
@@ -120,4 +120,20 @@ test('direct cancel: daemon refusals (unknown / not owner / queue attempt) pass 
     assert.equal(noop.nextStepHint, undefined);
     const failed = JSON.parse(await meshDirectCancel(makeCtx(new Error('Unknown command'), []), { task_id: 't' }));
     assert.equal(failed.code, 'mesh_direct_cancel_failed');
+});
+
+
+test('identity recovery is published, annotated, strict and always uses the local host transport', async () => {
+    const name = 'mesh_recover_node_identity';
+    assert.ok(ALL_MESH_TOOLS.some(t => t.name === name));
+    assert.equal(typeof resolveMeshToolHandler(name), 'function');
+    assert.equal(TOOL_ANNOTATIONS[name]?.destructiveHint, true);
+    const args = { node_id: 'existing', expected_identity: { daemon_id: null, machine_id: null }, expected_workspace: '/repo/integration', dry_run: true };
+    assert.equal(validateMeshToolArgs(name, args), null);
+    assert.match(String(validateMeshToolArgs(name, { ...args, force: true })), /force/);
+    const calls: Call[] = [];
+    await meshRecoverNodeIdentity(makeCtx({ success: true }, calls, { remote: true }), args);
+    assert.deepEqual(calls, [{ verb: 'recover_mesh_node_identity', args: { meshId: 'mesh-test', nodeId: 'existing', identityRecovery: {
+        v: 1, expectedDaemonId: null, expectedMachineId: null, expectedWorkspace: '/repo/integration', dryRun: true,
+    } } }]);
 });

@@ -531,10 +531,13 @@ export async function meshQueueRequeue(
     }
 }
 
-export async function meshQueueRevise(ctx: MeshContext, args: { task_id: string; expected_revision: number; patch: QueueReviseRequest['patch'] }): Promise<string> {
+export async function meshQueueRevise(ctx: MeshContext, args: { task_id: string; expected_revision: number; patch: QueueReviseRequest['patch']; dry_run?: boolean; defer_scheduling?: boolean }): Promise<string> {
     try {
-        const { task, quotaOverrideRequested } = await queueRevise(ctx.transport, { meshId: ctx.mesh.id, taskId: args.task_id, expectedRevision: args.expected_revision, patch: args.patch });
-        return JSON.stringify({ success: true, task, ...(quotaOverrideRequested ? { quotaOverrideRequested } : {}) });
+        const { task, quotaOverrideRequested } = await queueRevise(ctx.transport, { meshId: ctx.mesh.id, taskId: args.task_id, expectedRevision: args.expected_revision, patch: args.patch,
+            ...(args.dry_run !== undefined ? { dryRun: args.dry_run } : {}),
+            ...(args.defer_scheduling !== undefined ? { deferScheduling: args.defer_scheduling } : {}),
+        });
+        return JSON.stringify({ success: true, task, ...(args.dry_run !== undefined ? { dryRun: args.dry_run } : {}), ...(args.defer_scheduling !== undefined ? { deferScheduling: args.defer_scheduling } : {}), ...(quotaOverrideRequested ? { quotaOverrideRequested } : {}) });
     } catch (e: any) { return JSON.stringify({ success: false, error: e.message }); }
 }
 

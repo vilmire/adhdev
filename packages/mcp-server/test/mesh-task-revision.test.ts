@@ -39,3 +39,17 @@ test('requestQuotaOverride is a lone patch key that asks the owner and is passed
     assert.equal(result.quotaOverrideRequested.decisionId, 'mi_1');
     assert.equal(result.task.revision, 0);
 });
+
+
+test('revision preview and deferred scheduling flags are typed and forwarded', async () => {
+    const calls: any[] = [];
+    const ctx = { mesh: { id: 'mesh' }, transport: { command: async (name: string, args: any) => {
+        calls.push({ name, args }); return { success: true, task: { id: 'task', status: 'pending', revision: 17 } };
+    } } } as any;
+    const patch = { phase: 'integration' as const, ownedPaths: ['oss', 'adhdev-providers'] };
+    assert.equal(JSON.parse(await meshQueueRevise(ctx, { task_id: 'task', expected_revision: 17, patch, dry_run: true, defer_scheduling: true })).success, true);
+    assert.deepEqual(calls[0].args, { v: TURN_IPC_PROTOCOL_VERSION, meshId: 'mesh', taskId: 'task', expectedRevision: 17, patch, dryRun: true, deferScheduling: true });
+    assert.ok(decodeQueueReviseRequest(calls[0].args));
+    assert.equal(decodeQueueReviseRequest({ ...calls[0].args, dryRun: 'true' }), null);
+    assert.equal(decodeQueueReviseRequest({ ...calls[0].args, patch: { requestQuotaOverride: true } }), null);
+});

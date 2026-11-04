@@ -206,3 +206,21 @@ export const MESH_NOTIFY_WORKER_TOOL = {
         required: ['node_id', 'task_id', 'message'],
     },
 };
+
+
+export const MESH_RECOVER_NODE_IDENTITY_TOOL = {
+    name: 'mesh_recover_node_identity',
+    description: 'Recover missing identity on an EXISTING local node without replacing its ID, policy or history. Requires authenticated mesh host, exact old identity/workspace CAS, owned real Git resources and a verified local repository anchor. Refuses foreign/ambiguous identity, active claims/attempts and unsettled Refinery. First dry_run=true; apply with the returned receipt.fingerprint. Never edits or schedules tasks.',
+    inputSchema: {
+        type: 'object' as const, additionalProperties: false,
+        required: ['node_id', 'expected_identity', 'expected_workspace', 'dry_run'],
+        properties: {
+            node_id: { type: 'string', minLength: 1 },
+            expected_identity: { type: 'object', additionalProperties: false, required: ['daemon_id', 'machine_id'], properties: {
+                daemon_id: { type: ['string', 'null'] }, machine_id: { type: ['string', 'null'] },
+            } },
+            expected_workspace: { type: 'string', minLength: 1 }, dry_run: { type: 'boolean' },
+            expected_fingerprint: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+        },
+    },
+};

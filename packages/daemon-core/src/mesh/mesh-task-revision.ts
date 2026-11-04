@@ -21,6 +21,7 @@ export interface PendingTaskRevisionPatch {
 /** Passed only by the authenticated host handler, never spread from request options. */
 export interface TaskRevisionHostContext {
     actor: string; repoIdentity: string; machineId: string; nodeId?: string; workspace?: string;
+    dryRun?: boolean; deferScheduling?: boolean;
 }
 
 /** Same transaction as claims. Refusal throws before any row, history or hold is written. */
@@ -95,11 +96,12 @@ export function revisePendingTask(meshId: string, taskId: string, expectedRevisi
                     .map(c => ({ ...c, action: 'serialize_integration' as const }));
             });
         }
+        if (host.dryRun) return next; // Validation uses the same transaction/proof path; no writes or scheduling.
         next.revisionHistory = [...(before.revisionHistory ?? []), {
             revision: expectedRevision, at: new Date().toISOString(), actor: host.actor,
             before: { message: before.message, ownedPaths: before.ownedPaths, phase: before.phase, dependsOn: before.dependsOn, ownershipScope: before.ownershipScope, routingPreferences: before.routingPreferences, review: before.review },
         }];
-        delete next.hold; delete next.holdNoticeId; delete next.autoLaunch;
+        if (!host.deferScheduling) { delete next.hold; delete next.holdNoticeId; delete next.autoLaunch; }
         // updateQueueEntry owns the monotonic revision; no retries, attempts or identities change.
         store.updateQueueEntry(next);
         return next;
