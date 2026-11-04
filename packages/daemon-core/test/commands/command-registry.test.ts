@@ -344,7 +344,7 @@ const LEGACY_HIGH_FAMILY_COMMANDS = [
     'assistant_artifact_list', 'assistant_artifact_read',
     // Owner-decision inbox verbs (high-family/assistant-decisions.ts, structured missions §6.3).
     'assistant_decision_answer', 'assistant_decision_request', 'assistant_session_control', 'assistant_file_transfer', 'assistant_quota_failover', 'assistant_switch_provider',
-    'mesh_host_handoff', 'mesh_host_handoff_ack', 'mesh_host_handoff_activate', 'mesh_host_handoff_capability', 'mesh_host_handoff_certificate',
+    'mesh_host_handoff', 'mesh_host_handoff_ack', 'mesh_host_handoff_activate', 'mesh_host_handoff_capability', 'mesh_host_handoff_certificate', 'mesh_host_handoff_member_probe',
     'mesh_host_handoff_chunk', 'mesh_host_handoff_discard', 'mesh_host_handoff_status',
     // Authenticated remote project attach (high-family/remote-project-attach.ts): the
     // owner entry (assistant verb + mesh tool command), the owner settings verb, and the four server-api steps.

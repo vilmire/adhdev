@@ -44,6 +44,8 @@ export type StartResult =
     | { success: true; handoffId: string; phase: SourcePhase }
     | { success: false; code: HandoffErrorCode | string; error: string; checks?: PreflightCheck[]; handoffId?: string; phase?: SourcePhase };
 
+const MEMBER_UNREACHABLE = /PEER_NOT_CONNECTED|NO_PEER|NO_TRANSPORT|QUEUE_OVERFLOW|CONNECT_TIMEOUT|not connected|signaling|not available/i;
+
 const refuse = (code: HandoffErrorCode | string, error: string, extra: Record<string, unknown> = {}): { success: false; code: string; error: string } & Record<string, unknown> =>
     ({ success: false, code, error, ...extra });
 
@@ -130,7 +132,13 @@ export class HostHandoffSource {
             if (!this.d.peerOnline(id)) { offline.push(id); return; }
             const probe = this.d.peer(id).memberProbe;
             let answer: { success?: boolean; protocol?: number } | undefined;
-            try { answer = await probe?.({ meshId: input.meshId }); } catch { answer = undefined; }
+            try { answer = await probe?.({ meshId: input.meshId }); }
+            catch (e) {
+                // Unreachable is offline: it adopts when it returns. A daemon that answered
+                // without this verb is on an older build, and that is what must block the move.
+                const failure = e as { code?: unknown; message?: unknown };
+                if (MEMBER_UNREACHABLE.test(`${String(failure.code ?? '')} ${String(failure.message ?? '')}`)) { offline.push(id); return; }
+            }
             if (answer?.success !== true || answer.protocol !== HOST_HANDOFF_PROTOCOL) stale.push(id);
         }));
         const detail = [stale.length ? `not on protocol ${HOST_HANDOFF_PROTOCOL}: ${stale.join(', ')}` : '', offline.length ? `offline, adopts on reconnect: ${offline.join(', ')}` : ''].filter(Boolean).join('; ');

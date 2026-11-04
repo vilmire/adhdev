@@ -150008,6 +150008,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         init_types2();
       }
     });
+    var MEMBER_UNREACHABLE;
     var refuse6;
     var HostHandoffSource;
     var init_source_machine = __esm2({
@@ -150016,6 +150017,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         init_dist();
         init_snapshot_export();
         init_types2();
+        MEMBER_UNREACHABLE = /PEER_NOT_CONNECTED|NO_PEER|NO_TRANSPORT|QUEUE_OVERFLOW|CONNECT_TIMEOUT|not connected|signaling|not available/i;
         refuse6 = (code, error, extra = {}) => ({ success: false, code, error, ...extra });
         HostHandoffSource = class {
           constructor(d) {
@@ -150110,8 +150112,12 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
               let answer2;
               try {
                 answer2 = await probe?.({ meshId: input.meshId });
-              } catch {
-                answer2 = void 0;
+              } catch (e) {
+                const failure8 = e;
+                if (MEMBER_UNREACHABLE.test(`${String(failure8.code ?? "")} ${String(failure8.message ?? "")}`)) {
+                  offline.push(id4);
+                  return;
+                }
               }
               if (answer2?.success !== true || answer2.protocol !== HOST_HANDOFF_PROTOCOL) stale.push(id4);
             }));

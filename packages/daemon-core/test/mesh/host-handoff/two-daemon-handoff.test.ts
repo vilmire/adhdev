@@ -178,6 +178,11 @@ describe.skipIf(process.platform === 'win32')('two real daemons moving a project
         const stale = await air.call('preflight', { meshId: MESH, targetDaemonId: BOOK, targetNodeId: bookNode });
         expect(stale.checks).toContainEqual(expect.objectContaining({ id: 'fleet_members', ok: false, code: 'member_protocol_unsupported' }));
         net.oldProtocol.clear();
+        await worker.crash();
+        const away = await air.call('preflight', { meshId: MESH, targetDaemonId: BOOK, targetNodeId: bookNode });
+        expect(away.checks).toContainEqual(expect.objectContaining({ id: 'fleet_members', ok: true, detail: expect.stringContaining('adopts on reconnect') }));
+        expect(away.ok).toBe(true);
+        await worker.spawn();
         expect(await air.call('live', { meshId: MESH })).toHaveLength(1);
         expect(net.count('mesh_host_handoff_chunk')).toBe(0);
         expect(await air.call('admission', { meshId: MESH })).toBeNull();
