@@ -112,6 +112,26 @@ describe('MeshHostHandoffDialog', () => {
         expect(send).toHaveBeenCalledWith('daemon_host', 'mesh_host_handoff', { op: 'status', meshId: 'm' })
     })
 
+    it('shows a preflight refusal that cloud P2P delivers as a rejected command', async () => {
+        const send = vi.fn(async (_d: string, _c: string, payload: Record<string, unknown>) => {
+            if (payload.op === 'status') return { success: true, enabled: true, source: null }
+            throw Object.assign(new Error('Command failed'), { result: { success: false, ok: false, checks: [
+                { id: 'is_host', ok: true },
+                { id: 'peer_capability', ok: false, code: 'peer_capability_unconfirmed', detail: 'peer_capability_unconfirmed' },
+            ] } })
+        })
+        act(() => root.render(<MeshHostHandoffDialog open onClose={() => {}} meshId="m" hostDaemonId="daemon_host" daemons={daemons} sendCommand={send as never} />))
+        await flush()
+        const select = q('[data-handoff-target]') as HTMLSelectElement
+        const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!
+        await act(async () => { setter.call(select, 'daemon_b'); select.dispatchEvent(new Event('change', { bubbles: true })) })
+        await act(async () => { q('[data-handoff-action="preflight"]')!.click() })
+        await flush()
+        expect(q('[data-handoff-action="enable-target"]')).not.toBeNull()
+        expect(document.body.textContent).not.toContain('Command failed')
+        expect((q('[data-handoff-action="start"]') as HTMLButtonElement).disabled).toBe(true)
+    })
+
     it('runs preflight then start; start stays disabled until every check passes; the target list excludes the host', async () => {
         const calls: Array<Record<string, unknown>> = []
         const send = vi.fn(async (_d: string, _c: string, payload: Record<string, unknown>) => {

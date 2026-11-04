@@ -11,7 +11,7 @@ import { AlertBanner } from '../../components/ui/AlertBanner'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared'
 import {
-    HANDOFF_STEPS, HOST_HANDOFF_COMMAND, canAbortHandoff, canRetryHandoff, isHandoffTerminal, parseHandoffStatus, parsePreflight, parseStartResult, phaseToStep,
+    HANDOFF_STEPS, HOST_HANDOFF_COMMAND, canAbortHandoff, handoffAnswerFromError, canRetryHandoff, isHandoffTerminal, parseHandoffStatus, parsePreflight, parseStartResult, phaseToStep,
     unwrapHandoffAnswer, canaryProbeRefusal, canaryProbeSucceeded, isHandoffPending, needsTargetEnable, needsTargetPairing, type HandoffRecordView, type HandoffEvidenceView, type PreflightCheckView,
 } from './host-handoff'
 
@@ -44,8 +44,14 @@ export function MeshHostHandoffDialog({ open, onClose, meshId, hostDaemonId, dae
     const [record, setRecord] = useState<HandoffRecordView | null>(null)
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState<string | null>(null)
-    const sendRef = useRef(sendCommand)
-    sendRef.current = sendCommand
+    // Cloud P2P rejects `success:false`; a preflight refusal is an answer to show, not a transport failure.
+    const answering: typeof sendCommand = (daemonId, command, payload) => sendCommand(daemonId, command, payload).catch((e: unknown) => {
+        const answer = handoffAnswerFromError(e)
+        if (answer) return answer
+        throw e
+    })
+    const sendRef = useRef(answering)
+    sendRef.current = answering
     // The journal lives on the machine that started the move. After the cutover the project's
     // host changes under this dialog, but progress and stop proof are still answered there.
     const sourceDaemon = useRef(hostDaemonId).current

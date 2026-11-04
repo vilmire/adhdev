@@ -33,6 +33,12 @@ export function unwrapHandoffAnswer(raw: unknown): Record<string, any> | null {
     return inner && ('success' in inner || 'checks' in inner || 'enabled' in inner || 'handoffId' in inner) ? inner : r
 }
 
+/** Cloud P2P rejects a `success:false` answer; the checks and refusal code ride on the error as `result`. */
+export function handoffAnswerFromError(e: unknown): Record<string, any> | null {
+    const r = rec(rec(e)?.result)
+    return r && ('checks' in r || 'code' in r || 'handoffId' in r || 'enabled' in r) ? r : null
+}
+
 export function parseHandoffRecord(v: unknown): HandoffRecordView | null {
     const r = rec(v)
     if (!r || typeof r.handoffId !== 'string' || typeof r.phase !== 'string') return null
