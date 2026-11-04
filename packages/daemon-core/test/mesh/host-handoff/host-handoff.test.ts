@@ -209,7 +209,7 @@ describe('acceptance 10: failure injection leaves the source host, data intact, 
 
     it('a connection that drops mid-transfer', async () => {
         const before = w.src.dump();
-        w.net.faults.push({ verb: 'mesh_host_handoff_chunk', op: 'chunk', seq: 2, mode: 'request', times: 1 });
+        w.net.faults.push({ verb: 'mesh_host_handoff_chunk', op: 'chunk', seq: 2, mode: 'request', times: 3 });
         const r = await start() as { handoffId: string };
         await settle(w);
         expect(phase(w.src, r.handoffId, 'source')).toBe('aborted');
@@ -217,6 +217,25 @@ describe('acceptance 10: failure injection leaves the source host, data intact, 
         expect(phase(w.dst, r.handoffId, 'target')).toBe('discarded');
         expect(w.dst.journal.getChunks(r.handoffId)).toEqual([]);
         expectSourceStillHost(before);
+    });
+
+    it('one lost chunk RPC is retried, not fatal', async () => {
+        w.net.faults.push({ verb: 'mesh_host_handoff_chunk', op: 'chunk', seq: 2, mode: 'request', times: 2 });
+        const r = await start() as { handoffId: string };
+        await settle(w);
+        expect(phase(w.src, r.handoffId, 'source')).toBe('committed');
+    });
+
+    it('a transfer that outlasts the ACK deadline is not aborted while it is still copying', async () => {
+        const started = w.clock.now;
+        const original = w.dst.target.chunk.bind(w.dst.target);
+        let aborted: unknown;
+        w.dst.target.chunk = ((a: Parameters<typeof original>[0], sender: string) => { w.clock.now += 3 * 60_000; aborted = w.src.source.tick(); return original(a, sender); }) as never;
+        const r = await start() as { handoffId: string };
+        await aborted;
+        await settle(w);
+        expect(w.clock.now).toBeGreaterThan(started);
+        expect(phase(w.src, r.handoffId, 'source')).toBe('committed');
     });
 
     it('a tampered chunk is refused by its hash', async () => {

@@ -16,6 +16,7 @@ export interface HandoffRecordView {
     abortReason?: string
     peerDaemonId?: string
     epoch?: number
+    restore?: { ok: boolean; error?: string }
 }
 
 export interface PreflightCheckView { id: string; ok: boolean; code?: string; detail?: string }
@@ -40,6 +41,7 @@ export function parseHandoffRecord(v: unknown): HandoffRecordView | null {
         ...(typeof r.abortReason === 'string' ? { abortReason: r.abortReason } : {}),
         ...(typeof r.peerDaemonId === 'string' ? { peerDaemonId: r.peerDaemonId } : {}),
         ...(typeof r.epoch === 'number' ? { epoch: r.epoch } : {}),
+        ...(rec(r.restore) ? { restore: { ok: r.restore.ok === true, ...(typeof r.restore.error === 'string' ? { error: r.restore.error } : {}) } } : {}),
     }
 }
 
@@ -92,6 +94,23 @@ export function canaryProbeRefusal(checks: readonly PreflightCheckView[]): strin
 /** True when the nested auth probe itself passed. The host bound is not a native token or turn cap. */
 export function canaryProbeSucceeded(checks: readonly PreflightCheckView[]): boolean {
     return nestedCanaryRows(checks).some(row => row.id === 'provider_auth_canary' && row.ok === true)
+}
+
+/** The daemon is still working and asks to be called again. */
+export function isHandoffPending(raw: unknown): boolean {
+    return unwrapHandoffAnswer(raw)?.pending === true
+}
+
+const capabilityRefusal = (checks: readonly PreflightCheckView[]) => checks.find(c => c.id === 'peer_capability' && !c.ok)?.detail
+
+/** The target answered like a daemon with host moves off. It can be turned on from here, by the owner. */
+export function needsTargetEnable(checks: readonly PreflightCheckView[]): boolean {
+    return capabilityRefusal(checks) === 'peer_capability_unconfirmed'
+}
+
+/** The target holds no authenticated pin of this host (or no record of the project at all). */
+export function needsTargetPairing(checks: readonly PreflightCheckView[]): boolean {
+    return checks.some(c => c.id === 'host_key_pinned' && !c.ok) || capabilityRefusal(checks) === 'target_not_member'
 }
 
 export function parsePreflight(raw: unknown): { ok: boolean; checks: PreflightCheckView[]; error?: string } {

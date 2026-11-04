@@ -78,7 +78,6 @@ describe('complete logical project snapshot preservation', () => {
         world.dst.db.prepare("INSERT INTO mesh_mission_events (seq,mission_id,mesh_id,type,actor,payload_json,at) VALUES (100,'foreign-mission','unrelated','created','owner','{}','now')").run();
         const result = verify(snapshot()); if (!result.ok) throw new Error(result.detail);
         applySnapshotTables(world.dst.db as never, MESH, result.payload, undefined, 'origin-qualified-prototype');
-        expect(() => applySnapshotTables(world.dst.db as never, MESH, result.payload)).toThrow('owner compatibility decision');
         const sourceTypes = world.src.db.prepare('SELECT type FROM mesh_mission_events WHERE mesh_id=? ORDER BY seq').all(MESH);
         expect(world.dst.db.prepare('SELECT type FROM mesh_mission_events WHERE mesh_id=? ORDER BY seq').all(MESH)).toEqual(sourceTypes);
         expect(world.dst.db.prepare('SELECT MIN(seq) AS n FROM mesh_mission_events WHERE mesh_id=?').get(MESH)).toEqual({ n: 101 });
@@ -90,14 +89,59 @@ describe('complete logical project snapshot preservation', () => {
         expect(world.dst.db.prepare('SELECT COUNT(*) AS n FROM mesh_host_handoff_archive').get()).toEqual({ n: 2 });
     });
 
-    it('fails safely and retains every original byte on a history ID collision under the current production policy', () => {
+    it('refuses an exact (project, seq) collision and retains every original byte', () => {
         world = makeWorld();
-        world.dst.db.prepare("INSERT INTO mesh_mission_events (seq,mission_id,mesh_id,type,actor,payload_json,at) VALUES (1,'foreign-mission','unrelated','created','owner','{}','now')").run();
+        world.dst.db.prepare("INSERT INTO mesh_missions (id, mesh_id, title, goal, status, created_at, updated_at) VALUES ('m1', ?, 't', 'g', 'active', 'now', 'now')").run(MESH);
+        world.dst.db.prepare("INSERT INTO mesh_mission_events (seq,mission_id,mesh_id,type,actor,payload_json,at) VALUES (1,'m1',?,'different','owner','{}','now')").run(MESH);
         const before = world.dst.dump();
         const result = verify(snapshot()); if (!result.ok) throw new Error(result.detail);
-        expect(() => applySnapshotTables(world.dst.db as never, MESH, result.payload)).toThrow('owner compatibility decision');
+        expect(() => applySnapshotTables(world.dst.db as never, MESH, result.payload)).toThrow('history identity collision');
         expect(world.dst.dump()).toEqual(before);
         expect(world.dst.db.prepare('SELECT COUNT(*) AS n FROM mesh_host_handoff_archive').get()).toEqual({ n: 0 });
+    });
+
+    it('another project with the same seq is not a collision: both keep their exact ids and new events still number', () => {
+        world = makeWorld();
+        world.dst.db.prepare("INSERT INTO mesh_mission_events (seq,mission_id,mesh_id,type,actor,payload_json,at) VALUES (1,'foreign-mission','unrelated','created','owner','{}','now')").run();
+        world.dst.db.prepare("INSERT INTO mesh_mission_events (seq,mission_id,mesh_id,type,actor,payload_json,at) VALUES (100,'foreign-mission','unrelated','created','owner','{}','now')").run();
+        const sourceRows = world.src.db.prepare('SELECT seq, mission_id, type FROM mesh_mission_events WHERE mesh_id=? ORDER BY seq').all(MESH);
+        const result = verify(snapshot()); if (!result.ok) throw new Error(result.detail);
+        applySnapshotTables(world.dst.db as never, MESH, result.payload);
+        expect(world.dst.db.prepare('SELECT seq, mission_id, type FROM mesh_mission_events WHERE mesh_id=? ORDER BY seq').all(MESH)).toEqual(sourceRows);
+        expect(world.dst.db.prepare("SELECT seq, mission_id, type FROM mesh_mission_events WHERE mesh_id='unrelated' ORDER BY seq").all()).toEqual([
+            { seq: 1, mission_id: 'foreign-mission', type: 'created' }, { seq: 100, mission_id: 'foreign-mission', type: 'created' }]);
+        // Idempotent replay, and the row_id never travels back out.
+        applySnapshotTables(world.dst.db as never, MESH, result.payload);
+        expect(Object.keys(world.dst.db.prepare('SELECT * FROM mesh_mission_events LIMIT 1').get() as object)).toContain('row_id');
+        expect(world.dst.dump().mesh_mission_events![0]).toHaveLength((sourceRows.length && Object.keys(world.src.db.prepare('SELECT * FROM mesh_mission_events LIMIT 1').get() as object).length) as number);
+        // A statement that names no seq, as every insert site does, gets the next one.
+        const info = world.dst.db.prepare("INSERT INTO mesh_mission_events (mission_id, mesh_id, type, actor, payload_json, at) VALUES ('m1', ?, 'after', 'owner', '{}', 'now')").run(MESH);
+        expect((world.dst.db.prepare('SELECT seq FROM mesh_mission_events WHERE rowid = ?').get(info.lastInsertRowid) as { seq: number }).seq).toBeGreaterThan(100);
+    });
+
+    it('a per-daemon log with colliding private ids appends instead of refusing, once', () => {
+        world = makeWorld();
+        const log = "INSERT INTO mesh_tool_call_log (id, mesh_id, tool, session_id, caller_role, called_at) VALUES (?,?,?,?,?,?)";
+        world.src.db.prepare(log).run(7, MESH, 'mesh_status', 's', 'coordinator', 5);
+        world.dst.db.prepare(log).run(7, 'unrelated', 'mesh_status', 's', 'coordinator', 6);
+        const result = verify(snapshot()); if (!result.ok) throw new Error(result.detail);
+        applySnapshotTables(world.dst.db as never, MESH, result.payload);
+        applySnapshotTables(world.dst.db as never, MESH, result.payload);
+        expect(world.dst.db.prepare('SELECT mesh_id, called_at FROM mesh_tool_call_log ORDER BY called_at').all()).toEqual([{ mesh_id: MESH, called_at: 5 }, { mesh_id: 'unrelated', called_at: 6 }]);
+    });
+
+    it('a worker\'s own observation of an event keeps its local row unless the source still owes the notice', () => {
+        world = makeWorld();
+        const event = (over: Record<string, unknown>) => ({ event_id: 'e1', mesh_id: MESH, attempt_id: null, generation: 0, session_id: 's', kind: 'k', source: 'x', verdict: 'recorded', dedupe_key: 'd', payload_json: '{}', publish_state: 'none', at_ms: 1, recorded_at: 1, ...over });
+        const put = (db: typeof world.src.db, row: Record<string, unknown>) => db.prepare(`INSERT INTO turn_events (${Object.keys(row).join(',')}) VALUES (${Object.keys(row).map(() => '?').join(',')})`).run(...Object.values(row) as never[]);
+        put(world.src.db, event({ publish_state: 'published', published_seq: 4 }));
+        put(world.dst.db, event({}));
+        put(world.src.db, event({ event_id: 'e2', dedupe_key: 'p', publish_state: 'pending' }));
+        put(world.dst.db, event({ event_id: 'e2', dedupe_key: 'p' }));
+        const result = verify(snapshot()); if (!result.ok) throw new Error(result.detail);
+        applySnapshotTables(world.dst.db as never, MESH, result.payload);
+        expect(world.dst.db.prepare("SELECT event_id, publish_state FROM turn_events WHERE event_id IN ('e1','e2') ORDER BY event_id").all()).toEqual([
+            { event_id: 'e1', publish_state: 'none' }, { event_id: 'e2', publish_state: 'pending' }]);
     });
 
     it('keeps target-only local history and rolls back all effects on a conflicting local attempt', () => {

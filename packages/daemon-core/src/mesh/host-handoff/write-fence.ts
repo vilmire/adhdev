@@ -73,7 +73,10 @@ export function releaseHandoffWriteFence(db: FenceDb, meshId: string, handoffId:
     if (!current) return;
     if (current.handoff_id !== handoffId) throw new Error('project write fence identity changed');
     if (history) db.prepare("UPDATE mesh_host_write_fences SET mode='history' WHERE mesh_id=? AND handoff_id=?").run(meshId, handoffId);
-    else db.prepare('DELETE FROM mesh_host_write_fences WHERE mesh_id=? AND handoff_id=?').run(meshId, handoffId);
+    else {
+        db.prepare('DELETE FROM mesh_host_write_fences WHERE mesh_id=? AND handoff_id=?').run(meshId, handoffId);
+        db.prepare('DELETE FROM mesh_host_frozen_rows WHERE mesh_id=?').run(meshId);
+    }
 }
 
 export function withHandoffImport<T>(db: object, meshId: string, operation: () => T): T {

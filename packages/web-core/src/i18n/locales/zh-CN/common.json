@@ -1400,6 +1400,13 @@
             "close": "关闭",
             "open": "迁移主机…",
             "disabled": "主机迁移为实验功能,此机器上已关闭 (experimental.hostHandoff)。",
+            "enable": "在此机器上开启",
+            "enableTarget": "在目标上开启",
+            "targetDisabled": "目标机器上的主机迁移已关闭。",
+            "pair": "配对目标",
+            "pairExplain": "迁移前,目标必须固定此主机的密钥。这会在两台机器之间使用一次性代码,不会停止任何内容。",
+            "restored": "已重新启动之前的协调器。",
+            "restoreFailed": "之前的协调器未能重新启动({{reason}})。请从项目中启动。",
             "canaryUnsupported": "当前源不会停止。受支持的探测必须声明版本 1：由主机强制 15 秒和 16384 字节输出上限，关闭工具和私有上下文，并用真实参数绑定固定提示和所选模型。思考级别参数仅在选择了级别时加入。不保证原生的轮次上限或输出 token 上限，这类上限的占位符会被拒绝。",
             "canaryHostBound": "此探测仅在主机强制下通过：15 秒和 16384 字节输出上限。不保证原生的轮次上限或输出 token 上限。",
             "explain": "主机保存队列、任务和决策。迁移会把它们复制到所选机器,验证副本后才切换。运行中的工作不会中断,新工作会暂停到完成为止。",
@@ -1430,6 +1437,10 @@
                 "switch": "切换"
             },
             "check": {
+                "host_key_pinned": "目标已固定此主机的密钥",
+                "fleet_members": "其他机器可以跟随迁移",
+                "state_preservation": "项目状态完整且可读",
+                "launch_selection": "协调器选择可用",
                 "is_host": "此机器是主机",
                 "target_not_self": "目标是另一台机器",
                 "target_is_member": "目标是此项目的成员",
@@ -1442,6 +1453,11 @@
                 "no_open_writer_checkpoint": "没有未完成的工作者停止"
             },
             "code": {
+                "host_key_unpinned": "目标尚未与此主机配对",
+                "host_key_mismatch": "目标为此主机固定了不同的密钥",
+                "member_protocol_unsupported": "请先更新这些机器",
+                "snapshot_conflict": "目标存在冲突的记录",
+                "state_preservation_unverified": "请先完成进行中的工作",
                 "not_host": "此机器不是主机",
                 "target_is_self": "请选择另一台机器",
                 "target_not_member": "该机器不属于此项目",

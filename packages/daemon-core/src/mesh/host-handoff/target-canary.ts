@@ -54,6 +54,20 @@ function substituteCanaryArgs(spec: HostHandoffCanarySpec, selection: CanarySele
     }));
 }
 
+/** The same selection on the same provider command, proved within `maxAgeMs`. In-process only:
+ * a restart or an unknown result simply bills one more bounded probe. */
+const recentProofs = new Map<string, { evidence: CanaryEvidence; at: number }>();
+const proofKey = (provider: RegisteredCanaryProvider, selection: CanarySelection) => JSON.stringify([provider.type, provider.spawn.command, selection.provider, selection.model ?? '', selection.thinkingLevel ?? '']);
+export function recentCanaryProof(provider: RegisteredCanaryProvider, selection: CanarySelection, maxAgeMs: number): CanaryEvidence | undefined {
+    const hit = recentProofs.get(proofKey(provider, selection));
+    return hit && Date.now() - hit.at <= maxAgeMs ? hit.evidence : undefined;
+}
+export async function runTargetCanaryCached(provider: RegisteredCanaryProvider, selection: CanarySelection): Promise<CanaryEvidence> {
+    const evidence = await runTargetCanary(provider, selection);
+    if (evidence.ok) recentProofs.set(proofKey(provider, selection), { evidence, at: Date.now() });
+    return evidence;
+}
+
 export async function runTargetCanary(provider: RegisteredCanaryProvider, selection: CanarySelection,
     options: { env?: NodeJS.ProcessEnv; timeoutMs?: number; parentDir?: string } = {}): Promise<CanaryEvidence> {
     const startedAt = Date.now(), canaryId = randomUUID();

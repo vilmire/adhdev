@@ -27,6 +27,7 @@
  * runtime.
  */
 export const GIT_HEAVY_SUITES: string[] = [
+  'test/mesh/host-handoff/two-daemon-handoff.test.ts',
   'test/mesh/light-workspace.test.ts',
   'test/mesh/light-task-result.test.ts',
   'test/mesh/light-land.test.ts',

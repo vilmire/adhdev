@@ -9,7 +9,7 @@ vi.mock('../../../src/config/config.js', async (orig) => ({
 }));
 
 import { getDaemonCommandRegistry } from '../../../src/commands/router.js';
-import { HOST_HANDOFF_VERB } from '../../../src/mesh/host-handoff/types.js';
+import { HOST_HANDOFF_PROTOCOL, HOST_HANDOFF_VERB } from '../../../src/mesh/host-handoff/types.js';
 import { meshHostHandoffHandlers, hostHandoffEnabled } from '../../../src/commands/high-family/mesh-host-handoff.js';
 
 describe('host handoff is experimental and off by default (owner decision H2)', () => {
@@ -33,6 +33,25 @@ describe('host handoff is experimental and off by default (owner decision H2)', 
         expect(await owner({} as never, ownerArgs({ op: 'status' }))).toEqual({ success: true, enabled: false });
         const probe = meshHostHandoffHandlers.mesh_host_handoff_capability!;
         expect(await probe({} as never, { handoffId: 'h', meshId: 'm', _meshSenderDaemonId: 'daemon_x' })).toMatchObject({ success: false, code: 'peer_capability_unconfirmed' });
+    });
+    it('flag off: a member still follows a move and reports its protocol', async () => {
+        flag.on = false;
+        const probe = meshHostHandoffHandlers.mesh_host_handoff_member_probe!;
+        const ctx = { deps: { statusInstanceId: 'daemon_self' } } as never;
+        expect(await probe(ctx, { meshId: 'm', _meshSenderDaemonId: 'daemon_x' })).toMatchObject({ success: true, protocol: HOST_HANDOFF_PROTOCOL });
+        const certificate = meshHostHandoffHandlers.mesh_host_handoff_certificate!;
+        expect(await certificate(ctx, { meshId: 'unknown-project', certificate: { meshId: 'unknown-project' }, _meshSenderDaemonId: 'daemon_x' })).toMatchObject({ success: false, code: 'certificate_wrong_mesh' });
+    });
+    it('pair_host needs the owner, a code and an explicit node; nothing is pinned on a refusal', async () => {
+        flag.on = true;
+        const owner = meshHostHandoffHandlers.mesh_host_handoff!;
+        const dispatch = vi.fn(async () => ({ success: false, code: 'mesh_host_join_rejected', error: 'invalid pairing token' }));
+        const ctx = { deps: { statusInstanceId: 'daemon_self', dispatchMeshCommand: dispatch } } as never;
+        expect(await owner(ctx, { op: 'pair_host', meshId: 'm', token: 't', hostDaemonId: 'h', targetNodeId: 'n', workspace: '/w' })).toMatchObject({ code: 'owner_auth_required' });
+        expect(await owner(ctx, ownerArgs({ op: 'pair_host', meshId: 'm', token: 't' }))).toMatchObject({ code: 'invalid_args' });
+        expect(await owner(ctx, ownerArgs({ op: 'pair_host', meshId: 'm', token: 't', hostDaemonId: 'h', targetNodeId: 'n', workspace: '/w' }))).toMatchObject({ success: false, code: 'mesh_host_join_rejected' });
+        expect(dispatch).toHaveBeenCalledWith('h', 'apply_mesh_host_join', { meshId: 'm', token: 't', memberNode: { id: 'n', workspace: '/w', daemonId: 'daemon_self', role: 'member' } });
+        flag.on = false;
     });
     it('flag on: status answers enabled', async () => {
         flag.on = true;

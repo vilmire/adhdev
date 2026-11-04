@@ -14,9 +14,9 @@ import type { HandoffPeerClient } from './peer.js';
 import type {
     CertificatePort, HandoffClock, HandoffDataPort, HandoffFreezePort, HandoffHoldPort, HandoffLog, HandoffMeshPort, HandoffMetrics, SourceCoordinatorPort,
 } from './ports.js';
-import { rowCountsOf, snapshotBytes, type ExportedSnapshot } from './snapshot-export.js';
+import { rowCountsOf, sanitizeConfigForSnapshot, snapshotBytes, type ExportedSnapshot } from './snapshot-export.js';
 import {
-    HOST_HANDOFF_ACK_TIMEOUT_MS, HOST_HANDOFF_FREEZE_TIMEOUT_MS, HOST_HANDOFF_PROBE_BASE_MS, HOST_HANDOFF_PROBE_MAX_MS, HOST_HANDOFF_PROTOCOL,
+    HOST_HANDOFF_ACK_TIMEOUT_MS, HOST_HANDOFF_ADVERTISE_INTERVAL_MS, HOST_HANDOFF_CHUNK_ATTEMPTS, HOST_HANDOFF_FREEZE_TIMEOUT_MS, HOST_HANDOFF_PROBE_BASE_MS, HOST_HANDOFF_PROBE_MAX_MS, HOST_HANDOFF_PROTOCOL,
     HOST_HANDOFF_RETENTION_MS, type HandoffLaunchPlan, type HandoffAck, type HandoffErrorCode, type HandoffRecord, type PeerResult, type PreflightCheck, type SourcePhase,
 } from './types.js';
 
@@ -53,6 +53,7 @@ export class HostHandoffSource {
     private busy = new Set<string>();
     private starting = new Set<string>();
     private activating = new Set<string>();
+    private advertising = new Set<string>();
     constructor(private readonly d: SourceDeps) {}
 
     /** Await background work (tests). */
@@ -93,23 +94,47 @@ export class HostHandoffSource {
         if (checks.every(c => c.ok)) {
             const probeId = input.handoffId ?? 'probe';
             let cap: Awaited<ReturnType<HandoffPeerClient['capability']>> | undefined;
-            try { cap = await this.d.peer(input.targetDaemonId).capability({ handoffId: probeId, meshId: input.meshId, fromDaemonId: this.d.selfDaemonId, launchPlan }); } catch { cap = undefined; }
+            // The roster travels so a worker daemon with no local project record can inspect
+            // its own node. Nothing in it is trusted beyond that daemon's own registered workspace.
+            const offeredMesh = view?.config ? sanitizeConfigForSnapshot(view.config).value as Record<string, unknown> : null;
+            try { cap = await this.d.peer(input.targetDaemonId).capability({ handoffId: probeId, meshId: input.meshId, fromDaemonId: this.d.selfDaemonId, launchPlan, sourcePublicKey: this.d.certificate.ownPublicKey(), offeredMesh }); } catch { cap = undefined; }
             const capable = !!cap && cap.success === true && cap.protocol === HOST_HANDOFF_PROTOCOL;
             add('peer_capability', capable, 'peer_capability_unconfirmed', capable ? undefined : String(cap?.code ?? 'no_response'));
             if (capable) {
+                // Activation verifies the stop certificate against the target's pin. Find a
+                // missing or different pin here, while nothing has stopped yet.
+                add('host_key_pinned', cap!.hostKeyPinned === true, 'host_key_unpinned', cap!.hostKeyPinned === true ? undefined : 'Pair the target with this host first (create_mesh_host_pairing_token, then join_mesh_host_pairing on the target).');
                 add('target_launchable', cap!.ready?.coordinatorLaunchable === true, 'target_not_launchable', JSON.stringify(cap!.ready?.checks ?? []));
                 targetPublicKey = cap!.originGrantPublicKey;
                 try {
                     const snap = this.d.data.exportSnapshot({ meshId: input.meshId, handoffId: probeId, fromDaemonId: this.d.selfDaemonId, toDaemonId: input.targetDaemonId, hostEpoch: view!.hostEpoch, meshConfig: view!.config, launchPlan });
                     estimateBytes = snapshotBytes(snap);
-                    add('disk_space', this.d.data.freeDiskBytes() >= estimateBytes * 2 && cap!.ready?.diskOk !== false, 'insufficient_disk');
+                    // Staging, the retained snapshot archive and the before-image each hold about one copy.
+                    const targetFree = cap!.diskFreeBytes;
+                    add('disk_space', this.d.data.freeDiskBytes() >= estimateBytes * 2 && cap!.ready?.diskOk !== false && (targetFree === undefined || targetFree >= estimateBytes * 3), 'insufficient_disk');
                 } catch (e) { add('snapshot_readable', false, 'verify_failed', (e as Error)?.message); }
             }
+            if (capable) await this.checkFleetMembers(input, view?.memberDaemonIds ?? [], checks);
             const freeze = await this.d.freeze.check(input.meshId);
             // A coordinator that is merely busy is waited out during `freezing`; an open writer checkpoint is never forced.
             add('no_open_writer_checkpoint', freeze.ready || freeze.code !== 'writer_checkpoint_pending', 'writer_checkpoint_pending', freeze.ready ? undefined : freeze.detail);
         }
         return { ok: checks.every(c => c.ok), checks, ...(launchPlan ? { launchPlan } : {}), ...(targetPublicKey ? { targetPublicKey } : {}), ...(estimateBytes !== undefined ? { estimateBytes } : {}) };
+    }
+
+    /** Every online roster member must speak this protocol, or it could never adopt the new host. */
+    private async checkFleetMembers(input: StartInput, members: string[], checks: PreflightCheck[]): Promise<void> {
+        const others = [...new Set(members)].filter(id => !daemonIdsEquivalent(id, this.d.selfDaemonId) && !daemonIdsEquivalent(id, input.targetDaemonId));
+        const stale: string[] = [], offline: string[] = [];
+        await Promise.all(others.map(async id => {
+            if (!this.d.peerOnline(id)) { offline.push(id); return; }
+            const probe = this.d.peer(id).memberProbe;
+            let answer: { success?: boolean; protocol?: number } | undefined;
+            try { answer = await probe?.({ meshId: input.meshId }); } catch { answer = undefined; }
+            if (answer?.success !== true || answer.protocol !== HOST_HANDOFF_PROTOCOL) stale.push(id);
+        }));
+        const detail = [stale.length ? `not on protocol ${HOST_HANDOFF_PROTOCOL}: ${stale.join(', ')}` : '', offline.length ? `offline, adopts on reconnect: ${offline.join(', ')}` : ''].filter(Boolean).join('; ');
+        checks.push({ id: 'fleet_members', ok: stale.length === 0, ...(stale.length ? { code: 'member_protocol_unsupported' as const } : {}), ...(detail ? { detail } : {}) });
     }
 
     // ── start ────────────────────────────────────────────────────────────────
@@ -222,11 +247,21 @@ export class HostHandoffSource {
             const have = new Set(m.have ?? []);
             for (const c of snap.chunks) {
                 if (have.has(c.seq)) continue;
-                const r = await peer.chunk({ handoffId: rec.handoffId, meshId: rec.meshId, seq: c.seq, sha256: c.sha256, data: c.data });
-                if (!r.success) return { ok: false, code: String(r.code ?? 'chunk_hash_mismatch') };
+                // A lost RPC on one of hundreds of chunks is not worth the whole handoff. An
+                // explicit refusal from the target still stops the transfer immediately.
+                for (let attempt = 1; ; attempt++) {
+                    try {
+                        const r = await peer.chunk({ handoffId: rec.handoffId, meshId: rec.meshId, seq: c.seq, sha256: c.sha256, data: c.data });
+                        if (!r.success) return { ok: false, code: String(r.code ?? 'chunk_hash_mismatch') };
+                        break;
+                    } catch (e) { if (attempt >= HOST_HANDOFF_CHUNK_ATTEMPTS) throw e; }
+                }
+                // Progress, not silence: the ACK deadline starts when the copy is complete.
+                this.d.journal.update(rec.handoffId, 'source', { updatedAt: this.d.clock.now() });
             }
             const sealed = await peer.seal({ handoffId: rec.handoffId, meshId: rec.meshId });
             if (!sealed.success) return { ok: false, code: String(sealed.code ?? 'verify_failed') };
+            this.d.journal.update(rec.handoffId, 'source', { updatedAt: this.d.clock.now() });
             return { ok: true };
         } catch (e) {
             return { ok: false, code: `transfer_interrupted:${(e as Error)?.message ?? e}` };
@@ -325,8 +360,9 @@ export class HostHandoffSource {
         this.d.hold.release(rec.meshId, handoffId);
         const view = this.d.mesh.read(rec.meshId);
         const certificate = cert ?? this.d.journal.getCertificate(handoffId);
-        if (certificate) void this.d.certificate.broadcast(rec.meshId, certificate, [this.d.selfDaemonId, rec.peerDaemonId]).catch(() => undefined);
+        if (certificate && !this.d.certificate.deliver) void this.d.certificate.broadcast(rec.meshId, certificate, [this.d.selfDaemonId, rec.peerDaemonId]).catch(() => undefined);
         void view;
+        await this.advertise(handoffId, true);
         // Source stop was proved BEFORE activate. A target launch failure never
         // permits automatic source resurrection after target authority was granted.
         void info;
@@ -357,7 +393,49 @@ export class HostHandoffSource {
         this.move(rec.handoffId, 'aborted', { abortReason: reason });
         this.snapshots.delete(rec.handoffId);
         this.d.hold.release(rec.meshId, rec.handoffId);
+        // This abort can no longer activate: commit intent was never written, or the
+        // target proved a discard. Undo the one effect the owner would notice.
+        const stopped = this.d.journal.getCertificate(rec.handoffId)?.sourceStopProof?.sessionIds ?? [];
+        if (stopped.length && this.d.coordinator.restoreSource) {
+            const run = this.restore(rec.handoffId, rec.meshId);
+            this.inflight.add(run);
+            void run.finally(() => this.inflight.delete(run));
+        }
         if (!targetAlreadyDiscarded) { try { await this.d.peer(rec.peerDaemonId).discard({ handoffId: rec.handoffId, meshId: rec.meshId }); } catch { /* target discards on its own TTL / next contact */ } }
+    }
+
+    private async restore(handoffId: string, meshId: string): Promise<void> {
+        let restore: NonNullable<HandoffRecord['restore']>;
+        try {
+            const out = await this.d.coordinator.restoreSource!(meshId);
+            restore = { ok: out.success === true, ...(out.sessionId ? { sessionId: out.sessionId } : {}), ...(out.error ? { error: out.error } : {}), at: this.d.clock.now() };
+        } catch (e) { restore = { ok: false, error: (e as Error)?.message ?? String(e), at: this.d.clock.now() }; }
+        this.log(`source coordinator restore ${restore.ok ? 'ok' : `failed: ${restore.error ?? 'unknown'}`}`);
+        this.d.journal.update(handoffId, 'source', { restore });
+    }
+
+    /** Offer the transfer to every roster member that has not taken it. Members offline at
+     * commit adopt here when they return, for as long as the source retains the handoff. */
+    private async advertise(handoffId: string, force: boolean): Promise<void> {
+        const deliver = this.d.certificate.deliver;
+        if (!deliver || this.advertising.has(handoffId)) return;
+        const rec = this.d.journal.get(handoffId, 'source');
+        const cert = this.d.journal.getCertificate(handoffId);
+        if (!rec || rec.phase !== 'committed' || !cert) return;
+        const now = this.d.clock.now();
+        if (!force && rec.lastAdvertiseAt !== undefined && now - rec.lastAdvertiseAt < HOST_HANDOFF_ADVERTISE_INTERVAL_MS) return;
+        const acks = new Set(rec.memberAcks ?? []);
+        const members = [...new Set(this.d.mesh.read(rec.meshId)?.memberDaemonIds ?? [])]
+            .filter(id => !daemonIdsEquivalent(id, this.d.selfDaemonId) && !daemonIdsEquivalent(id, rec.peerDaemonId) && ![...acks].some(a => daemonIdsEquivalent(a, id)));
+        if (!members.length) return;
+        this.advertising.add(handoffId);
+        try {
+            for (const id of members) {
+                if (!this.d.peerOnline(id)) continue;
+                try { if (await deliver(id, rec.meshId, cert)) acks.add(id); } catch { /* retried at the next interval */ }
+            }
+            this.d.journal.update(handoffId, 'source', { memberAcks: [...acks], lastAdvertiseAt: now });
+        } finally { this.advertising.delete(handoffId); }
     }
 
     /** Owner abort. After `activate` was sent, only a target-confirmed discard permits it. */
@@ -386,7 +464,8 @@ export class HostHandoffSource {
         const now = this.d.clock.now();
         for (const rec of this.d.journal.list().filter(r => r.role === 'source')) {
             if (rec.phase === 'freezing' || rec.phase === 'frozen') await this.advance(rec.handoffId);
-            else if (rec.phase === 'awaiting_ack' && now - rec.updatedAt >= HOST_HANDOFF_ACK_TIMEOUT_MS) await this.abortInternal(rec, 'ack_timeout');
+            else if (rec.phase === 'awaiting_ack' && !this.busy.has(rec.handoffId) && now - rec.updatedAt >= HOST_HANDOFF_ACK_TIMEOUT_MS) await this.abortInternal(rec, 'ack_timeout');
+            else if (rec.phase === 'committed' && now - rec.updatedAt < HOST_HANDOFF_RETENTION_MS) await this.advertise(rec.handoffId, false);
             else if (rec.phase === 'uncertain' || (rec.phase === 'activating' && !this.activating.has(rec.handoffId) && rec.commitIntentAt)) await this.probe(rec.handoffId, false);
         }
     }
@@ -434,8 +513,12 @@ export class HostHandoffSource {
         const rec = this.d.journal.get(handoffId, 'source');
         if (!rec) return { success: false, code: 'handoff_unknown' };
         if (rec.phase === 'awaiting_ack') {
-            const sent = await this.transfer(rec);
-            if (!sent.ok) { await this.abortInternal(rec, sent.code); return { success: false, code: sent.code, phase: 'aborted' }; }
+            if (this.busy.has(handoffId)) return { success: true, phase: 'awaiting_ack', transferring: true };
+            this.busy.add(handoffId);
+            try {
+                const sent = await this.transfer(rec);
+                if (!sent.ok) { this.busy.delete(handoffId); await this.abortInternal(rec, sent.code); return { success: false, code: sent.code, phase: 'aborted' }; }
+            } finally { this.busy.delete(handoffId); }
             this.d.journal.update(handoffId, 'source', { updatedAt: this.d.clock.now() });
             return { success: true, phase: 'awaiting_ack' };
         }

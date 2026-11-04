@@ -8,7 +8,10 @@
  */
 
 // v2 requires a source-stop attestation; v1 peers could activate before source stop.
-export const HOST_HANDOFF_PROTOCOL = 2;
+// v3 adds member adoption through the host record, a pinned-key preflight and
+// project-scoped history identity at import. Source, target and every online
+// roster member must answer exactly this value: it is the fleet precondition.
+export const HOST_HANDOFF_PROTOCOL = 3;
 
 /** Peer verbs (daemon <-> daemon, mesh source only). The owner verb is `mesh_host_handoff`. */
 export const HOST_HANDOFF_VERB = {
@@ -21,6 +24,8 @@ export const HOST_HANDOFF_VERB = {
     discard: 'mesh_host_handoff_discard',
     /** Previous host (or the new one) -> other members: the signed host transfer certificate. */
     certificate: 'mesh_host_handoff_certificate',
+    /** Source -> roster member during preflight: which protocol does this build speak. Read-only. */
+    memberProbe: 'mesh_host_handoff_member_probe',
 } as const;
 export type HostHandoffPeerVerb = Exclude<typeof HOST_HANDOFF_VERB[keyof typeof HOST_HANDOFF_VERB], 'mesh_host_handoff'>;
 
@@ -37,6 +42,8 @@ export const TARGET_TERMINAL: ReadonlySet<TargetPhase> = new Set(['active', 'dis
 export const HOST_HANDOFF_CHUNK_BYTES = 256 * 1024;
 export const HOST_HANDOFF_FREEZE_TIMEOUT_MS = 5 * 60_000;
 export const HOST_HANDOFF_ACK_TIMEOUT_MS = 2 * 60_000;
+export const HOST_HANDOFF_CHUNK_ATTEMPTS = 3;
+export const HOST_HANDOFF_ADVERTISE_INTERVAL_MS = 5 * 60_000;
 export const HOST_HANDOFF_PROBE_BASE_MS = 30_000;
 export const HOST_HANDOFF_PROBE_MAX_MS = 5 * 60_000;
 /** Source data stays read-only this long after commit (owner decision H6). */
@@ -99,6 +106,15 @@ export interface HandoffRecord {
     targetPublicKey?: string;
     probeCount?: number;
     lastProbeAt?: number;
+    /** Target: first trusted proof that the local coordinator reached ready. */
+    coordinatorReadyAt?: number;
+    launchAttempts?: number;
+    lastLaunchAt?: number;
+    /** Source, after commit: roster daemons that adopted (or already hold) the transfer. */
+    memberAcks?: string[];
+    lastAdvertiseAt?: number;
+    /** Source, after an abort that followed a proved stop: the coordinator relaunch result. */
+    restore?: { ok: boolean; sessionId?: string; error?: string; at: number };
 }
 
 export type HandoffErrorCode =
@@ -107,7 +123,8 @@ export type HandoffErrorCode =
     | 'writer_checkpoint_pending' | 'freeze_timeout' | 'coordinator_not_quiescent'
     | 'chunk_hash_mismatch' | 'manifest_mismatch' | 'ack_mismatch' | 'ack_timeout' | 'verify_failed'
     | 'handoff_aborted' | 'handoff_unknown' | 'wrong_peer' | 'stale_epoch' | 'abort_requires_target_confirmation'
-    | 'already_committed' | 'not_staged' | 'activate_failed' | 'invalid_args' | 'hold_failed' | 'state_preservation_unverified';
+    | 'already_committed' | 'not_staged' | 'activate_failed' | 'invalid_args' | 'hold_failed' | 'state_preservation_unverified'
+    | 'host_key_unpinned' | 'host_key_mismatch' | 'member_protocol_unsupported' | 'snapshot_conflict';
 
 export interface PreflightCheck { id: string; ok: boolean; code?: HandoffErrorCode; detail?: string }
 

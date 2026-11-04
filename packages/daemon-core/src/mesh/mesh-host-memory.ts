@@ -362,6 +362,55 @@ export function writeMeshHostRecord(
     }
 }
 
+/**
+ * A verified host transfer: the only path that may replace an existing record's
+ * host. The trust level does not change. A record that was pinned by pairing
+ * stays pinned, now to the transferred key; a learned record stays learned.
+ * `null` removes the record (this daemon became the host). Returns whether it wrote.
+ */
+export function transferMeshHostRecord(
+    meshId: string,
+    next: { hostDaemonId: string; originGrantPublicKey?: string } | null,
+    opts?: { env?: NodeJS.ProcessEnv },
+): boolean {
+    const mesh = meshId.trim();
+    if (!mesh) return false;
+    const configDir = getConfigDir(opts?.env);
+    try {
+        const all = readAll(configDir);
+        const existing = all[mesh];
+        if (!next) {
+            if (!existing) return false;
+            delete all[mesh];
+            writeAll(all, configDir);
+            return true;
+        }
+        const host = next.hostDaemonId.trim();
+        if (!host) return false;
+        const pinned = isValidOriginGrantPublicKey(next.originGrantPublicKey) ? next.originGrantPublicKey.trim() : undefined;
+        const keepPairing = existing?.source === 'pairing' && !!pinned;
+        all[mesh] = {
+            meshId: mesh,
+            hostDaemonId: host,
+            source: keepPairing ? 'pairing' : existing?.source === 'pairing' ? 'session_stamp' : existing?.source ?? 'session_stamp',
+            recordedAt: new Date().toISOString(),
+            ...(keepPairing ? { originGrantPublicKey: pinned, pairingVerified: true } : {}),
+        };
+        writeAll(all, configDir);
+        if (pinned) {
+            authenticatedPeerPublicKeys.set(peerKey(mesh, host, configDir), pinned);
+            try {
+                const peerKeys = readPeerGrantKeysFile(configDir);
+                peerKeys[peerStoreKey(mesh, host)] = pinned;
+                writePeerGrantKeysFile(peerKeys, configDir);
+            } catch { /* the record above still carries the pin */ }
+        }
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 export function canAcceptPeerOriginGrantPublicKey(
     meshId: string,
     peerDaemonId: string,

@@ -91,25 +91,32 @@ export function exportProjectApprovalFiles(configDir: string, meshId: string, re
     return files;
 }
 
+const verifyExisting = (path: string, data: string) => {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink() || readFileSync(path, 'utf8') !== data) throw new Error('approval destination conflicts with retained data');
+};
+function assertDestination(path: string, data: string): void {
+    const consumed = `${path}.consumed`;
+    if (existsSync(consumed)) {
+        const stat = lstatSync(consumed);
+        if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('approval consent receipt is not a local file');
+        throw new Error('approval consent receipt already retained');
+    }
+    if (existsSync(path)) verifyExisting(path, data);
+}
+
+/** The destination checks of an import with no effects, for the pre-ACK rehearsal. */
+export function assertProjectApprovalDestinations(configDir: string, files: ProjectApprovalFile[]): void {
+    for (const file of files) assertDestination(join(configDir, 'assistant', file.area, file.name), file.data);
+}
+
 /** Validate every destination before effects. New files are installed without
  * replacing an existing inode; a crash/retry accepts only identical bytes. */
 export function importProjectApprovalFiles(configDir: string, meshId: string, files: ProjectApprovalFile[], resolveProject?: (reference: string) => string | null): void {
     verifyProjectApprovalFiles(files, meshId, resolveProject);
-    const verifyExisting = (path: string, data: string) => {
-        const stat = lstatSync(path);
-        if (!stat.isFile() || stat.isSymbolicLink() || readFileSync(path, 'utf8') !== data) throw new Error('approval destination conflicts with retained data');
-    };
     const destinations = files.map(file => {
         const path = join(safeDir(configDir, file.area, true), file.name);
-        const consumed = `${path}.consumed`;
-        if (existsSync(consumed)) {
-            const stat = lstatSync(consumed);
-            if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('approval consent receipt is not a local file');
-            throw new Error('approval consent receipt already retained');
-        }
-        if (existsSync(path)) {
-            verifyExisting(path, file.data);
-        }
+        assertDestination(path, file.data);
         return { file, path };
     });
     for (const { file, path } of destinations) {

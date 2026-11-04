@@ -5,7 +5,7 @@ import { realpathSync, statSync, accessSync, constants } from 'node:fs';
 import { promisify } from 'node:util';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { normalizeRepoIdentity } from '../../config/mesh-config-store.js';
-import { runTargetCanary, type RegisteredCanaryProvider } from './target-canary.js';
+import { recentCanaryProof, runTargetCanaryCached, type RegisteredCanaryProvider } from './target-canary.js';
 import type { HandoffLaunchPlan } from './types.js';
 
 export interface ReadinessCheck { id: string; ok: boolean; detail?: string }
@@ -18,6 +18,8 @@ export interface ReadinessPorts {
     provider(plan: HandoffLaunchPlan): RegisteredCanaryProvider | undefined;
     coordinatorCapable(plan: HandoffLaunchPlan, workspace: string): boolean;
     census(): Promise<unknown[]>;
+    /** A successful probe of this exact selection newer than this stands in for a new one. */
+    canaryMaxAgeMs?: number;
 }
 const exec = promisify(execFile);
 export async function inspectTargetReadiness(p: ReadinessPorts): Promise<{ ok: boolean; checks: ReadinessCheck[] }> {
@@ -60,7 +62,7 @@ export async function inspectTargetReadiness(p: ReadinessPorts): Promise<{ ok: b
     add('coordinator_capability', !!plan && !!workspace && p.coordinatorCapable(plan, workspace));
     if (checks.every(c => c.ok) && provider && plan) {
         try {
-            const evidence = await runTargetCanary(provider, plan);
+            const evidence = (p.canaryMaxAgeMs ? recentCanaryProof(provider, plan, p.canaryMaxAgeMs) : undefined) ?? await runTargetCanaryCached(provider, plan);
             add('provider_auth_canary', evidence.ok && evidence.terminated, evidence.ok
                 ? `host-enforced ${evidence.hostTimeoutMs}ms ${evidence.hostMaxOutputBytes} output bytes; nativeTurnCap false; nativeOutputTokenCap false; canary ${evidence.canaryId}; terminated`
                 : (evidence.detail ?? evidence.code));

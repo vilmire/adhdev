@@ -8,7 +8,7 @@
 import type { HostHandoffSource } from './source-machine.js';
 import type { HostHandoffTarget } from './target-machine.js';
 import type { HandoffAckClient, HandoffPeerClient } from './peer.js';
-import { HOST_HANDOFF_VERB, type HandoffAck, type PeerResult } from './types.js';
+import { HOST_HANDOFF_PROTOCOL, HOST_HANDOFF_VERB, type HandoffAck, type PeerResult } from './types.js';
 
 export type PeerDispatch = (daemonId: string, verb: string, args: Record<string, unknown>) => Promise<PeerResult>;
 
@@ -28,12 +28,13 @@ export async function handlePeerVerb(
         return engines.certificate && meshId ? engines.certificate({ meshId, certificate: args.certificate }, sender) : { success: false, code: 'peer_capability_unconfirmed' };
     }
     if (!sender) return { success: false, code: 'wrong_peer', error: 'no authenticated sender' };
+    if (verb === HOST_HANDOFF_VERB.memberProbe) return { success: true, protocol: HOST_HANDOFF_PROTOCOL };
     if (!handoffId || !meshId) return { success: false, code: 'invalid_args', error: 'handoffId and meshId are required' };
     const target = engines.target;
     const source = engines.source;
     switch (verb) {
         case HOST_HANDOFF_VERB.capability:
-            return target ? target.capability({ handoffId, meshId, fromDaemonId: str(args.fromDaemonId), launchPlan: args.launchPlan as never }, sender) : { success: false, code: 'peer_capability_unconfirmed' };
+            return target ? target.capability({ handoffId, meshId, fromDaemonId: str(args.fromDaemonId), launchPlan: args.launchPlan as never, sourcePublicKey: str(args.sourcePublicKey) || undefined, offeredMesh: (args.offeredMesh ?? null) as never }, sender) : { success: false, code: 'peer_capability_unconfirmed' };
         case HOST_HANDOFF_VERB.chunk: {
             if (!target) return { success: false, code: 'peer_capability_unconfirmed' };
             const op = str(args.op);
@@ -66,6 +67,7 @@ export function createWirePeerClient(dispatch: PeerDispatch, targetDaemonId: str
         activate: (a) => send(HOST_HANDOFF_VERB.activate, a) as never,
         status: (a) => send(HOST_HANDOFF_VERB.status, a) as never,
         discard: (a) => send(HOST_HANDOFF_VERB.discard, a),
+        memberProbe: (a) => send(HOST_HANDOFF_VERB.memberProbe, a) as never,
     };
 }
 

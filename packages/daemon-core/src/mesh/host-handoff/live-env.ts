@@ -15,6 +15,7 @@ import { readMeshConfigFromDisk, saveMeshConfigDurable, withStrictMeshConfigWrit
 import { getOrCreateHostKeyPair } from '../origin-grant-keypair.js';
 import { MeshRuntimeStore } from '../mesh-runtime-store.js';
 import { resolveMeshHostStatus } from '../mesh-host-ownership.js';
+import { readAuthenticatedPeerOriginGrantPublicKey, readMeshHostRecord, transferMeshHostRecord } from '../mesh-host-memory.js';
 import { releaseNewWorkHold, setNewWorkHold } from '../../maintenance/new-work-hold.js';
 import { signHostTransferCertificate } from './certificate.js';
 import { SqliteHandoffJournal } from './journal.js';
@@ -23,7 +24,7 @@ import { HostHandoffSource, type SourceDeps } from './source-machine.js';
 import { HostHandoffTarget } from './target-machine.js';
 import { exportSnapshot } from './snapshot-export.js';
 import { applySnapshotTables, localTableColumns, approvalProjectResolver } from './snapshot-import.js';
-import { exportProjectApprovalFiles, importProjectApprovalFiles } from './project-files.js';
+import { assertProjectApprovalDestinations, exportProjectApprovalFiles, importProjectApprovalFiles } from './project-files.js';
 import { resolveAssistantProject } from '../../assistant/assistant-projects.js';
 import { acquireProjectFileCut } from './project-write-cut.js';
 import { adoptPendingNoticeReceipts, assessPreservationBoundary } from './preservation-boundary.js';
@@ -41,7 +42,11 @@ export interface LiveHandoffHost {
     stopCoordinators(meshId: string): Promise<void | HostTransferCertificate['sourceStopProof']>;
     observeCoordinator(meshId: string, plan?: HandoffLaunchPlan): Promise<import('./ports.js').CoordinatorObservation>;
     selectLaunch(meshId: string, targetNodeId?: string): HandoffLaunchPlan;
-    readiness(meshId: string, plan: HandoffLaunchPlan | undefined): Promise<{ ok: boolean; checks: Array<{ id: string; ok: boolean; detail?: string }> }>;
+    readiness(meshId: string, plan: HandoffLaunchPlan | undefined, opts?: { offeredMesh?: Record<string, unknown> | null; canaryMaxAgeMs?: number }): Promise<{ ok: boolean; checks: Array<{ id: string; ok: boolean; detail?: string }> }>;
+    /** Relaunch this project's coordinator after an abort that stopped it. */
+    restoreCoordinator?(meshId: string): Promise<{ success: boolean; sessionId?: string; error?: string }>;
+    /** The role moved: anything cached from the old host must not answer again. */
+    meshAuthorityChanged?(meshId: string): void;
     canLaunchCoordinator(meshId: string): boolean;
     launchCoordinator(meshId: string, handoffId: string, plan?: HandoffLaunchPlan): Promise<{ success: boolean; sessionId?: string; ready: boolean }>;
     selfNodeId(meshId: string): string | undefined;
@@ -69,10 +74,30 @@ export function createLiveMeshPort(selfDaemonId = ''): HandoffMeshPort {
             return {
                 role: status.role, hostDaemonId: status.hostDaemonId, hostNodeId: status.hostNodeId, hostEpoch: status.hostEpoch ?? 0,
                 handedOff: !!status.handedOffTo, config: mesh,
-                hostPublicKey: raw.meshHost?.originGrantPublicKey,
+                // Pairing pins into the host record for a daemon that holds no project record, and
+                // into both once it does. Only authenticated pairing or a verified transfer writes either.
+                hostPublicKey: raw.meshHost?.originGrantPublicKey ?? (status.role === 'member' && status.hostDaemonId ? readAuthenticatedPeerOriginGrantPublicKey(meshId, status.hostDaemonId) ?? undefined : undefined),
                 handoffFence: raw.meshHost?.handoffFence,
                 memberDaemonIds: (raw.nodes ?? []).map(n => String(n.daemonId ?? '')).filter(Boolean),
             };
+        },
+        describeMember(meshId, sender) {
+            const record = readMeshHostRecord(meshId);
+            if (!record || !daemonIdsEquivalent(record.hostDaemonId, sender)) return null;
+            return {
+                role: 'member', hostDaemonId: record.hostDaemonId, hostEpoch: 0, unrecorded: true, handedOff: false, memberDaemonIds: [], config: null,
+                hostPublicKey: readAuthenticatedPeerOriginGrantPublicKey(meshId, record.hostDaemonId) ?? undefined,
+            };
+        },
+        materializeMember(meshId, snapshotConfig, hostDaemonId, hostPublicKey) {
+            withHandoffConfigWrite(meshId, () => withMeshConfigWriteLock(() => {
+                const config = loadMeshConfig();
+                if (locate(config.meshes, meshId)) return;
+                if (!snapshotConfig) throw new Error('handoff snapshot carries no project config');
+                const { meshHost: _hostOwned, ...incoming } = snapshotConfig;
+                config.meshes.push({ ...incoming, id: meshId, meshHost: { role: 'member', hostDaemonId, originGrantPublicKey: hostPublicKey } } as never);
+                saveMeshConfig(config);
+            }));
         },
         setFence(meshId, fence, expectedHandoffId) {
             withHandoffConfigWrite(meshId, () => withStrictMeshConfigWriteLock(() => {
@@ -119,6 +144,8 @@ export function createLiveMeshPort(selfDaemonId = ''): HandoffMeshPort {
                 mesh.updatedAt = new Date().toISOString();
                 saveMeshConfig(config);
             }));
+            // The learned record would otherwise keep answering "the host is the old daemon".
+            if (meta.role === 'host') transferMeshHostRecord(meshId, null);
         },
         applyConfig(meshId, snapshotConfig) {
             if (!snapshotConfig) return;
@@ -167,13 +194,28 @@ export function createLiveDataPort(): HandoffDataPort {
         localColumns: localTableColumns(db() as never),
         applySnapshot: (meshId, payload, provenance) => {
             const store = MeshRuntimeStore.getInstance().db as unknown as { transaction<T>(fn: () => T): () => T };
-            const counts = withHandoffImport(MeshRuntimeStore.getInstance().db, meshId, () => store.transaction(() => {
-                const applied = applySnapshotTables(db(), meshId, payload, provenance);
-                adoptPendingNoticeReceipts(db() as never, meshId, payload, provenance);
-                return applied;
-            })());
+            let counts: Record<string, number>;
+            try {
+                counts = withHandoffImport(MeshRuntimeStore.getInstance().db, meshId, () => store.transaction(() => {
+                    const applied = applySnapshotTables(db(), meshId, payload, provenance);
+                    adoptPendingNoticeReceipts(db() as never, meshId, payload, provenance);
+                    return applied;
+                })());
+            } catch (e) { throw Object.assign(e as Error, { handoffNoEffect: true }); }
             importProjectApprovalFiles(getConfigDir(), meshId, payload.files, approvalProjectResolver(payload.config, meshId));
             return counts;
+        },
+        dryRunApply: (meshId, payload, provenance) => {
+            const store = MeshRuntimeStore.getInstance().db as unknown as { transaction<T>(fn: () => T): () => T };
+            const rollback = new Error('handoff dry run');
+            try {
+                withHandoffImport(MeshRuntimeStore.getInstance().db, meshId, () => store.transaction(() => {
+                    applySnapshotTables(db(), meshId, payload, provenance);
+                    adoptPendingNoticeReceipts(db() as never, meshId, payload, provenance);
+                    throw rollback;
+                })());
+            } catch (e) { if (e !== rollback) throw e; }
+            assertProjectApprovalDestinations(getConfigDir(), payload.files);
         },
         freeDiskBytes: () => { try { const s = statfsSync(getConfigDir()); return Number(s.bavail) * Number(s.bsize); } catch { return 0; } },
         markHandedOff: (row) => {
@@ -225,6 +267,10 @@ function liveCertificatePort(host: LiveHandoffHost) {
     return {
         sign: (u: Omit<HostTransferCertificate, 'signature'>) => signHostTransferCertificate(u, getOrCreateHostKeyPair(host.selfDaemonId).privateKeyObj),
         ownPublicKey: () => getOrCreateHostKeyPair(host.selfDaemonId).publicKey,
+        async deliver(daemonId: string, meshId: string, cert: HostTransferCertificate) {
+            const answer = await host.dispatch(daemonId, 'mesh_host_handoff_certificate', { meshId, handoffId: cert.handoffId, certificate: cert });
+            return answer.success === true;
+        },
         async broadcast(meshId: string, cert: HostTransferCertificate, except: string[]) {
             const view = createLiveMeshPort(host.selfDaemonId).read(meshId);
             for (const daemonId of view?.memberDaemonIds ?? []) {
@@ -250,7 +296,8 @@ export function createLiveHandoffEngines(host: LiveHandoffHost): LiveHandoffEngi
         // file stays state_preservation_unverified.
         preservationCheck: (meshId) => assessPreservationBoundary(MeshRuntimeStore.getInstance().db as never, getConfigDir(), meshId),
         selfDaemonId: host.selfDaemonId, journal, mesh, data, hold: createLiveHoldPort(), freeze: { check: liveFreezeCheck(host) },
-        coordinator: { selectLaunch: (m, n) => host.selectLaunch(m, n), stopSource: (meshId) => host.stopCoordinators(meshId) }, certificate,
+        coordinator: { selectLaunch: (m, n) => host.selectLaunch(m, n), stopSource: (meshId) => host.stopCoordinators(meshId),
+            ...(host.restoreCoordinator ? { restoreSource: (meshId: string) => host.restoreCoordinator!(meshId) } : {}) }, certificate,
         peer: (target) => createWirePeerClient(host.dispatch, target), peerOnline: (d) => host.peerOnline(d), clock, log,
     };
     return {
@@ -258,7 +305,7 @@ export function createLiveHandoffEngines(host: LiveHandoffHost): LiveHandoffEngi
         source: new HostHandoffSource(sourceDeps),
         target: new HostHandoffTarget({
             selfDaemonId: host.selfDaemonId, journal, mesh, data, clock, certificate, log,
-            coordinator: { observe: (m, p) => host.observeCoordinator(m, p), readiness: (m, p) => host.readiness(m, p), canLaunch: (m) => host.canLaunchCoordinator(m), launch: (m, h, p) => host.launchCoordinator(m, h, p) },
+            coordinator: { observe: (m, p) => host.observeCoordinator(m, p), readiness: (m, p, o) => host.readiness(m, p, o), canLaunch: (m) => host.canLaunchCoordinator(m), launch: (m, h, p) => host.launchCoordinator(m, h, p) },
             ackClient: createWireAckClient(host.dispatch), selfNodeId: (m) => host.selfNodeId(m),
         }),
     };
