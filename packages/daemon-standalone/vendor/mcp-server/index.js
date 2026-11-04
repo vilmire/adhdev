@@ -152718,6 +152718,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
     var mesh_host_handoff_exports = {};
     __export2(mesh_host_handoff_exports, {
       __resetHostHandoffEnginesForTest: () => __resetHostHandoffEnginesForTest,
+      handoffTickerContext: () => handoffTickerContext,
       hostHandoffEnabled: () => hostHandoffEnabled,
       meshHostHandoffHandlers: () => meshHostHandoffHandlers,
       meshHostHandoffSpecs: () => meshHostHandoffSpecs,
@@ -152978,12 +152979,15 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         return handlePeerVerb({ source: e.source, target: e.target, certificate }, verb, args ?? {}, sender);
       };
     }
-    function startHostHandoffTicker(components) {
-      const ctx = {
-        deps: components,
+    function handoffTickerContext(components) {
+      return {
+        deps: components.router.deps,
         components: () => components,
         execute: (cmd, args, source2, opts) => components.router.execute(cmd, args, source2, opts)
       };
+    }
+    function startHostHandoffTicker(components) {
+      const ctx = handoffTickerContext(components);
       let resumed = false;
       let running = false;
       const run5 = () => {

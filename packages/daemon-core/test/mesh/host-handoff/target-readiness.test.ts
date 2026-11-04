@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { inspectTargetReadiness, type ReadinessPorts } from '../../../src/mesh/host-handoff/target-readiness.js';
+import { handoffTickerContext } from '../../../src/commands/high-family/mesh-host-handoff.js';
 
 function fixture(): ReadinessPorts {
     const workspace = mkdtempSync(join(tmpdir(), 'handoff-ready-repo-'));
@@ -48,5 +49,13 @@ describe('exact target readiness without release/deployment prerequisites', () =
         expect((await inspectTargetReadiness(p)).checks.find(c => c.id === 'session_runtime')?.ok).toBe(false);
         p.census = async () => []; p.provider = () => ({ type: 'fixture-cli', spawn: { command: process.execPath } });
         expect((await inspectTargetReadiness(p)).checks.find(c => c.id === 'provider_auth_canary')).toMatchObject({ ok: false, detail: 'canary_contract_unsupported: missing_declaration:fixture-cli' });
+    });
+});
+
+describe('host move ticker context', () => {
+    it('reaches the session host through the router deps, not the components', () => {
+        const deps = { sessionHostControl: { listSessions: async () => [] } };
+        const components = { router: { deps, execute: async () => undefined } };
+        expect(handoffTickerContext(components).deps).toBe(deps);
     });
 });

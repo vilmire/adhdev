@@ -351,16 +351,23 @@ export const meshHostHandoffSpecs = defineCommandSpecs('high', meshHostHandoffHa
     ...Object.fromEntries(HANDOFF_PEER_VERBS.map(v => [v, { sources: ['mesh'] as const, meshSender: 'roster' as const }])),
 });
 
+type HandoffTickerComponents = { router: { deps: unknown; execute(cmd: string, args: any, source: any, opts?: any): Promise<unknown> } };
+
+/** The engines keep the first context they get, so the ticker's must be the router's own deps: components have no session host control. */
+export function handoffTickerContext(components: HandoffTickerComponents): HighFamilyContext {
+    return {
+        deps: components.router.deps, components: () => components,
+        execute: (cmd: string, args: any, source: any, opts?: any) => components.router.execute(cmd, args, source, opts),
+    } as unknown as HighFamilyContext;
+}
+
 /**
  * Boot wiring: resume interrupted handoffs once, then tick every 30 s (freeze
  * re-check, ACK timeout, activation probes with backoff). A no-op while the
  * experimental flag is off; the timer is unref'd and stopped with the host.
  */
-export function startHostHandoffTicker(components: { router: { execute(cmd: string, args: any, source: any, opts?: any): Promise<unknown> } }): () => void {
-    const ctx = {
-        deps: components, components: () => components,
-        execute: (cmd: string, args: any, source: any, opts?: any) => components.router.execute(cmd, args, source, opts),
-    } as unknown as HighFamilyContext;
+export function startHostHandoffTicker(components: HandoffTickerComponents): () => void {
+    const ctx = handoffTickerContext(components);
     let resumed = false;
     let running = false;
     const run = () => {
