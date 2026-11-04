@@ -152673,12 +152673,14 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       } else add("repository_identity", false);
       let timer;
       try {
+        const limitMs = p.censusTimeoutMs ?? CENSUS_TIMEOUT_MS;
         const rows = await Promise.race([p.census(), new Promise((_, reject) => {
-          timer = setTimeout(() => reject(new Error("runtime timeout")), 3e3);
+          timer = setTimeout(() => reject(new Error(`no answer within ${limitMs}ms`)), limitMs);
         })]);
-        add("session_runtime", Array.isArray(rows) && rows.every((r) => r && typeof r === "object" && typeof r.sessionId === "string"));
-      } catch {
-        add("session_runtime", false);
+        const valid = Array.isArray(rows) && rows.every((r) => r && typeof r === "object" && typeof r.sessionId === "string");
+        add("session_runtime", valid, valid ? void 0 : "The session host answered with an unreadable session list.");
+      } catch (e) {
+        add("session_runtime", false, `The session host did not answer: ${String(e?.message ?? e).slice(0, 200)}`);
       } finally {
         if (timer) clearTimeout(timer);
       }
@@ -152698,6 +152700,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
     var import_node_child_process35;
     var import_node_fs52;
     var import_node_util18;
+    var CENSUS_TIMEOUT_MS;
     var exec6;
     var init_target_readiness = __esm2({
       "src/mesh/host-handoff/target-readiness.ts"() {
@@ -152708,6 +152711,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         init_dist();
         init_mesh_config_store();
         init_target_canary();
+        CENSUS_TIMEOUT_MS = 1e4;
         exec6 = (0, import_node_util18.promisify)(import_node_child_process35.execFile);
       }
     });

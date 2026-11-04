@@ -20,7 +20,10 @@ export interface ReadinessPorts {
     census(): Promise<unknown[]>;
     /** A successful probe of this exact selection newer than this stands in for a new one. */
     canaryMaxAgeMs?: number;
+    censusTimeoutMs?: number;
 }
+/** A loaded machine with many sessions answers in seconds; a slow answer is not a dead runtime. */
+const CENSUS_TIMEOUT_MS = 10_000;
 const exec = promisify(execFile);
 export async function inspectTargetReadiness(p: ReadinessPorts): Promise<{ ok: boolean; checks: ReadinessCheck[] }> {
     const checks: ReadinessCheck[] = [];
@@ -53,9 +56,11 @@ export async function inspectTargetReadiness(p: ReadinessPorts): Promise<{ ok: b
     } else add('repository_identity', false);
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-        const rows = await Promise.race([p.census(), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('runtime timeout')), 3_000); })]);
-        add('session_runtime', Array.isArray(rows) && rows.every(r => r && typeof r === 'object' && typeof (r as { sessionId?: unknown }).sessionId === 'string'));
-    } catch { add('session_runtime', false); }
+        const limitMs = p.censusTimeoutMs ?? CENSUS_TIMEOUT_MS;
+        const rows = await Promise.race([p.census(), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer within ${limitMs}ms`)), limitMs); })]);
+        const valid = Array.isArray(rows) && rows.every(r => r && typeof r === 'object' && typeof (r as { sessionId?: unknown }).sessionId === 'string');
+        add('session_runtime', valid, valid ? undefined : 'The session host answered with an unreadable session list.');
+    } catch (e) { add('session_runtime', false, `The session host did not answer: ${String((e as Error)?.message ?? e).slice(0, 200)}`); }
     finally { if (timer) clearTimeout(timer); }
     const provider = plan ? p.provider(plan) : undefined;
     add('provider_installed', !!provider && provider.type === plan?.provider);

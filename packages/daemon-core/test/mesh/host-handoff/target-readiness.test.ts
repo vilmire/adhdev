@@ -24,6 +24,20 @@ describe('exact target readiness without release/deployment prerequisites', () =
         expect(ready.ok).toBe(true);
         expect(ready.checks.map(c => c.id)).toEqual(['launch_selection', 'target_workspace_binding', 'workspace_access', 'repository_identity', 'session_runtime', 'provider_installed', 'coordinator_capability', 'provider_auth_canary']);
     });
+    it('says why the session runtime check failed', async () => {
+        const p = fixture();
+        p.census = async () => { throw new Error('socket closed'); };
+        expect((await inspectTargetReadiness(p)).checks.find(c => c.id === 'session_runtime')).toEqual({ id: 'session_runtime', ok: false, detail: 'The session host did not answer: socket closed' });
+        p.census = () => new Promise(() => {}); p.censusTimeoutMs = 20;
+        expect((await inspectTargetReadiness(p)).checks.find(c => c.id === 'session_runtime')).toEqual({ id: 'session_runtime', ok: false, detail: 'The session host did not answer: no answer within 20ms' });
+        p.census = async () => [{ noId: true }];
+        expect((await inspectTargetReadiness(p)).checks.find(c => c.id === 'session_runtime')).toEqual({ id: 'session_runtime', ok: false, detail: 'The session host answered with an unreadable session list.' });
+    });
+    it('waits for a slow session host instead of calling it dead', async () => {
+        const p = fixture();
+        p.census = () => new Promise(resolve => setTimeout(() => resolve([]), 3_200));
+        expect((await inspectTargetReadiness(p)).checks.find(c => c.id === 'session_runtime')?.ok).toBe(true);
+    }, 15_000);
     it('rejects an ambiguous or foreign node, mismatched repository, unavailable runtime and absent canary contract', async () => {
         const p = fixture();
         p.plan!.targetNodeId = 'foreign-node';
