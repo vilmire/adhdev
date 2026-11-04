@@ -23,6 +23,8 @@ export interface ProbeConflict { table: string; key: unknown[]; reason: string }
 
 const HISTORY_TABLES = ['mesh_mission_events', 'mesh_release_events'] as const;
 const MAX_REPORTED = 5;
+/** An open attempt touched this recently may belong to a session still working here; older ones are stale records the import archives. */
+const LIVE_ATTEMPT_WINDOW_MS = 2 * 60 * 60_000;
 
 const rowDigest = (row: Row, columns: string[]) => sha256Hex(JSON.stringify(columns.map(c => row[c] ?? null))).slice(0, 16);
 
@@ -42,8 +44,12 @@ export function buildConflictProbe(db: Db, meshId: string): SnapshotConflictProb
 }
 
 /** Target side. Read-only. An empty answer is not a promise: the rehearsal still decides. */
-export function findProbeConflicts(db: Db, meshId: string, probe: SnapshotConflictProbe): ProbeConflict[] {
+export function findProbeConflicts(db: Db, meshId: string, probe: SnapshotConflictProbe, now = Date.now()): ProbeConflict[] {
     const found: ProbeConflict[] = [];
+    // The host's attempt replaces a colliding row here, so a session still working under it would report into nothing.
+    for (const open of db.prepare('SELECT attempt_id, session_id, updated_at FROM turn_attempts WHERE mesh_id=? AND terminal_outcome IS NULL AND updated_at>=?').all(meshId, now - LIVE_ATTEMPT_WINDOW_MS) as Row[]) {
+        found.push({ table: 'turn_attempts', key: [open.attempt_id], reason: `session ${String(open.session_id)} may still be working on this machine; let it finish first` });
+    }
     for (const table of HISTORY_TABLES) {
         const incoming = probe.history?.[table];
         if (!incoming?.rows?.length) continue;

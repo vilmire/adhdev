@@ -120,10 +120,10 @@ export class HostHandoffSource {
                 try {
                     const snap = this.d.data.exportSnapshot({ meshId: input.meshId, handoffId: probeId, fromDaemonId: this.d.selfDaemonId, toDaemonId: input.targetDaemonId, hostEpoch: view!.hostEpoch, meshConfig: view!.config, launchPlan });
                     estimateBytes = snapshotBytes(snap);
-                    // Staging, the retained snapshot archive and the before-image each hold about one copy,
-                    // and the rehearsal's rolled-back import needs about one more in the WAL.
+                    // Measured peak on the target is about 7x: staging, both archive sides, the rehearsal's
+                    // rolled-back import and its WAL, and a possible table rebuild.
                     const targetFree = cap!.diskFreeBytes;
-                    add('disk_space', this.d.data.freeDiskBytes() >= estimateBytes * 2 && cap!.ready?.diskOk !== false && (targetFree === undefined || targetFree >= estimateBytes * 4), 'insufficient_disk');
+                    add('disk_space', this.d.data.freeDiskBytes() >= estimateBytes * 2 && cap!.ready?.diskOk !== false && (targetFree === undefined || targetFree >= estimateBytes * 8), 'insufficient_disk');
                 } catch (e) { add('snapshot_readable', false, 'verify_failed', (e as Error)?.message); }
             }
             if (capable) await this.checkFleetMembers(input, view?.memberDaemonIds ?? [], checks);

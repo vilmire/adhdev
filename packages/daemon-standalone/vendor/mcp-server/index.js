@@ -140390,7 +140390,7 @@ ${tail}` : ""
             const key7 = [v("session_id"), v("rel_path")];
             if (local.mesh_id !== null && local.mesh_id !== this.c.meshId) throw snapshotConflict("session_artifacts", key7, `path belongs to another project's artifact ${String(local.artifact_id)}`);
             const origin = String(local.origin_daemon_id ?? "");
-            if (origin === this.c.sourceDaemonId || daemonIdsEquivalent5(origin, this.c.sourceDaemonId)) {
+            if (daemonIdsEquivalent5(origin, this.c.sourceDaemonId)) {
               this.run("DELETE FROM session_artifacts WHERE artifact_id=?", local.artifact_id);
               this.map("session_artifacts", TARGET_LOCAL_KEY_SPACE, [local.artifact_id], [v("artifact_id")]);
               this.resolutions.push({ table: "session_artifacts", index: "idx_session_artifacts_unique_path", key: key7, winner: "source", local, incomingKey: v("artifact_id") });
@@ -150762,8 +150762,11 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         memory: db3.prepare("SELECT id FROM assistant_memory_entry WHERE scope='project' AND project_ref=?").all(meshId).map((r) => String(r.id))
       };
     }
-    function findProbeConflicts(db3, meshId, probe) {
+    function findProbeConflicts(db3, meshId, probe, now = Date.now()) {
       const found = [];
+      for (const open of db3.prepare("SELECT attempt_id, session_id, updated_at FROM turn_attempts WHERE mesh_id=? AND terminal_outcome IS NULL AND updated_at>=?").all(meshId, now - LIVE_ATTEMPT_WINDOW_MS)) {
+        found.push({ table: "turn_attempts", key: [open.attempt_id], reason: `session ${String(open.session_id)} may still be working on this machine; let it finish first` });
+      }
       for (const table of HISTORY_TABLES) {
         const incoming = probe.history?.[table];
         if (!incoming?.rows?.length) continue;
@@ -150796,6 +150799,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
     }
     var HISTORY_TABLES;
     var MAX_REPORTED;
+    var LIVE_ATTEMPT_WINDOW_MS;
     var rowDigest;
     var init_snapshot_probe = __esm2({
       "src/mesh/host-handoff/snapshot-probe.ts"() {
@@ -150803,6 +150807,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         init_snapshot_export();
         HISTORY_TABLES = ["mesh_mission_events", "mesh_release_events"];
         MAX_REPORTED = 5;
+        LIVE_ATTEMPT_WINDOW_MS = 2 * 60 * 6e4;
         rowDigest = (row2, columns) => sha256Hex(JSON.stringify(columns.map((c) => row2[c] ?? null))).slice(0, 16);
       }
     });
@@ -150895,7 +150900,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
                   const snap = this.d.data.exportSnapshot({ meshId: input.meshId, handoffId: probeId, fromDaemonId: this.d.selfDaemonId, toDaemonId: input.targetDaemonId, hostEpoch: view2.hostEpoch, meshConfig: view2.config, launchPlan });
                   estimateBytes2 = snapshotBytes(snap);
                   const targetFree = cap.diskFreeBytes;
-                  add("disk_space", this.d.data.freeDiskBytes() >= estimateBytes2 * 2 && cap.ready?.diskOk !== false && (targetFree === void 0 || targetFree >= estimateBytes2 * 4), "insufficient_disk");
+                  add("disk_space", this.d.data.freeDiskBytes() >= estimateBytes2 * 2 && cap.ready?.diskOk !== false && (targetFree === void 0 || targetFree >= estimateBytes2 * 8), "insufficient_disk");
                 } catch (e) {
                   add("snapshot_readable", false, "verify_failed", e?.message);
                 }
