@@ -71,6 +71,22 @@ describe('production stage ports', () => {
         expect(await defaultStageGit.fingerprint(dir)).not.toBe(clean);
     });
 
+    it('current fingerprints carry a version line; the legacy format still counts git-ignored output (in-flight reviews keep their old strictness)', async () => {
+        const dir = mkdtempSync(join(tmpdir(), 'stage-fp-legacy-')); dirs.push(dir);
+        git(dir, 'init', '-b', 'main');
+        writeFileSync(join(dir, '.gitignore'), 'out.log\n'); writeFileSync(join(dir, 'a.txt'), '1\n'); writeFileSync(join(dir, 'out.log'), 'v1');
+        git(dir, 'add', '.'); git(dir, 'commit', '-m', 'one');
+        const current = (await defaultStageGit.fingerprint(dir))!;
+        const legacy = (await defaultStageGit.fingerprint(dir, { legacy: true }))!;
+        expect(current.split('\n')[0]).toBe('fp2');
+        expect(legacy.split('\n')).toHaveLength(5);
+        expect(current.split('\n').slice(1)[0]).toBe(legacy.split('\n')[0]); // same HEAD line
+        await new Promise(r => setTimeout(r, 15));
+        writeFileSync(join(dir, 'out.log'), 'v2-longer');
+        expect(await defaultStageGit.fingerprint(dir)).toBe(current);
+        expect(await defaultStageGit.fingerprint(dir, { legacy: true })).not.toBe(legacy);
+    });
+
     it('fingerprint fails closed on a spent budget or too many entries, and never blocks the event loop on the stat pass', async () => {
         const dir = mkdtempSync(join(tmpdir(), 'stage-fp2-')); dirs.push(dir);
         git(dir, 'init', '-b', 'main'); writeFileSync(join(dir, 'a.txt'), '1\n'); git(dir, 'add', '.'); git(dir, 'commit', '-m', 'one');

@@ -78531,6 +78531,13 @@ Owner-authorized input recovery: review ${r.expectedHeadSha} in the authenticate
         clone = (s2) => JSON.parse(JSON.stringify(s2));
       }
     });
+    var FINGERPRINT_V2;
+    var init_stage_ports = __esm2({
+      "src/mesh/stage-ports.ts"() {
+        "use strict";
+        FINGERPRINT_V2 = "fp2";
+      }
+    });
     function stashStageReport(meshId, taskId, report) {
       stash.delete(key3(meshId, taskId));
       stash.set(key3(meshId, taskId), report);
@@ -78624,6 +78631,7 @@ ${body.replace(/<\/?\s*(untrusted_[a-z_]+)\b[^>]*>/gi, "[tag removed]")}
         init_stage_review_recovery();
         init_dist();
         init_stage_pipeline();
+        init_stage_ports();
         init_stage_report_stash();
         init_stage_synthesis();
         init_stage_state();
@@ -78718,7 +78726,9 @@ ${body.replace(/<\/?\s*(untrusted_[a-z_]+)\b[^>]*>/gi, "[tag removed]")}
               const independenceUsed = reviewIndependenceOf(fresh.review ?? {}) === "fresh_session" ? "fresh_session_fallback" : "different_provider";
               if (!fresh.reviewerWorkspace && fresh.status === "completed") {
                 const workspace = this.ports.workspaceOf(parent);
-                const now = workspace ? await this.safeFingerprint(workspace) : null;
+                const legacyBaseline = !!st.reviewFingerprint && !st.reviewFingerprint.startsWith(`${FINGERPRINT_V2}
+`);
+                const now = workspace ? await this.safeFingerprint(workspace, legacyBaseline) : null;
                 if (!st.reviewFingerprint || st.reviewFingerprintUnavailable || !now || this.ports.queue.reviewInputValid?.(parent, fresh) === false) {
                   dropStageReport(meshId, childId);
                   await this.apply(meshId, parentId, { kind: "reviewer_integrity_unverifiable", childTaskId: childId, at: this.iso() });
@@ -79027,9 +79037,9 @@ ${result.log.slice(-SELF_CHECK_LOG_MAX)}
             } catch {
             }
           }
-          async safeFingerprint(workspace) {
+          async safeFingerprint(workspace, legacy = false) {
             try {
-              return await this.ports.git.fingerprint(workspace) || null;
+              return await this.ports.git.fingerprint(workspace, legacy ? { legacy: true } : void 0) || null;
             } catch {
               return null;
             }
@@ -81326,6 +81336,7 @@ ${report}`;
         init_stage_hooks();
         init_stage_notice_silence();
         init_stage_state();
+        init_stage_ports();
         init_refine_profile_run();
         init_light_workspace();
         init_light_workspace_config();
@@ -81377,11 +81388,13 @@ ${report}`;
               const g3 = (args, max = 64 * 1024 * 1024) => git6(workspace, ["-c", "core.fsmonitor=false", ...args], max);
               const sha8 = (text9) => (0, import_node_crypto21.createHash)("sha256").update(text9).digest("hex");
               const head = (await g3(["rev-parse", "HEAD"])).trim();
-              const status = await g3(["status", "--porcelain=v1", "--untracked-files=all"]);
+              const legacy = limits.legacy === true;
+              const status = await g3(["status", "--porcelain=v1", "--untracked-files=all", ...legacy ? ["--ignored=matching"] : []]);
               const diff = await g3(["diff", "HEAD", "--binary"]);
               const lsv = await g3(["ls-files", "-v"]);
               const untracked = (await g3(["ls-files", "-z", "-o", "--exclude-standard"])).split("\0").filter(Boolean);
-              const entries2 = untracked.map((p) => `u:${p}`);
+              const ignored = legacy ? (await g3(["ls-files", "-z", "-o", "-i", "--exclude-standard"])).split("\0").filter(Boolean) : [];
+              const entries2 = [...untracked.map((p) => `u:${p}`), ...ignored.map((p) => `i:${p}`)];
               if (entries2.length > maxEntries) return null;
               entries2.sort();
               const lines = new Array(entries2.length);
@@ -81407,7 +81420,7 @@ ${report}`;
               };
               await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(1, entries2.length)) }, worker));
               if (failed || Date.now() > deadline) return null;
-              return [head, sha8(status), sha8(diff), sha8(lsv), sha8(lines.join("\n"))].join("\n");
+              return [...legacy ? [] : [FINGERPRINT_V2], head, sha8(status), sha8(diff), sha8(lsv), sha8(lines.join("\n"))].join("\n");
             } catch {
               return null;
             }

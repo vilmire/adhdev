@@ -24,14 +24,14 @@ function harness(opts: { maxRevisions?: 0 | 1 | 2 | 3; selfChecks?: SelfCheckRes
     rows.set(PARENT, parent);
     const selfChecks = [...(opts.selfChecks ?? [])];
     let head = 0;
-    const fp = { value: 'fp0' as string | null, queue: [] as Array<string | null | 'throw'> };
+    const fp = { value: 'fp0' as string | null, legacyValue: undefined as string | null | undefined, legacyCalls: 0, queue: [] as Array<string | null | 'throw'> };
     const ports: StageRuntimePorts = {
         now: () => nowMs,
         selfCheck: { run: async () => selfChecks.shift() ?? { status: 'passed', log: 'ok' } },
         reviewerWorkspace: { prepare: async () => null },
         git: {
             baseSha: async () => 'base0000', headSha: async () => (opts.diff === false ? 'base0000' : `head${++head}`),
-            diff: async () => 'diff text', isClean: async () => true, fingerprint: async () => { const next = fp.queue.shift(); if (next === 'throw') throw new Error('git failed'); if (next !== undefined) return next; return fp.value; },
+            diff: async () => 'diff text', isClean: async () => true, fingerprint: async (_w, limits) => { if (limits?.legacy) fp.legacyCalls++; const next = fp.queue.shift(); if (next === 'throw') throw new Error('git failed'); if (next !== undefined) return next; return limits?.legacy && fp.legacyValue !== undefined ? fp.legacyValue : fp.value; },
         },
         artifacts: { register: i => { const id = `art_${i.kind}_${log.artifacts.length}`; log.artifacts.push(id); return id; } },
         queue: {
@@ -182,6 +182,27 @@ describe('stage pipeline runtime', () => {
         await ok.implDone('a1');
         await ok.review({ verdict: 'approve' }); // unchanged fingerprint → verdict stands
         expect(ok.log.commits[0].status).toBe('completed');
+    });
+
+    it('a baseline written by the previous fingerprint format is verified in that format, not voided by the upgrade', async () => {
+        const old = harness();
+        old.fp.value = 'old-format-baseline'; // no version line: written before the format change
+        await old.implDone('a1');
+        await old.review({ verdict: 'approve' });
+        expect(old.fp.legacyCalls).toBeGreaterThan(0);
+        expect(old.log.commits[0].status).toBe('completed');
+        const mutated = harness();
+        mutated.fp.value = 'old-format-baseline';
+        await mutated.implDone('a1');
+        mutated.fp.legacyValue = 'old-format-after-mutation';
+        await mutated.review({ verdict: 'approve' });
+        expect(mutated.parent().stageState!.blockedReason).toBe('reviewer_mutated_source'); // still strict
+        const current = harness();
+        current.fp.value = 'fp2\ncurrent-format';
+        await current.implDone('a1');
+        await current.review({ verdict: 'approve' });
+        expect(current.fp.legacyCalls).toBe(0);
+        expect(current.log.commits[0].status).toBe('completed');
     });
 
     it('fails closed: an unreadable fingerprint at the end blocks with reviewer_integrity_unverifiable', async () => {

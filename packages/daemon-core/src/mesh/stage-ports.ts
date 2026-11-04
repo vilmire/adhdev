@@ -29,6 +29,9 @@ export interface ReviewerWorkspace { path: string; headSha: string; release(): P
 /** Light workspace at a commit, or null → fall back to the read lease on the parent's checkout. */
 export interface ReviewerWorkspaceProvider { prepare(req: ReviewerWorkspaceRequest): Promise<ReviewerWorkspace | null> }
 
+/** First line of a current-format checkout fingerprint; a stored value without it was written by an earlier build. */
+export const FINGERPRINT_V2 = 'fp2';
+
 export interface StageGitPort {
     /** Merge-base of HEAD with the integration branch; null when it cannot be resolved. */
     baseSha(workspace: string): Promise<string | null>;
@@ -36,7 +39,7 @@ export interface StageGitPort {
     /** `git diff base..head` text (root only; bounded by the caller). */
     diff(workspace: string, base: string, head: string): Promise<string>;
     /** Opaque fingerprint of HEAD + working-tree status; equal fingerprints = the checkout did not change. Null when unreadable. */
-    fingerprint(workspace: string, limits?: { budgetMs?: number; maxEntries?: number; concurrency?: number }): Promise<string | null>;
+    fingerprint(workspace: string, limits?: { budgetMs?: number; maxEntries?: number; concurrency?: number; legacy?: boolean }): Promise<string | null>;
     /** True when the working tree has no uncommitted changes. */
     isClean(workspace: string): Promise<boolean>;
 }

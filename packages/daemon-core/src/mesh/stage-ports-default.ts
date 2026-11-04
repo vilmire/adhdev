@@ -30,7 +30,7 @@ import { StagePipelineRuntime } from './stage-pipeline-runtime.js';
 import { setStageHookTarget } from './stage-hooks.js';
 import { setStageNoticeLookup } from './stage-notice-silence.js';
 import { isStageChild, isStageParent } from './stage-state.js';
-import type { StageGitPort, StageRuntimePorts, SelfCheckRunner, SelfCheckResult, ReviewerWorkspaceProvider } from './stage-ports.js';
+import { FINGERPRINT_V2, type StageGitPort, type StageRuntimePorts, type SelfCheckRunner, type SelfCheckResult, type ReviewerWorkspaceProvider } from './stage-ports.js';
 import { runMeshRefineValidationProfile } from './refine-profile-run.js';
 import { prepareLightWorkspace, removeLightWorkspace } from './light-workspace.js';
 import { loadLightWorkspaceConfig } from './light-workspace-config.js';
@@ -72,7 +72,7 @@ export const defaultStageGit: StageGitPort = {
      * bounded concurrency under a wall-clock budget and an incremental file cap; any failure, cap or timeout → null (the
      * caller treats that as "cannot verify" and fails closed).
      */
-    async fingerprint(workspace, limits: { budgetMs?: number; maxEntries?: number; concurrency?: number } = {}) {
+    async fingerprint(workspace, limits: { budgetMs?: number; maxEntries?: number; concurrency?: number; legacy?: boolean } = {}) {
         const budgetMs = limits.budgetMs ?? FINGERPRINT_BUDGET_MS;
         const maxEntries = limits.maxEntries ?? MAX_FINGERPRINT_OTHER_FILES;
         const concurrency = limits.concurrency ?? FINGERPRINT_STAT_CONCURRENCY;
@@ -81,11 +81,15 @@ export const defaultStageGit: StageGitPort = {
             const g = (args: string[], max = 64 * 1024 * 1024) => git(workspace, ['-c', 'core.fsmonitor=false', ...args], max);
             const sha = (text: string) => createHash('sha256').update(text).digest('hex');
             const head = (await g(['rev-parse', 'HEAD'])).trim();
-            const status = await g(['status', '--porcelain=v1', '--untracked-files=all']);
+            // `legacy` reproduces the format written before git-ignored output was excluded (no version line, ignored
+            // entries included), so a review that started before the upgrade is still verified like it would have been.
+            const legacy = limits.legacy === true;
+            const status = await g(['status', '--porcelain=v1', '--untracked-files=all', ...(legacy ? ['--ignored=matching'] : [])]);
             const diff = await g(['diff', 'HEAD', '--binary']);
             const lsv = await g(['ls-files', '-v']);
             const untracked = (await g(['ls-files', '-z', '-o', '--exclude-standard'])).split('\0').filter(Boolean);
-            const entries = untracked.map(p => `u:${p}`);
+            const ignored = legacy ? (await g(['ls-files', '-z', '-o', '-i', '--exclude-standard'])).split('\0').filter(Boolean) : [];
+            const entries = [...untracked.map(p => `u:${p}`), ...ignored.map(p => `i:${p}`)];
             if (entries.length > maxEntries) return null;
             entries.sort();
             const lines: string[] = new Array(entries.length);
@@ -104,7 +108,7 @@ export const defaultStageGit: StageGitPort = {
             };
             await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(1, entries.length)) }, worker));
             if (failed || Date.now() > deadline) return null;
-            return [head, sha(status), sha(diff), sha(lsv), sha(lines.join('\n'))].join('\n');
+            return [...(legacy ? [] : [FINGERPRINT_V2]), head, sha(status), sha(diff), sha(lsv), sha(lines.join('\n'))].join('\n');
         } catch { return null; }
     },
     async isClean(workspace) { try { return (await git(workspace, ['status', '--porcelain'])).trim() === ''; } catch { return false; } },

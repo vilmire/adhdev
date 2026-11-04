@@ -5,7 +5,7 @@
 import { recoverPendingStageReview, type StageReviewRecoveryHost, type StageReviewRecoveryRequest } from './stage-review-recovery.js';
 import { reviewIndependenceOf, type MeshReviewReport, type MeshTaskStageState } from '@adhdev/mesh-shared';
 import { reduceStage, type StageEffect, type StageEvent } from './stage-pipeline.js';
-import type { StageRuntimePorts } from './stage-ports.js';
+import { FINGERPRINT_V2, type StageRuntimePorts } from './stage-ports.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue-types.js';
 import { dropStageReport, peekStageReport } from './stage-report-stash.js';
 import { buildFinalReport, buildReviewerMessage, buildRevisionMemo } from './stage-synthesis.js';
@@ -100,7 +100,10 @@ export class StagePipelineRuntime {
             // unreadable current fingerprint, or any difference all void the verdict. Light-workspace reviewers are exempt.
             if (!fresh.reviewerWorkspace && fresh.status === 'completed') {
                 const workspace = this.ports.workspaceOf(parent);
-                const now = workspace ? await this.safeFingerprint(workspace) : null;
+                // A baseline written before the fingerprint format changed carries no version line: verify it in
+                // its own (stricter) format rather than voiding a review that was already in flight.
+                const legacyBaseline = !!st.reviewFingerprint && !st.reviewFingerprint.startsWith(`${FINGERPRINT_V2}\n`);
+                const now = workspace ? await this.safeFingerprint(workspace, legacyBaseline) : null;
                 if (!st.reviewFingerprint || st.reviewFingerprintUnavailable || !now
                     || this.ports.queue.reviewInputValid?.(parent, fresh) === false) {
                     dropStageReport(meshId, childId);
@@ -361,8 +364,8 @@ export class StagePipelineRuntime {
         try { await ws.release(); } catch { /* the light-workspace sweep reclaims leftovers */ }
     }
 
-    private async safeFingerprint(workspace: string): Promise<string | null> {
-        try { return (await this.ports.git.fingerprint(workspace)) || null; } catch { return null; }
+    private async safeFingerprint(workspace: string, legacy = false): Promise<string | null> {
+        try { return (await this.ports.git.fingerprint(workspace, legacy ? { legacy: true } : undefined)) || null; } catch { return null; }
     }
 
     private async registerDiff(parentId: string, workspace: string, base: string, head: string): Promise<void> {
