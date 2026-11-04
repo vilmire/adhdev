@@ -49,9 +49,9 @@ const published = new Set(ALL_MESH_TOOLS.map(tool => tool.name));
 // 56 with the release-object tools (rc.37: mesh_release_upsert/scope/list/record_deploy/changelog_draft).
 // 60 with mesh_file_transfer (2026-11-02); 58 with mesh_light_land / mesh_light_discard (same-machine light tasks); 59 with mesh_task_stage_decide (review-in-task).
 // 47 once the deprecated mesh_ledger_query alias is dropped next release.
-test('the published surface is 61 tools and contains no retired name', () => {
-    assert.equal(ALL_MESH_TOOLS.length, 61);
-    assert.equal(CANONICAL_MESH_TOOL_NAMES.length, 61);
+test('the published surface is 62 tools and contains no retired name', () => {
+    assert.equal(ALL_MESH_TOOLS.length, 62);
+    assert.equal(CANONICAL_MESH_TOOL_NAMES.length, 62);
     assert.equal(published.has('mesh_recover_node_identity'), true);
     assert.equal(published.has('mesh_queue_revise'), true);
     assert.equal(typeof resolveMeshToolHandler('mesh_queue_revise'), 'function');

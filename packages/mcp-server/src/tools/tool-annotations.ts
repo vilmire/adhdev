@@ -264,6 +264,8 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   mesh_add_node: WRITE_LOCAL_ACCUMULATING,
   mesh_reattach_source_parent: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   mesh_attach_remote: CONTROL_REMOTE_IDEMPOTENT,
+  // create_code mints a credential (accumulating); pin_host_key writes a trust pin on a member machine.
+  mesh_host_pairing: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   // Creates a git WORKTREE on disk for a (possibly remote) node.
   mesh_clone_node: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   // Deregisters a node.

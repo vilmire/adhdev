@@ -181,6 +181,13 @@ export interface ApplyMeshHostJoinOptions {
     token: string;
     memberNode: MeshHostJoinMemberNodeInput;
     memberMeshId?: string;
+    /**
+     * Pin-only join: the member is ALREADY on this host's roster (authenticated
+     * project attach) and only needs the host's artifact-signing key pin. No
+     * node is created or edited; a member whose daemon is not on the roster is
+     * refused without consuming the token.
+     */
+    pinOnly?: boolean;
     now?: string;
 }
 
@@ -238,6 +245,29 @@ function applyMeshHostJoinRequestUnlocked(
         return { accepted: false, mesh, meshHost: mesh.meshHost, tokenId: validation.presentedTokenId, reason: validation.reason };
     }
 
+    if (opts.pinOnly) {
+        const memberDaemon = typeof opts.memberNode.daemonId === 'string' ? opts.memberNode.daemonId.trim() : '';
+        const rosterNode = memberDaemon
+            ? mesh.nodes.find(n => n.daemonId && daemonIdsEquivalent(n.daemonId, memberDaemon))
+            : undefined;
+        if (!rosterNode) {
+            return { accepted: false, mesh, meshHost: mesh.meshHost, tokenId: validation.tokenId, reason: 'member_not_on_roster: attach this machine to the project from the host first (mesh_attach_remote), then pin' };
+        }
+        mesh.meshHost = {
+            ...meshHost,
+            pairing: {
+                ...(meshHost.pairing || {}),
+                status: 'paired',
+                tokenId: validation.tokenId,
+                joinedAt: now,
+                lastPairedAt: meshHost.pairing?.lastPairedAt || now,
+                ...(meshHost.pairing?.expiresAt ? { expiresAt: meshHost.pairing.expiresAt } : {}),
+            },
+        };
+        mesh.updatedAt = now;
+        saveMeshConfig(config);
+        return { accepted: true, mesh, meshHost: mesh.meshHost, node: rosterNode, tokenId: validation.tokenId };
+    }
     const workspace = opts.memberNode.workspace.trim();
     if (!workspace) throw new Error('memberNode.workspace required');
     const memberId = opts.memberNode.id?.trim();

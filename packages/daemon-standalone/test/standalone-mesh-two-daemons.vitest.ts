@@ -371,6 +371,64 @@ describe('standalone multi-machine mesh — two daemon processes', () => {
     }, 15_000);
   }, 120_000);
 
+  it('adds the missing host key pin to an already-attached member through the pairing code (pin_mesh_host_key)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-mesh-pin-'));
+    roots.push(root);
+    const hostHome = join(root, 'host');
+    const memberHome = join(root, 'member');
+    const hostRepo = join(root, 'host-repo');
+    const memberCheckout = join(root, 'member-checkout');
+    for (const dir of [hostHome, memberHome, hostRepo, memberCheckout]) mkdirSync(dir, { recursive: true });
+    for (const repo of [hostRepo, memberCheckout]) {
+      writeFileSync(join(repo, 'README.md'), 'repo\n');
+      execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo, windowsHide: true });
+    }
+    const host = await Node.start('host', hostHome);
+    nodes.push(host);
+    const member = await Node.start('member', memberHome);
+    nodes.push(member);
+    const hostId = host.ready.statusInstanceId;
+    const memberId = member.ready.statusInstanceId;
+
+    const hostMesh = await host.command('create_mesh', { name: 'host-mesh', repoIdentity: 'github.com/acme/pin-two-daemons' });
+    const hostMeshId = hostMesh.mesh.id as string;
+    expect((await host.command('add_mesh_node', { meshId: hostMeshId, workspace: hostRepo })).success).toBe(true);
+    // What authenticated attach leaves behind: the member is on the host roster...
+    const attached = await host.command('add_mesh_node', { meshId: hostMeshId, workspace: memberCheckout, repoRoot: memberCheckout, daemonId: memberId });
+    expect(attached.success, JSON.stringify(attached)).toBe(true);
+    // ...and the member recognises the host, but holds no key for it.
+    writeFileSync(join(member.ready.configDir, 'mesh-host-records.json'), JSON.stringify({
+      version: 2,
+      meshes: { [hostMeshId]: { meshId: hostMeshId, hostDaemonId: hostId, source: 'pairing', recordedAt: new Date().toISOString(), pairingVerified: true } },
+    }));
+
+    const token = await host.command('create_mesh_host_pairing_token', { meshId: hostMeshId });
+    expect(token.success).toBe(true);
+
+    // A wrong code changes nothing.
+    const wrong = await member.command('pin_mesh_host_key', { meshId: hostMeshId, token: 'not-the-code', hostAddress: `127.0.0.1:${host.ready.port}` });
+    expect(wrong.success).toBe(false);
+    expect(JSON.parse(readFileSync(join(member.ready.configDir, 'mesh-host-records.json'), 'utf8')).meshes[hostMeshId].originGrantPublicKey).toBeUndefined();
+
+    const pinned = await member.command('pin_mesh_host_key', { meshId: hostMeshId, token: token.token, hostAddress: `127.0.0.1:${host.ready.port}` });
+    expect(pinned.success, JSON.stringify(pinned)).toBe(true);
+    expect(pinned.code).toBe('mesh_host_pin_applied');
+    expect(pinned.transport).toBe('standalone_http_mesh_join');
+    const record = JSON.parse(readFileSync(join(member.ready.configDir, 'mesh-host-records.json'), 'utf8')).meshes[hostMeshId];
+    expect(typeof record.originGrantPublicKey).toBe('string');
+    expect(record.originGrantPublicKey.length).toBeGreaterThan(20);
+    expect(record.pairingVerified).toBe(true);
+    expect(JSON.stringify(pinned)).not.toContain(record.originGrantPublicKey);
+    // The host did not duplicate or move the member node.
+    const hostStatus = await host.command('get_mesh', { meshId: hostMeshId });
+    const memberNodes = (hostStatus.mesh?.nodes ?? []).filter((n: any) => n.workspace === memberCheckout);
+    expect(memberNodes).toHaveLength(1);
+
+    // Single use.
+    const replay = await member.command('pin_mesh_host_key', { meshId: hostMeshId, token: token.token, hostAddress: `127.0.0.1:${host.ready.port}` });
+    expect(replay.success).toBe(false);
+  }, 120_000);
+
   it('an assistant on the member drives the host-hosted mesh by relay: list, status, read, note — and reports the host offline', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-mesh-assistant-'));
     roots.push(root);

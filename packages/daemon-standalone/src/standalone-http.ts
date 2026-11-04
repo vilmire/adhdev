@@ -674,7 +674,7 @@ export class StandaloneHttpApi {
     // apply_mesh_host_join verifies and rejects when bad, spent or expired.
     // The exemption is as narrow as it can be — this exact path, POST only, a
     // JSON body of at most 64 KB, rate-limited to 5 attempts per minute per
-    // remote IP, and only the four join fields reach the handler. Every other
+    // remote IP, and only the join fields (+ pinOnly) reach the handler. Every other
     // /api path (including GET on this one) still goes through the gate below.
     // Browsers from a foreign Origin were already refused above.
     if (parsedUrl.pathname === MESH_JOIN_PATH && method === 'POST') {
@@ -1166,6 +1166,7 @@ export class StandaloneHttpApi {
         token,
         memberNode: memberNode as Record<string, unknown>,
         ...(memberMeshId ? { memberMeshId } : {}),
+        ...(record?.pinOnly === true ? { pinOnly: true } : {}),
       }, 'ipc');
       const ok = (result as { success?: boolean } | null)?.success === true;
       const rejected = (result as { code?: string } | null)?.code === 'mesh_host_join_rejected';

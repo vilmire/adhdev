@@ -568,7 +568,15 @@
             "peerReconnecting": "Reconectando",
             "peerDisconnected": "Desconectado",
             "peerLastConnected": "Última conexión {{time}}",
-            "peerFailure": "Código de error: {{code}}"
+            "peerFailure": "Código de error: {{code}}",
+            "tabPin": "Fijar clave",
+            "pinIntro": "Los artefactos remotos se rechazan cuando una máquina ya conectada al proyecto no tiene la clave de firma de artefactos del anfitrión. Introduce el código creado en la pestaña Anfitrión para fijar la clave en esa máquina.",
+            "pinMachine": "Máquina",
+            "pinSelect": "Elige una máquina",
+            "pinNoMachines": "No hay máquinas conectadas aparte del anfitrión. Conecta primero una máquina al proyecto.",
+            "pinAction": "Fijar clave",
+            "pinning": "Fijando…",
+            "pinned": "Clave fijada: {{machine}}"
         },
         "hint": {
             "daemon": {

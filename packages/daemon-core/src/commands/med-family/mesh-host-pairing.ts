@@ -25,9 +25,12 @@ import { buildMemberJoinNode } from '../router.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
 import { defineCommandSpecs, type CommandSource } from '../command-registry.js';
 import { unwrapMeshRelayResult } from '../mesh-relay-result.js';
+import { readMeshSender } from '../mesh-sender.js';
 import { mintPeerSecret, putPeerSecret, removePeerSecret } from '../../mesh/transport/mesh-peer-secrets.js';
 import { MESH_HANDSHAKE_PROTOCOL_VERSION } from '../../mesh/transport/mesh-peer-handshake.js';
-import { getHostOriginGrantPublicKey } from './artifact-origin-grant.js';
+import { getHostOriginGrantPublicKey, resolveTrustedHostOriginGrantPublicKey } from './artifact-origin-grant.js';
+import { isValidOriginGrantPublicKey } from '../../mesh/origin-grant-keypair.js';
+import { readMeshHostRecord, writeMeshHostRecord } from '../../mesh/mesh-host-memory.js';
 import { LOG } from '../../logging/logger.js';
 import { maskDaemonId } from '../../mesh/transport/mask-daemon-id.js';
 import {
@@ -226,6 +229,7 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
                 token,
                 memberNode: memberNode as any,
                 memberMeshId: typeof args?.memberMeshId === 'string' ? args.memberMeshId : undefined,
+                ...(args?.pinOnly === true ? { pinOnly: true } : {}),
             });
             if (!applied) return { success: false, error: 'Mesh not found' };
             // The host may have resolved its mesh from the token (the member
@@ -390,8 +394,16 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
             const pairedHostDaemonIdForSecret = readTrimmed(hostResult.hostDaemonId)
                 || readTrimmed(hostResult.meshHost?.hostDaemonId)
                 || readTrimmed(hostDaemonId);
-            const hostOriginGrantPublicKey = readTrimmed(hostResult.originGrantPublicKey)
+            // A host that returns no (valid) key must not erase a pin this member
+            // already holds for it (older host build, or a re-join).
+            const offeredHostKey = readTrimmed(hostResult.originGrantPublicKey)
                 || readTrimmed(hostResult.meshHost?.originGrantPublicKey);
+            const hostOriginGrantPublicKey = isValidOriginGrantPublicKey(offeredHostKey)
+                ? offeredHostKey
+                : (pairedHostDaemonIdForSecret
+                    ? (resolveTrustedHostOriginGrantPublicKey({ meshId: readTrimmed(hostResult.meshId) || hostMeshId, hostDaemonId: pairedHostDaemonIdForSecret })
+                        || resolveTrustedHostOriginGrantPublicKey({ meshId, hostDaemonId: pairedHostDaemonIdForSecret }))
+                    : '');
             const peerSecret = readTrimmed(hostResult.peerSecret);
             const secretMeshId = readTrimmed(hostResult.meshId) || hostMeshId;
             let peerSecretStored = false;
@@ -451,7 +463,6 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
                 ? hostResult.meshHost.hostDaemonId.trim()
                 : hostDaemonId;
             if (pairedHostDaemonId) {
-                const { writeMeshHostRecord } = await import('../../mesh/mesh-host-memory.js');
                 writeMeshHostRecord(meshId, pairedHostDaemonId, 'pairing', hostOriginGrantPublicKey || undefined, {
                     pairingVerified: true,
                 });
@@ -497,6 +508,115 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
     },
 
     /**
+     * Add the missing host artifact-signing key pin on a member that is already
+     * attached to the project (authenticated attach registers the host but
+     * cannot carry a key). The pairing code minted by the host is the
+     * credential: it is verified by the host (single use, 10 minutes), which
+     * answers with its public key and a fresh peer secret. Nothing is accepted
+     * from request arguments, an existing pin is replaced only by the key the
+     * host returns for this exact code, and a host that returns no key leaves
+     * the member exactly as it was.
+     */
+    pin_mesh_host_key: async (ctx: MedFamilyContext, args: any) => {
+        const meshId = readTrimmed(args?.meshId);
+        const token = readTrimmed(args?.token);
+        if (!meshId) return { success: false, error: 'meshId required' };
+        if (!token) return { success: false, code: 'mesh_host_pin_token_required', meshId, error: 'A pairing code is required: create one on the host (create_mesh_host_pairing_token / mesh_host_pairing action=create_token) and pass it as token.' };
+        const selfDaemonId = readTrimmed(ctx.deps.statusInstanceId);
+        if (!selfDaemonId) return { success: false, code: 'mesh_host_pin_identity_unknown', meshId, error: 'This daemon has no machine identity yet; wait for it to finish connecting and retry.' };
+        const record = readMeshHostRecord(meshId);
+        // A relayed request (coordinator tool on the host) is honoured only from
+        // the host this machine already recognises, and it never chooses where
+        // to dial: the code goes back to that host over the mesh dispatch, not
+        // to an address a peer supplied.
+        const relayedBy = readMeshSender(args);
+        if (relayedBy) {
+            if (!record || !daemonIdsEquivalent(record.hostDaemonId, relayedBy)) {
+                return { success: false, code: 'mesh_host_pin_sender_not_host', meshId, error: 'Only the project host this machine recognises may ask it to pin the host key.' };
+            }
+        }
+        const explicitHost = relayedBy ? '' : readTrimmed(args?.hostDaemonId);
+        const hostDaemonId = explicitHost || record?.hostDaemonId || '';
+        if (!hostDaemonId) {
+            return { success: false, code: 'mesh_host_unknown', meshId, error: 'This machine does not know the project host. Attach it from the host first (mesh_attach_remote) or pass hostDaemonId.' };
+        }
+        if (daemonIdsEquivalent(hostDaemonId, selfDaemonId)) {
+            return { success: false, code: 'mesh_host_pin_is_host', meshId, error: 'This machine is the project host; run the pin on the member machine.' };
+        }
+        if (record && explicitHost && !daemonIdsEquivalent(record.hostDaemonId, explicitHost)) {
+            return { success: false, code: 'mesh_host_conflict', meshId, error: 'This machine already recognises a different project host for this project; resolve that locally before pinning another.' };
+        }
+        const hostAddress = relayedBy ? '' : readTrimmed(args?.hostAddress);
+        const memberNode = { daemonId: selfDaemonId, workspace: '' };
+        const joinBody = { meshId, token, memberMeshId: meshId, memberNode, pinOnly: true };
+        let hostResult: any;
+        let transport: string;
+        try {
+            if (hostAddress) {
+                transport = 'standalone_http_mesh_join';
+                const response = await fetch(normalizeStandaloneHostJoinUrl(hostAddress), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(joinBody),
+                });
+                hostResult = await response.json().catch(() => ({ success: false, error: `Host returned HTTP ${response.status}` }));
+                if (!response.ok && hostResult?.success !== false) hostResult = { success: false, error: `Host returned HTTP ${response.status}` };
+            } else if (ctx.deps.dispatchMeshCommand) {
+                transport = 'mesh_command_dispatch';
+                hostResult = unwrapMeshRelayResult(await ctx.deps.dispatchMeshCommand(hostDaemonId, 'apply_mesh_host_join', joinBody), { command: 'apply_mesh_host_join', peerDaemonId: hostDaemonId });
+            } else {
+                return { success: false, code: 'mesh_host_join_transport_unavailable', meshId, error: 'No path to the host: pass hostAddress (ip:port of the host daemon) or run this from a connected cloud daemon.' };
+            }
+        } catch (e: any) {
+            return { success: false, code: 'mesh_host_pin_unreachable', meshId, error: `Could not reach the project host: ${e?.message || String(e)}. Check the host is online${hostAddress ? ' and the address is reachable from this machine' : ''}, then retry with a fresh code.` };
+        }
+        if (!hostResult?.success) {
+            return { success: false, code: hostResult?.code || 'mesh_host_join_rejected', meshId, transport, error: hostResult?.error || 'The project host rejected the pairing code. Create a new code on the host and retry.', hostResult: redactHostJoinResult(hostResult) };
+        }
+        const answeredHost = readTrimmed(hostResult.hostDaemonId) || readTrimmed(hostResult.meshHost?.hostDaemonId) || hostDaemonId;
+        if (!daemonIdsEquivalent(answeredHost, hostDaemonId)) {
+            return { success: false, code: 'mesh_host_pin_identity_mismatch', meshId, transport, error: 'The machine that answered is not the project host this machine recognises; nothing was pinned.' };
+        }
+        const offeredKey = readTrimmed(hostResult.originGrantPublicKey) || readTrimmed(hostResult.meshHost?.originGrantPublicKey);
+        if (!isValidOriginGrantPublicKey(offeredKey)) {
+            return { success: false, code: 'mesh_host_pin_key_unavailable', meshId, transport, error: 'The project host accepted the code but returned no artifact signing key (it may run an older build). Update the host daemon, create a new code and retry.' };
+        }
+        const secretMeshId = readTrimmed(hostResult.meshId) || meshId;
+        const peerSecret = readTrimmed(hostResult.peerSecret);
+        try {
+            if (peerSecret) {
+                putPeerSecret({
+                    meshId: secretMeshId,
+                    peerDaemonId: canonicalDaemonId(answeredHost) || answeredHost,
+                    role: 'member',
+                    secret: peerSecret,
+                    ...(hostAddress ? { hostAddress } : {}),
+                    originGrantPublicKey: offeredKey,
+                    createdAt: new Date().toISOString(),
+                });
+            }
+        } catch (e: any) {
+            return { success: false, code: 'mesh_host_peer_secret_store_failed', meshId, transport, error: `Host accepted the code but the credential could not be stored: ${e?.message || String(e)}` };
+        }
+        const recorded = [meshId, ...(secretMeshId !== meshId ? [secretMeshId] : [])]
+            .map(id => writeMeshHostRecord(id, answeredHost, 'pairing', offeredKey, { pairingVerified: true }))
+            .every(Boolean);
+        if (!recorded) {
+            return { success: false, code: 'mesh_host_record_write_failed', meshId, transport, error: 'Host accepted the code but this machine could not save the pin; restore writable daemon configuration and retry with a new code.' };
+        }
+        LOG.info('MeshPairing', `pinned host key mesh=${meshId} host=${maskDaemonId(answeredHost)} via=${transport}`);
+        return {
+            success: true,
+            code: 'mesh_host_pin_applied',
+            meshId,
+            hostDaemonId: answeredHost,
+            transport,
+            pinned: true,
+            peerSecretStored: !!peerSecret,
+        };
+    },
+
+    /**
      * Forget one peer's secret (design §4.4 step 6). Either side may run it:
      * the host revokes a member, a member forgets its host. The WS transport
      * closes the peer's open sockets through onPeerSecretsChanged; this command
@@ -535,4 +655,6 @@ export const meshHostPairingSpecs = defineCommandSpecs('med', meshHostPairingHan
     // authorises it): the sender must be the daemon its memberNode names.
     apply_mesh_host_join: { meshSender: 'pairing_member' },
     revoke_mesh_peer: { sources: LOCAL_OPERATOR_SOURCES, meshSender: undefined },
+    // 'mesh' is allowed only for the recorded host (checked in the handler); the cloud dashboard uses 'p2p'.
+    pin_mesh_host_key: { sources: [...LOCAL_OPERATOR_SOURCES, 'mesh'], meshSender: 'authenticated_peer' },
 }, { meshSender: 'authenticated_peer' });
