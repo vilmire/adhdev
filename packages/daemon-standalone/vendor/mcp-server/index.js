@@ -250588,6 +250588,30 @@ async function meshNodeSlotsSet(ctx, args) {
     if (result?.success === false) {
       return JSON.stringify({ success: false, error: result.error || "update_mesh_node failed" });
     }
+    let hostWrite;
+    if (supportsMeshRelay(ctx.transport) && node.daemonId && !isLocalControlPlaneNode(ctx, node)) {
+      try {
+        const local = unwrapCommandPayload(await ctx.transport.command("update_mesh_node", {
+          meshId: ctx.mesh.id,
+          nodeId: node.id,
+          policy: { slots: proposed },
+          inlineMesh: ctx.mesh
+        }));
+        hostWrite = { written: local?.success !== false, ...local?.error ? { error: local.error } : {} };
+      } catch (e) {
+        hostWrite = { written: false, error: e?.message || String(e) };
+      }
+      if (hostWrite.written !== true) {
+        return JSON.stringify({
+          success: false,
+          written: false,
+          code: "mesh_node_slots_host_write_failed",
+          error: "The owning daemon accepted the slots but the coordinator mesh config was not updated, so routing still uses the previous slots.",
+          hostWrite,
+          nodeId: node.id
+        });
+      }
+    }
     const idx = ctx.mesh.nodes.findIndex((n) => n.id === node.id);
     if (idx >= 0) {
       const target = ctx.mesh.nodes[idx];
@@ -250605,6 +250629,7 @@ async function meshNodeSlotsSet(ctx, args) {
       replacement: true,
       previousSlots: current,
       slots: proposed,
+      ...hostWrite ? { hostWrite } : {},
       nextAction: 'Verify with mesh_node_slots (action "list"). Slot-fitness routing picks these up on the next queue drain.'
     }, null, 2);
   } catch (e) {
