@@ -101,4 +101,6 @@ export const GIT_HEAVY_SUITES: string[] = [
   // Driver result artifacts: real repos to prove the generated files never dirty the checkout.
   'test/drivers/driver-artifacts.test.ts',
   'test/commands/driver-artifacts-e2e.test.ts',
+  // Browser driver package through DriverService: the screenshot artifact path runs git.
+  'test/drivers/browser-driver-package.test.ts',
 ];
