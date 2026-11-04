@@ -67,6 +67,7 @@ describe('mergeIncomingHandoffNode', () => {
         expect(mergeIncomingHandoffNode({ workspace: '/local' }, { daemonId: HOST }, { aliased: true, selfDaemonId: SELF })).toEqual({ ok: false, error: changed });
         expect(mergeIncomingHandoffNode({ workspace: '/local' }, { daemonId: SELF }, { aliased: false, selfDaemonId: SELF }).ok).toBe(false);
         expect(mergeIncomingHandoffNode({ daemonId: SELF }, {}, { aliased: true, selfDaemonId: SELF }).ok).toBe(false);
+        expect(mergeIncomingHandoffNode({ workspace: '/local' }, { id: 'n', workspace: '/snap' }, { aliased: false, selfDaemonId: SELF })).toEqual({ ok: true, node: { id: 'n', workspace: '/local' } });
     });
 });
 

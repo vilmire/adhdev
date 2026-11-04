@@ -84,6 +84,8 @@ export function mergeIncomingHandoffNode(
         if (!daemonIdsEquivalent(localId, incomingId)) return { ok: false, error: IDENTITY_CHANGED };
         return { ok: true, node: { ...incoming, workspace: local.workspace } };
     }
+    // A roster node recorded without an owner on both sides claims no identity, so nothing changed.
+    if (!localId && !incomingId) return { ok: true, node: { ...incoming, workspace: local.workspace } };
     if (localId || !incomingId) return { ok: false, error: IDENTITY_CHANGED };
     if (!opts.aliased || !opts.selfDaemonId || !daemonIdsEquivalent(incomingId, opts.selfDaemonId)) return { ok: false, error: IDENTITY_CHANGED };
     return { ok: true, node: { ...incoming, daemonId: incomingId, workspace: local.workspace } };

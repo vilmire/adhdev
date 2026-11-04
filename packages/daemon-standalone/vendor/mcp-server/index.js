@@ -152059,6 +152059,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         if (!daemonIdsEquivalent5(localId, incomingId)) return { ok: false, error: IDENTITY_CHANGED };
         return { ok: true, node: { ...incoming, workspace: local.workspace } };
       }
+      if (!localId && !incomingId) return { ok: true, node: { ...incoming, workspace: local.workspace } };
       if (localId || !incomingId) return { ok: false, error: IDENTITY_CHANGED };
       if (!opts.aliased || !opts.selfDaemonId || !daemonIdsEquivalent5(incomingId, opts.selfDaemonId)) return { ok: false, error: IDENTITY_CHANGED };
       return { ok: true, node: { ...incoming, daemonId: incomingId, workspace: local.workspace } };
