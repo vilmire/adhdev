@@ -83030,19 +83030,43 @@ ${block3.text}`,
       const customStore = isThreeArg && credentialOrStore && typeof credentialOrStore.findAssignedBySession === "function" ? credentialOrStore : null;
       const direct = verifyWorkerTaskToken(credential.token);
       if (direct) {
-        return {
+        return followStageRevisionAttempt({
           token: direct.token,
           meshId: direct.meshId,
           taskId: direct.taskId,
           ...direct.attemptId ? { attemptId: direct.attemptId } : {},
           sessionId: direct.sessionId || "",
           ...direct.nodeId ? { nodeId: direct.nodeId } : {}
-        };
+        }, customStore);
       }
-      return exchangeWorkerSessionBind(
+      const exchanged = exchangeWorkerSessionBind(
         credential.bind,
         (meshId, sessionId) => resolveCurrentTaskForSession(meshId, sessionId, customStore)
       );
+      return exchanged ? followStageRevisionAttempt(exchanged, customStore) : null;
+    }
+    function followStageRevisionAttempt(identity5, customStore) {
+      if (!identity5.attemptId || !identity5.sessionId) return identity5;
+      try {
+        const store5 = customStore ?? MeshRuntimeStore.getInstance();
+        const current5 = store5.turnStore().findLatestAttemptForTask(identity5.meshId, identity5.taskId);
+        if (!current5 || current5.terminal || current5.attemptId === identity5.attemptId) return identity5;
+        if (!current5.sessionId || !sessionIdsEquivalent(current5.sessionId, identity5.sessionId)) return identity5;
+        if (!store5.findQueueEntryById(identity5.meshId, identity5.taskId)?.stageState) return identity5;
+        let token = findWorkerTaskTokenForSession(identity5.meshId, identity5.taskId, identity5.sessionId, current5.attemptId);
+        if (token?.attemptId !== current5.attemptId) {
+          token = mintWorkerTaskToken({
+            meshId: identity5.meshId,
+            taskId: identity5.taskId,
+            attemptId: current5.attemptId,
+            sessionId: identity5.sessionId,
+            ...identity5.nodeId ? { nodeId: identity5.nodeId } : {}
+          });
+        }
+        return { ...identity5, token: token.token, attemptId: current5.attemptId };
+      } catch {
+        return identity5;
+      }
     }
     function classifyUnresolvedWorkerCredential(credential) {
       const bind = typeof credential.bind === "string" ? credential.bind.trim() : "";
