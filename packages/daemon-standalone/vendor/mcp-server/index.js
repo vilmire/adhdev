@@ -120751,6 +120751,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         init_risk_class();
         init_input_schema();
         init_driver_artifacts();
+        init_logger();
         refused2 = (code) => ({ success: false, code });
         LEASE_MS = 30 * 6e4;
         DriverService = class {
@@ -120995,6 +120996,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
               return { ...refused2("driver_execution_failed"), invocationId: record8.invocationId, error: record8.error };
             } finally {
               record8.completedAt = this.now();
+              LOG.info("Driver", `[driver] invoke type=${input.type} action=${input.action} risk=${action2.risk} caller=${approval ? "owner" : "worker"} status=${record8.status} artifacts=${record8.artifacts?.length ?? 0} ms=${record8.completedAt - record8.startedAt}`);
             }
           }
           async resolveAction(id4, decision, source2) {

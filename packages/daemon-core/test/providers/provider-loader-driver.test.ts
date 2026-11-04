@@ -10,7 +10,7 @@ import sampleSnapshot from './fixtures/driver-browser-playwright.v1.json';
 
 // G1a-1 e3d8b3e4c sample. Prefer the owner copy in the cloud workspace;
 // the snapshot keeps this OSS test runnable without the sibling submodule.
-const samplePath = new URL('../../../../../adhdev-providers/examples/driver/browser-playwright/provider.v1.json', import.meta.url);
+const samplePath = new URL('../../../../../adhdev-providers/driver/browser-playwright/provider.v1.json', import.meta.url);
 const sample = existsSync(samplePath) ? JSON.parse(readFileSync(samplePath, 'utf8')) : sampleSnapshot;
 
 class DriverTestLoader extends ProviderLoader {

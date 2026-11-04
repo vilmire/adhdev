@@ -12,6 +12,7 @@ import { DriverActionStaging, type DriverWorkerIdentity, type DriverOwnerSource 
 import { deriveDriverRiskClass } from './risk-class.js';
 import { readDriverInputSchema, validateDriverArgs } from './input-schema.js';
 import { captureDriverArtifacts, type DriverArtifactPort } from './driver-artifacts.js';
+import { LOG } from '../logging/logger.js';
 
 export type DriverInstanceState = 'discovered' | 'validated' | 'installed' | 'approved' | 'ready' | 'running' | 'stopped' | 'failed' | 'removed';
 type ManagedClient = DriverMcpClient & { start(): Promise<void>; state: string };
@@ -230,7 +231,11 @@ export class DriverService {
             instance.state = instance.process?.state === 'failed' ? 'failed' : 'stopped';
             record.status = 'failed'; record.error = error instanceof Error ? error.message : String(error);
             return { ...refused('driver_execution_failed'), invocationId: record.invocationId, error: record.error };
-        } finally { record.completedAt = this.now(); }
+        } finally {
+            record.completedAt = this.now();
+            // One greppable usage line per call: the driver usage metric (docs/design/2026-11-03-browser-driver.md).
+            LOG.info('Driver', `[driver] invoke type=${input.type} action=${input.action} risk=${action.risk} caller=${approval ? 'owner' : 'worker'} status=${record.status} artifacts=${record.artifacts?.length ?? 0} ms=${record.completedAt - record.startedAt}`);
+        }
     }
     async resolveAction(id: string, decision: 'apply' | 'discard', source: DriverOwnerSource): Promise<DriverReply> {
         if (!['p2p', 'ws', 'standalone'].includes(source)) return refused('COMMAND_SOURCE_REJECTED');

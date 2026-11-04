@@ -3,23 +3,201 @@
   "type": "browser-playwright",
   "category": "driver",
   "name": "Browser (Playwright MCP)",
-  "providerVersion": "1.0.0",
+  "providerVersion": "1.1.0",
   "publisher": "ADHDev",
-  "compatibility": { "driverApi": "^1.0.0" },
+  "compatibility": {
+    "driverApi": "^1.0.0"
+  },
   "runtime": {
     "kind": "mcp-stdio",
     "command": "node",
-    "args": ["./bin/browser-server.js"],
-    "platforms": ["win32", "darwin", "linux"],
-    "startupTimeoutMs": 15000,
-    "idleStopMs": 600000
+    "args": [
+      "./bin/browser-server.js"
+    ],
+    "platforms": [
+      "win32",
+      "darwin",
+      "linux"
+    ],
+    "startupTimeoutMs": 60000,
+    "idleStopMs": 600000,
+    "env": [
+      "ADHDEV_BROWSER_ALLOWED_ORIGINS",
+      "ADHDEV_BROWSER_ALLOW_PRIVATE"
+    ]
   },
   "actions": [
-    { "id": "navigate", "tool": "browser_navigate", "risk": "write", "inputSchema": "./schemas/navigate.input.json" },
-    { "id": "snapshot", "tool": "browser_snapshot", "risk": "read" },
-    { "id": "screenshot", "tool": "browser_take_screenshot", "risk": "read", "inputSchema": "./schemas/screenshot.input.json" }
+    {
+      "id": "navigate",
+      "tool": "browser_navigate",
+      "risk": "write",
+      "inputSchema": "./schemas/navigate.input.json"
+    },
+    {
+      "id": "back",
+      "tool": "browser_navigate_back",
+      "risk": "write",
+      "inputSchema": "./schemas/back.input.json"
+    },
+    {
+      "id": "snapshot",
+      "tool": "browser_snapshot",
+      "risk": "read",
+      "inputSchema": "./schemas/snapshot.input.json"
+    },
+    {
+      "id": "find",
+      "tool": "browser_find",
+      "risk": "read",
+      "inputSchema": "./schemas/find.input.json"
+    },
+    {
+      "id": "screenshot",
+      "tool": "browser_take_screenshot",
+      "risk": "read",
+      "inputSchema": "./schemas/screenshot.input.json"
+    },
+    {
+      "id": "console",
+      "tool": "browser_console_messages",
+      "risk": "read",
+      "inputSchema": "./schemas/console.input.json"
+    },
+    {
+      "id": "network",
+      "tool": "browser_network_requests",
+      "risk": "read",
+      "inputSchema": "./schemas/network.input.json"
+    },
+    {
+      "id": "network_request",
+      "tool": "browser_network_request",
+      "risk": "read",
+      "inputSchema": "./schemas/network_request.input.json"
+    },
+    {
+      "id": "wait_for",
+      "tool": "browser_wait_for",
+      "risk": "read",
+      "inputSchema": "./schemas/wait_for.input.json"
+    },
+    {
+      "id": "tabs",
+      "tool": "browser_tabs_list",
+      "risk": "read",
+      "inputSchema": "./schemas/tabs.input.json"
+    },
+    {
+      "id": "tab_new",
+      "tool": "browser_tab_new",
+      "risk": "write",
+      "inputSchema": "./schemas/tab_new.input.json"
+    },
+    {
+      "id": "tab_select",
+      "tool": "browser_tab_select",
+      "risk": "write",
+      "inputSchema": "./schemas/tab_select.input.json"
+    },
+    {
+      "id": "tab_close",
+      "tool": "browser_tab_close",
+      "risk": "write",
+      "inputSchema": "./schemas/tab_close.input.json"
+    },
+    {
+      "id": "click",
+      "tool": "browser_click",
+      "risk": "write",
+      "inputSchema": "./schemas/click.input.json"
+    },
+    {
+      "id": "hover",
+      "tool": "browser_hover",
+      "risk": "write",
+      "inputSchema": "./schemas/hover.input.json"
+    },
+    {
+      "id": "drag",
+      "tool": "browser_drag",
+      "risk": "write",
+      "inputSchema": "./schemas/drag.input.json"
+    },
+    {
+      "id": "type",
+      "tool": "browser_type",
+      "risk": "write",
+      "inputSchema": "./schemas/type.input.json"
+    },
+    {
+      "id": "fill_form",
+      "tool": "browser_fill_form",
+      "risk": "write",
+      "inputSchema": "./schemas/fill_form.input.json"
+    },
+    {
+      "id": "select_option",
+      "tool": "browser_select_option",
+      "risk": "write",
+      "inputSchema": "./schemas/select_option.input.json"
+    },
+    {
+      "id": "press_key",
+      "tool": "browser_press_key",
+      "risk": "write",
+      "inputSchema": "./schemas/press_key.input.json"
+    },
+    {
+      "id": "resize",
+      "tool": "browser_resize",
+      "risk": "write",
+      "inputSchema": "./schemas/resize.input.json"
+    },
+    {
+      "id": "dialog_dismiss",
+      "tool": "browser_dialog_dismiss",
+      "risk": "write",
+      "inputSchema": "./schemas/dialog_dismiss.input.json"
+    },
+    {
+      "id": "click_commit",
+      "tool": "browser_click_commit",
+      "risk": "destructive",
+      "inputSchema": "./schemas/click_commit.input.json"
+    },
+    {
+      "id": "type_commit",
+      "tool": "browser_type_commit",
+      "risk": "destructive",
+      "inputSchema": "./schemas/type_commit.input.json"
+    },
+    {
+      "id": "press_enter",
+      "tool": "browser_press_enter",
+      "risk": "destructive",
+      "inputSchema": "./schemas/press_enter.input.json"
+    },
+    {
+      "id": "dialog_accept",
+      "tool": "browser_dialog_accept",
+      "risk": "destructive",
+      "inputSchema": "./schemas/dialog_accept.input.json"
+    }
   ],
-  "resources": [{ "key": "profile", "lease": "session" }],
+  "resources": [
+    {
+      "key": "profile",
+      "lease": "session"
+    }
+  ],
   "guidance": "./guidance/usage.md",
-  "declaredAccess": { "network": ["*"], "filesystem": ["workspace"], "desktopControl": false }
+  "declaredAccess": {
+    "network": [
+      "*"
+    ],
+    "filesystem": [
+      "workspace"
+    ],
+    "desktopControl": false
+  }
 }
