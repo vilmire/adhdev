@@ -24,6 +24,7 @@
 import {
     ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON,
     PROVIDER_QUOTA_MONTHLY_LOW_SKIP_REASON,
+    PROVIDER_QUOTA_RESET_UNCONFIRMED_SKIP_REASON,
     PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON,
     PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON,
     type ProviderQuotaGateBlock,
@@ -54,12 +55,21 @@ export function isQuotaGateHoldReason(reason: string | undefined): boolean {
         && (reason.startsWith(ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON) || reason.startsWith('provider_quota_'));
 }
 
-/** Reserve blocks with headroom left are overridable; provider-level exhaustion is not. */
-export function quotaBlockOverridable(block: Pick<ProviderQuotaGateBlock, 'reason' | 'remainingPercent'>): boolean {
+/** Reserve blocks with headroom left are the only blocks a task's provider pin passes on its own (owner decision A, 2026-11-03). */
+export function quotaBlockPinOverridable(block: Pick<ProviderQuotaGateBlock, 'reason' | 'remainingPercent'>): boolean {
     return (block.reason === PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON
         || block.reason === PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON
         || block.reason === PROVIDER_QUOTA_MONTHLY_LOW_SKIP_REASON)
         && block.remainingPercent >= QUOTA_HARD_LIMIT_PERCENT;
+}
+
+/**
+ * What the OWNER may waive for one task: a reserve block with headroom left, or a confirmed exhaustion
+ * whose reset passed with no new measurement (the owner's run is the probe that produces it). A provider
+ * still inside its exhausted window, or at a model group's hard limit, is never overridable.
+ */
+export function quotaBlockOverridable(block: Pick<ProviderQuotaGateBlock, 'reason' | 'remainingPercent'>): boolean {
+    return quotaBlockPinOverridable(block) || block.reason === PROVIDER_QUOTA_RESET_UNCONFIRMED_SKIP_REASON;
 }
 
 export function hasQuotaOverride(task: Pick<MeshWorkQueueEntry, 'quotaGateOverride'> | null | undefined): boolean {

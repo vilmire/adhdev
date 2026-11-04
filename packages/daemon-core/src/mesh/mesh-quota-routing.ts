@@ -106,6 +106,7 @@
  */
 import { type MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 import { resolveQuotaReserve } from '../quota/quota-reserve.js';
+import { cliRateLimitHoldActive, readCliRateLimitEvidence, windowResetUnconfirmed } from '../quota/exhaustion-hold.js';
 import { recordQuotaReserveBlock } from '../quota/quota-reserve-metrics.js';
 import { quotaAccountLineage } from '../quota/account-lineage.js';
 import {
@@ -137,6 +138,10 @@ export type QuotaRankingAxis = 'session' | 'weekly' | 'monthly';
  *  semantics as the window gates — the quota resets on its own — so this is
  *  deliberately NOT actionable either. */
 export const PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON = 'provider_quota_exhausted';
+/** A window (or the CLI itself) was CONFIRMED exhausted and only the clock says it reset: no measurement
+ *  taken after the reset exists yet. Elapsed time alone never unblocks (quota/exhaustion-hold.ts); the owner
+ *  can waive it for one task, which is the probe that produces the new measurement. */
+export const PROVIDER_QUOTA_RESET_UNCONFIRMED_SKIP_REASON = 'provider_quota_reset_unconfirmed';
 
 /** Skip reason reported when a node HAS usable provider candidates but EVERY
  *  one of them is quota-gated. Kept distinct from 'provider_priority_unusable'
@@ -418,6 +423,29 @@ export function evaluateProviderQuotaGate(
         return null; // never reported → unknown, not blocked
     }
     const { facts, quota } = entry;
+    // CLI EVIDENCE: a session of this provider printed its own "usage limit reached". That is a confirmed
+    // fact about the account, stronger than any percentage, and only a measurement taken after it can end it.
+    const cliEvidence = readCliRateLimitEvidence(quota);
+    if (cliEvidence && cliRateLimitHoldActive(cliEvidence, quota)) {
+        const resetPassed = cliEvidence.resetsAt !== undefined && now >= cliEvidence.resetsAt;
+        return {
+            reason: resetPassed ? PROVIDER_QUOTA_RESET_UNCONFIRMED_SKIP_REASON : PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON,
+            window: 'unknown',
+            remainingPercent: 0,
+            thresholdPercent: 0,
+            ...(cliEvidence.resetsAt !== undefined ? { resetsAt: cliEvidence.resetsAt } : {}),
+        };
+    }
+    // MODEL-UNSPECIFIED Antigravity admission: the provider headline is the WORST pool, so a Gemini slot with
+    // headroom was refused because Claude/GPT in the same account was low. With no model to judge, admit when
+    // ANY pool is clear; the claim gate re-judges the session's live model once it is known.
+    if (providerType === 'antigravity-cli' && !antigravityPoolFromLeadingLabel(target?.model)) {
+        const pools = ['Gemini', 'Claude'].filter(model => quotaWindowsForGateTarget(providerType, quota, { model }));
+        if (pools.length >= 2) {
+            const blocks = pools.map(model => evaluateProviderQuotaGate(node, providerType, policy, now, context, { model }));
+            return blocks.some(block => !block) ? null : blocks[0];
+        }
+    }
     const targetWindows = quotaWindowsForGateTarget(providerType, quota, target);
     const sessionWindow = targetWindows ? targetWindows.session : quota.session;
     const weeklyWindow = targetWindows ? targetWindows.weekly : quota.weekly;
@@ -468,6 +496,24 @@ export function evaluateProviderQuotaGate(
     // describes a previous window and must never be used to deny a claim.
     if (sessionTrustworthy && isWindowExpired(sessionWindow, facts, quota, now)) sessionTrustworthy = false;
     if (weeklyTrustworthy && isWindowExpired(weeklyWindow, facts, quota, now)) weeklyTrustworthy = false;
+    // CONFIRMED-EXHAUSTED window whose reset passed with no measurement since: elapsed time does not unblock.
+    // Unknown lookups (expired token, ...) carry the ORIGINAL updatedAt forward, so they keep this hold too.
+    if (quota.status === 'ok' || (quota as any).metadata?.lastGoodWindows === true) {
+        const ageMs = quotaSnapshotAgeMs(facts, quota, now);
+        const unconfirmed = Number.isFinite(ageMs) ? windowResetUnconfirmed([
+            ['session', sessionWindow], ['weekly', weeklyWindow], ['monthly', monthlyWindow],
+        ], quota, Number(quota.updatedAt) + ageMs) : null;
+        if (unconfirmed) {
+            return {
+                reason: PROVIDER_QUOTA_RESET_UNCONFIRMED_SKIP_REASON,
+                window: unconfirmed.window,
+                remainingPercent: 0,
+                thresholdPercent: 0,
+                resetsAt: unconfirmed.resetsAt,
+                ...(targetWindows ? { group: targetWindows.group } : {}),
+            };
+        }
+    }
     if (quota.status === 'ok' && !sessionTrustworthy && !weeklyTrustworthy && !monthlyTrustworthy) {
         if (!isQuotaSnapshotFresh(facts, quota, policy, now)) {
             logStaleQuotaFailOpen(node, providerType, facts, quota, policy, now, context);

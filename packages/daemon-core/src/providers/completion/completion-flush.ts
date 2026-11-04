@@ -30,6 +30,7 @@ import { resolveTranscriptAuthorityProfile } from '../transcript-evidence.js';
 import { isWeakCompletionEvidence } from '../../mesh/mesh-events-utils.js';
 import type { ProviderModule } from '../contracts.js';
 import { emitTurnEnd, type TurnEvidencePort } from '../turn-evidence-port.js';
+import { recordCliRateLimitEvidence } from '../../quota/refresh.js';
 import { classifyOwnAuthFailureOnlyReply, classifyOwnQuotaFailureOnlyReply } from '../spec/provider-output-attribution.js';
 import type { TurnAttemptRef, TurnEndBlockReason, NativeTurnOutcome } from '@adhdev/mesh-shared';
 
@@ -404,6 +405,15 @@ export function emitGeneratingCompleted(host: CompletionEmitHost, opts: {
     // and swaps in the returned `SummaryRef` (a remote-owned worker), so
     // `renderNotice` (turn-ledger/deliver.ts) reproduces the exact same
     // coordinator text that used to come from `buildProviderEvidence`.
+    // The CLI itself said "usage limit reached": record that on the quota cache so routing holds the
+    // provider (quota/exhaustion-hold.ts) even when its percentage reading says there is headroom.
+    // Same whole-reply rule as the verdict below — a summary that merely mentions a limit is untouched.
+    const nativeQuotaVerdict = host.turnEvidencePort && typeof summary === 'string' && summary
+        && !classifyOwnAuthFailureOnlyReply(host.type, summary)
+        ? classifyOwnQuotaFailureOnlyReply(host.type, summary) : null;
+    if (nativeQuotaVerdict === 'usage_limit_exceeded') {
+        try { recordCliRateLimitEvidence(host.type, { observedAt: Date.now() }); } catch { /* evidence is best-effort */ }
+    }
     if (host.turnEvidencePort) {
         emitTurnEnd(host.turnEvidencePort, {
             sessionId: host.instanceId,

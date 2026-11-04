@@ -149,6 +149,15 @@ export function classifyOwnAuthFailureOnlyReply(cliType: string, reply: string):
  * No captured provider text or error id leaves this classifier.
  */
 export function classifyOwnQuotaFailureOnlyReply(cliType: string, reply: string): 'usage_limit_exceeded' | null {
+    if (cliType === 'claude-cli' && reply.length <= 400) {
+        // Claude Code's own limit banner as the WHOLE reply ("Claude usage limit reached. Your limit will reset at
+        // 10:40am (Asia/Seoul)." / "5-hour limit reached ∙ resets 10:40am"). Reset time zones are not parsed here:
+        // the hold ends on a measurement taken after the report, never on a guessed clock.
+        const banner = stripAnsi(reply).replace(/\s+/g, ' ').trim();
+        return /^(?:[⎿●⏺!⚠]\s*)?(?:claude (?:ai )?)?(?:(?:usage|5-hour|five-hour|weekly|session|opus) )?limit reached(?:\s*[.∙·|-]\s*(?:your limit will reset|resets?)\b[^\n]{0,120})?\.?$/i.test(banner)
+            || /^(?:[⎿●⏺!⚠]\s*)?you(?:'|’)ve hit your (?:usage |session |weekly |5-hour )?limit(?:\s*[.∙·|-]\s*resets?\b[^\n]{0,120})?\.?$/i.test(banner)
+            ? 'usage_limit_exceeded' : null;
+    }
     if (cliType !== 'antigravity-cli' || reply.length > 2048) return null;
     const text = stripAnsi(reply).replace(/\s+/g, ' ').trim();
     return /^(?:… \d+ more actions \([\d a-z,:]+\) … )?⚠ Individual quota reached\. Please upgrade your subscription to increase your limits\. Resets in (?:\d+h)?(?:\d+m)?\d+s\.(?: Error ID: [a-f0-9-]{8,80})?$/i.test(text)
