@@ -734,6 +734,27 @@ function settleUnreachableWriter(draft: Draft, stop: NonNullable<TurnAttempt['da
 
 /** Stopping is exclusive and nonterminal. All ordinary lifecycle proposals
  * remain evidence; neither a late idle nor an operator requeue releases it. */
+/** The current generation's report, when it arrived after this attempt's writer stop began. */
+export function reportHeldDuringStop(a: Pick<TurnAttempt, 'generation' | 'data'>): NonNullable<TurnAttempt['data']['report']> | null {
+    const report = a.data.report, stop = a.data.writerStop;
+    return report && stop && report.generation === a.generation && report.at >= stop.requestedAt ? report : null;
+}
+
+/**
+ * A worker that reported while its stop was pending finished the work: settling the
+ * stop ends the task with that report instead of running it again. Only a scheduler
+ * ceiling yields to it; an operator cancel or an adopted terminal stands. A report
+ * from before the stop began keeps its reclaim, since the writer died after filing it.
+ */
+function adoptReportHeldDuringStop(a: TurnAttempt, stop: NonNullable<TurnAttempt['data']['writerStop']>): void {
+    const report = reportHeldDuringStop(a);
+    if (!report) return;
+    if (stop.terminal && (stop.terminal.adoptSessionId || stop.terminal.source !== 'scheduler')) return;
+    stop.reason = 'worker_reported';
+    stop.terminal = { outcome: report.outcome, strength: 'tool_report', source: 'worker_tool',
+        ...(report.summary ? { summary: report.summary } : {}), textEventId: report.eventId };
+}
+
 function reduceStopping(input: ReduceInput): ReduceResult {
     const a = cloneAttempt(input.attempt!), ev = input.evidence;
     a.data.writerStop = { ...a.data.writerStop! };
@@ -750,9 +771,11 @@ function reduceStopping(input: ReduceInput): ReduceResult {
         stop.terminal = { outcome: 'cancelled', strength: 'genuine', source: ev.source };
     }
     if (input.writerUnreachable && !input.stopConfirmed && ev.kind !== 'cancel') {
+        adoptReportHeldDuringStop(a, stop);
         settleUnreachableWriter(draft, stop, input.writerUnreachable);
     } else if (input.stopConfirmed) {
         stop.confirmed = true;
+        adoptReportHeldDuringStop(a, stop);
         if (stop.terminal) {
             if (stop.terminal.adoptSessionId) {
                 a.sessionId = stop.terminal.adoptSessionId;

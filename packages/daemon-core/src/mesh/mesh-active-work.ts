@@ -8,6 +8,8 @@ import { cancelDirectDispatchAttempts } from './mesh-work-queue.js';
 import { meshNodeIdMatches, machineCoreFromDaemonId, sessionIdsEquivalent, readString } from '@adhdev/mesh-shared';
 import { resolveTurnAttemptRow, presentationFromAttemptRow, type TurnStage } from './mesh-turn-presentation.js';
 import { isWeakCompletionEvidence } from './mesh-events-utils.js';
+import { MeshRuntimeStore } from './mesh-runtime-store.js';
+import { reportHeldDuringStop } from './turn-ledger/reducer.js';
 
 export type MeshActiveWorkSource = 'queue' | 'direct';
 export type MeshActiveWorkStatus = 'pending' | 'assigned' | 'generating' | 'idle' | 'failed' | 'awaiting_approval' | 'awaiting_choice' | 'finalizing' | 'stopping';
@@ -20,7 +22,7 @@ export type MeshActiveWorkStatus = 'pending' | 'assigned' | 'generating' | 'idle
  * until the reducer commits terminal. Returns null when no attempt exists
  * (legacy behavior keeps governing — the ONLY fallback condition).
  */
-function turnProjectionActiveWorkStatus(meshId: string, taskId: string): { status: MeshActiveWorkStatus; attemptId: string; stage: TurnStage } | null {
+function turnProjectionActiveWorkStatus(meshId: string, taskId: string): { status: MeshActiveWorkStatus; attemptId: string; stage: TurnStage; stopping?: MeshActiveWorkStopping } | null {
     const row = resolveTurnAttemptRow({ meshId, taskId });
     if (!row) return null;
     const presentation = presentationFromAttemptRow(row);
@@ -40,7 +42,7 @@ function turnProjectionActiveWorkStatus(meshId: string, taskId: string): { statu
         case 'finalizing':
             return { status: 'finalizing', attemptId: presentation.attemptId!, stage };
         case 'stopping':
-            return { status: 'stopping', attemptId: presentation.attemptId!, stage };
+            return { status: 'stopping', attemptId: presentation.attemptId!, stage, ...stoppingDetail(presentation.attemptId!) };
         case 'completed':
         case 'blocked':
             return { status: 'idle', attemptId: presentation.attemptId!, stage };
@@ -50,7 +52,17 @@ function turnProjectionActiveWorkStatus(meshId: string, taskId: string): { statu
     }
 }
 
+/** Why a task sits in `stopping`: without this a finished worker reads as still running. */
+export interface MeshActiveWorkStopping { reason: string; since: number; tries: number; reportHeld: boolean }
+
+function stoppingDetail(attemptId: string): { stopping?: MeshActiveWorkStopping } {
+    const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(attemptId);
+    const stop = attempt?.data.writerStop;
+    return attempt && stop ? { stopping: { reason: stop.reason, since: stop.requestedAt, tries: stop.tries, reportHeld: !!reportHeldDuringStop(attempt) } } : {};
+}
+
 export interface MeshActiveWorkRecord {
+    stopping?: MeshActiveWorkStopping;
     hold?: MeshQueueHoldView;
     taskId: string;
     source: MeshActiveWorkSource;
@@ -860,7 +872,7 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
             source: 'queue',
             status: queueStatus,
             providerApproval: queueLive.providerApproval,
-            ...(turnOverlay ? { attemptId: turnOverlay.attemptId, turnStage: turnOverlay.stage } : {}),
+            ...(turnOverlay ? { attemptId: turnOverlay.attemptId, turnStage: turnOverlay.stage, ...(turnOverlay.stopping ? { stopping: turnOverlay.stopping } : {}) } : {}),
             nodeId: queueNodeId,
             sessionId: queueSessionId,
             taskTitle: title,
@@ -912,7 +924,7 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
                 source: 'direct',
                 status,
                 providerApproval: live.providerApproval,
-                ...(turnOverlay ? { attemptId: turnOverlay.attemptId, turnStage: turnOverlay.stage } : {}),
+                ...(turnOverlay ? { attemptId: turnOverlay.attemptId, turnStage: turnOverlay.stage, ...(turnOverlay.stopping ? { stopping: turnOverlay.stopping } : {}) } : {}),
                 nodeId: dispatch.nodeId ?? undefined,
                 sessionId: dispatch.sessionId ?? undefined,
                 providerType: dispatch.providerType ?? undefined,

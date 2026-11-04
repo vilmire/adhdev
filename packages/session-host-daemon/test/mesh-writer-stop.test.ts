@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SessionHostRecord, StopMeshWriterPayload } from '@adhdev/session-host-core';
 import { SessionHostServer } from '../src/server.js';
+import { PtySessionRuntime } from '../src/runtime.js';
 
 const assignment = { meshId: 'mesh-writer', nodeId: 'node-worker', taskId: 'task-worker', attemptId: 'attempt-worker', generation: 1, dispatchNonce: 2, ownerDaemonId: 'daemon-owner' };
 const payload: StopMeshWriterPayload = { sessionId: 'session-worker', clientId: 'client-source', providerType: 'antigravity-cli', runtimeKey: 'native-incarnation-1', startedAt: 123456, osPid: 417, assignment };
@@ -62,3 +63,17 @@ for (const launchRecord of [{ launchedBy: 'assistant' }, { roleLaunch: { role: '
     });
   });
 }
+
+test('a Windows runtime stops without a signal, which node-pty refuses there', () => {
+  const kills: unknown[][] = [];
+  const runtime = Object.create(PtySessionRuntime.prototype);
+  runtime.ptyProcess = { kill: (...args: unknown[]) => kills.push(args) };
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  try {
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+    runtime.stop('SIGKILL');
+    Object.defineProperty(process, 'platform', { ...platform, value: 'linux' });
+    runtime.stop('SIGKILL');
+  } finally { Object.defineProperty(process, 'platform', platform); }
+  assert.deepEqual(kills, [[], ['SIGKILL']]);
+});

@@ -61,7 +61,7 @@ import { DEFAULT_TURN_POLICY, type TurnPolicy } from './policy.js';
 import type { TurnLedger } from './ledger.js';
 import { parseDeliveryClaimId, type TurnEventRow } from './store.js';
 import type { TurnAttempt } from './types.js';
-import { isUnredeliveredDirectFailure } from './reducer.js';
+import { isUnredeliveredDirectFailure, reportHeldDuringStop } from './reducer.js';
 import { renderTurnNotify, type FormatStopReason, type TurnNotifyRefs, type TurnNotifyScalars } from './format.js';
 import { routeNotice, type CoordinatorSessionView } from './routing.js';
 import { evaluateNotifySuppression, isHoldableNotice, noticeWakeKey, type NotifySuppression } from './suppression.js';
@@ -448,6 +448,7 @@ export function renderNotice(ctx: RenderContext, meshId: string, entry: Record<s
         : notify;
     const scalars: TurnNotifyScalars = {
         ...(attempt?.state === 'stopping' ? { writerCheckpointPending: true } : {}),
+        ...(attempt?.state === 'stopping' && reportHeldDuringStop(attempt) ? { writerReportHeld: true } : {}),
         nodeLabel: nodeLabelFor(attempt, notice),
         ...(attempt?.taskId ? { taskId: attempt.taskId } : str(entry.taskId) ? { taskId: str(entry.taskId)! } : {}),
         ...(attempt ? { attemptId: attempt.attemptId, generation: attempt.generation, sessionId: attempt.sessionId } : {}),

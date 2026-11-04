@@ -392,6 +392,25 @@ export function fenceWorkerReportOnLedger(
 
 // ─── Report acceptance ──────────────────────────────────────────────────
 
+function workerReportEnvelope(report: WorkerCompletionReport, identity: { nodeId?: string }, completedAt: string) {
+    return {
+        finalSummary: report.summary,
+        ...(report.touchedFiles?.length ? { artifacts: { touchedFiles: report.touchedFiles } } : {}),
+        evidence: {
+            // The grade this report earns (design §4 등급표): declared by
+            // the worker, so it is complete by construction and carries
+            // no truncation risk the way a screen scrape does.
+            summarySource: 'tool_report',
+            mayBeTruncated: false,
+            reportedOutcome: report.outcome,
+            ...(report.branchState ? { branchState: report.branchState } : {}),
+            ...(report.blockers?.length ? { blockers: report.blockers.join('; ') } : {}),
+        },
+        ...(identity.nodeId ? { nodeId: identity.nodeId } : {}),
+        completedAt,
+    };
+}
+
 export type WorkerReportRefusal =
     /** No valid token/bind, or the session holds no assigned task. */
     | 'unauthenticated'
@@ -998,8 +1017,12 @@ export function acceptWorkerCompletionReportForIdentity(
     if (evidenceAttemptId && store.turnStore().getAttempt(evidenceAttemptId)?.state === 'stopping') {
         const ledger = getActiveTurnLedger();
         if (!ledger) return { accepted: false, refusal: 'rejected_by_reducer', detail: 'checkpoint_pending:no_owner_ledger' };
+        // Held for the settle: the writer may be dead by then and never re-send, so the
+        // ledger keeps the whole result and the review pipeline gets its report now.
+        stashStageReportForIdentity(identity, report, nowMs);
         observeAcceptedWorkerReport(ledger, { ...identity, outcome: report.outcome, summary: report.summary,
-            hasHandoffNotes: !!report.handoffNotes, atMs: nowMs });
+            hasHandoffNotes: !!report.handoffNotes, touchedFileCount: report.touchedFiles?.length ?? 0,
+            ...(report.branchState ? { branchState: report.branchState } : {}), atMs: nowMs, envelope: workerReportEnvelope(report, identity, nowIso) });
         return { accepted: false, refusal: 'rejected_by_reducer', detail: 'checkpoint_pending:report NOT accepted yet; physical writer stop is unconfirmed (the worker re-sends it after the stop settles)' };
     }
     let commit: ReturnType<typeof commitTaskTerminal>;
@@ -1018,22 +1041,7 @@ export function acceptWorkerCompletionReportForIdentity(
             reason: report.outcome === 'blocked'
                 ? `worker_reported_blocked:${(report.blockers || []).length}`
                 : `worker_reported:${report.outcome}`,
-            envelope: {
-                finalSummary: report.summary,
-                ...(report.touchedFiles?.length ? { artifacts: { touchedFiles: report.touchedFiles } } : {}),
-                evidence: {
-                    // The grade this report earns (design §4 등급표): declared by
-                    // the worker, so it is complete by construction and carries
-                    // no truncation risk the way a screen scrape does.
-                    summarySource: 'tool_report',
-                    mayBeTruncated: false,
-                    reportedOutcome: report.outcome,
-                    ...(report.branchState ? { branchState: report.branchState } : {}),
-                    ...(report.blockers?.length ? { blockers: report.blockers.join('; ') } : {}),
-                },
-                ...(identity.nodeId ? { nodeId: identity.nodeId } : {}),
-                completedAt: nowIso,
-            },
+            envelope: workerReportEnvelope(report, identity, nowIso),
         });
     } catch (e: any) {
         LOG.warn('WorkerReport', `Terminal commit threw for task ${identity.taskId}: ${e?.message || e}`);
@@ -1177,6 +1185,16 @@ export function recordOrHoldHandoffNote(
 }
 
 /** Publish a held strict note once its result became usable (completion or later revalidation). */
+/** A report held through a writer stop committed on settle: run the assessment its acceptance skipped. */
+export function assessReportCommittedOnSettle(input: { meshId: string; taskId: string; attemptId: string; sessionId: string }, nowMs: number): void {
+    try {
+        const contract = contractAfterAcceptedCompletion(input);
+        if (contract?.publishHandoff) publishHeldHandoffNote(contract.publishHandoff, nowMs);
+    } catch (e: any) {
+        LOG.warn('WorkerReport', `Contract assessment after settle for task ${input.taskId} failed (result stays held): ${e?.message || e}`);
+    }
+}
+
 export function publishHeldHandoffNote(held: HeldHandoffNote, nowMs: number): void {
     let notes: WorkerHandoffNotes;
     try { notes = JSON.parse(held.notesJson) as WorkerHandoffNotes; } catch { return; }

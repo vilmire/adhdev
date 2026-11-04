@@ -20,6 +20,8 @@ import {
     revokeWorkerSessionBindsForSession,
     revokeWorkerTaskToken,
 } from '../worker-mcp-isolation.js';
+import { assessReportCommittedOnSettle } from '../worker-report.js';
+import { afterBridgeCommit } from '../worker-bridge-transaction.js';
 import { publishMeshTopicEntry } from '../../seqscribe/mesh-publisher.js';
 import { LOG } from '../../logging/logger.js';
 import { resolveTurnPolicy, type TurnPolicy } from './policy.js';
@@ -47,6 +49,10 @@ export const meshRuntimeTxnHost: TurnTxnHost = {
             ...(ctx.envelope ? { envelope: ctx.envelope } : {}),
         });
         if (result.transitioned) propagateLedgerDependencyFailure(effect.meshId, effect.taskId, effect.outcome, ctx.attempt.terminal?.reason);
+        if (result.transitioned && ctx.attempt.terminal?.reason === 'worker_reported' && ctx.attempt.data.writerStop?.confirmed) {
+            const held = { meshId: effect.meshId, taskId: effect.taskId, attemptId: ctx.attempt.attemptId, sessionId: ctx.attempt.sessionId };
+            afterBridgeCommit(MeshRuntimeStore.getInstance().db, () => assessReportCommittedOnSettle(held, ctx.nowMs));
+        }
         return { transitioned: result.transitioned };
     },
 };

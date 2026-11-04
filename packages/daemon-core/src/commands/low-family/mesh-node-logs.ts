@@ -11,6 +11,7 @@
 import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { readDaemonLogTail, MAX_TAIL_BYTES, MAX_GREP_PATTERN_LENGTH } from '../../logging/log-tail-reader.js';
 import { redactLogLines } from '../../logging/log-redactor.js';
+import { captureDaemonCpuProfile } from '../../process/daemon-cpu-profile.js';
 import type { CommandRouterResult } from '../router.js';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 import { defineCommandSpecs } from '../command-registry.js';
@@ -25,6 +26,15 @@ import { unwrapMeshRelayResult } from '../mesh-relay-result.js';
 export const MESH_NODE_LOGS_TIMEOUT_MS = 20_000;
 
 export const meshNodeLogsHandlers: Record<string, LowFamilyHandler> = {
+    get_daemon_cpu_profile: async (_ctx: LowFamilyContext, args: any) => {
+        const seconds = Number(args?.seconds);
+        try {
+            const summary = await captureDaemonCpuProfile(Number.isFinite(seconds) && seconds > 0 ? seconds : 15);
+            return { success: true, pid: process.pid, nodeVersion: process.version, ...summary } as CommandRouterResult;
+        } catch (error: any) {
+            return { success: false, code: 'cpu_profile_failed', error: String(error?.message ?? error) } as CommandRouterResult;
+        }
+    },
     get_mesh_node_logs: async (ctx: LowFamilyContext, args: any) => {
         // Coordinator-driven remote log fetch: read a (possibly remote)
         // daemon's recent log tail over P2P instead of opening a session
@@ -131,4 +141,6 @@ export const meshNodeLogsHandlers: Record<string, LowFamilyHandler> = {
 
 export const meshNodeLogsSpecs = defineCommandSpecs('low', meshNodeLogsHandlers, {
     get_mesh_node_logs: { meshSender: 'any_member_mesh' },
+    // The owner's own surfaces only: a mesh peer has no reason to slow another machine down.
+    get_daemon_cpu_profile: { sources: ['ipc', 'standalone', 'p2p'] },
 }, { meshSender: 'authenticated_peer' });

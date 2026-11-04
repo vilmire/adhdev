@@ -491,7 +491,7 @@ var PtySessionRuntime = class {
   }
   stop(signal) {
     if (!this.ptyProcess) return;
-    if (signal) this.ptyProcess.kill(signal);
+    if (signal && process.platform !== "win32") this.ptyProcess.kill(signal);
     else this.ptyProcess.kill();
   }
   sendSignal(signal) {

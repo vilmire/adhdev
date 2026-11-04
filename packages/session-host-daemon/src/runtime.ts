@@ -447,7 +447,8 @@ export class PtySessionRuntime {
 
   stop(signal?: 'SIGKILL'): void {
     if (!this.ptyProcess) return;
-    if (signal) this.ptyProcess.kill(signal);
+    // node-pty throws on any signal on Windows; a plain kill there closes the ConPTY.
+    if (signal && process.platform !== 'win32') this.ptyProcess.kill(signal);
     else this.ptyProcess.kill();
   }
 

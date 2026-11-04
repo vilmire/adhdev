@@ -203,7 +203,7 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     'mark_session_seen', 'delete_notification', 'mark_notification_unread', 'daemon_upgrade', 'daemon_restart',
     'set_machine_nickname', 'get_quota_account_label', 'set_quota_account_label', 'get_quota_provider_enabled',
     'set_quota_provider_enabled', 'quota_reserve_get', 'quota_reserve_set', 'get_mesh_ledger', 'get_mesh_ledger_slice', 'list_mesh_notes',
-    'record_mesh_note', 'forget_mesh_note', 'get_mesh_node_logs',
+    'record_mesh_note', 'forget_mesh_note', 'get_mesh_node_logs', 'get_daemon_cpu_profile',
     'worker_bridge_prepare', 'worker_bridge_capabilities', 'worker_bridge_delivery', 'worker_bridge_control', 'worker_bridge_status', 'worker_bridge_verify',
     'worker_resolve_task', 'worker_report_completion',
     // NOT a legacy-table migration: F7 (2026-09-25) — a remote worker daemon

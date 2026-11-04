@@ -106,6 +106,8 @@ interface FormatRecoveryContext {
  */
 export interface TurnNotifyScalars {
     writerCheckpointPending?: boolean;
+    /** The worker already reported; the task ends with that report once the stop is confirmed. */
+    writerReportHeld?: boolean;
     taskId?: string;
     attemptId?: string;
     generation?: number;
@@ -446,7 +448,7 @@ function renderStopped(input: RenderTurnNotifyInput, missing: SummaryRef[]): str
 
 function renderNoProgress(input: RenderTurnNotifyInput): string {
     const s = input.scalars;
-    if (s.writerCheckpointPending) return `[System] ${s.nodeLabel}: worker stopping, checkpoint pending. The exact physical writer has not been confirmed quiescent after bounded stop attempts. Its task and worktree claim remain exclusive; do not dispatch a recovery writer or delete the worktree. Preserve the current worker's reports and dirty changes until an authenticated handoff or exact stop is confirmed.`;
+    if (s.writerCheckpointPending) return `[System] ${s.nodeLabel}: worker stopping, checkpoint pending. The exact physical writer has not been confirmed quiescent after bounded stop attempts. Its task and worktree claim remain exclusive; do not dispatch a recovery writer or delete the worktree. Preserve the current worker's reports and dirty changes until an authenticated handoff or exact stop is confirmed.${s.writerReportHeld ? ' The worker already filed its report; the task ends with that report once the stop is confirmed, and is not run again.' : ''}`;
     if (s.meshWorkerStall) {
         const stalledSuffix = s.stalledMs !== undefined ? ` for ${Math.round(s.stalledMs / 1000)}s` : '';
         const statusSuffix = s.observedStatus ? ` (observed status: ${s.observedStatus})` : '';

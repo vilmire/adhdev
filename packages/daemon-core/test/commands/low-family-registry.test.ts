@@ -86,7 +86,7 @@ const DAEMON_LIFECYCLE_CMDS = [
 // C-W9a: `import_mesh_ledger_slice` retired with the event ledger (a peer's records
 // are read from the peer, never copied into this daemon's local store).
 const MESH_LEDGER_CMDS = ['get_mesh_ledger', 'get_mesh_ledger_slice', 'list_mesh_notes', 'record_mesh_note', 'forget_mesh_note']
-const MESH_NODE_LOGS_CMDS = ['get_mesh_node_logs']
+const MESH_NODE_LOGS_CMDS = ['get_daemon_cpu_profile', 'get_mesh_node_logs']
 // WORKER-MCP Phase B: the worker's own reporting surface (design §4/§5).
 // + worker_report_forwarded (F7, 2026-09-25): a remote worker daemon relays its report to the attempt owner.
 // + worker_progress_forwarded (F7 progress axis, 2026-09-25): same relay for progress notes.
@@ -153,7 +153,7 @@ const NEW_WORK_HOLD_CMDS = [
 ]
 
 describe('low-family registry', () => {
-  it('registers all 133 LOW family commands once, no overlap', () => {
+  it('registers all 134 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,
@@ -180,8 +180,8 @@ describe('low-family registry', () => {
     // rc.37: + mesh_direct_cancel = 125; + 2 machine quota reserve commands
     // (quota_reserve_get/set, 2026-11-01) = 127; + light_land/light_discard
     // (same-machine light tasks, 2026-11-01) = 129, +1 project_transfer_set_relay (2026-11-02) = 130,
-    // + project_transfer_set_agent_auto_approve / _revert / _agent (agent transfers + overwrite revert, 2026-11-02) = 133.
-    expect(all).toHaveLength(133)
+    // + project_transfer_set_agent_auto_approve / _revert / _agent (agent transfers + overwrite revert, 2026-11-02) = 133, + get_daemon_cpu_profile (2026-11-04) = 134.
+    expect(all).toHaveLength(134)
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
     expect(lowFamilyNames()).toHaveLength(all.length)

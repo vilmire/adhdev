@@ -34,6 +34,7 @@ import { createMeshRuntimeTurnLedger } from '../../../src/mesh/turn-ledger/runti
 import { setActiveTurnLedger } from '../../../src/mesh/turn-ledger/active-ledger.js'
 import { seedMeshAttempt } from '../../helpers/turn-attempt-seed'
 import { FakeSourceReader } from './contract-test-helpers'
+import { evd } from '../../turn-ledger/ledger-harness.js'
 import { refineContractAdmissionStage, withContractLandingGuard } from '../../../src/commands/router-refine-contract-stage'
 import { acceptLateWorkerCompletionReport } from '../../../src/mesh/worker-report-late'
 import { reconcileDuplicateHolder } from '../../../src/mesh/mesh-holder-reconcile'
@@ -193,6 +194,29 @@ describe('AC04 / AC11 / RN-01 — strict completion: unchanged report, held note
     // Selector side: a later head change hides the already-published note again.
     w.accept('API v2: the field is renamed to `uid`.')
     expect(getStoredHandoffNote(w.meshId, t.id)).toBeNull()
+  })
+
+  it('a report held through a writer stop is assessed when the stop settles, and its note publishes once', async () => {
+    const w = setup()
+    const t = enqueueTask(w.meshId, 'pilot task', { difficulty: 'easy', missionId: w.missionId })
+    const { token, adm, attempt } = dispatchStrict(w.meshId, t.id)
+    await readAndClaim(token, adm.bindingId)
+    let settled = false
+    const ledger = createMeshRuntimeTurnLedger({ selfDaemonId: attempt.ownerDaemonId!, publisher: null, ports: {
+      cancelDispatch: (req) => settled ? { ...req, success: true, quiescent: true, incarnation: 'fixture-native-writer' } : { success: false, code: 'writer_checkpoint_pending' },
+    } })
+    setActiveTurnLedger(ledger)
+    ledger.observe(evd('liveness', { result: 'dead' }, { source: 'coordinator_probe', observedBy: attempt.ownerDaemonId!, sessionId: attempt.sessionId, taskId: t.id,
+      attemptRef: { attemptId: attempt.attemptId, generation: attempt.generation } }))
+    expect(ledger.getAttempt(attempt.attemptId)?.state).toBe('stopping')
+    expect(await report(token)).toMatchObject({ success: false })
+    expect(getStoredHandoffNote(w.meshId, t.id)).toBeNull()
+    settled = true
+    await ledger.resumeStoppingWriters()
+    expect(ledger.getAttempt(attempt.attemptId)?.terminal).toMatchObject({ outcome: 'completed', reason: 'worker_reported' })
+    expect(MeshRuntimeStore.getInstance().findQueueEntryById(w.meshId, t.id)?.status).toBe('completed')
+    expect(contractTaskEligibility(w.meshId, t.id, 'handoff')).toMatchObject({ state: 'eligible', usable: true })
+    expect(getStoredHandoffNote(w.meshId, t.id)?.notes.intent).toBe(CANARY)
   })
 
   it('a held note becomes active only after an authorized exact revalidation (housekeeping publishes it)', async () => {

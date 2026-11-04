@@ -52990,6 +52990,23 @@ ${rendered.join("\n\n")}`,
       stop.terminal = { outcome: "failed", strength: "genuine", source: "scheduler" };
       commit(draft, "failed", "genuine", "writer_unreachable", stop.terminal);
     }
+    function reportHeldDuringStop(a) {
+      const report = a.data.report, stop = a.data.writerStop;
+      return report && stop && report.generation === a.generation && report.at >= stop.requestedAt ? report : null;
+    }
+    function adoptReportHeldDuringStop(a, stop) {
+      const report = reportHeldDuringStop(a);
+      if (!report) return;
+      if (stop.terminal && (stop.terminal.adoptSessionId || stop.terminal.source !== "scheduler")) return;
+      stop.reason = "worker_reported";
+      stop.terminal = {
+        outcome: report.outcome,
+        strength: "tool_report",
+        source: "worker_tool",
+        ...report.summary ? { summary: report.summary } : {},
+        textEventId: report.eventId
+      };
+    }
     function reduceStopping(input) {
       const a = cloneAttempt(input.attempt), ev = input.evidence;
       a.data.writerStop = { ...a.data.writerStop };
@@ -53012,9 +53029,11 @@ ${rendered.join("\n\n")}`,
         stop.terminal = { outcome: "cancelled", strength: "genuine", source: ev.source };
       }
       if (input.writerUnreachable && !input.stopConfirmed && ev.kind !== "cancel") {
+        adoptReportHeldDuringStop(a, stop);
         settleUnreachableWriter(draft, stop, input.writerUnreachable);
       } else if (input.stopConfirmed) {
         stop.confirmed = true;
+        adoptReportHeldDuringStop(a, stop);
         if (stop.terminal) {
           if (stop.terminal.adoptSessionId) {
             a.sessionId = stop.terminal.adoptSessionId;
@@ -54314,7 +54333,7 @@ Do NOT retry on this node. Consider reassigning to a different node or asking th
     }
     function renderNoProgress(input) {
       const s2 = input.scalars;
-      if (s2.writerCheckpointPending) return `[System] ${s2.nodeLabel}: worker stopping, checkpoint pending. The exact physical writer has not been confirmed quiescent after bounded stop attempts. Its task and worktree claim remain exclusive; do not dispatch a recovery writer or delete the worktree. Preserve the current worker's reports and dirty changes until an authenticated handoff or exact stop is confirmed.`;
+      if (s2.writerCheckpointPending) return `[System] ${s2.nodeLabel}: worker stopping, checkpoint pending. The exact physical writer has not been confirmed quiescent after bounded stop attempts. Its task and worktree claim remain exclusive; do not dispatch a recovery writer or delete the worktree. Preserve the current worker's reports and dirty changes until an authenticated handoff or exact stop is confirmed.${s2.writerReportHeld ? " The worker already filed its report; the task ends with that report once the stop is confirmed, and is not run again." : ""}`;
       if (s2.meshWorkerStall) {
         const stalledSuffix = s2.stalledMs !== void 0 ? ` for ${Math.round(s2.stalledMs / 1e3)}s` : "";
         const statusSuffix = s2.observedStatus ? ` (observed status: ${s2.observedStatus})` : "";
@@ -55206,6 +55225,7 @@ ${line}`;
       const renderKind = notify2 === "failed" && (reason === "finalization_timeout_no_response" || reason === "hollow_max_retries") ? "completed" : notify2;
       const scalars = {
         ...attempt?.state === "stopping" ? { writerCheckpointPending: true } : {},
+        ...attempt?.state === "stopping" && reportHeldDuringStop(attempt) ? { writerReportHeld: true } : {},
         nodeLabel: nodeLabelFor(attempt, notice),
         ...attempt?.taskId ? { taskId: attempt.taskId } : str5(entry.taskId) ? { taskId: str5(entry.taskId) } : {},
         ...attempt ? { attemptId: attempt.attemptId, generation: attempt.generation, sessionId: attempt.sessionId } : {},
@@ -82941,7 +82961,7 @@ ${block3.text}`,
         ...typeof report.touchedFileCount === "number" ? { touchedFileCount: report.touchedFileCount } : {},
         ...report.branchState ? { branchState: report.branchState } : {}
       };
-      return ledger.observe(evidence, { envelope: { finalSummary: report.summary } });
+      return ledger.observe(evidence, { envelope: report.envelope ?? { finalSummary: report.summary } });
     }
     var init_worker_report_evidence = __esm2({
       "src/mesh/turn-ledger/worker-report-evidence.ts"() {
@@ -83152,6 +83172,7 @@ ${block3.text}`,
       __setHandoffNoteSinkForTests: () => __setHandoffNoteSinkForTests,
       acceptWorkerCompletionReport: () => acceptWorkerCompletionReport,
       acceptWorkerCompletionReportForIdentity: () => acceptWorkerCompletionReportForIdentity,
+      assessReportCommittedOnSettle: () => assessReportCommittedOnSettle,
       checkReportAgainstTaskMode: () => checkReportAgainstTaskMode,
       classifyUnresolvedWorkerCredential: () => classifyUnresolvedWorkerCredential,
       fenceWorkerReportOnLedger: () => fenceWorkerReportOnLedger,
@@ -83293,6 +83314,24 @@ ${block3.text}`,
       if (identity5.sessionId && attempt.sessionId && !sessionIdsEquivalent(identity5.sessionId, attempt.sessionId)) return "session_mismatch";
       if (attempt.terminal && attempt.terminal.outcome !== terminalStatus) return "already_terminal";
       return "ok";
+    }
+    function workerReportEnvelope(report, identity5, completedAt) {
+      return {
+        finalSummary: report.summary,
+        ...report.touchedFiles?.length ? { artifacts: { touchedFiles: report.touchedFiles } } : {},
+        evidence: {
+          // The grade this report earns (design §4 등급표): declared by
+          // the worker, so it is complete by construction and carries
+          // no truncation risk the way a screen scrape does.
+          summarySource: "tool_report",
+          mayBeTruncated: false,
+          reportedOutcome: report.outcome,
+          ...report.branchState ? { branchState: report.branchState } : {},
+          ...report.blockers?.length ? { blockers: report.blockers.join("; ") } : {}
+        },
+        ...identity5.nodeId ? { nodeId: identity5.nodeId } : {},
+        completedAt
+      };
     }
     function __setHandoffNoteSinkForTests(sink2) {
       handoffSinkOverride = sink2;
@@ -83549,12 +83588,16 @@ ${block3.text}`,
       if (evidenceAttemptId && store5.turnStore().getAttempt(evidenceAttemptId)?.state === "stopping") {
         const ledger2 = getActiveTurnLedger();
         if (!ledger2) return { accepted: false, refusal: "rejected_by_reducer", detail: "checkpoint_pending:no_owner_ledger" };
+        stashStageReportForIdentity(identity5, report, nowMs2);
         observeAcceptedWorkerReport(ledger2, {
           ...identity5,
           outcome: report.outcome,
           summary: report.summary,
           hasHandoffNotes: !!report.handoffNotes,
-          atMs: nowMs2
+          touchedFileCount: report.touchedFiles?.length ?? 0,
+          ...report.branchState ? { branchState: report.branchState } : {},
+          atMs: nowMs2,
+          envelope: workerReportEnvelope(report, identity5, nowIso)
         });
         return { accepted: false, refusal: "rejected_by_reducer", detail: "checkpoint_pending:report NOT accepted yet; physical writer stop is unconfirmed (the worker re-sends it after the stop settles)" };
       }
@@ -83572,22 +83615,7 @@ ${block3.text}`,
           // token buys no exemption from stale-attempt or session-mismatch.
           source: "worker_tool_report",
           reason: report.outcome === "blocked" ? `worker_reported_blocked:${(report.blockers || []).length}` : `worker_reported:${report.outcome}`,
-          envelope: {
-            finalSummary: report.summary,
-            ...report.touchedFiles?.length ? { artifacts: { touchedFiles: report.touchedFiles } } : {},
-            evidence: {
-              // The grade this report earns (design §4 등급표): declared by
-              // the worker, so it is complete by construction and carries
-              // no truncation risk the way a screen scrape does.
-              summarySource: "tool_report",
-              mayBeTruncated: false,
-              reportedOutcome: report.outcome,
-              ...report.branchState ? { branchState: report.branchState } : {},
-              ...report.blockers?.length ? { blockers: report.blockers.join("; ") } : {}
-            },
-            ...identity5.nodeId ? { nodeId: identity5.nodeId } : {},
-            completedAt: nowIso
-          }
+          envelope: workerReportEnvelope(report, identity5, nowIso)
         });
       } catch (e) {
         LOG.warn("WorkerReport", `Terminal commit threw for task ${identity5.taskId}: ${e?.message || e}`);
@@ -83693,6 +83721,14 @@ ${block3.text}`,
         return { recorded: false, error: `handoff note could not be held for contract assessment: ${e?.message || e}` };
       }
       return recordHandoffNote(identity5, notes, nowMs2, nowIso);
+    }
+    function assessReportCommittedOnSettle(input, nowMs2) {
+      try {
+        const contract = contractAfterAcceptedCompletion(input);
+        if (contract?.publishHandoff) publishHeldHandoffNote(contract.publishHandoff, nowMs2);
+      } catch (e) {
+        LOG.warn("WorkerReport", `Contract assessment after settle for task ${input.taskId} failed (result stays held): ${e?.message || e}`);
+      }
     }
     function publishHeldHandoffNote(held, nowMs2) {
       let notes;
@@ -94229,17 +94265,17 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           args.meshNodes
         ));
         if (!available.length) {
-          const ranked2 = { clear: [], gated: [] };
+          const ranked3 = { clear: [], gated: [] };
           const diagnostics2 = args.unbounded ? buildProviderSelectionDiagnostics({
             ...args,
             candidateSlots: [],
-            ranked: ranked2
+            ranked: ranked3
           }) : { riskSnapshot: [], ...args.preScoreExclusions?.length ? { preScoreExclusions: args.preScoreExclusions } : {} };
           return {
             reason: `task_difficulty_floor_wait:${args.task.difficulty}`,
             candidateSlots: [],
             candidates: [],
-            ranked: ranked2,
+            ranked: ranked3,
             diagnostics: diagnostics2
           };
         }
@@ -94271,7 +94307,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         }
       }
       const candidates = [...byProvider.values()];
-      let ranked = rankProvidersByQuotaGate3(
+      let ranked2 = rankProvidersByQuotaGate3(
         args.node,
         candidates.map((candidate) => candidate.providerType),
         args.quotaRouting,
@@ -94282,19 +94318,19 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           { model: candidate.slot.model }
         ]))
       );
-      if (args.overrideQuotaGate && ranked.gated.length) {
-        const waived = ranked.gated.filter((g3) => quotaBlockOverridable(g3.block));
-        if (waived.length) ranked = { ...ranked, clear: [...ranked.clear, ...waived.map((g3) => g3.providerType)], gated: ranked.gated.filter((g3) => !waived.includes(g3)) };
+      if (args.overrideQuotaGate && ranked2.gated.length) {
+        const waived = ranked2.gated.filter((g3) => quotaBlockOverridable(g3.block));
+        if (waived.length) ranked2 = { ...ranked2, clear: [...ranked2.clear, ...waived.map((g3) => g3.providerType)], gated: ranked2.gated.filter((g3) => !waived.includes(g3)) };
       }
-      const winner = ranked.clear.length ? candidates.find((candidate) => candidate.providerType === ranked.clear[0]) ?? candidates[0] : void 0;
+      const winner = ranked2.clear.length ? candidates.find((candidate) => candidate.providerType === ranked2.clear[0]) ?? candidates[0] : void 0;
       const diagnostics = buildProviderSelectionDiagnostics({
         ...args,
         now,
         candidateSlots,
-        ranked,
+        ranked: ranked2,
         winner
       });
-      return { candidateSlots, candidates, ranked, winner, diagnostics };
+      return { candidateSlots, candidates, ranked: ranked2, winner, diagnostics };
     }
     function selectionRationaleFrom(trajectory, allLosers) {
       const winner = trajectory?.providerWinner;
@@ -94569,42 +94605,42 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         preScoreExclusions
       });
       if (selection.reason) return { reason: selection.reason, preScoreExclusions };
-      const { ranked, winner } = selection;
+      const { ranked: ranked2, winner } = selection;
       const { riskSnapshot, allLosers, ...routingDiagnostics } = selection.diagnostics;
       const rationale = selectionRationaleFrom(routingDiagnostics.selectionTrajectory, allLosers);
-      if (!ranked.clear.length) {
-        const detail = ranked.gated.map((g3) => `${g3.providerType}: ${g3.block.reason}`).join("; ");
+      if (!ranked2.clear.length) {
+        const detail = ranked2.gated.map((g3) => `${g3.providerType}: ${g3.block.reason}`).join("; ");
         LOG.info("MeshQueue", `QUOTA GATE: every usable provider on node ${nodeId} is quota-gated (${detail}); leaving the task queued until a quota window resets`);
         recordLastQuotaRanking(nodeId, {
           decidedAt: Date.now(),
           clear: riskSnapshot,
-          gated: ranked.gated.map((g3) => ({ providerType: g3.providerType, reason: g3.block.reason })),
+          gated: ranked2.gated.map((g3) => ({ providerType: g3.providerType, reason: g3.block.reason })),
           ...taskId ? { taskId } : {}
         });
-        if (meshId && taskId) noteQuotaGateEvidence(meshId, taskId, ranked.gated);
+        if (meshId && taskId) noteQuotaGateEvidence(meshId, taskId, ranked2.gated);
         return { reason: `${ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON}: ${detail}`, preScoreExclusions };
       }
       if (meshId && taskId) clearQuotaGateEvidence(meshId, taskId);
       const selectedWinner = winner;
-      LOG.debug("MeshQueue", `QUOTA RANK: node ${nodeId} clear=[${riskSnapshot.map((s2) => `${s2.providerType}:${s2.risk?.toFixed(1) ?? "?"}`).join(",")}] gated=[${ranked.gated.map((g3) => `${g3.providerType}:${g3.block.reason}`).join(",")}] winner=${selectedWinner.providerType}`);
+      LOG.debug("MeshQueue", `QUOTA RANK: node ${nodeId} clear=[${riskSnapshot.map((s2) => `${s2.providerType}:${s2.risk?.toFixed(1) ?? "?"}`).join(",")}] gated=[${ranked2.gated.map((g3) => `${g3.providerType}:${g3.block.reason}`).join(",")}] winner=${selectedWinner.providerType}`);
       recordLastQuotaRanking(nodeId, {
         decidedAt: Date.now(),
         winner: selectedWinner.providerType,
         clear: riskSnapshot,
-        gated: ranked.gated.map((g3) => ({ providerType: g3.providerType, reason: g3.block.reason })),
+        gated: ranked2.gated.map((g3) => ({ providerType: g3.providerType, reason: g3.block.reason })),
         ...taskId ? { taskId } : {},
         ...rationale ? { rationale } : {}
       });
       return {
         providerType: selectedWinner.providerType,
-        ...ranked.gated.length ? { quotaGated: ranked.gated } : {},
+        ...ranked2.gated.length ? { quotaGated: ranked2.gated } : {},
         // QUOTA-BUSY FALLBACK inputs: the risk-ordered clear ranking and the
         // de-duplicated candidates it was drawn from, so a caller that finds the
         // winner saturated can walk to the next clear candidate WITHOUT re-running
         // selection (re-ranking would just re-elect the same busy winner — that
         // recomputation is the defect). Only `clear` is exposed: gated providers
         // must stay unreachable from the fallback path. See mesh-quota-fallback.ts.
-        quotaClearOrder: ranked.clear,
+        quotaClearOrder: ranked2.clear,
         quotaCandidates: selection.candidates,
         ...selectedWinner.slot.model ? { model: selectedWinner.slot.model } : {},
         ...selectedWinner.slot.thinkingLevel ? { thinkingLevel: selectedWinner.slot.thinkingLevel } : {},
@@ -95172,8 +95208,8 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         pool.forEach((c, i) => {
           if (!baseIndex.has(c.nodeId)) baseIndex.set(c.nodeId, i);
         });
-        const ranked = orderEligibleNodes(meshId, strategy, uniqueNodes, { bumpCursor: true });
-        const rankIndex = new Map(ranked.map((r, i) => [r.nodeId, i]));
+        const ranked2 = orderEligibleNodes(meshId, strategy, uniqueNodes, { bumpCursor: true });
+        const rankIndex = new Map(ranked2.map((r, i) => [r.nodeId, i]));
         const remaining2 = [...pool];
         while (remaining2.length > 0) {
           remaining2.sort((a, b) => {
@@ -100432,10 +100468,10 @@ ${buildSafetyTailSection(coordinatorCliType)}`,
       const tag = m ? m[1].trim().toLowerCase() : "";
       return tag || void 0;
     }
-    function foldSameClassNotes(ranked) {
+    function foldSameClassNotes(ranked2) {
       const out = [];
       const survivorByKey = /* @__PURE__ */ new Map();
-      for (const note2 of ranked) {
+      for (const note2 of ranked2) {
         const subject = deriveSubjectKey(note2);
         const foldable = !note2.pinned && !!note2.category && !!subject;
         if (foldable) {
@@ -103956,7 +103992,7 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
         case "finalizing":
           return { status: "finalizing", attemptId: presentation.attemptId, stage };
         case "stopping":
-          return { status: "stopping", attemptId: presentation.attemptId, stage };
+          return { status: "stopping", attemptId: presentation.attemptId, stage, ...stoppingDetail(presentation.attemptId) };
         case "completed":
         case "blocked":
           return { status: "idle", attemptId: presentation.attemptId, stage };
@@ -103964,6 +104000,11 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
         case "cancelled":
           return { status: "failed", attemptId: presentation.attemptId, stage };
       }
+    }
+    function stoppingDetail(attemptId) {
+      const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(attemptId);
+      const stop = attempt?.data.writerStop;
+      return attempt && stop ? { stopping: { reason: stop.reason, since: stop.requestedAt, tries: stop.tries, reportHeld: !!reportHeldDuringStop(attempt) } } : {};
     }
     function pushTerminalBucket(buckets, key7, terminal) {
       if (!key7) return;
@@ -104360,7 +104401,7 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
           source: "queue",
           status: queueStatus,
           providerApproval: queueLive.providerApproval,
-          ...turnOverlay ? { attemptId: turnOverlay.attemptId, turnStage: turnOverlay.stage } : {},
+          ...turnOverlay ? { attemptId: turnOverlay.attemptId, turnStage: turnOverlay.stage, ...turnOverlay.stopping ? { stopping: turnOverlay.stopping } : {} } : {},
           nodeId: queueNodeId,
           sessionId: queueSessionId,
           taskTitle: title,
@@ -104398,7 +104439,7 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
             source: "direct",
             status,
             providerApproval: live.providerApproval,
-            ...turnOverlay ? { attemptId: turnOverlay.attemptId, turnStage: turnOverlay.stage } : {},
+            ...turnOverlay ? { attemptId: turnOverlay.attemptId, turnStage: turnOverlay.stage, ...turnOverlay.stopping ? { stopping: turnOverlay.stopping } : {} } : {},
             nodeId: dispatch2.nodeId ?? void 0,
             sessionId: dispatch2.sessionId ?? void 0,
             providerType: dispatch2.providerType ?? void 0,
@@ -104592,6 +104633,8 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
         init_dist();
         init_mesh_turn_presentation();
         init_mesh_events_utils();
+        init_mesh_runtime_store();
+        init_reducer();
         DIRECT_DISPATCH_VIA = /* @__PURE__ */ new Set(["p2p_direct", "local_direct", "mesh_send_task"]);
         TERMINAL_LEDGER_KINDS = /* @__PURE__ */ new Set(["task_completed", "task_failed", "task_cancelled", "task_stalled"]);
         LEDGER_ONLY_STALE_REASON = "direct task dispatch has no provider acknowledgement, transcript append, or active runtime transition";
@@ -114659,7 +114702,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           return void 0;
         }
       })() : void 0;
-      const ranked = [];
+      const ranked2 = [];
       const rest = [];
       for (const rawLine of raw.split(/\r?\n/)) {
         const line = stripInvisible(rawLine);
@@ -114670,10 +114713,10 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         if (!slug) continue;
         const label2 = cleanToken(match.groups?.label);
         const model = label2 ? { slug, label: label2 } : { slug };
-        if (defaultMarker?.test(line)) ranked.push(model);
+        if (defaultMarker?.test(line)) ranked2.push(model);
         else rest.push(model);
       }
-      return dedupe([...ranked, ...rest]);
+      return dedupe([...ranked2, ...rest]);
     }
     function parseTomlTableKeyModels(raw, parse2) {
       if (!parse2.tableHeaderPattern) return [];
@@ -135621,7 +135664,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
     function orderMeshRefineBatchNodes(changeAreas) {
       const areaById = {};
       for (const area of changeAreas) areaById[area.nodeId] = area;
-      const ranked = [...changeAreas].sort((a, b) => {
+      const ranked2 = [...changeAreas].sort((a, b) => {
         const aSub = a.touchesSubmodule ? 1 : 0;
         const bSub = b.touchesSubmodule ? 1 : 0;
         if (aSub !== bSub) return aSub - bSub;
@@ -135631,18 +135674,18 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         return a.nodeId.localeCompare(b.nodeId);
       });
       const rationale = [];
-      const nonSub = ranked.filter((a) => !a.touchesSubmodule).map((a) => a.nodeId);
-      const sub = ranked.filter((a) => a.touchesSubmodule).map((a) => a.nodeId);
+      const nonSub = ranked2.filter((a) => !a.touchesSubmodule).map((a) => a.nodeId);
+      const sub = ranked2.filter((a) => a.touchesSubmodule).map((a) => a.nodeId);
       if (nonSub.length) {
         rationale.push(`Non-submodule nodes first (no submodule-main advance, conflict-free ordering): ${nonSub.join(", ")}`);
       }
       if (sub.length) {
         rationale.push(`Submodule-touching nodes last, serialized (each merge advances submodule main, forcing rebase of the next): ${sub.join(", ")}`);
       }
-      for (const area of ranked) {
+      for (const area of ranked2) {
         if (area.error) rationale.push(`Node ${area.nodeId}: change-area analysis degraded (${area.error}); placed with neutral priority.`);
       }
-      return { order: ranked.map((a) => a.nodeId), changeAreas: areaById, rationale };
+      return { order: ranked2.map((a) => a.nodeId), changeAreas: areaById, rationale };
     }
     var import_node_child_process26;
     var import_node_fs39;
@@ -143682,7 +143725,9 @@ ${grant.exp}`).digest("hex");
             state2?.attemptId,
             rec3(state2?.turn).attemptId,
             rec3(remoteState?.turn).attemptId,
-            rec3(localState?.turn).attemptId
+            rec3(localState?.turn).attemptId,
+            rec3(remoteState?.settings).meshActiveAttemptId,
+            rec3(localState?.settings).meshActiveAttemptId
           ].map(text5).filter(Boolean);
           const attemptMatches = !!attemptId && stateAttempts.length > 0 && stateAttempts.every((id4) => id4 === attemptId);
           const effectiveFreshness = !attemptMatches ? "unknown" : freshness2;
@@ -143779,7 +143824,7 @@ ${grant.exp}`).digest("hex");
         num = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null;
         choice = (v, values, fallback) => values.includes(v) ? v : fallback;
         sessionProvider = (v) => /^[a-z][a-z0-9_-]{0,63}$/.test(text5(v)) ? text5(v) : "unknown";
-        statuses = ["idle", "generating", "working", "running", "waiting_approval", "waiting_choice", "awaiting_approval", "starting", "initializing", "stopping", "stopped", "exited", "terminated", "completed", "failed", "error", "disconnected", "unknown"];
+        statuses = ["idle", "generating", "working", "running", "waiting_approval", "waiting_choice", "awaiting_approval", "starting", "initializing", "finalizing", "stopping", "stopped", "exited", "terminated", "completed", "failed", "error", "disconnected", "unknown"];
         sessionStatus = (v) => choice(v, statuses, "unknown");
         freshnesses = ["fresh", "stale", "unreachable", "not_observed", "unknown"];
         quotaFailures = ["missing-credentials", "expired-token", "unauthorized", "quota-exhausted", "rate-limited", "network", "server", "parse", "cli-unavailable", "unsupported", "setup-required", "no-data", "unknown"];
@@ -160716,7 +160761,11 @@ ${defangRelayBody(text9)}`;
             };
             let outcome = {};
             try {
-              const receipt = await ports.cancelDispatch?.(request);
+              let receipt = await ports.cancelDispatch?.(request);
+              if (receipt?.reason === "exact_stop_never_attempted") {
+                log.warn(`turn-ledger: exact stop never reached the writer of ${a.attemptId}; sending it now`);
+                receipt = await ports.cancelDispatch?.({ ...request, inspectOnly: false });
+              }
               outcome = { receipt };
               settleWriterStop(request, receipt);
             } catch (error) {
@@ -160854,6 +160903,8 @@ ${defangRelayBody(text9)}`;
         init_mesh_task_terminal();
         init_mesh_work_queue();
         init_worker_mcp_isolation();
+        init_worker_report();
+        init_worker_bridge_transaction();
         init_mesh_publisher();
         init_logger();
         init_policy();
@@ -160876,6 +160927,10 @@ ${defangRelayBody(text9)}`;
               ...ctx.envelope ? { envelope: ctx.envelope } : {}
             });
             if (result.transitioned) propagateLedgerDependencyFailure(effect.meshId, effect.taskId, effect.outcome, ctx.attempt.terminal?.reason);
+            if (result.transitioned && ctx.attempt.terminal?.reason === "worker_reported" && ctx.attempt.data.writerStop?.confirmed) {
+              const held = { meshId: effect.meshId, taskId: effect.taskId, attemptId: ctx.attempt.attemptId, sessionId: ctx.attempt.sessionId };
+              afterBridgeCommit(MeshRuntimeStore.getInstance().db, () => assessReportCommittedOnSettle(held, ctx.nowMs));
+            }
             return { transitioned: result.transitioned };
           }
         };
@@ -197240,12 +197295,110 @@ ${marker2}`,
       };
     }
     init_log_redactor();
+    var MAX_PROFILE_SECONDS = 25;
+    var SAMPLE_INTERVAL_US = 2e3;
+    var STALL_MS = 1e3;
+    var MAX_STALLS = 5;
+    var STACK_DEPTH = 14;
+    var frameLabel = (n) => {
+      const f = n.callFrame;
+      const file = f.url ? f.url.replace(/^file:\/\//, "").split("/").slice(-2).join("/") : "";
+      return `${f.functionName || "(anonymous)"} ${file}:${f.lineNumber + 1}`;
+    };
+    var ranked = (m, limit) => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([frame2, ms3]) => ({ frame: frame2, ms: Math.round(ms3) }));
+    function summarizeCpuProfile(profile) {
+      const byId = new Map(profile.nodes.map((n) => [n.id, n]));
+      const parent = /* @__PURE__ */ new Map();
+      for (const n of profile.nodes) for (const child of n.children ?? []) parent.set(child, n.id);
+      const stackOf = (id4) => {
+        const frames = [];
+        for (let at = id4; at !== void 0; at = parent.get(at)) {
+          const n = byId.get(at);
+          if (n && n.callFrame.functionName !== "(root)") frames.push(frameLabel(n));
+        }
+        return frames;
+      };
+      const self = /* @__PURE__ */ new Map(), inclusive = /* @__PURE__ */ new Map();
+      const stalls = [];
+      let busyMs = 0, gcMs = 0, idleMs = 0;
+      let run5 = null;
+      const closeRun = () => {
+        if (run5 && run5.ms >= STALL_MS) stalls.push(run5);
+        run5 = null;
+      };
+      profile.samples.forEach((id4, i) => {
+        const ms3 = (profile.timeDeltas[i] ?? 0) / 1e3;
+        const name = byId.get(id4)?.callFrame.functionName ?? "";
+        if (name === "(idle)") {
+          idleMs += ms3;
+          closeRun();
+          return;
+        }
+        run5 ??= { ms: 0, stacks: /* @__PURE__ */ new Map() };
+        run5.ms += ms3;
+        if (name === "(garbage collector)") {
+          gcMs += ms3;
+          return;
+        }
+        if (name === "(program)") return;
+        busyMs += ms3;
+        const stack = stackOf(id4);
+        self.set(stack[0], (self.get(stack[0]) ?? 0) + ms3);
+        for (const frame2 of new Set(stack)) inclusive.set(frame2, (inclusive.get(frame2) ?? 0) + ms3);
+        const key7 = stack.slice(0, STACK_DEPTH).join("\n");
+        run5.stacks.set(key7, (run5.stacks.get(key7) ?? 0) + ms3);
+      });
+      closeRun();
+      return {
+        sampledMs: Math.round((profile.endTime - profile.startTime) / 1e3),
+        busyMs: Math.round(busyMs),
+        gcMs: Math.round(gcMs),
+        idleMs: Math.round(idleMs),
+        stalls: stalls.sort((a, b) => b.ms - a.ms).slice(0, MAX_STALLS).map((s2) => ({
+          ms: Math.round(s2.ms),
+          stacks: [...s2.stacks.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2).map(([stack, ms3]) => ({ ms: Math.round(ms3), stack: stack.split("\n") }))
+        })),
+        topSelf: ranked(self, 20),
+        topInclusive: ranked(inclusive, 30)
+      };
+    }
+    var capturing = false;
+    async function captureDaemonCpuProfile(seconds) {
+      if (capturing) throw new Error("cpu_profile_in_progress");
+      capturing = true;
+      const { Session: Session2 } = await import("inspector");
+      const session = new Session2();
+      try {
+        session.connect();
+        const post = (method, params) => new Promise((resolve76, reject) => {
+          session.post(method, params ?? {}, (e, r) => e ? reject(e) : resolve76(r));
+        });
+        await post("Profiler.enable");
+        await post("Profiler.setSamplingInterval", { interval: SAMPLE_INTERVAL_US });
+        await post("Profiler.start");
+        await new Promise((resolve76) => setTimeout(resolve76, Math.min(Math.max(seconds, 1), MAX_PROFILE_SECONDS) * 1e3));
+        const { profile } = await post("Profiler.stop");
+        return summarizeCpuProfile(profile);
+      } finally {
+        session.disconnect();
+        capturing = false;
+      }
+    }
     init_command_registry();
     init_command_args();
     init_mesh_sender();
     init_mesh_relay_result();
     var MESH_NODE_LOGS_TIMEOUT_MS = 2e4;
     var meshNodeLogsHandlers = {
+      get_daemon_cpu_profile: async (_ctx, args) => {
+        const seconds = Number(args?.seconds);
+        try {
+          const summary = await captureDaemonCpuProfile(Number.isFinite(seconds) && seconds > 0 ? seconds : 15);
+          return { success: true, pid: process.pid, nodeVersion: process.version, ...summary };
+        } catch (error) {
+          return { success: false, code: "cpu_profile_failed", error: String(error?.message ?? error) };
+        }
+      },
       get_mesh_node_logs: async (ctx, args) => {
         const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
         const nodeId = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
@@ -197326,7 +197479,9 @@ ${marker2}`,
       }
     };
     var meshNodeLogsSpecs = defineCommandSpecs("low", meshNodeLogsHandlers, {
-      get_mesh_node_logs: { meshSender: "any_member_mesh" }
+      get_mesh_node_logs: { meshSender: "any_member_mesh" },
+      // The owner's own surfaces only: a mesh peer has no reason to slow another machine down.
+      get_daemon_cpu_profile: { sources: ["ipc", "standalone", "p2p"] }
     }, { meshSender: "authenticated_peer" });
     var import_node_crypto54 = require("crypto");
     init_worker_report_idempotency();
@@ -214834,6 +214989,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     init_mesh_pinned_node_identity();
     init_mesh_writer_stop_journal();
     init_hidden_spawn();
+    init_process_table_snapshot();
     init_dist();
     var import_session_host_core15 = require_dist();
     init_cli_provider_mesh_assignment();
@@ -214849,9 +215005,34 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         return null;
       }
     }
+    var UNBOUND_BUSY_STATUSES = /* @__PURE__ */ new Set(["generating", "starting", "waiting_approval", "waiting_choice"]);
+    async function stopUnboundWriter(control, sessionId, runtimeKey, startedAt) {
+      const hostBootId = await writerStopHostBootId(control);
+      if (!hostBootId || typeof control?.stopSessionIfExpected !== "function") return false;
+      const stopped = await control.stopSessionIfExpected(
+        sessionId,
+        { sessionId, hostBootId, runtimeKey, startedAt, taskId: null, attemptId: null, generation: null, dispatchNonce: null }
+      );
+      return stopped?.lifecycle === "stopped" || stopped?.lifecycle === "stopping";
+    }
+    var WRITER_STOP_NEVER_ATTEMPTED = "exact_stop_never_attempted";
+    var inWriterGroup = (p, root) => root.pgid !== null && p.pgid === root.pgid;
+    var birthToleranceMs = (root) => root.pgid === null ? 5e3 : 1e3;
+    function nativeProcessesFromWindowsTable(rows) {
+      if (!rows?.length) return null;
+      const out = [];
+      for (const row2 of rows) {
+        if (typeof row2.startedAtMs !== "number") {
+          if (row2.pid <= 4) continue;
+          return null;
+        }
+        out.push({ pid: row2.pid, ppid: row2.ppid, pgid: null, uid: 0, birth: new Date(row2.startedAtMs).toString() });
+      }
+      return out.length ? out : null;
+    }
     var nativeWriterStopPorts = {
       async read() {
-        if (process.platform === "win32") return null;
+        if (process.platform === "win32") return nativeProcessesFromWindowsTable(await readSystemProcessTableAsync("win32"));
         const { stdout } = await hiddenExecFileAsync(
           "/bin/ps",
           ["-A", "-o", "pid=,ppid=,pgid=,uid=,lstart="],
@@ -214887,10 +215068,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         try {
           const table = await ports.read();
           if (!table) return pending("native_observation_unknown");
-          const current5 = host.adapters.get(request.sessionId)?.getRuntimeMetadata?.();
-          if (current5 && (current5.osPid !== previous.root.pid || current5.runtimeKey !== previous.runtimeKey || current5.startedAt !== previous.startedAt)) return pending("native_identity_drift");
+          const current6 = host.adapters.get(request.sessionId)?.getRuntimeMetadata?.();
+          if (current6 && (current6.osPid !== previous.root.pid || current6.runtimeKey !== previous.runtimeKey || current6.startedAt !== previous.startedAt)) return pending("native_identity_drift");
           if (table.some((p) => previous.tree.some((old) => old.pid === p.pid && old.birth !== p.birth))) return pending("pid_reused");
-          if (!table.some((p) => p.pgid === previous.root.pgid || previous.tree.some((old) => old.pid === p.pid))) {
+          if (!table.some((p) => inWriterGroup(p, previous.root) || previous.tree.some((old) => old.pid === p.pid))) {
             markWriterStopQuiescent(request);
             return { ...request, success: true, quiescent: true, incarnation: previous.incarnation };
           }
@@ -214922,34 +215103,44 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           return pending("unknown, cannot prove dead: host unreachable");
         }
       }
-      if (request.inspectOnly) return pending("quiescence_not_confirmed");
+      if (request.inspectOnly) return pending(previous ? "quiescence_not_confirmed" : WRITER_STOP_NEVER_ATTEMPTED);
       const adapter = host.adapters.get(request.sessionId);
       const instance = host.deps.getInstanceManager()?.getInstance(request.sessionId);
+      const restoredBinding = (s2) => !s2?.meshActiveTaskId && s2?.meshActiveDispatchNonce === void 0;
       const matches = () => {
         const s2 = instance?.getState().settings;
-        return host.adapters.get(request.sessionId) === adapter && adapter?.cliType === request.providerType && s2?.assistant !== true && !s2?.meshCoordinatorFor && s2?.meshNodeFor === request.meshId && s2?.meshActiveTaskId === request.taskId && s2?.meshActiveAttemptId === request.attemptId && (s2?.meshActiveAttemptGeneration ?? 0) === request.generation && (s2?.meshActiveDispatchNonce ?? 0) === (request.dispatchNonce ?? 0) && (!request.nodeId || pinnedMeshNodeIdMatches(s2?.meshNodeId, request.nodeId)) && typeof s2?.meshCoordinatorDaemonId === "string" && daemonIdsEquivalent5(s2.meshCoordinatorDaemonId, request.ownerDaemonId);
+        return host.adapters.get(request.sessionId) === adapter && adapter?.cliType === request.providerType && s2?.assistant !== true && !s2?.meshCoordinatorFor && s2?.meshNodeFor === request.meshId && s2?.meshActiveAttemptId === request.attemptId && (s2?.meshActiveAttemptGeneration ?? 0) === request.generation && (restoredBinding(s2) || s2?.meshActiveTaskId === request.taskId && (s2?.meshActiveDispatchNonce ?? 0) === (request.dispatchNonce ?? 0)) && (!request.nodeId || pinnedMeshNodeIdMatches(s2?.meshNodeId, request.nodeId)) && typeof s2?.meshCoordinatorDaemonId === "string" && daemonIdsEquivalent5(s2.meshCoordinatorDaemonId, request.ownerDaemonId);
       };
-      if (!adapter || !instance || !matches()) return pending("foreign_or_unbound_writer");
+      const unboundWorker = () => {
+        const s2 = instance?.getState().settings;
+        return host.adapters.get(request.sessionId) === adapter && adapter?.cliType === request.providerType && s2?.assistant !== true && !s2?.meshCoordinatorFor && s2?.launchedByCoordinator === true && s2?.meshNodeFor === request.meshId && !s2?.meshActiveTaskId && !s2?.meshActiveAttemptId && (!request.nodeId || pinnedMeshNodeIdMatches(s2?.meshNodeId, request.nodeId)) && typeof s2?.meshCoordinatorDaemonId === "string" && daemonIdsEquivalent5(s2.meshCoordinatorDaemonId, request.ownerDaemonId);
+      };
+      const unbound = unboundWorker();
+      const current5 = () => unbound ? unboundWorker() : matches();
+      if (!adapter || !instance || !current5()) return pending("foreign_or_unbound_writer");
+      if (unbound && UNBOUND_BUSY_STATUSES.has(String(instance.getState().status))) return pending("unbound_writer_busy");
       const meta2 = adapter.getRuntimeMetadata?.();
       if (meta2?.runtimeId !== request.sessionId || !meta2.runtimeKey || !meta2.osPid || !meta2.startedAt || meta2.lifecycle !== "running") return pending("native_incarnation_unknown");
       const captured = { ...meta2 };
       try {
-        const assignmentMeta = nativeMeshAssignmentMeta(instance.getState().settings);
-        if (!await adapter.verifyRuntimeMeta?.(assignmentMeta) || !matches()) return pending("native_ownership_unconfirmed");
+        const settings2 = instance.getState().settings;
+        const assignmentMeta = nativeMeshAssignmentMeta(restoredBinding(settings2) ? { ...settings2, meshActiveTaskId: request.taskId, meshActiveDispatchNonce: request.dispatchNonce ?? 0 } : settings2);
+        if (!unbound && !await adapter.verifyRuntimeMeta?.(assignmentMeta)) return pending("native_ownership_unconfirmed");
+        if (!current5()) return pending("native_ownership_unconfirmed");
         const before = await ports.read();
         const root = before?.find((p) => p.pid === captured.osPid);
-        if (!before || !root || root.pgid !== root.pid || Math.abs(Date.parse(root.birth) - captured.startedAt) > 1e3 || !matches()) return pending("native_identity_drift");
+        if (!before || !root || root.pgid !== null && root.pgid !== root.pid || Math.abs(Date.parse(root.birth) - captured.startedAt) > birthToleranceMs(root) || !current5()) return pending("native_identity_drift");
         const tree = /* @__PURE__ */ new Set([root.pid]);
         for (let pass = 0; pass < before.length; pass++) {
           const old = tree.size;
-          for (const p of before) if (tree.has(p.ppid)) tree.add(p.pid);
+          for (const p of before) if (tree.has(p.ppid) && (root.pgid !== null || Date.parse(p.birth) >= Date.parse(before.find((x) => x.pid === p.ppid).birth))) tree.add(p.pid);
           if (old === tree.size) break;
         }
-        if (before.some((p) => tree.has(p.pid) && (p.pgid !== root.pgid || p.uid !== root.uid) || p.pgid === root.pgid && !tree.has(p.pid))) return pending("ambiguous_worker_tree");
+        if (root.pgid !== null && before.some((p) => tree.has(p.pid) && (p.pgid !== root.pgid || p.uid !== root.uid) || p.pgid === root.pgid && !tree.has(p.pid))) return pending("ambiguous_worker_tree");
         const held = before.filter((p) => tree.has(p.pid));
         const capture = captureWriterStop(request, root, held, captured.runtimeKey, captured.startedAt);
-        if (!matches()) return pending("claim_changed");
-        const stopped = await adapter.stopMeshWriter?.({
+        if (!current5()) return pending("claim_changed");
+        const stopped = unbound ? await stopUnboundWriter(host.deps.idleSessionLifetimeControl, request.sessionId, captured.runtimeKey, captured.startedAt) : await adapter.stopMeshWriter?.({
           runtimeKey: captured.runtimeKey,
           startedAt: captured.startedAt,
           osPid: captured.osPid,
@@ -214962,7 +215153,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           const after = await ports.read();
           if (!after) return pending("native_observation_unknown");
           if (after.some((p) => held.some((old) => old.pid === p.pid && old.birth !== p.birth))) return pending("pid_reused");
-          if (!after.some((p) => p.pgid === root.pgid || tree.has(p.pid))) {
+          if (!after.some((p) => inWriterGroup(p, root) || tree.has(p.pid))) {
             markWriterStopQuiescent(request);
             return {
               ...request,

@@ -790,7 +790,17 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
                     providerType: a.providerType, ownerDaemonId: a.ownerDaemonId, messageId: a.messageId,
                     revokeBind: false, stopRequestId: a.data.writerStop.requestId, inspectOnly: true };
                 let outcome: { error?: unknown; receipt?: unknown } = {};
-                try { const receipt = await ports.cancelDispatch?.(request); outcome = { receipt }; settleWriterStop(request, receipt); }
+                try {
+                    let receipt = await ports.cancelDispatch?.(request);
+                    // The bounded tries can all die in a transport outage or a restart of the
+                    // writer's daemon. Once the writer answers that no exact stop ever reached
+                    // it, send one: inspecting alone can never settle a live writer.
+                    if ((receipt as { reason?: unknown } | null | undefined)?.reason === 'exact_stop_never_attempted') {
+                        log.warn(`turn-ledger: exact stop never reached the writer of ${a.attemptId}; sending it now`);
+                        receipt = await ports.cancelDispatch?.({ ...request, inspectOnly: false });
+                    }
+                    outcome = { receipt }; settleWriterStop(request, receipt);
+                }
                 catch (error) { outcome = { error }; log.warn(`writer checkpoint remains pending: ${String(error)}`); }
                 if (store.getAttempt(a.attemptId)?.state === 'stopping') {
                     const removed = !!a.meshId && !!a.nodeId && ports.writerNodeRemoved?.({ meshId: a.meshId, nodeId: a.nodeId }) === true;

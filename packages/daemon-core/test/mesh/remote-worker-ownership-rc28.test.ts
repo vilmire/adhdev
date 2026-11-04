@@ -36,7 +36,7 @@ import { agentCommand } from '../../src/commands/cli-manager-agent-command.js';
 import { ProviderInstanceManager } from '../../src/providers/provider-instance-manager.js';
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js';
 import { stopStaleMeshWorker } from '../../src/mesh/mesh-event-forwarding.js';
-import { __setWriterStopPortsForTests, type NativeWriterProcess } from '../../src/commands/mesh-writer-stop.js';
+import { __setWriterStopPortsForTests, nativeProcessesFromWindowsTable, type NativeWriterProcess } from '../../src/commands/mesh-writer-stop.js';
 import type { CancelDispatchRequest } from '../../src/mesh/turn-ledger/effects.js';
 import { resumePendingHolderReconciles, reconcileDuplicateHolder } from '../../src/mesh/mesh-holder-reconcile.js';
 import { retireOpenQueueAttemptForRequeue } from '../../src/mesh/mesh-queue-attempt-guard.js';
@@ -613,5 +613,199 @@ describe('RC29 source attach precedes paired duplicate-holder owner CAS', () => 
         expect(await reconcileDuplicateHolder(ctx, HOLDER, 'late-owner-CAS')).toBe(false);
         expect(f.instance.captureMeshAssignment()).toEqual(before);
         expect(ledger.getAttempt(ATTEMPT)?.sessionId).toBe('replacement-session');
+    });
+});
+
+describe('a stop outage followed by a restart of the writer daemon (live 2026-11-04, task 36feec4d)', () => {
+    const claimedReport = () => acceptForwardedWorkerCompletionReport(claim, { outcome: 'completed', summary: 'Finished during the outage.', touchedFiles: [] },
+        { sender, nowMs: now, reportedAtMs: now, isSelfDaemon: id => id === 'owner' });
+    /** The restart drops the task id and nonce; the session host keeps the exact assignment. */
+    function restartedWriter() {
+        const f = sourceFixture();
+        delete f.instance.settings.meshActiveTaskId;
+        delete f.instance.settings.meshActiveDispatchNonce;
+        const persisted = { meshId: MESH, nodeId: NODE, taskId: TASK, attemptId: ATTEMPT, generation: 0, dispatchNonce: 1, ownerDaemonId: 'owner' };
+        f.adapter.verifyRuntimeMeta.mockImplementation(async (expected: Record<string, unknown>) => JSON.stringify(expected.meshActiveAssignment) === JSON.stringify(persisted));
+        return { f, persisted };
+    }
+    function stoppingAfterOutage() {
+        open();
+        cancel.mockImplementation(async () => { throw new Error('P2P state changed to closed'); });
+        expect(ledger.observe(evidence(evd('dispatch_failed', { reason: 'transport_error', workerAbsent: false }, { source: 'dispatch' }))).verdict).toBe('applied');
+        expect(ledger.getAttempt(ATTEMPT)).toMatchObject({ state: 'stopping', terminal: null });
+    }
+
+    it('sends the exact stop once the writer answers, and ends the task with the held report', async () => {
+        stoppingAfterOutage();
+        now += 60_000;
+        expect(claimedReport()).toMatchObject({ accepted: false, detail: expect.stringContaining('checkpoint_pending') });
+        const { f } = restartedWriter(); let table: NativeWriterProcess[] = [nativeRoot, nativeChild];
+        wireNativeStop(f, () => table);
+        (f.adapter as any).stopMeshWriter.mockImplementation(async () => { table = []; return true; });
+        await ledger.resumeStoppingWriters();
+        expect((f.adapter as any).stopMeshWriter).toHaveBeenCalledTimes(1);
+        expect(ledger.getAttempt(ATTEMPT)).toMatchObject({ generation: 0, reclaimCount: 0,
+            terminal: { outcome: 'completed', reason: 'worker_reported', strength: 'tool_report' } });
+        expect(MeshRuntimeStore.getInstance().findQueueEntryById(MESH, TASK)?.status).toBe('completed');
+    });
+    it('the held report keeps its whole result through the settle', async () => {
+        stoppingAfterOutage();
+        now += 60_000;
+        acceptForwardedWorkerCompletionReport(claim, { outcome: 'completed', summary: 'Finished during the outage.', touchedFiles: ['src/a.ts'], branchState: 'merged_to_main' },
+            { sender, nowMs: now, reportedAtMs: now, isSelfDaemon: id => id === 'owner' });
+        const { f } = restartedWriter(); let table: NativeWriterProcess[] = [nativeRoot, nativeChild];
+        wireNativeStop(f, () => table);
+        (f.adapter as any).stopMeshWriter.mockImplementation(async () => { table = []; return true; });
+        await ledger.resumeStoppingWriters();
+        const output = MeshRuntimeStore.getInstance().getLatestTaskOutput(TASK) as any;
+        expect(JSON.stringify(output)).toContain('src/a.ts');
+        expect(JSON.stringify(output)).toContain('merged_to_main');
+        expect(JSON.stringify(output)).toContain('Finished during the outage.');
+    });
+    it('stays pending while the process table is unreadable, then settles once it can be read', async () => {
+        stoppingAfterOutage();
+        now += 60_000; claimedReport();
+        const { f } = restartedWriter(); let table: NativeWriterProcess[] | null = null;
+        wireNativeStop(f, () => table);
+        (f.adapter as any).stopMeshWriter.mockImplementation(async () => { table = []; return true; });
+        await ledger.resumeStoppingWriters();
+        expect((f.adapter as any).stopMeshWriter).not.toHaveBeenCalled();
+        expect(ledger.getAttempt(ATTEMPT)).toMatchObject({ state: 'stopping', terminal: null });
+        expect(MeshRuntimeStore.getInstance().getLatestTaskOutput(TASK)).toBeNull();
+        table = [nativeRoot, nativeChild];
+        await ledger.resumeStoppingWriters(ATTEMPT);
+        expect(ledger.getAttempt(ATTEMPT)?.terminal).toMatchObject({ outcome: 'completed', reason: 'worker_reported' });
+    });
+    it('without a report the settled stop still reclaims the task', async () => {
+        stoppingAfterOutage();
+        const { f } = restartedWriter(); let table: NativeWriterProcess[] = [nativeRoot, nativeChild];
+        wireNativeStop(f, () => table);
+        (f.adapter as any).stopMeshWriter.mockImplementation(async () => { table = []; return true; });
+        await ledger.resumeStoppingWriters();
+        expect(ledger.getAttempt(ATTEMPT)).toMatchObject({ generation: 1, terminal: null });
+        expect(MeshRuntimeStore.getInstance().findQueueEntryById(MESH, TASK)?.status).toBe('pending');
+    });
+    it('a held report outranks the hard ceiling', async () => {
+        stoppingAfterOutage();
+        now += 60_000; claimedReport();
+        now = T0 + DEFAULT_TURN_POLICY.hardCeilingMs + 1; ledger.sweepExpiredHolds(now); await drain();
+        const { f } = restartedWriter(); let table: NativeWriterProcess[] = [nativeRoot, nativeChild];
+        wireNativeStop(f, () => table);
+        (f.adapter as any).stopMeshWriter.mockImplementation(async () => { table = []; return true; });
+        await ledger.resumeStoppingWriters();
+        expect(ledger.getAttempt(ATTEMPT)?.terminal).toMatchObject({ outcome: 'completed', reason: 'worker_reported' });
+    });
+    it('an operator cancel outranks a held report', async () => {
+        stoppingAfterOutage();
+        now += 60_000; claimedReport();
+        ledger.observe(evidence(evd('cancel', { reason: 'operator_cancel' }, { source: 'operator' })));
+        const { f } = restartedWriter(); let table: NativeWriterProcess[] = [nativeRoot, nativeChild];
+        wireNativeStop(f, () => table);
+        (f.adapter as any).stopMeshWriter.mockImplementation(async () => { table = []; return true; });
+        await ledger.resumeStoppingWriters();
+        expect(ledger.getAttempt(ATTEMPT)?.terminal).toMatchObject({ outcome: 'cancelled' });
+    });
+    it('after a real stop that left the tree alive it only inspects', async () => {
+        stoppingAfterOutage();
+        const { f } = restartedWriter();
+        wireNativeStop(f, () => [nativeRoot, nativeChild]);
+        (f.adapter as any).stopMeshWriter.mockImplementation(async () => true);
+        await ledger.resumeStoppingWriters();
+        await ledger.resumeStoppingWriters(ATTEMPT);
+        expect((f.adapter as any).stopMeshWriter).toHaveBeenCalledTimes(1);
+        expect(ledger.getAttempt(ATTEMPT)).toMatchObject({ state: 'stopping', terminal: null });
+    });
+    it.each([
+        ['a different attempt on the session', (f: ReturnType<typeof sourceFixture>) => { f.instance.settings.meshActiveAttemptId = 'other-attempt'; }],
+        ['a session host that holds no such assignment', (f: ReturnType<typeof sourceFixture>) => { f.adapter.verifyRuntimeMeta.mockImplementation(async () => false); }],
+    ])('refuses to stop %s', async (_name, mutate) => {
+        stoppingAfterOutage();
+        const { f } = restartedWriter(); mutate(f);
+        wireNativeStop(f, () => [nativeRoot, nativeChild]);
+        await ledger.resumeStoppingWriters();
+        expect((f.adapter as any).stopMeshWriter).not.toHaveBeenCalled();
+        expect(ledger.getAttempt(ATTEMPT)).toMatchObject({ state: 'stopping', terminal: null });
+    });
+
+    /** The session's own idle edge cleared its stamp; the host holds no assignment either. */
+    function unboundWorker() {
+        const f = sourceFixture();
+        for (const key of ['meshActiveTaskId', 'meshActiveDispatchNonce', 'meshActiveAttemptId', 'meshActiveAttemptGeneration']) delete f.instance.settings[key];
+        f.instance.settings.launchedByCoordinator = true;
+        f.instance.getState = function () { return { instanceId: HOLDER, status: 'idle', settings: this.settings }; } as any;
+        const stopSessionIfExpected = vi.fn(async (_id: string, _expected: Record<string, unknown>) => ({ lifecycle: 'stopping' }));
+        (f.source.deps as any).idleSessionLifetimeControl = { resolveHostBootId: () => 'boot-1', stopSessionIfExpected };
+        return { f, stopSessionIfExpected };
+    }
+    it('stops a coordinator-launched worker whose stamp cleared, through the host compare-and-stop for an unbound session', async () => {
+        stoppingAfterOutage();
+        now += 60_000; claimedReport();
+        const { f, stopSessionIfExpected } = unboundWorker(); let table: NativeWriterProcess[] = [nativeRoot, nativeChild];
+        wireNativeStop(f, () => table);
+        stopSessionIfExpected.mockImplementation(async () => { table = []; return { lifecycle: 'stopping' }; });
+        await ledger.resumeStoppingWriters();
+        expect(stopSessionIfExpected.mock.calls[0]![1]).toMatchObject({ sessionId: HOLDER, hostBootId: 'boot-1', taskId: null, attemptId: null, generation: null, dispatchNonce: null });
+        expect((f.adapter as any).stopMeshWriter).not.toHaveBeenCalled();
+        expect(ledger.getAttempt(ATTEMPT)?.terminal).toMatchObject({ outcome: 'completed', reason: 'worker_reported' });
+    });
+    it.each([
+        ['a session the user started', (f: any) => { delete f.instance.settings.launchedByCoordinator; }],
+        ['a worker still running a turn', (f: any) => { f.instance.getState = function () { return { instanceId: HOLDER, status: 'generating', settings: this.settings }; }; }],
+        ['a worker of another owner', (f: any) => { f.instance.settings.meshCoordinatorDaemonId = 'someone-else'; }],
+    ])('never stops %s through the unbound path', async (_name, mutate) => {
+        stoppingAfterOutage();
+        const { f, stopSessionIfExpected } = unboundWorker(); mutate(f);
+        wireNativeStop(f, () => [nativeRoot, nativeChild]);
+        await ledger.resumeStoppingWriters();
+        expect(stopSessionIfExpected).not.toHaveBeenCalled();
+        expect(ledger.getAttempt(ATTEMPT)).toMatchObject({ state: 'stopping', terminal: null });
+    });
+    it('a host that refuses the unbound stop leaves the attempt pending', async () => {
+        stoppingAfterOutage();
+        const { f, stopSessionIfExpected } = unboundWorker();
+        stopSessionIfExpected.mockImplementation(async () => { throw new Error('cleanup_expected_unbound_now_bound'); });
+        wireNativeStop(f, () => [nativeRoot, nativeChild]);
+        await ledger.resumeStoppingWriters();
+        expect(ledger.getAttempt(ATTEMPT)).toMatchObject({ state: 'stopping', terminal: null });
+    });
+
+    describe('on Windows, where there are no process groups', () => {
+        const win = (pid: number, ppid: number, atMs: number): NativeWriterProcess => ({ pid, ppid, pgid: null, uid: 0, birth: new Date(atMs).toString() });
+        it('settles once the parent tree is gone', async () => {
+            stoppingAfterOutage();
+            now += 60_000; claimedReport();
+            const { f } = restartedWriter(); let table = [win(417, 1, T0 + 2_000), win(418, 417, T0 + 3_000), win(900, 1, T0)];
+            wireNativeStop(f, () => table);
+            (f.adapter as any).stopMeshWriter.mockImplementation(async () => { table = [win(900, 1, T0)]; return true; });
+            await ledger.resumeStoppingWriters();
+            expect((f.adapter as any).stopMeshWriter).toHaveBeenCalledTimes(1);
+            expect(ledger.getAttempt(ATTEMPT)?.terminal).toMatchObject({ outcome: 'completed' });
+        });
+        it('waits for a descendant that outlives the root', async () => {
+            stoppingAfterOutage();
+            const { f } = restartedWriter(); let table = [win(417, 1, T0), win(418, 417, T0 + 1_000)];
+            wireNativeStop(f, () => table);
+            (f.adapter as any).stopMeshWriter.mockImplementation(async () => { table = [win(418, 417, T0 + 1_000)]; return true; });
+            await ledger.resumeStoppingWriters();
+            expect(ledger.getAttempt(ATTEMPT)).toMatchObject({ state: 'stopping', terminal: null });
+            table = [];
+            await ledger.resumeStoppingWriters(ATTEMPT);
+            expect(ledger.getAttempt(ATTEMPT)?.state).not.toBe('stopping');
+        });
+        it('does not take an older process with a reused parent id for a descendant', async () => {
+            stoppingAfterOutage();
+            now += 60_000; claimedReport();
+            const { f } = restartedWriter(); let table = [win(417, 1, T0), win(500, 417, T0 - 60_000)];
+            wireNativeStop(f, () => table);
+            (f.adapter as any).stopMeshWriter.mockImplementation(async () => { table = [win(500, 417, T0 - 60_000)]; return true; });
+            await ledger.resumeStoppingWriters();
+            expect(ledger.getAttempt(ATTEMPT)?.terminal).toMatchObject({ outcome: 'completed' });
+        });
+        it('a table with an unknown start time is no observation, except the kernel processes', () => {
+            const row = (pid: number, startedAtMs?: number) => ({ pid, ppid: 0, comm: 'x', ...(startedAtMs ? { startedAtMs } : {}) });
+            expect(nativeProcessesFromWindowsTable(null)).toBeNull();
+            expect(nativeProcessesFromWindowsTable([row(0), row(4), row(417, T0)])).toEqual([{ pid: 417, ppid: 0, pgid: null, uid: 0, birth: new Date(T0).toString() }]);
+            expect(nativeProcessesFromWindowsTable([row(417)])).toBeNull();
+        });
     });
 });
