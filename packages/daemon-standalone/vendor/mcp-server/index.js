@@ -32924,6 +32924,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       daemonLog: () => daemonLog,
       getConsoleLogLevel: () => getConsoleLogLevel,
       getCurrentDaemonLogPath: () => getCurrentDaemonLogPath,
+      getDaemonCaptureLogPath: () => getDaemonCaptureLogPath,
       getDaemonLogDir: () => getDaemonLogDir,
       getLogDirPath: () => getLogDirPath,
       getLogInstanceTag: () => getLogInstanceTag,
@@ -33053,6 +33054,9 @@ ${renderWorkerProtocolFooter2(input)}`;
       } catch {
         return false;
       }
+    }
+    function getDaemonCaptureLogPath() {
+      return path32.join(getDaemonLogDir(), DAEMON_CAPTURE_LOG_NAME);
     }
     function openCaptureLogFd(logPath = path32.join(getDaemonLogDir(), DAEMON_CAPTURE_LOG_NAME)) {
       try {
@@ -162729,6 +162733,7 @@ ${defangRelayBody(text9)}`;
       getCoordinatorForSession: () => getCoordinatorForSession,
       getCurrentDaemonLogPath: () => getCurrentDaemonLogPath,
       getDaemonBuildInfo: () => getDaemonBuildInfo,
+      getDaemonCaptureLogPath: () => getDaemonCaptureLogPath,
       getDaemonCommandRegistry: () => getDaemonCommandRegistry,
       getDaemonDataDir: () => getDaemonDataDir,
       getDaemonLogDir: () => getDaemonLogDir,

@@ -298,6 +298,16 @@ export function rotateCaptureLogIfNeeded(
 export const DAEMON_CAPTURE_LOG_NAME = 'daemon-service.log';
 
 /**
+ * Path of the raw stdout/stderr capture file (`daemon-service.log`). A daemon that
+ * dies before the structured logger is up (module-load crash, native segfault) leaves
+ * its only trace here, so a "failed to start" message must name this file, not just the
+ * structured `daemon-<date>.log`.
+ */
+export function getDaemonCaptureLogPath(): string {
+    return path.join(getDaemonLogDir(), DAEMON_CAPTURE_LOG_NAME);
+}
+
+/**
  * Open the daemon's raw stdio-capture log as an append fd, ready to hand to a
  * detached child through `stdio: ['ignore', fd, fd]`.
  *
