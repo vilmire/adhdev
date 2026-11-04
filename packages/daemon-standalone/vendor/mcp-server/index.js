@@ -80978,8 +80978,9 @@ ${asText(streams.stderr)}
               if (existing && (existing.status === "assigned" || existing.assignedSessionId || existing.attemptId || existing.autoLaunch?.sessionId)) throw new Error("stage_review_already_started");
               if (existing) return existing;
               let proof;
+              const reviewNodeId = current5.assignedNodeId ?? current5.targetNodeId;
               if (!spec.reviewerWorkspace) {
-                const nodeId = current5.assignedNodeId ?? current5.targetNodeId;
+                const nodeId = reviewNodeId;
                 const mesh = getMesh(current5.meshId);
                 const node = mesh?.nodes?.find((n) => n.id === nodeId);
                 const machineId = getMachineId();
@@ -80998,6 +80999,7 @@ ${asText(streams.stderr)}
                 inputArtifactIds: spec.inputArtifactIds,
                 inheritArtifacts: false,
                 ...spec.targetSessionId ? { targetSessionId: spec.targetSessionId } : {},
+                ...!spec.reviewerWorkspace && reviewNodeId ? { targetNodeId: reviewNodeId } : {},
                 ...parent.sourceCoordinatorSessionId ? { sourceCoordinatorSessionId: parent.sourceCoordinatorSessionId } : {}
               });
               if (proof) {
@@ -81206,10 +81208,13 @@ ${report}`;
             return git6(workspace, ["diff", "--no-color", `${base}..${head}`], 16 * 1024 * 1024);
           },
           /**
-           * Content-based checkout fingerprint (review-in-task §11). Covers: HEAD; porcelain status incl. untracked and ignored
-           * entries; a hash of `git diff HEAD --binary` (tracked content); `git ls-files -v` (skip-worktree / assume-unchanged
-           * bits); and a stat hash (path, size, mtime) of every untracked and ignored file (all enumerated, so an in-place edit
-           * inside an ignored directory is detected). fsmonitor is disabled so a stale daemon cannot hide changes. Stats run asynchronously with
+           * Content-based checkout fingerprint (review-in-task §11). Covers: HEAD; porcelain status incl. untracked entries;
+           * a hash of `git diff HEAD --binary` (tracked content); `git ls-files -v` (skip-worktree / assume-unchanged
+           * bits); and a stat hash (path, size, mtime) of every untracked, non-ignored file. Git-IGNORED files are excluded on
+           * purpose: a reviewer that runs the project's tests or build rewrites ignored output (dist/, caches, node_modules
+           * state) and that is not a source mutation — counting it voided honest verdicts as `reviewer_mutated_source`.
+           * Tracked source (diff, skip-worktree bits, HEAD) and untracked source files stay protected.
+           * fsmonitor is disabled so a stale daemon cannot hide changes. Stats run asynchronously with
            * bounded concurrency under a wall-clock budget and an incremental file cap; any failure, cap or timeout → null (the
            * caller treats that as "cannot verify" and fails closed).
            */
@@ -81222,12 +81227,11 @@ ${report}`;
               const g3 = (args, max = 64 * 1024 * 1024) => git6(workspace, ["-c", "core.fsmonitor=false", ...args], max);
               const sha8 = (text9) => (0, import_node_crypto21.createHash)("sha256").update(text9).digest("hex");
               const head = (await g3(["rev-parse", "HEAD"])).trim();
-              const status = await g3(["status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching"]);
+              const status = await g3(["status", "--porcelain=v1", "--untracked-files=all"]);
               const diff = await g3(["diff", "HEAD", "--binary"]);
               const lsv = await g3(["ls-files", "-v"]);
               const untracked = (await g3(["ls-files", "-z", "-o", "--exclude-standard"])).split("\0").filter(Boolean);
-              const ignored = (await g3(["ls-files", "-z", "-o", "-i", "--exclude-standard"])).split("\0").filter(Boolean);
-              const entries2 = [...untracked.map((p) => `u:${p}`), ...ignored.map((p) => `i:${p}`)];
+              const entries2 = untracked.map((p) => `u:${p}`);
               if (entries2.length > maxEntries) return null;
               entries2.sort();
               const lines = new Array(entries2.length);

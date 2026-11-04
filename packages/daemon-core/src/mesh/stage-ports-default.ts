@@ -41,7 +41,7 @@ import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 const SELF_CHECK_LOG_MAX = 60_000;
 
 const execFileAsync = promisify(execFile);
-/** Past this many untracked/ignored files the stat hash is not attempted: the fingerprint is unavailable (fail closed). */
+/** Past this many untracked files the stat hash is not attempted: the fingerprint is unavailable (fail closed). */
 const MAX_FINGERPRINT_OTHER_FILES = 300_000;
 /** Wall-clock budget and stat concurrency of the checkout fingerprint (fail closed past the budget). */
 const FINGERPRINT_BUDGET_MS = 20_000;
@@ -62,10 +62,13 @@ export const defaultStageGit: StageGitPort = {
     async headSha(workspace) { try { return (await git(workspace, ['rev-parse', 'HEAD'])).trim() || null; } catch { return null; } },
     async diff(workspace, base, head) { return git(workspace, ['diff', '--no-color', `${base}..${head}`], 16 * 1024 * 1024); },
     /**
-     * Content-based checkout fingerprint (review-in-task §11). Covers: HEAD; porcelain status incl. untracked and ignored
-     * entries; a hash of `git diff HEAD --binary` (tracked content); `git ls-files -v` (skip-worktree / assume-unchanged
-     * bits); and a stat hash (path, size, mtime) of every untracked and ignored file (all enumerated, so an in-place edit
-     * inside an ignored directory is detected). fsmonitor is disabled so a stale daemon cannot hide changes. Stats run asynchronously with
+     * Content-based checkout fingerprint (review-in-task §11). Covers: HEAD; porcelain status incl. untracked entries;
+     * a hash of `git diff HEAD --binary` (tracked content); `git ls-files -v` (skip-worktree / assume-unchanged
+     * bits); and a stat hash (path, size, mtime) of every untracked, non-ignored file. Git-IGNORED files are excluded on
+     * purpose: a reviewer that runs the project's tests or build rewrites ignored output (dist/, caches, node_modules
+     * state) and that is not a source mutation — counting it voided honest verdicts as `reviewer_mutated_source`.
+     * Tracked source (diff, skip-worktree bits, HEAD) and untracked source files stay protected.
+     * fsmonitor is disabled so a stale daemon cannot hide changes. Stats run asynchronously with
      * bounded concurrency under a wall-clock budget and an incremental file cap; any failure, cap or timeout → null (the
      * caller treats that as "cannot verify" and fails closed).
      */
@@ -78,12 +81,11 @@ export const defaultStageGit: StageGitPort = {
             const g = (args: string[], max = 64 * 1024 * 1024) => git(workspace, ['-c', 'core.fsmonitor=false', ...args], max);
             const sha = (text: string) => createHash('sha256').update(text).digest('hex');
             const head = (await g(['rev-parse', 'HEAD'])).trim();
-            const status = await g(['status', '--porcelain=v1', '--untracked-files=all', '--ignored=matching']);
+            const status = await g(['status', '--porcelain=v1', '--untracked-files=all']);
             const diff = await g(['diff', 'HEAD', '--binary']);
             const lsv = await g(['ls-files', '-v']);
             const untracked = (await g(['ls-files', '-z', '-o', '--exclude-standard'])).split('\0').filter(Boolean);
-            const ignored = (await g(['ls-files', '-z', '-o', '-i', '--exclude-standard'])).split('\0').filter(Boolean);
-            const entries = [...untracked.map(p => `u:${p}`), ...ignored.map(p => `i:${p}`)];
+            const entries = untracked.map(p => `u:${p}`);
             if (entries.length > maxEntries) return null;
             entries.sort();
             const lines: string[] = new Array(entries.length);
@@ -266,8 +268,12 @@ export function createProductionStagePorts(components: Pick<DaemonComponents, 's
                     if (existing && (existing.status === 'assigned' || existing.assignedSessionId || existing.attemptId || existing.autoLaunch?.sessionId)) throw new Error('stage_review_already_started');
                     if (existing) return existing;
                     let proof;
+                    // The read-lease reviewer must run in the PARENT's checkout. Without a node target the
+                    // queue could hand the child to any idle session, and a claim from another checkout is
+                    // then refused review_input_unavailable (a generic hold) instead of being routed here.
+                    const reviewNodeId = current.assignedNodeId ?? current.targetNodeId;
                     if (!spec.reviewerWorkspace) {
-                        const nodeId = current.assignedNodeId ?? current.targetNodeId;
+                        const nodeId = reviewNodeId;
                         const mesh = getMesh(current.meshId);
                         const node = mesh?.nodes?.find(n => n.id === nodeId);
                         const machineId = getMachineId();
@@ -283,6 +289,7 @@ export function createProductionStagePorts(components: Pick<DaemonComponents, 's
                         ...(parent.missionId ? { missionId: parent.missionId } : {}),
                         inputArtifactIds: spec.inputArtifactIds, inheritArtifacts: false,
                         ...(spec.targetSessionId ? { targetSessionId: spec.targetSessionId } : {}),
+                        ...(!spec.reviewerWorkspace && reviewNodeId ? { targetNodeId: reviewNodeId } : {}),
                         ...(parent.sourceCoordinatorSessionId ? { sourceCoordinatorSessionId: parent.sourceCoordinatorSessionId } : {}),
                     });
                     if (proof) { proof.childTaskId = child.id; current.stageReviewInput = proof; }
