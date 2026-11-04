@@ -95178,6 +95178,11 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
             return false;
           }
           const mesh = getMeshWithCache(components, meshId);
+          if (!mesh) {
+            LOG.info("MeshQueue", `Deferring queue claim for node ${nodeId} (${sessionId}): mesh ${meshId} is not resolvable yet (claim path ${trigger}) \u2014 task left pending, claim re-fires next tick`);
+            noteClaimDeferredForNode(meshId, nodeId);
+            return false;
+          }
           const node = mesh?.nodes.find((n) => meshNodeIdMatches7(n, nodeId));
           if (routingDecision?.source !== "autoLaunch") {
             recordLastQuotaRanking(nodeId, { decidedAt: Date.now(), winner: providerType, adopted: true });

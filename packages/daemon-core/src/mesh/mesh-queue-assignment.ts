@@ -537,6 +537,15 @@ export function tryAssignQueueTask(
         return false;
     }
     const mesh = getMeshWithCache(components, meshId);
+    // Right after boot an idle session can reach this claim before the mesh is resolvable
+    // (no local config entry, no router inline cache yet). Without the mesh there is no node
+    // record and no repo identity to attest ownership against, so the claim cannot be judged:
+    // leave the task pending and re-fire on the next tick instead of throwing a TypeError.
+    if (!mesh) {
+        LOG.info('MeshQueue', `Deferring queue claim for node ${nodeId} (${sessionId}): mesh ${meshId} is not resolvable yet (claim path ${trigger}) — task left pending, claim re-fires next tick`);
+        noteClaimDeferredForNode(meshId, nodeId);
+        return false;
+    }
     // Match with the shared 3-form normalizer (id / nodeId / node_id), not raw
     // `n.id` — a stamp-form nodeId vs the mesh node's config-form id must still resolve.
     const node = mesh?.nodes.find((n: any) => meshNodeIdMatches(n, nodeId));
