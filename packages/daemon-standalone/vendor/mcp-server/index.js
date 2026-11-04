@@ -225229,6 +225229,16 @@ ${buttons.join("\n")}`;
       if (summary) {
         host.lastCompletionSummary = { content: summary, receivedAt: opts.timestamp };
       }
+      const nativeQuotaVerdict = host.turnEvidencePort && typeof summary === "string" && summary && !classifyOwnAuthFailureOnlyReply(host.type, summary) ? classifyOwnQuotaFailureOnlyReply(host.type, summary) : null;
+      if (nativeQuotaVerdict === "usage_limit_exceeded") {
+        try {
+          const observedAt = Date.now();
+          const resetsAt = host.type === "claude-cli" ? parseClaudeUsageLimitBanner(summary, observedAt)?.resetsAt : void 0;
+          recordCliRateLimitEvidence(host.type, { observedAt, ...resetsAt ? { resetsAt } : {} });
+        } catch {
+        }
+      }
+      if (host.type === "claude-cli" && summary && !classifyOwnAuthFailureOnlyReply(host.type, summary) && classifyOwnQuotaFailureOnlyReply(host.type, summary) === "usage_limit_exceeded") return;
       const completionEvidenceInput = {
         chatTitle: opts.chatTitle,
         duration: opts.duration,
@@ -225246,15 +225256,6 @@ ${buttons.join("\n")}`;
         weak,
         emittedAtEpoch: host.busyEpoch
       };
-      const nativeQuotaVerdict = host.turnEvidencePort && typeof summary === "string" && summary && !classifyOwnAuthFailureOnlyReply(host.type, summary) ? classifyOwnQuotaFailureOnlyReply(host.type, summary) : null;
-      if (nativeQuotaVerdict === "usage_limit_exceeded") {
-        try {
-          const observedAt = Date.now();
-          const resetsAt = host.type === "claude-cli" ? parseClaudeUsageLimitBanner(summary, observedAt)?.resetsAt : void 0;
-          recordCliRateLimitEvidence(host.type, { observedAt, ...resetsAt ? { resetsAt } : {} });
-        } catch {
-        }
-      }
       if (host.turnEvidencePort) {
         emitTurnEnd(host.turnEvidencePort, {
           sessionId: host.instanceId,

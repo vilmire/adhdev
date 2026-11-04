@@ -51,6 +51,20 @@ describe('provider-attributed completion evidence through the real reducer', () 
         expect(result.attempt?.terminal).toMatchObject({ outcome: 'failed', reason: 'provider_usage_limit_exceeded' });
     });
 
+    it('Claude Code usage-limit banner (it resumes by itself) ends no attempt: no failure, no completion, the real completion is not suppressed', () => {
+        const observed: TurnEvidence[] = [];
+        const host: any = {
+            type: 'claude-cli', instanceId: 's1', settings: {}, busyEpoch: 1, lastCompletionSummary: null, lastEmittedCompletion: null,
+            pushEvent: () => {}, updateSettings: () => {}, currentAttemptRef: () => ({ attemptId: 'a1', generation: 1 }),
+            turnEvidencePort: createTurnEvidencePort({ observe: e => { observed.push(e); } }),
+        };
+        emitGeneratingCompleted(host, { chatTitle: 'synthetic', timestamp: NOW, finalSummary: 'Usage limit reached · continuing automatically at 5:30pm · esc to cancel' });
+        expect(observed).toEqual([]);
+        expect(host.lastEmittedCompletion).toBeNull();
+        emitGeneratingCompleted(host, { chatTitle: 'synthetic', timestamp: NOW + 1, finalSummary: 'Done: the importer is finished.' });
+        expect(observed.map(e => e.kind)).toEqual(['turn_end']);
+    });
+
     it.each(['Authentication required. Not signed in.', 'Login expired · Please run /login'])('a genuine own-only banner still fails: %s', summary => {
         const { evidence, result } = complete('antigravity-cli', summary);
         expect(evidence.providerFailure).toBe('auth_failed');

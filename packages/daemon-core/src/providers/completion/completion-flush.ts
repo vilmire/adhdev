@@ -354,6 +354,27 @@ export function emitGeneratingCompleted(host: CompletionEmitHost, opts: {
     if (summary) {
         host.lastCompletionSummary = { content: summary, receivedAt: opts.timestamp };
     }
+    // The CLI itself said "usage limit reached": record that on the quota cache so routing holds the
+    // provider (quota/exhaustion-hold.ts) even when its percentage reading says there is headroom.
+    // Same whole-reply rule as the verdict below — a summary that merely mentions a limit is untouched.
+    const nativeQuotaVerdict = host.turnEvidencePort && typeof summary === 'string' && summary
+        && !classifyOwnAuthFailureOnlyReply(host.type, summary)
+        ? classifyOwnQuotaFailureOnlyReply(host.type, summary) : null;
+    if (nativeQuotaVerdict === 'usage_limit_exceeded') {
+        try {
+            const observedAt = Date.now();
+            const resetsAt = host.type === 'claude-cli' ? parseClaudeUsageLimitBanner(summary as string, observedAt)?.resetsAt : undefined;
+            recordCliRateLimitEvidence(host.type, { observedAt, ...(resetsAt ? { resetsAt } : {}) });
+        } catch { /* evidence is best-effort */ }
+    }
+    // Claude Code's banner says it CONTINUES AUTOMATICALLY at the reset time: the turn is paused, not ended.
+    // Ending the attempt here (R9f -> failed) would fail the task while the same session resumes on its own and
+    // writes outside any attempt (a ghost writer), and it would also remove the task from `assigned`, so the owner
+    // would never get the switch-or-wait card. The exhaustion evidence above is enough: the task stays assigned,
+    // routing holds the provider, the owner is offered the switch, and a resumed turn finishes inside the attempt.
+    // Nothing else of the completion bookkeeping runs either, so the REAL completion later is not suppressed.
+    if (host.type === 'claude-cli' && summary && !classifyOwnAuthFailureOnlyReply(host.type, summary)
+        && classifyOwnQuotaFailureOnlyReply(host.type, summary) === 'usage_limit_exceeded') return;
     // Classification input only (NOT pushed to the wire — C-W5c deleted the
     // legacy `agent:generating_completed` construction; `isWeakCompletionEvidence`
     // just needs the same shape it always read).
@@ -405,19 +426,6 @@ export function emitGeneratingCompleted(host: CompletionEmitHost, opts: {
     // and swaps in the returned `SummaryRef` (a remote-owned worker), so
     // `renderNotice` (turn-ledger/deliver.ts) reproduces the exact same
     // coordinator text that used to come from `buildProviderEvidence`.
-    // The CLI itself said "usage limit reached": record that on the quota cache so routing holds the
-    // provider (quota/exhaustion-hold.ts) even when its percentage reading says there is headroom.
-    // Same whole-reply rule as the verdict below — a summary that merely mentions a limit is untouched.
-    const nativeQuotaVerdict = host.turnEvidencePort && typeof summary === 'string' && summary
-        && !classifyOwnAuthFailureOnlyReply(host.type, summary)
-        ? classifyOwnQuotaFailureOnlyReply(host.type, summary) : null;
-    if (nativeQuotaVerdict === 'usage_limit_exceeded') {
-        try {
-            const observedAt = Date.now();
-            const resetsAt = host.type === 'claude-cli' ? parseClaudeUsageLimitBanner(summary as string, observedAt)?.resetsAt : undefined;
-            recordCliRateLimitEvidence(host.type, { observedAt, ...(resetsAt ? { resetsAt } : {}) });
-        } catch { /* evidence is best-effort */ }
-    }
     if (host.turnEvidencePort) {
         emitTurnEnd(host.turnEvidencePort, {
             sessionId: host.instanceId,
