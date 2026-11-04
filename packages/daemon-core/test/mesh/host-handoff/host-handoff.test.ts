@@ -36,6 +36,21 @@ describe('v2 single authority failure injection', () => {
         expect(w.src.journal.getCertificate(r.handoffId)?.sourceStopped).toBe(true);
     });
 
+    it('moves to a paired member that holds no project record until activation', async () => {
+        const recorded = w.dst.mesh.read;
+        const view = recorded(MESH)!;
+        w.dst.mesh.read = () => null;
+        w.dst.mesh.describeMember = (_mesh, sender) => ({ ...view, hostDaemonId: sender, hostEpoch: 0, unrecorded: true, config: null, memberDaemonIds: [] });
+        w.dst.mesh.materializeMember = () => { w.dst.mesh.read = recorded; w.dst.launchable = true; };
+        w.dst.launchable = false;
+        w.dst.readiness = { ok: true, checks: [] };
+        w.dst.buildEngines();
+        const r = await start() as { handoffId: string };
+        await settle(w);
+        expect(r.handoffId).toBeTruthy();
+        expect(phase(w.src, r.handoffId, 'source')).toBe('committed');
+    });
+
     it('never clears the fence when the target loses its journal after applying authority', async () => {
         w.net.faults.push({ verb: 'mesh_host_handoff_activate', mode: 'response', times: 1 });
         const r = await start() as { handoffId: string };

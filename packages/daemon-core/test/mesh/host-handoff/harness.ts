@@ -113,6 +113,7 @@ export class FakeDaemon {
     stopFailure: Error | null = null;
     coordinatorLaunches: string[] = [];
     launchable = true;
+    readiness: { ok: boolean; checks: Array<{ id: string; ok: boolean }> } | null = null;
     launchReady = true;
     missingColumns = new Set<string>();
     broadcasts: HostTransferCertificate[] = [];
@@ -205,7 +206,7 @@ export class FakeDaemon {
         });
         this.target = new HostHandoffTarget({
             selfDaemonId: this.id, journal: this.journal, mesh: this.mesh, data: this.dataPort(), clock: clk, certificate,
-            coordinator: { canLaunch: () => this.launchable, launch: async (m) => { this.coordinatorLaunches.push(m); return { success: true, sessionId: 'coord-new', ready: this.launchReady }; } },
+            coordinator: { ...(this.readiness ? { readiness: async () => this.readiness! } : {}), canLaunch: () => this.launchable, launch: async (m) => { this.coordinatorLaunches.push(m); return { success: true, sessionId: 'coord-new', ready: this.launchReady }; } },
             ackClient: createWireAckClient(net.dispatcher(this.id)),
             selfNodeId: () => `node-${this.id}`,
         });

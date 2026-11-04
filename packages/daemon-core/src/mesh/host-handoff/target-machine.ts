@@ -64,6 +64,11 @@ export class HostHandoffTarget {
         return this.d.mesh.read(meshId) ?? this.d.mesh.describeMember?.(meshId, sender) ?? null;
     }
 
+    /** A paired member holds no project record until activation, so only the readiness run there, with the snapshot's config, can refuse it. */
+    private ackLaunchable(meshId: string, host: string): boolean {
+        return this.d.coordinator.canLaunch(meshId) || this.memberView(meshId, host)?.unrecorded === true;
+    }
+
     async capability(a: { handoffId: string; meshId: string; fromDaemonId: string; launchPlan?: HandoffLaunchPlan; sourcePublicKey?: string; offeredMesh?: Record<string, unknown> | null }, sender: string): Promise<PeerResult & { protocol?: number; targetDaemonId?: string; originGrantPublicKey?: string; hostKeyPinned?: boolean; diskFreeBytes?: number; ready?: { coordinatorLaunchable: boolean; diskOk: boolean; checks?: Array<{ id: string; ok: boolean; detail?: string }> } }> {
         const view = this.memberView(a.meshId, sender);
         if (!view || view.role !== 'member') return fail('target_not_member', 'this daemon is not a member of the mesh');
@@ -148,7 +153,7 @@ export class HostHandoffTarget {
             const m = this.d.journal.getManifest(a.handoffId)!;
             const again: HandoffAck = {
                 handoffId: a.handoffId, meshId: a.meshId, epoch: rec.epoch, manifestDigest: m.digest, rowCounts: rec.rowCounts ?? {},
-                targetDaemonId: this.d.selfDaemonId, readiness: { coordinatorLaunchable: this.d.coordinator.canLaunch(a.meshId) },
+                targetDaemonId: this.d.selfDaemonId, readiness: { coordinatorLaunchable: this.ackLaunchable(a.meshId, rec.peerDaemonId) },
             };
             const rerun = this.sendAck(rec.peerDaemonId, again).catch(e => this.log(`ack delivery failed: ${(e as Error)?.message ?? e}`));
             this.inflight.add(rerun);
@@ -176,7 +181,7 @@ export class HostHandoffTarget {
         this.move(a.handoffId, 'verified', { rowCounts: result.rowCounts });
         const ack: HandoffAck = {
             handoffId: a.handoffId, meshId: a.meshId, epoch: rec.epoch, manifestDigest: manifest.digest, rowCounts: result.rowCounts,
-            targetDaemonId: this.d.selfDaemonId, readiness: { coordinatorLaunchable: this.d.coordinator.canLaunch(a.meshId) },
+            targetDaemonId: this.d.selfDaemonId, readiness: { coordinatorLaunchable: this.ackLaunchable(a.meshId, rec.peerDaemonId) },
         };
         const run = this.sendAck(rec.peerDaemonId, ack).catch(e => this.log(`ack delivery failed: ${(e as Error)?.message ?? e}`));
         this.inflight.add(run);

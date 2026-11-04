@@ -151125,8 +151125,15 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             }
             if (rec8.phase !== "awaiting_ack") return { success: false, code: "handoff_unknown", error: `not awaiting an ACK (${rec8.phase})` };
             const ours = rec8.rowCounts ?? {};
-            const same = ack.manifestDigest === rec8.manifestDigest && ack.epoch === rec8.epoch && ack.meshId === rec8.meshId && Object.keys(ours).length === Object.keys(ack.rowCounts ?? {}).length && Object.entries(ours).every(([t, n]) => ack.rowCounts?.[t] === n) && ack.readiness?.coordinatorLaunchable === true;
-            if (!same) {
+            const differs = [
+              ack.manifestDigest !== rec8.manifestDigest && "manifest digest",
+              ack.epoch !== rec8.epoch && "epoch",
+              ack.meshId !== rec8.meshId && "project",
+              (Object.keys(ours).length !== Object.keys(ack.rowCounts ?? {}).length || Object.entries(ours).some(([t, n]) => ack.rowCounts?.[t] !== n)) && "row counts",
+              ack.readiness?.coordinatorLaunchable !== true && "target not launchable"
+            ].filter(Boolean);
+            if (differs.length) {
+              this.log(`ack refused: ${differs.join(", ")}`);
               await this.abortInternal(rec8, "ack_mismatch");
               return { success: false, code: "ack_mismatch" };
             }
@@ -151496,6 +151503,10 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           memberView(meshId, sender) {
             return this.d.mesh.read(meshId) ?? this.d.mesh.describeMember?.(meshId, sender) ?? null;
           }
+          /** A paired member holds no project record until activation, so only the readiness run there, with the snapshot's config, can refuse it. */
+          ackLaunchable(meshId, host) {
+            return this.d.coordinator.canLaunch(meshId) || this.memberView(meshId, host)?.unrecorded === true;
+          }
           async capability(a, sender) {
             const view2 = this.memberView(a.meshId, sender);
             if (!view2 || view2.role !== "member") return fail10("target_not_member", "this daemon is not a member of the mesh");
@@ -151594,7 +151605,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
                 manifestDigest: m.digest,
                 rowCounts: rec8.rowCounts ?? {},
                 targetDaemonId: this.d.selfDaemonId,
-                readiness: { coordinatorLaunchable: this.d.coordinator.canLaunch(a.meshId) }
+                readiness: { coordinatorLaunchable: this.ackLaunchable(a.meshId, rec8.peerDaemonId) }
               };
               const rerun = this.sendAck(rec8.peerDaemonId, again).catch((e) => this.log(`ack delivery failed: ${e?.message ?? e}`));
               this.inflight.add(rerun);
@@ -151625,7 +151636,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
               manifestDigest: manifest.digest,
               rowCounts: result.rowCounts,
               targetDaemonId: this.d.selfDaemonId,
-              readiness: { coordinatorLaunchable: this.d.coordinator.canLaunch(a.meshId) }
+              readiness: { coordinatorLaunchable: this.ackLaunchable(a.meshId, rec8.peerDaemonId) }
             };
             const run5 = this.sendAck(rec8.peerDaemonId, ack).catch((e) => this.log(`ack delivery failed: ${e?.message ?? e}`));
             this.inflight.add(run5);

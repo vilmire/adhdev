@@ -325,11 +325,15 @@ export class HostHandoffSource {
         }
         if (rec.phase !== 'awaiting_ack') return { success: false, code: 'handoff_unknown', error: `not awaiting an ACK (${rec.phase})` };
         const ours = rec.rowCounts ?? {};
-        const same = ack.manifestDigest === rec.manifestDigest && ack.epoch === rec.epoch && ack.meshId === rec.meshId
-            && Object.keys(ours).length === Object.keys(ack.rowCounts ?? {}).length
-            && Object.entries(ours).every(([t, n]) => ack.rowCounts?.[t] === n)
-            && ack.readiness?.coordinatorLaunchable === true;
-        if (!same) {
+        const differs = [
+            ack.manifestDigest !== rec.manifestDigest && 'manifest digest',
+            ack.epoch !== rec.epoch && 'epoch',
+            ack.meshId !== rec.meshId && 'project',
+            (Object.keys(ours).length !== Object.keys(ack.rowCounts ?? {}).length || Object.entries(ours).some(([t, n]) => ack.rowCounts?.[t] !== n)) && 'row counts',
+            ack.readiness?.coordinatorLaunchable !== true && 'target not launchable',
+        ].filter(Boolean);
+        if (differs.length) {
+            this.log(`ack refused: ${differs.join(', ')}`);
             await this.abortInternal(rec, 'ack_mismatch');
             return { success: false, code: 'ack_mismatch' };
         }
