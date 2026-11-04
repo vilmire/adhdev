@@ -58,6 +58,8 @@ function fixture(over: { bound?: boolean; lifecycle?: string } = {}) {
             if (refused) throw new Error(refused);
             stops++;
             record.lifecycle = 'stopping';
+            // The host acknowledges with 'stopping' and finishes shortly after: the stop proof waits for that.
+            setTimeout(() => { record.lifecycle = 'stopped'; }, 30);
             return { ...record, lifecycle: 'stopping' };
         },
         deleteSessionIfExpected: async (_id: string, exp: any, opts?: { force?: boolean }) => {
@@ -284,6 +286,15 @@ describe('B1 operator cleanupMeshSessions expected-assignment CAS', () => {
             expect(sessionIsStopping(MeshRuntimeStore.getInstance().db, f.sessionId)).toBe(true);
             expect(sessionStopPending(MeshRuntimeStore.getInstance().db, f.sessionId)).toBe(true);
         });
+    });
+
+    it('a host that only acknowledges "stopping" (never stopped) is NOT a stop proof on the expected-stop path', async () => {
+        const f = fixture();
+        f.control.stopSessionIfExpected = async () => { f.record.lifecycle = 'stopping'; return { ...f.record, lifecycle: 'stopping' }; };
+        const result = await cleanupMeshSessions(f.self, f.args);
+        expect(result).toMatchObject({ success: false, retained: true });
+        expect(result.errors?.[0]?.error).toBe('cleanup_stop_not_proven');
+        expect(sessionStopPending(MeshRuntimeStore.getInstance().db, f.sessionId)).toBe(true);
     });
 
     it('missing expected tuple (no incarnation) fails closed', async () => {
@@ -515,6 +526,7 @@ describe('F2 production-shaped delete unsupported (method present + RPC refuse)'
             if (refused) throw new Error(refused);
             stopped++;
             f.record.lifecycle = 'stopping';
+            setTimeout(() => { f.record.lifecycle = 'stopped'; }, 30);
             return { ...f.record, lifecycle: 'stopping' };
         };
         const result = await cleanupMeshSessions(f.self, { ...f.args, mode: 'stop_and_delete' });

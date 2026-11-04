@@ -165854,6 +165854,9 @@ ${defangRelayBody(text9)}`;
           if (!stopped || stopped.lifecycle !== "stopped" && stopped.lifecycle !== "stopping") {
             return { success: false, error: "cleanup_unconfirmed", retained: true };
           }
+          if (stopped.lifecycle === "stopping" && !await awaitSessionStopProof({ control, sessionId, expected, timeoutMs: legacy?.timeoutMs, pollMs: legacy?.pollMs })) {
+            return { success: false, error: "cleanup_stop_not_proven", retained: true };
+          }
           confirmSessionStop(db3, sessionId, stopId);
           return { success: true, expected };
         } catch (error) {

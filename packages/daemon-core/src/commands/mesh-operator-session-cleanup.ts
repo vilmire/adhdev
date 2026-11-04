@@ -236,6 +236,11 @@ export async function operatorStopSessionIfExpected(args: {
             if (!stopped || (stopped.lifecycle !== 'stopped' && stopped.lifecycle !== 'stopping')) {
                 return { success: false, error: 'cleanup_unconfirmed', retained: true };
             }
+            // "stopping" is only an acknowledgement: proof means the host no longer lists this incarnation as live.
+            if (stopped.lifecycle === 'stopping'
+                && !await awaitSessionStopProof({ control, sessionId, expected, timeoutMs: legacy?.timeoutMs, pollMs: legacy?.pollMs })) {
+                return { success: false, error: 'cleanup_stop_not_proven', retained: true };
+            }
             confirmSessionStop(db, sessionId, stopId);
             return { success: true, expected };
         } catch (error) {
