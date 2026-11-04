@@ -995,11 +995,36 @@ export function acceptWorkerCompletionReportForIdentity(
     // (4) A blocked report ends this task attempt without succeeding or failing.
     // Claim/retry fences treat it as terminal; only completed satisfies dependencies.
     if (fence !== 'ok') return { accepted: false, refusal: 'rejected_by_reducer', detail: fence };
+    const reportEnvelope = {
+        finalSummary: report.summary,
+        ...(report.touchedFiles?.length ? { artifacts: { touchedFiles: report.touchedFiles } } : {}),
+        evidence: {
+            // The grade this report earns (design §4 등급표): declared by
+            // the worker, so it is complete by construction and carries
+            // no truncation risk the way a screen scrape does.
+            summarySource: 'tool_report' as const,
+            mayBeTruncated: false,
+            reportedOutcome: report.outcome,
+            ...(report.branchState ? { branchState: report.branchState } : {}),
+            ...(report.blockers?.length ? { blockers: report.blockers.join('; ') } : {}),
+        },
+        ...(identity.nodeId ? { nodeId: identity.nodeId } : {}),
+        completedAt: nowIso,
+    };
     if (evidenceAttemptId && store.turnStore().getAttempt(evidenceAttemptId)?.state === 'stopping') {
         const ledger = getActiveTurnLedger();
         if (!ledger) return { accepted: false, refusal: 'rejected_by_reducer', detail: 'checkpoint_pending:no_owner_ledger' };
-        observeAcceptedWorkerReport(ledger, { ...identity, outcome: report.outcome, summary: report.summary,
-            hasHandoffNotes: !!report.handoffNotes, atMs: nowMs });
+        stashStageReportForIdentity(identity, report, nowMs);
+        observeAcceptedWorkerReport(ledger, {
+            ...identity,
+            outcome: report.outcome,
+            summary: report.summary,
+            hasHandoffNotes: !!report.handoffNotes,
+            touchedFileCount: report.touchedFiles?.length ?? 0,
+            ...(report.branchState ? { branchState: report.branchState } : {}),
+            envelope: reportEnvelope,
+            atMs: nowMs,
+        });
         return { accepted: false, refusal: 'rejected_by_reducer', detail: 'checkpoint_pending:report NOT accepted yet; physical writer stop is unconfirmed (the worker re-sends it after the stop settles)' };
     }
     let commit: ReturnType<typeof commitTaskTerminal>;
@@ -1018,22 +1043,7 @@ export function acceptWorkerCompletionReportForIdentity(
             reason: report.outcome === 'blocked'
                 ? `worker_reported_blocked:${(report.blockers || []).length}`
                 : `worker_reported:${report.outcome}`,
-            envelope: {
-                finalSummary: report.summary,
-                ...(report.touchedFiles?.length ? { artifacts: { touchedFiles: report.touchedFiles } } : {}),
-                evidence: {
-                    // The grade this report earns (design §4 등급표): declared by
-                    // the worker, so it is complete by construction and carries
-                    // no truncation risk the way a screen scrape does.
-                    summarySource: 'tool_report',
-                    mayBeTruncated: false,
-                    reportedOutcome: report.outcome,
-                    ...(report.branchState ? { branchState: report.branchState } : {}),
-                    ...(report.blockers?.length ? { blockers: report.blockers.join('; ') } : {}),
-                },
-                ...(identity.nodeId ? { nodeId: identity.nodeId } : {}),
-                completedAt: nowIso,
-            },
+            envelope: reportEnvelope,
         });
     } catch (e: any) {
         LOG.warn('WorkerReport', `Terminal commit threw for task ${identity.taskId}: ${e?.message || e}`);

@@ -9,7 +9,7 @@ const text = (v: unknown): string => typeof v === 'string' ? v.trim() : '';
 const num = (v: unknown): number | null => typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
 const choice = <T extends string>(v: unknown, values: readonly T[], fallback: T): T => values.includes(v as T) ? v as T : fallback;
 export const sessionProvider = (v: unknown): string => /^[a-z][a-z0-9_-]{0,63}$/.test(text(v)) ? text(v) : 'unknown';
-const statuses = ['idle', 'generating', 'working', 'running', 'waiting_approval', 'waiting_choice', 'awaiting_approval', 'starting', 'initializing', 'stopping', 'stopped', 'exited', 'terminated', 'completed', 'failed', 'error', 'disconnected', 'unknown'] as const;
+const statuses = ['idle', 'generating', 'working', 'running', 'waiting_approval', 'waiting_choice', 'awaiting_approval', 'starting', 'initializing', 'finalizing', 'stopping', 'stopped', 'exited', 'terminated', 'completed', 'failed', 'error', 'disconnected', 'unknown'] as const;
 export const sessionStatus = (v: unknown): string => choice(v, statuses, 'unknown');
 const freshnesses = ['fresh', 'stale', 'unreachable', 'not_observed', 'unknown'] as const;
 export interface ProjectSessionEvidence {
@@ -143,7 +143,8 @@ export function projectSessionView(view: RecordValue, opts: {
             const state = localState ? detail ?? localState : remoteState ? detail ?? remoteState : undefined;
             const attemptId = text(task.attemptId) || null;
             const stateAttempts = [state?.attemptId, rec(state?.turn).attemptId,
-                rec(remoteState?.turn).attemptId, rec(localState?.turn).attemptId].map(text).filter(Boolean);
+                rec(remoteState?.turn).attemptId, rec(localState?.turn).attemptId,
+                rec(remoteState?.settings).meshActiveAttemptId, rec(localState?.settings).meshActiveAttemptId].map(text).filter(Boolean);
             const attemptMatches = !!attemptId && stateAttempts.length > 0 && stateAttempts.every(id => id === attemptId);
             const effectiveFreshness = !attemptMatches ? 'unknown' : freshness;
             const activityValue = local ? state?.lastActivityAt ?? state?.lastMessageAt

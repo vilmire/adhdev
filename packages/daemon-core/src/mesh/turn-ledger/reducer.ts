@@ -740,7 +740,8 @@ function reduceStopping(input: ReduceInput): ReduceResult {
     const draft: Draft = { attempt: a, holds: new Map(input.holds.map(h => [h.holdId, h])), effects: [],
         ctx: { ...input, effectiveGeneration: a.generation }, rule: TRANSITIONS[0]!, committed: false };
     const stop = a.data.writerStop!;
-    if (input.nowMs >= a.acceptedAt + input.policy.hardCeilingMs) {
+    if (input.nowMs >= a.acceptedAt + input.policy.hardCeilingMs
+        && stop.reason !== 'worker_reported' && stop.reason !== 'operator_cancel' && stop.reason !== 'superseded') {
         stop.reason = 'hard_ceiling';
         stop.terminal = { outcome: 'failed', strength: 'genuine', source: 'scheduler' };
         releaseHolds(draft, ['hard_ceiling']);
@@ -772,7 +773,14 @@ function reduceStopping(input: ReduceInput): ReduceResult {
             notify(draft, 'no_progress');
             draft.effects.push({ kind: 'record', note: 'writer_stop_unconfirmed_checkpoint_pending' });
         }
-    } else if (ev.kind === 'worker_report') ACTIONS.record_report(draft);
+    } else if (ev.kind === 'worker_report') {
+        ACTIONS.record_report(draft);
+        if (stop.reason !== 'operator_cancel' && stop.reason !== 'superseded') {
+            stop.reason = 'worker_reported';
+            stop.terminal = { outcome: ev.outcome, strength: 'tool_report', source: ev.source,
+                ...(ev.summary ? { summary: ev.summary } : {}), textEventId: ev.eventId };
+        }
+    }
     else draft.effects.push({ kind: 'record', note: 'writer_stop_checkpoint_pending' });
     return { attempt: a, holds: [...draft.holds.values()], effects: draft.effects, verdict: 'applied', rule: input.stopConfirmed ? 'writer_settled' : input.writerUnreachable && a.data.writerStop?.confirmed ? 'writer_unreachable_settled' : 'WR' };
 }

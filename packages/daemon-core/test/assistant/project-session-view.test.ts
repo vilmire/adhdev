@@ -191,4 +191,27 @@ describe('project task-bound sessions over held mesh status', () => {
         expect(JSON.stringify(second)).not.toContain('SECRET');
         expect(body.sessions[0]!.evidence!.sessionError).toBe('unknown');
     });
+
+    it('preserves finalizing status for stopping turns and matches light-workspace sessions via settings.meshActiveAttemptId', () => {
+        const view = fixture();
+        view.status.nodes[1]!.activeSessionDetails![0]!.chatStatus = 'finalizing';
+        expect(projectSessionView(view, opts).sessions[0]!.status).toBe('finalizing');
+
+        // Light-workspace session without activeSessionDetails or turn.attemptId, bound via settings.meshActiveAttemptId
+        view.activeWork.activeWork.activeWork = [{
+            taskId: 'lw-task', nodeId: 'host', sessionId: 'lw-worker',
+            providerType: 'antigravity-cli', attemptId: 'lw-attempt', status: 'running',
+        }];
+        const localStates = [{
+            instanceId: 'lw-worker', type: 'antigravity-cli', status: 'generating', lastActivityAt: NOW - 10,
+            settings: { meshNodeFor: 'project', meshNodeId: 'host', meshActiveAttemptId: 'lw-attempt' },
+        }];
+        const out = projectSessionView(view, { ...opts, localStates });
+        expect(out.sessions).toHaveLength(1);
+        expect(out.sessions[0]).toMatchObject({
+            sessionId: 'lw-worker',
+            status: 'generating',
+            evidence: { taskId: 'lw-task', attemptId: 'lw-attempt', freshness: 'fresh', observedStatus: 'generating' },
+        });
+    });
 });

@@ -98,16 +98,16 @@ export async function stopExactMeshWriter(
             return pending('unknown, cannot prove dead: host still reports session');
         } catch { return pending('unknown, cannot prove dead: host unreachable'); }
     }
-    if (request.inspectOnly) return pending('quiescence_not_confirmed');
+    if (request.inspectOnly && previous) return pending('quiescence_not_confirmed');
     const adapter = host.adapters.get(request.sessionId);
     const instance = host.deps.getInstanceManager()?.getInstance(request.sessionId);
     const matches = () => {
         const s = instance?.getState().settings;
         return host.adapters.get(request.sessionId) === adapter && adapter?.cliType === request.providerType
             && s?.assistant !== true && !s?.meshCoordinatorFor
-            && s?.meshNodeFor === request.meshId && s?.meshActiveTaskId === request.taskId
+            && s?.meshNodeFor === request.meshId && (s?.meshActiveTaskId === undefined || s.meshActiveTaskId === request.taskId)
             && s?.meshActiveAttemptId === request.attemptId && (s?.meshActiveAttemptGeneration ?? 0) === request.generation
-            && (s?.meshActiveDispatchNonce ?? 0) === (request.dispatchNonce ?? 0)
+            && (s?.meshActiveDispatchNonce === undefined || s.meshActiveDispatchNonce === (request.dispatchNonce ?? 0))
             && (!request.nodeId || pinnedMeshNodeIdMatches(s?.meshNodeId, request.nodeId))
             && typeof s?.meshCoordinatorDaemonId === 'string' && daemonIdsEquivalent(s.meshCoordinatorDaemonId, request.ownerDaemonId!);
     };
@@ -116,7 +116,12 @@ export async function stopExactMeshWriter(
     if (meta?.runtimeId !== request.sessionId || !meta.runtimeKey || !meta.osPid || !meta.startedAt || meta.lifecycle !== 'running') return pending('native_incarnation_unknown');
     const captured = { ...meta };
     try {
-        const assignmentMeta = nativeMeshAssignmentMeta(instance.getState().settings as Record<string, any>);
+        const currentSettings = instance.getState().settings as Record<string, any>;
+        const assignmentMeta = nativeMeshAssignmentMeta({
+            ...currentSettings,
+            meshActiveTaskId: currentSettings?.meshActiveTaskId ?? request.taskId,
+            meshActiveDispatchNonce: currentSettings?.meshActiveDispatchNonce ?? (request.dispatchNonce ?? 0),
+        });
         if (!await adapter.verifyRuntimeMeta?.(assignmentMeta) || !matches()) return pending('native_ownership_unconfirmed');
         const before = await ports.read();
         const root = before?.find(p => p.pid === captured.osPid);

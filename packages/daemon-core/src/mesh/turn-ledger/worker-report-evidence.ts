@@ -16,6 +16,7 @@
 
 import { sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import type { TurnEvidenceOf, WorkerBranchState, WorkerReportOutcome } from '@adhdev/mesh-shared';
+import type { TurnCompletionEnvelope } from './effects.js';
 import type { ObserveResult, TurnLedger } from './ledger.js';
 
 interface AcceptedWorkerReport {
@@ -30,6 +31,7 @@ interface AcceptedWorkerReport {
     hasHandoffNotes: boolean;
     touchedFileCount?: number;
     branchState?: WorkerBranchState;
+    envelope?: TurnCompletionEnvelope;
     atMs: number;
 }
 
@@ -58,5 +60,5 @@ export function observeAcceptedWorkerReport(ledger: TurnLedger, report: Accepted
         ...(typeof report.touchedFileCount === 'number' ? { touchedFileCount: report.touchedFileCount } : {}),
         ...(report.branchState ? { branchState: report.branchState } : {}),
     };
-    return ledger.observe(evidence, { envelope: { finalSummary: report.summary } });
+    return ledger.observe(evidence, { envelope: report.envelope ?? { finalSummary: report.summary } });
 }

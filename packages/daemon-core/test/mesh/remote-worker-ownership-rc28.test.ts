@@ -504,6 +504,106 @@ describe('RC29 exact stop and crash settlement through real command/ledger/queue
         expect(MeshRuntimeStore.getInstance().getLatestTaskOutput(TASK)).toBeNull();
     });
 
+    it('delayed dispatch ACK timeout + delivered worker report while stopping holds until physical quiescence and settles completed after escalated inspectOnly stop on restored session', async () => {
+        insertTask(TASK, 'assigned');
+        expect(ledger.observe(evidence(evd('dispatch_accepted', {
+            scope: 'mesh_queue', meshId: MESH, nodeId: NODE, providerType: PROVIDER,
+            messageId: 'task-dispatch-ack-timeout', dispatchNonce: 1, consumeProfile: 'default',
+        }, { source: 'dispatch' }))).verdict).toBe('applied');
+        cancel.mockImplementation(async () => { throw new Error('P2P timeout'); });
+        now += 10_000;
+        expect(ledger.observe(evidence(evd('dispatch_failed', {
+            reason: 'timeout', workerAbsent: true,
+        }, { source: 'dispatch' }))).verdict).toBe('applied');
+        await drain();
+        for (let i = 0; i < 3; i++) {
+            now += 30_000;
+            ledger.sweepExpiredHolds(now);
+            await drain();
+        }
+        expect(ledger.getAttempt(ATTEMPT)).toMatchObject({
+            state: 'stopping',
+            generation: 0,
+            reclaimCount: 0,
+            terminal: null,
+            data: { writerStop: { reason: 'dispatch_failed', escalated: true } },
+        });
+        expect(MeshRuntimeStore.getInstance().findQueueEntryById(MESH, TASK)?.status).toBe('assigned');
+
+        // Worker actually received the task, finished, and submitted report_completion while stopping.
+        const reportRes = acceptForwardedWorkerCompletionReport(claim, {
+            outcome: 'completed',
+            summary: 'Smoke-check completed on Air after delayed dispatch ACK.',
+            touchedFiles: ['src/owned.ts'],
+            branchState: 'not_mergeable',
+        }, { sender, nowMs: now, reportedAtMs: now, isSelfDaemon: id => id === 'owner' });
+        expect(reportRes).toMatchObject({ accepted: false, detail: expect.stringContaining('checkpoint_pending') });
+        expect(ledger.getAttempt(ATTEMPT)?.terminal).toBeNull();
+        expect(MeshRuntimeStore.getInstance().getLatestTaskOutput(TASK)).toBeNull();
+
+        // Worker daemon restarted (restored settings omit meshActiveTaskId and meshActiveDispatchNonce)
+        // and the CLI session is sitting idle at its prompt, while native process observation is initially unavailable.
+        const f = sourceFixture();
+        delete f.instance.settings.meshActiveTaskId;
+        delete f.instance.settings.meshActiveDispatchNonce;
+        f.instance.getState = () => ({ instanceId: HOLDER, status: 'idle', settings: f.instance.settings });
+        let table: NativeWriterProcess[] | null = null;
+        // Failure to prove physical quiescence (native process observation unavailable even though session is idle):
+        wireNativeStop(f, () => table);
+        await ledger.resumeStoppingWriters();
+        expect(cancel.mock.calls.at(-1)![0].inspectOnly).toBe(true);
+        expect(f.adapter.shutdown).not.toHaveBeenCalled();
+        expect(ledger.getAttempt(ATTEMPT)).toMatchObject({ state: 'stopping', generation: 0, reclaimCount: 0, terminal: null });
+        expect(MeshRuntimeStore.getInstance().getLatestTaskOutput(TASK)).toBeNull();
+        expect(revoke).not.toHaveBeenCalled();
+
+        // Once native process observation is available and exact stop terminates the process tree, physical quiescence is proven and the retained report commits.
+        table = [nativeRoot, nativeChild];
+        f.adapter.shutdown.mockImplementation(() => { table = []; });
+        await ledger.resumeStoppingWriters();
+        expect(f.adapter.verifyRuntimeMeta).toHaveBeenCalledWith({
+            meshActiveAssignment: {
+                meshId: MESH,
+                nodeId: NODE,
+                taskId: TASK,
+                attemptId: ATTEMPT,
+                generation: 0,
+                dispatchNonce: 1,
+                ownerDaemonId: 'owner',
+            },
+            meshActiveAttemptRef: {
+                attemptId: ATTEMPT,
+                generation: 0,
+            },
+            meshCoordinatorDaemonId: 'owner',
+        });
+        expect(f.adapter.shutdown).toHaveBeenCalledTimes(1);
+        expect(revoke).toHaveBeenCalledTimes(1);
+        expect(ledger.getAttempt(ATTEMPT)).toMatchObject({
+            state: 'completed',
+            generation: 0,
+            reclaimCount: 0,
+            terminal: { outcome: 'completed', strength: 'tool_report', reason: 'worker_reported' },
+        });
+        expect(MeshRuntimeStore.getInstance().findQueueEntryById(MESH, TASK)?.status).toBe('completed');
+        const latestOutput = MeshRuntimeStore.getInstance().getLatestTaskOutput(TASK);
+        expect(latestOutput).toMatchObject({
+            taskId: TASK,
+            meshId: MESH,
+            status: 'completed',
+        });
+        expect(JSON.parse(latestOutput!.envelopeJson)).toMatchObject({
+            final_summary: 'Smoke-check completed on Air after delayed dispatch ACK.',
+            artifacts: { touchedFiles: ['src/owned.ts'] },
+            evidence: {
+                summarySource: 'tool_report',
+                mayBeTruncated: false,
+                reportedOutcome: 'completed',
+                branchState: 'not_mergeable',
+            },
+        });
+    });
+
     it('queue cancellation and direct stale writes cannot clear a stopping writer assignment', async () => {
         open(); cancel.mockImplementation(async () => { throw new Error('stop unavailable'); });
         expect(cancelTask(MESH, TASK)?.status).toBe('assigned'); await drain();
