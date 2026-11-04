@@ -2,6 +2,7 @@
 import { execFileSync } from 'node:child_process';
 import { isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
+import { meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue-types.js';
 import type { StageRuntimePorts } from './stage-ports.js';
@@ -60,7 +61,7 @@ export async function recoverPendingStageReview(request: StageReviewRecoveryRequ
             || parent.stageState.reviewTaskIds.at(-1) !== child.id || child.reviewerWorkspace) throw new Error('pending_managed_review_required');
         if ((parent.revision ?? 0) !== r.expectedParentRevision || (child.revision ?? 0) !== r.expectedReviewRevision) throw new Error('stale_review_recovery_cas');
         if (parent.stageState.stageHeads.at(-1)?.rootSha !== r.expectedStageHeadSha) throw new Error('review_stage_head_mismatch');
-        if (parent.assignedNodeId !== host.nodeId) throw new Error('review_source_node_mismatch');
+        if (!meshNodeIdMatches({ nodeId: parent.assignedNodeId }, host.nodeId)) throw new Error('review_source_node_mismatch');
         if (child.assignedSessionId || child.attemptId || child.dispatchTimestamp || child.autoLaunch?.sessionId
             || ['started', 'completed'].includes(child.autoLaunch?.status ?? '') || isTaskDispatchInFlight(r.meshId, child.id)
             || store.turnStore().findLatestAttemptForTask(r.meshId, child.id)) throw new Error('review_already_started');

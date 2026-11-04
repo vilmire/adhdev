@@ -79,6 +79,17 @@ function setup() {
 }
 
 describe('owner/CAS pending review recovery', () => {
+    it('matches normalized source node identity and refuses missing or foreign assignments without writes', async () => {
+        const h = setup(); const original = h.parent();
+        for (const assignedNodeId of [undefined, '', 'node_foreign']) {
+            h.store.updateQueueEntry({ ...original, assignedNodeId });
+            const before = h.snapshot();
+            await expect(recoverPendingStageReview(h.request(), h.host, h.ports)).rejects.toThrow('review_source_node_mismatch');
+            expect(h.snapshot()).toBe(before);
+        }
+        h.store.updateQueueEntry(original);
+        await expect(recoverPendingStageReview(h.request(), { ...h.host, nodeId: ' node_a ' }, h.ports)).resolves.toMatchObject({ dryRun: true });
+    });
     it('dry-run is read-only; apply preserves ids/round/claim/history and changes task-scoped difficulty/grants only', async () => {
         const h = setup(); const before = h.snapshot(); const p = h.parent(); const c = h.child();
         expect(await recoverPendingStageReview(h.request(), h.host, h.ports)).toMatchObject({ fingerprint: 'fresh-fingerprint', dryRun: true, reviewRevision: 0 });

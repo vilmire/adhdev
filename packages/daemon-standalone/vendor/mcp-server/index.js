@@ -78096,7 +78096,7 @@ ${env2.envelopes.join("\n\n")}${tail}`;
         if (!parent || !child || !parent.stagePlan || parent.status !== "assigned" || parent.stageState?.phase !== "awaiting_review" || parent.stageState.released || child.status !== "pending" || !child.readonly || child.origin !== "stage" || child.stageRole !== "review" || child.parentTaskId !== parent.id || child.review?.sourceTaskId !== parent.id || child.stageRound !== parent.stageState.round || parent.stageState.reviewTaskIds.at(-1) !== child.id || child.reviewerWorkspace) throw new Error("pending_managed_review_required");
         if ((parent.revision ?? 0) !== r.expectedParentRevision || (child.revision ?? 0) !== r.expectedReviewRevision) throw new Error("stale_review_recovery_cas");
         if (parent.stageState.stageHeads.at(-1)?.rootSha !== r.expectedStageHeadSha) throw new Error("review_stage_head_mismatch");
-        if (parent.assignedNodeId !== host.nodeId) throw new Error("review_source_node_mismatch");
+        if (!meshNodeIdMatches7({ nodeId: parent.assignedNodeId }, host.nodeId)) throw new Error("review_source_node_mismatch");
         if (child.assignedSessionId || child.attemptId || child.dispatchTimestamp || child.autoLaunch?.sessionId || ["started", "completed"].includes(child.autoLaunch?.status ?? "") || isTaskDispatchInFlight(r.meshId, child.id) || store5.turnStore().findLatestAttemptForTask(r.meshId, child.id)) throw new Error("review_already_started");
         if (isTaskDispatchInFlight(r.meshId, parent.id) || findOpenQueueAttempt(store5.turnStore(), r.meshId, parent.id)) throw new Error("review_source_attempt_active");
         if (child.difficulty !== "difficult") throw new Error("review_difficulty_transition_required");
@@ -78233,6 +78233,7 @@ Owner-authorized input recovery: review ${r.expectedHeadSha} in the authenticate
         import_node_child_process16 = require("child_process");
         import_node_path12 = require("path");
         import_node_crypto20 = require("crypto");
+        init_dist();
         init_mesh_runtime_store();
         init_stage_review_input();
         init_stage_state();
@@ -99422,7 +99423,7 @@ ${continuationNotice}` } : dispatchTask,
         const node = mesh?.nodes.find((n) => n.id === nodeId);
         if (!config || !mesh || !node) throw new Error("node_not_found");
         const cached5 = host.cachedNode;
-        const cachedDaemonMatches = !cached5 || cached5.daemonId === void 0 && node.daemonId === void 0 || daemonIdsEquivalent5(cached5.daemonId, node.daemonId);
+        const cachedDaemonMatches = !cached5 || typeof cached5.daemonId === "undefined" && typeof node.daemonId === "undefined" || daemonIdsEquivalent5(cached5.daemonId, node.daemonId);
         if (cached5 && (cached5.workspace !== node.workspace || !cachedDaemonMatches || cached5.machineId !== node.machineId)) throw new Error("node_identity_cache_conflict");
         const owner = resolveMeshHostStatus(mesh, { localDaemonId: host.actor });
         if (!host.actor || !host.machineId || !daemonIdsEquivalent5(host.actor, host.machineId) || !mesh.meshHost?.hostDaemonId || !daemonIdsEquivalent5(mesh.meshHost.hostDaemonId, host.actor) || owner.role !== "host" || !daemonIdsEquivalent5(owner.hostDaemonId, host.actor)) throw new Error("authenticated_local_mesh_host_required");

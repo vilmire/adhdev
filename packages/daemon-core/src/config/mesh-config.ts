@@ -515,7 +515,7 @@ export function recoverLocalNodeIdentity(meshId: string, nodeId: string, request
         if (!config || !mesh || !node) throw new Error('node_not_found');
         const cached = host.cachedNode;
         // Missing identity must agree; populated daemon aliases identify the same machine.
-        const cachedDaemonMatches = !cached || (cached.daemonId === undefined && node.daemonId === undefined)
+        const cachedDaemonMatches = !cached || (typeof cached.daemonId === 'undefined' && typeof node.daemonId === 'undefined')
             || daemonIdsEquivalent(cached.daemonId, node.daemonId);
         if (cached && (cached.workspace !== node.workspace || !cachedDaemonMatches || cached.machineId !== node.machineId)) throw new Error('node_identity_cache_conflict');
         const owner = resolveMeshHostStatus(mesh, { localDaemonId: host.actor });
