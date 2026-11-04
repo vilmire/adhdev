@@ -78531,6 +78531,13 @@ Owner-authorized input recovery: review ${r.expectedHeadSha} in the authenticate
         clone = (s2) => JSON.parse(JSON.stringify(s2));
       }
     });
+    var FINGERPRINT_V2;
+    var init_stage_ports = __esm2({
+      "src/mesh/stage-ports.ts"() {
+        "use strict";
+        FINGERPRINT_V2 = "fp2";
+      }
+    });
     function stashStageReport(meshId, taskId, report) {
       stash.delete(key3(meshId, taskId));
       stash.set(key3(meshId, taskId), report);
@@ -78624,6 +78631,7 @@ ${body.replace(/<\/?\s*(untrusted_[a-z_]+)\b[^>]*>/gi, "[tag removed]")}
         init_stage_review_recovery();
         init_dist();
         init_stage_pipeline();
+        init_stage_ports();
         init_stage_report_stash();
         init_stage_synthesis();
         init_stage_state();
@@ -78718,7 +78726,9 @@ ${body.replace(/<\/?\s*(untrusted_[a-z_]+)\b[^>]*>/gi, "[tag removed]")}
               const independenceUsed = reviewIndependenceOf(fresh.review ?? {}) === "fresh_session" ? "fresh_session_fallback" : "different_provider";
               if (!fresh.reviewerWorkspace && fresh.status === "completed") {
                 const workspace = this.ports.workspaceOf(parent);
-                const now = workspace ? await this.safeFingerprint(workspace) : null;
+                const legacyBaseline = !!st.reviewFingerprint && !st.reviewFingerprint.startsWith(`${FINGERPRINT_V2}
+`);
+                const now = workspace ? await this.safeFingerprint(workspace, legacyBaseline) : null;
                 if (!st.reviewFingerprint || st.reviewFingerprintUnavailable || !now || this.ports.queue.reviewInputValid?.(parent, fresh) === false) {
                   dropStageReport(meshId, childId);
                   await this.apply(meshId, parentId, { kind: "reviewer_integrity_unverifiable", childTaskId: childId, at: this.iso() });
@@ -79027,9 +79037,9 @@ ${result.log.slice(-SELF_CHECK_LOG_MAX)}
             } catch {
             }
           }
-          async safeFingerprint(workspace) {
+          async safeFingerprint(workspace, legacy = false) {
             try {
-              return await this.ports.git.fingerprint(workspace) || null;
+              return await this.ports.git.fingerprint(workspace, legacy ? { legacy: true } : void 0) || null;
             } catch {
               return null;
             }
@@ -81326,6 +81336,7 @@ ${report}`;
         init_stage_hooks();
         init_stage_notice_silence();
         init_stage_state();
+        init_stage_ports();
         init_refine_profile_run();
         init_light_workspace();
         init_light_workspace_config();
@@ -81377,11 +81388,13 @@ ${report}`;
               const g3 = (args, max = 64 * 1024 * 1024) => git6(workspace, ["-c", "core.fsmonitor=false", ...args], max);
               const sha8 = (text9) => (0, import_node_crypto21.createHash)("sha256").update(text9).digest("hex");
               const head = (await g3(["rev-parse", "HEAD"])).trim();
-              const status = await g3(["status", "--porcelain=v1", "--untracked-files=all"]);
+              const legacy = limits.legacy === true;
+              const status = await g3(["status", "--porcelain=v1", "--untracked-files=all", ...legacy ? ["--ignored=matching"] : []]);
               const diff = await g3(["diff", "HEAD", "--binary"]);
               const lsv = await g3(["ls-files", "-v"]);
               const untracked = (await g3(["ls-files", "-z", "-o", "--exclude-standard"])).split("\0").filter(Boolean);
-              const entries2 = untracked.map((p) => `u:${p}`);
+              const ignored = legacy ? (await g3(["ls-files", "-z", "-o", "-i", "--exclude-standard"])).split("\0").filter(Boolean) : [];
+              const entries2 = [...untracked.map((p) => `u:${p}`), ...ignored.map((p) => `i:${p}`)];
               if (entries2.length > maxEntries) return null;
               entries2.sort();
               const lines = new Array(entries2.length);
@@ -81407,7 +81420,7 @@ ${report}`;
               };
               await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(1, entries2.length)) }, worker));
               if (failed || Date.now() > deadline) return null;
-              return [head, sha8(status), sha8(diff), sha8(lsv), sha8(lines.join("\n"))].join("\n");
+              return [...legacy ? [] : [FINGERPRINT_V2], head, sha8(status), sha8(diff), sha8(lsv), sha8(lines.join("\n"))].join("\n");
             } catch {
               return null;
             }
@@ -94681,6 +94694,8 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         if (recentlyAttempted(key7, now)) continue;
         attempted.set(key7, now);
         const from = task.assignedProviderType;
+        const assignedNode = (Array.isArray(mesh?.nodes) ? mesh.nodes : []).find((n) => task.assignedNodeId && meshNodeIdMatches7(n, task.assignedNodeId));
+        if (!assignedNode || !isLocalAutoLaunchNode(assignedNode)) continue;
         const alternatives = await (deps.findAlternatives ?? (components ? usableAlternativeFinder(components, meshId, mesh) : async () => []))(
           { ...task, requiredTags: [...(task.requiredTags ?? []).filter((t) => !t.startsWith("provider=")), `provider=${from}`] }
         );
@@ -140316,7 +140331,7 @@ ${tail}` : ""
       const surrogate = { mesh_mission_events: "seq", mesh_release_events: "seq", ...historyIdentity === "preserve-exact" ? {} : { mesh_tool_call_log: "id", assistant_procedure_signals: "id" } };
       const appendOnly = historyIdentity === "preserve-exact" ? /* @__PURE__ */ new Set(["mesh_tool_call_log", "assistant_procedure_signals"]) : /* @__PURE__ */ new Set();
       const observed2 = /* @__PURE__ */ new Set(["mesh_topic_index", "mesh_local_records", "session_artifacts", "turn_events"]);
-      const sourceWins = (table, row2, columns, existing) => table === "turn_events" && row2[columns.indexOf("publish_state")] === "pending" || table === "session_artifacts" && existing.origin_daemon_id === source2;
+      const sourceWins = (table, row2, columns, existing) => table === "turn_events" && row2[columns.indexOf("publish_state")] === "pending" || (table === "session_artifacts" && existing.origin_daemon_id === source2 || daemonIdsEquivalent5(String(existing.origin_daemon_id ?? ""), source2));
       const apply = db3.transaction(() => {
         const counts2 = {};
         const retained = db3.prepare("SELECT snapshot_digest FROM mesh_host_handoff_archive WHERE handoff_id=? AND side=?").all(handoffId, "source-snapshot")[0];
@@ -140415,6 +140430,7 @@ ${tail}` : ""
       "src/mesh/host-handoff/snapshot-import.ts"() {
         "use strict";
         init_snapshot_export();
+        init_dist();
         init_project_files();
         init_assistant_projects();
         init_history_identity();
@@ -165851,6 +165867,9 @@ ${defangRelayBody(text9)}`;
           const stopped = await control.stopSessionIfExpected(sessionId, expected);
           if (!stopped || stopped.lifecycle !== "stopped" && stopped.lifecycle !== "stopping") {
             return { success: false, error: "cleanup_unconfirmed", retained: true };
+          }
+          if (stopped.lifecycle === "stopping" && !await awaitSessionStopProof({ control, sessionId, expected, timeoutMs: legacy?.timeoutMs, pollMs: legacy?.pollMs })) {
+            return { success: false, error: "cleanup_stop_not_proven", retained: true };
           }
           confirmSessionStop(db3, sessionId, stopId);
           return { success: true, expected };
@@ -205649,6 +205668,7 @@ ${lines.join("\n")}
     init_mesh_runtime_store();
     init_mesh_quota_override();
     init_dist();
+    init_mesh_candidacy_predicates();
     init_mesh_runtime_store();
     init_mesh_quota_override();
     init_mesh_mission_decisions();
@@ -205680,6 +205700,14 @@ ${lines.join("\n")}
       const resolved = await ctx.getMeshForCommand(req.meshId, void 0, { preferInline: true });
       const node = resolved?.mesh?.nodes?.find((n) => meshNodeIdMatches7(n, task.assignedNodeId));
       if (!node) return reopen({ ok: false, code: "quota_switch_node_missing", error: "the node that ran the task is no longer in the project" });
+      if (!isLocalAutoLaunchNode(node)) {
+        return reopen({
+          ok: false,
+          code: "quota_switch_remote_node",
+          error: "this task runs on another machine; switching its CLI from here cannot prove the old session stopped",
+          recovery: "Wait for the limit to reset, or stop the session from that machine (or its own dashboard) and requeue the task there."
+        });
+      }
       const control = ctx.deps.sessionHostControl;
       const result = await switchQuotaExhaustedSession({
         hostHasSession: control ? async (id4) => (await control.listSessions()).some((r) => r?.sessionId === id4) : void 0,
@@ -211353,13 +211381,23 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (!hostResult?.success) {
           return { success: false, code: hostResult?.code || "mesh_host_join_rejected", meshId, transport, error: hostResult?.error || "The project host rejected the pairing code. Create a new code on the host and retry.", hostResult: redactHostJoinResult(hostResult) };
         }
-        const answeredHost = readTrimmed2(hostResult.hostDaemonId) || readTrimmed2(hostResult.meshHost?.hostDaemonId) || hostDaemonId;
+        const claimedHost = readTrimmed2(hostResult.hostDaemonId) || readTrimmed2(hostResult.meshHost?.hostDaemonId);
+        if (hostAddress && !claimedHost) {
+          return { success: false, code: "mesh_host_pin_identity_missing", meshId, transport, error: "The machine at that address did not say which project host it is, so its key cannot be trusted over plain HTTP; nothing was pinned. Update the host daemon, or pin through the relayed path from the host." };
+        }
+        const answeredHost = claimedHost || hostDaemonId;
         if (!daemonIdsEquivalent5(answeredHost, hostDaemonId)) {
           return { success: false, code: "mesh_host_pin_identity_mismatch", meshId, transport, error: "The machine that answered is not the project host this machine recognises; nothing was pinned." };
         }
         const offeredKey = readTrimmed2(hostResult.originGrantPublicKey) || readTrimmed2(hostResult.meshHost?.originGrantPublicKey);
         if (!isValidOriginGrantPublicKey(offeredKey)) {
           return { success: false, code: "mesh_host_pin_key_unavailable", meshId, transport, error: "The project host accepted the code but returned no artifact signing key (it may run an older build). Update the host daemon, create a new code and retry." };
+        }
+        if (hostAddress) {
+          const existingPin = resolveTrustedHostOriginGrantPublicKey({ meshId, hostDaemonId });
+          if (existingPin && existingPin !== offeredKey) {
+            return { success: false, code: "mesh_host_pin_key_changed", meshId, transport, error: "This machine already pins a different signing key for the project host. Plain HTTP cannot replace it: pin through the relayed path from the host, or revoke the existing pin first (revoke_mesh_peer), then retry with a fresh code." };
+          }
         }
         const secretMeshId = readTrimmed2(hostResult.meshId) || meshId;
         const peerSecret = readTrimmed2(hostResult.peerSecret);
@@ -225204,6 +225242,16 @@ ${buttons.join("\n")}`;
       if (summary) {
         host.lastCompletionSummary = { content: summary, receivedAt: opts.timestamp };
       }
+      const nativeQuotaVerdict = host.turnEvidencePort && typeof summary === "string" && summary && !classifyOwnAuthFailureOnlyReply(host.type, summary) ? classifyOwnQuotaFailureOnlyReply(host.type, summary) : null;
+      if (nativeQuotaVerdict === "usage_limit_exceeded") {
+        try {
+          const observedAt = Date.now();
+          const resetsAt = host.type === "claude-cli" ? parseClaudeUsageLimitBanner(summary, observedAt)?.resetsAt : void 0;
+          recordCliRateLimitEvidence(host.type, { observedAt, ...resetsAt ? { resetsAt } : {} });
+        } catch {
+        }
+      }
+      if (host.type === "claude-cli" && summary && !classifyOwnAuthFailureOnlyReply(host.type, summary) && classifyOwnQuotaFailureOnlyReply(host.type, summary) === "usage_limit_exceeded") return;
       const completionEvidenceInput = {
         chatTitle: opts.chatTitle,
         duration: opts.duration,
@@ -225221,15 +225269,6 @@ ${buttons.join("\n")}`;
         weak,
         emittedAtEpoch: host.busyEpoch
       };
-      const nativeQuotaVerdict = host.turnEvidencePort && typeof summary === "string" && summary && !classifyOwnAuthFailureOnlyReply(host.type, summary) ? classifyOwnQuotaFailureOnlyReply(host.type, summary) : null;
-      if (nativeQuotaVerdict === "usage_limit_exceeded") {
-        try {
-          const observedAt = Date.now();
-          const resetsAt = host.type === "claude-cli" ? parseClaudeUsageLimitBanner(summary, observedAt)?.resetsAt : void 0;
-          recordCliRateLimitEvidence(host.type, { observedAt, ...resetsAt ? { resetsAt } : {} });
-        } catch {
-        }
-      }
       if (host.turnEvidencePort) {
         emitTurnEnd(host.turnEvidencePort, {
           sessionId: host.instanceId,
