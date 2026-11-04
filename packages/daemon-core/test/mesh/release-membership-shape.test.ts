@@ -29,6 +29,8 @@ describe('release membership is explicit (no daemon-initiated membership)', () =
         expect(using(/mesh_release_missions/)).toEqual([
             'mesh/host-handoff/snapshot-export.ts',
             'mesh/host-handoff/snapshot-import.ts',
+            // Host move only: retires the target's row when the host's membership wins; adds no member.
+            'mesh/host-handoff/snapshot-reconcile.ts',
             'mesh/mesh-mission-items-store.ts',
             'mesh/mesh-release-schema.ts',
             'mesh/mesh-release-store.ts',
