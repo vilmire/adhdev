@@ -647,7 +647,8 @@ export function wireAssistantRuntime(
                 }
             })();
         }, { name: 'assistant.context' }));
-        relay.start();
+        // The assistant must not be able to stop the daemon from booting.
+        try { relay.start(); } catch (e) { LOG.error('Assistant', `relay did not start: ${(e as Error)?.message ?? e}`); }
         sessionControl.restorePending();
         offs.push(() => relay.stop());
         tickTimer = setInterval(tick, opts.tickMs ?? ASSISTANT_RELAY_TICK_MS);

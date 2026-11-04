@@ -66,6 +66,13 @@ function toRelay(r: RelayDbRow): AssistantRelayRow {
     };
 }
 
+/** Reading coverage tidies up as it goes. A project mid host move refuses those writes, and the read must still work: a daemon reads this at boot. */
+function skipWhileHostMoveFenced(tidy: () => unknown): void {
+    try { tidy(); } catch (error) {
+        if (!String((error as Error)?.message ?? error).includes('mesh_host_handoff_fenced')) throw error;
+    }
+}
+
 export class SqliteAssistantRelayStore implements AssistantRelayStore {
     constructor(private readonly db: DatabaseHandle) {}
 
@@ -172,7 +179,7 @@ export class SqliteAssistantRelayStore implements AssistantRelayStore {
     }
 
     listDeliveredCoverage(now: number): StoredAttemptCoverage[] {
-        this.pruneCoverage(now);
+        skipWhileHostMoveFenced(() => this.pruneCoverage(now));
         const rows = this.db.prepare(`SELECT attempt_id, coordinator_session_id, rendered_at, replies_json, reply_count
             FROM assistant_relay_coverage ORDER BY rendered_at, attempt_id`).all() as Array<{
                 attempt_id: string; coordinator_session_id: string; rendered_at: number; replies_json: string; reply_count: number;
@@ -183,7 +190,7 @@ export class SqliteAssistantRelayStore implements AssistantRelayStore {
             let manifest: RenderedAttemptCoverage | null = null;
             try { manifest = copyRenderedCoverage({ attemptId: row.attempt_id, coordinatorSessionId: row.coordinator_session_id, replies: JSON.parse(row.replies_json) }); } catch { /* corrupt manifests prove no coverage */ }
             if (!manifest || manifest.replies.length !== row.reply_count || !Number.isSafeInteger(row.rendered_at)
-                || !Number.isFinite(new Date(row.rendered_at).getTime())) { drop.run(row.attempt_id); continue; }
+                || !Number.isFinite(new Date(row.rendered_at).getTime())) { skipWhileHostMoveFenced(() => drop.run(row.attempt_id)); continue; }
             out.push({ ...manifest, renderedAt: row.rendered_at });
         }
         return out;

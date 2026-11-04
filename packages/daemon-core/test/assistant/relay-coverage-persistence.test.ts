@@ -57,6 +57,17 @@ describe('delivered native coverage persistence', () => {
         expect(db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_assistant_relay_coverage_age'").get()).toBeTruthy();
     });
 
+    it('reads coverage while a host move refuses the tidy-up, and still reports any other failure', () => {
+        const db = database();
+        const store: any = new SqliteAssistantRelayStore(db);
+        commit(store);
+        store.markDelivered(['plain:a'], NOW, ['plain:a'], [manifest()]);
+        db.exec(`CREATE TRIGGER fence BEFORE DELETE ON assistant_relay_coverage BEGIN SELECT RAISE(ABORT, 'mesh_host_handoff_fenced'); END`);
+        expect(store.listDeliveredCoverage(NOW + 400 * 24 * 60 * 60 * 1000)).toHaveLength(1);
+        db.exec(`DROP TRIGGER fence; CREATE TRIGGER other BEFORE DELETE ON assistant_relay_coverage BEGIN SELECT RAISE(ABORT, 'disk trouble'); END`);
+        expect(() => store.listDeliveredCoverage(NOW + 400 * 24 * 60 * 60 * 1000)).toThrow('disk trouble');
+    });
+
     it.each(['memory', 'sqlite'])('validates settlement/session ownership and never overwrites delivered coverage (%s)', kind => {
         const store: any = kind === 'memory' ? new InMemoryAssistantRelayStore() : new SqliteAssistantRelayStore(database());
         commit(store);

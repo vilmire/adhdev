@@ -145444,6 +145444,13 @@ ${grant.exp}`).digest("hex");
         outcome: r.outcome
       };
     }
+    function skipWhileHostMoveFenced(tidy) {
+      try {
+        tidy();
+      } catch (error) {
+        if (!String(error?.message ?? error).includes("mesh_host_handoff_fenced")) throw error;
+      }
+    }
     function metricDay(at) {
       const d = new Date(at);
       const p = (n) => String(n).padStart(2, "0");
@@ -145552,7 +145559,7 @@ ${grant.exp}`).digest("hex");
             })(attemptIds);
           }
           listDeliveredCoverage(now) {
-            this.pruneCoverage(now);
+            skipWhileHostMoveFenced(() => this.pruneCoverage(now));
             const rows = this.db.prepare(`SELECT attempt_id, coordinator_session_id, rendered_at, replies_json, reply_count
             FROM assistant_relay_coverage ORDER BY rendered_at, attempt_id`).all();
             const out = [];
@@ -145564,7 +145571,7 @@ ${grant.exp}`).digest("hex");
               } catch {
               }
               if (!manifest || manifest.replies.length !== row2.reply_count || !Number.isSafeInteger(row2.rendered_at) || !Number.isFinite(new Date(row2.rendered_at).getTime())) {
-                drop.run(row2.attempt_id);
+                skipWhileHostMoveFenced(() => drop.run(row2.attempt_id));
                 continue;
               }
               out.push({ ...manifest, renderedAt: row2.rendered_at });
@@ -159508,7 +159515,11 @@ ${defangRelayBody(text9)}`;
             }
           })();
         }, { name: "assistant.context" }));
-        relay.start();
+        try {
+          relay.start();
+        } catch (e) {
+          LOG.error("Assistant", `relay did not start: ${e?.message ?? e}`);
+        }
         sessionControl.restorePending();
         offs.push(() => relay.stop());
         tickTimer = setInterval(tick2, opts.tickMs ?? ASSISTANT_RELAY_TICK_MS);
