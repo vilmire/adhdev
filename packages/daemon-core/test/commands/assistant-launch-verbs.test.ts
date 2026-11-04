@@ -33,6 +33,8 @@ import { acquireOwnedLock } from '../../src/launch-defaults/owned-lock.js';
 import * as ownedLocks from '../../src/launch-defaults/owned-lock.js';
 import { beginAssistantSpawn } from '../../src/assistant/assistant-launch-fence.js';
 import { assistantLaunchHandlers } from '../../src/commands/high-family/assistant-launch.js';
+import { __resetMcpSessionCredentialsForTest, __setMcpSessionCredentialPersistenceForTest } from '../../src/commands/mcp-command-ingress.js';
+import { FileMcpSessionCredentialStore } from '../../src/commands/mcp-session-credential-store.js';
 import { writeProtectedAssistantConfigFile } from '../../src/assistant/assistant-config-io.js';
 import { ASSISTANT_MCP_SERVER_NAME, mergeAssistantCodexMcpConfigToml } from '../../src/assistant/assistant-launch-plan.js';
 import { createAssistantServices, setAssistantServicesForTests } from '../../src/assistant/assistant-services.js';
@@ -423,6 +425,32 @@ describe('launch_assistant', () => {
         }
         expect(launchCalls()).toHaveLength(0);
         expect(existsSync(join(dir, 'mcp-configs', 'assistant.json'))).toBe(false);
+    });
+
+    it('a launch refused before the host spawns leaves no MCP credential binding behind', async () => {
+        const store = new FileMcpSessionCredentialStore(join(dir, 'mcp-session-credentials.json'));
+        __setMcpSessionCredentialPersistenceForTest(store);
+        try {
+            const codex: any = {
+                type: 'codex-cli',
+                meshCoordinator: {
+                    supported: true,
+                    mcpConfig: { mode: 'manual', serverName: 'adhdev-mesh', requiresRestart: true, instructions: 'codex mcp add', template: 'codex mcp add {{serverName}} -- {{adhdevMcpCommand}} {{adhdevMcpArgs}}' },
+                    systemPromptInjection: { mode: 'cli_arg', flag: '-c' },
+                },
+            };
+            const c = ctx();
+            c.deps.providerLoader = loader(codex);
+            const codexDir = join(dir, 'assistant', '.codex');
+            mkdirSync(codexDir, { recursive: true, mode: 0o700 });
+            writeFileSync(join(codexDir, 'config.toml'), '[mcp_servers.adhdev-assistant]\nargs = ["unclosed"\n', { mode: 0o600 });
+            expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, { cliType: 'codex-cli' })).toMatchObject({ success: false, code: 'assistant_config_write_failed' });
+            expect(launchCalls()).toHaveLength(0);
+            expect(store.list()).toEqual([]);
+        } finally {
+            __resetMcpSessionCredentialsForTest();
+            __setMcpSessionCredentialPersistenceForTest(null);
+        }
     });
 
     it.each([false, true])('reuses a hosted/restorable assistant after binding damage (already bound: %s)', async bound => {

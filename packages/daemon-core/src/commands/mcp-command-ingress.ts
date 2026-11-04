@@ -140,22 +140,42 @@ function persistCredential(entry: McpSessionCredentialRecord): void {
         isCoordinator: entry.isCoordinator,
         mintedAtMs: entry.mintedAtMs,
     };
-    try { credentialPersistence.put(row); } catch { /* best-effort: memory stays authoritative */ }
+    try {
+        credentialPersistence.put(row);
+        // put() replaces every row of this session, so the stale hash is gone.
+        undeletedRevocations.delete(entry.sessionId);
+    } catch { /* best-effort: memory stays authoritative */ }
 }
+
+/**
+ * Sessions whose persisted hash could not be deleted (full disk, EACCES). A
+ * revoked credential must not come back from the file: these sessions are never
+ * re-adopted from persistence, and the delete is retried on the next write.
+ */
+const undeletedRevocations = new Set<string>();
 
 function deletePersistedCredential(sessionId: string): void {
     if (!credentialPersistence) return;
-    try { credentialPersistence.deleteBySession(sessionId); } catch { /* best-effort */ }
+    undeletedRevocations.add(sessionId);
+    for (const pending of [...undeletedRevocations]) {
+        try {
+            credentialPersistence.deleteBySession(pending);
+            undeletedRevocations.delete(pending);
+        } catch { /* stays tombstoned for this process; retried on the next revoke */ }
+    }
 }
 
 function persistedCredential(sessionId: string): PersistedMcpSessionCredential | null {
-    if (!credentialPersistence) return null;
+    if (!credentialPersistence || undeletedRevocations.has(sessionId)) return null;
     try { return credentialPersistence.getBySession(sessionId); } catch { return null; }
 }
 
 function persistedCredentialByHash(tokenHash: string): PersistedMcpSessionCredential | null {
     if (!credentialPersistence) return null;
-    try { return credentialPersistence.getByHash(tokenHash); } catch { return null; }
+    try {
+        const row = credentialPersistence.getByHash(tokenHash);
+        return row && !undeletedRevocations.has(row.sessionId) ? row : null;
+    } catch { return null; }
 }
 
 function adoptPersistedCredential(row: PersistedMcpSessionCredential): McpSessionCredentialRecord {
@@ -280,6 +300,7 @@ export function revokeMcpSessionCredential(sessionId: string): void {
 }
 
 export function __resetMcpSessionCredentialsForTest(): void {
+    undeletedRevocations.clear();
     credentialStore.byToken.clear();
     credentialStore.byHash.clear();
     credentialStore.bySessionId.clear();

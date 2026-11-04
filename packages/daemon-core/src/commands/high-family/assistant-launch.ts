@@ -178,32 +178,36 @@ const launchAssistantOnce = async (
         sessionCredential: assistantMcpCredential,
         declaredMcpConfigPath: provider?.meshCoordinator?.mcpConfig?.path,
     });
-    if (!mcp.ok) {
+    // Before the host spawns anything, a failed launch leaves no credential behind.
+    // After dispatch the runtime may exist, and cleanup owns the session.
+    const failPreSpawn = (...failArgs: Parameters<typeof fail>) => {
         revokeMcpSessionCredential(assistantSessionKey);
-        return fail(mcp.code, mcp.error, { cliType });
-    }
+        return fail(...failArgs);
+    };
+    if (!mcp.ok) return failPreSpawn(mcp.code, mcp.error, { cliType });
     const approval = resolveAssistantApprovalSettings(provider, args?.autoApproveMode);
-    if (!approval.ok) return fail(approval.code, approval.error, { cliType });
+    if (!approval.ok) return failPreSpawn(approval.code, approval.error, { cliType });
 
     let projects: AssistantPromptProject[];
     try {
         projects = await promptProjects(ctx);
     } catch (e) {
+        revokeMcpSessionCredential(assistantSessionKey);
         if (isDaemonComponentsNotReady(e)) return componentsNotReadyResult(e);
         throw e;
     }
-    if (fence.aborted) return fail('assistant_launch_timeout');
-    if (ctx.deps.cliManager.hostedRestoreState !== 'ready') return fail('assistant_restore_pending');
+    if (fence.aborted) return failPreSpawn('assistant_launch_timeout');
+    if (ctx.deps.cliManager.hostedRestoreState !== 'ready') return failPreSpawn('assistant_restore_pending');
     const svc = getAssistantServices();
     const prompt = buildAssistantSystemPrompt({ projects, memory: svc.memory.read(), skills: svc.skills.list(), frozenAt: new Date() });
     // From here a change to the memory files that no store write caused is a hand edit the session has not seen.
     svc.memory.markSnapshotTaken();
-    if (!prompt.withinLimit) return fail('assistant_prompt_too_long', `assistant prompt is ${prompt.length} chars`, { cliType });
+    if (!prompt.withinLimit) return failPreSpawn('assistant_prompt_too_long', `assistant prompt is ${prompt.length} chars`, { cliType });
 
     try {
         ensurePrivateAssistantWorkspace(configDir, workspace);
     } catch (e) {
-        return fail('assistant_config_write_failed', `could not prepare the assistant workspace: ${(e as Error)?.message ?? e}`, { cliType, workspace });
+        return failPreSpawn('assistant_config_write_failed', `could not prepare the assistant workspace: ${(e as Error)?.message ?? e}`, { cliType, workspace });
     }
     if (mcp.privateHome) {
         // Home-rooted CLI (antigravity): the worker private-HOME mechanism at a
@@ -215,7 +219,7 @@ const launchAssistantOnce = async (
             const prepared = materializePrivateHome(mcp.privateHome.spec, { home: mcp.privateHome.dir, workspace });
             if (prepared.failed.length) LOG.warn('Assistant', `[${cliType}] private HOME imports failed: ${prepared.failed.join(', ')}`);
         } catch (e) {
-            return fail('assistant_private_home_failed', `could not prepare the assistant's private HOME: ${(e as Error)?.message ?? e}`, { cliType, workspace });
+            return failPreSpawn('assistant_private_home_failed', `could not prepare the assistant's private HOME: ${(e as Error)?.message ?? e}`, { cliType, workspace });
         }
     }
     try {
@@ -230,7 +234,7 @@ const launchAssistantOnce = async (
             }
         }
     } catch (e) {
-        return fail('assistant_config_write_failed', `could not prepare the assistant MCP config: ${(e as Error)?.message ?? e}`, { cliType, workspace });
+        return failPreSpawn('assistant_config_write_failed', `could not prepare the assistant MCP config: ${(e as Error)?.message ?? e}`, { cliType, workspace });
     }
 
     const cliArgs: string[] = [];
@@ -244,7 +248,7 @@ const launchAssistantOnce = async (
     };
     const { applyMeshCoordinatorSystemPromptInjection } = await import('../mesh-coordinator.js');
     const injection = applyMeshCoordinatorSystemPromptInjection(prompt.text, provider?.meshCoordinator?.systemPromptInjection, { cliArgs, launchEnv, workspace, cliType });
-    if (injection.error) return fail(injection.errorCode ?? 'assistant_prompt_failed', injection.error, { cliType, workspace });
+    if (injection.error) return failPreSpawn(injection.errorCode ?? 'assistant_prompt_failed', injection.error, { cliType, workspace });
     // Provider-declared MCP launch args (e.g. cursor --approve-mcps), then the assistant's own.
     const providerLaunchArgs = provider?.meshCoordinator?.launchArgs;
     if (Array.isArray(providerLaunchArgs)) cliArgs.push(...providerLaunchArgs.filter((a: unknown): a is string => typeof a === 'string' && !!a.trim()));
@@ -257,11 +261,11 @@ const launchAssistantOnce = async (
     try {
         if (fence.aborted) {
             void scheduleInjectionCleanup(injection, { launched: false, label: 'assistant' });
-            return fail('assistant_launch_timeout');
+            return failPreSpawn('assistant_launch_timeout');
         }
         if (ctx.deps.cliManager.hostedRestoreState !== 'ready') {
             void scheduleInjectionCleanup(injection, { launched: false, label: 'assistant' });
-            return fail('assistant_restore_pending');
+            return failPreSpawn('assistant_restore_pending');
         }
         registerAssistantLaunchFence(assistantSessionKey, fence);
         fence.dispatched = true;
