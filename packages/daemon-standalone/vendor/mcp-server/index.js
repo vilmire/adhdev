@@ -247318,7 +247318,7 @@ var MESH_CHECKPOINT_TOOL = {
   }
 };
 
-// src/tools/mesh-host-pairing-tool.ts
+// src/tools/mesh-tools-host-pairing.ts
 var MESH_HOST_PAIRING_TOOL = {
   name: "mesh_host_pairing",
   description: `Fix "host_pin_missing" artifact refusals on a machine that is already attached to this project. Step 1: action=create_code on the host (returns a single-use pairing code valid 10 minutes; share it only with the owner). Step 2: action=pin_host_key with target_daemon_id (the member machine) and code; the member contacts the host with the code and stores the host's artifact signing key. Never pass a key; the code is the only credential and is verified by the host.`,

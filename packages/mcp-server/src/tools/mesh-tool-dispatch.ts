@@ -32,7 +32,7 @@
  * ★Aliases are deliberately NOT in this table — see MESH_ALIAS_DISPATCH below.
  */
 import { meshReattachSourceParent } from './mesh-tools-crud.js';
-import { meshHostPairing } from './mesh-host-pairing-tool.js';
+import { meshHostPairing } from './mesh-tools-host-pairing.js';
 import { callDriverTool } from './driver-tools.js';
 import {
     callCoordinatorArtifactList,

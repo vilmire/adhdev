@@ -24,7 +24,7 @@ export const MESH_HOST_PAIRING_TOOL = {
     },
 };
 
-export async function meshHostPairing(ctx: MeshContext, args: Record<string, any>): Promise<string> {
+export async function meshHostPairing(ctx: MeshContext, args: { action?: unknown; code?: unknown; target_daemon_id?: unknown }): Promise<string> {
     const action = typeof args?.action === 'string' ? args.action : '';
     if (action === 'create_code') {
         return JSON.stringify(await ctx.transport.command('create_mesh_host_pairing_token', { meshId: ctx.mesh.id }));

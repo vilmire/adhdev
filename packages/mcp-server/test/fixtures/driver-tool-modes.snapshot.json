@@ -32,6 +32,7 @@
     "mesh_direct_cancel",
     "mesh_queue_requeue",
     "mesh_queue_revise",
+    "mesh_recover_node_identity",
     "mesh_light_land",
     "mesh_light_discard",
     "mesh_send_task",

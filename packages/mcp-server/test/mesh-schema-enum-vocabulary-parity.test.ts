@@ -68,7 +68,7 @@ const EVERY_VOCABULARY = [
  * D2 pattern, now applied mesh-wide) — still accepted via
  * MESH_ACCEPTED_ARG_ALIASES and enum-checked as their canonical key.
  */
-const EXPECTED_VOCABULARY_PROPERTY_COUNT = 14;
+const EXPECTED_VOCABULARY_PROPERTY_COUNT = 15;
 
 interface EnumSite { tool: string; path: string; leaf: string; values: unknown }
 
