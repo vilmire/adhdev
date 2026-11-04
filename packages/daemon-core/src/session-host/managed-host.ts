@@ -29,6 +29,8 @@ import {
     createSessionHostProbeInvocation,
     type SessionHostReplacementAuthorization,
 } from './runtime-support.js';
+import { captureWedgeDiagnostics, probeHostForWedge } from './wedge-recovery.js';
+import type { WedgedHostIdentity, WedgedHostSupervisorDeps } from './wedged-host-supervisor.js';
 import { DEFAULT_SESSION_HOST_READY_TIMEOUT_MS } from '../runtime-defaults.js';
 import { isPidAlive } from '../system/process-utils.js';
 
@@ -136,6 +138,16 @@ export interface ManagedSessionHost {
     killPid(pid: number): boolean;
     spawnHost(): void;
     stopManagedSessionHostProcess(): boolean;
+    /** Recorded host process (pidfile pid + native birth), or null. */
+    getHostProcessIdentity(): WedgedHostIdentity | null;
+    /**
+     * SIGKILL a host that is alive but serves nothing. Refuses unless the pidfile
+     * still names exactly `expected` (pid and birth) and its command line is this
+     * instance's managed session host. Never used for ordinary stops.
+     */
+    killWedgedHost(expected: WedgedHostIdentity): boolean;
+    /** Probe/capture/kill wiring for {@link createWedgedHostSupervisor}. */
+    wedgeRecoveryDeps(): Pick<WedgedHostSupervisorDeps, 'probe' | 'identity' | 'capture' | 'kill'>;
     acquireIdleReplacementAuthority(options: {
         owner: string;
         token: string;
@@ -465,6 +477,43 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         } catch {
             return false;
         }
+    }
+
+    function getHostProcessIdentity(): WedgedHostIdentity | null {
+        const pid = getPid();
+        if (pid === null || pid === process.pid || !isPidAlive(pid)) return null;
+        return { pid, birth: getProcessBirth(pid) };
+    }
+
+    function killWedgedHost(expected: WedgedHostIdentity): boolean {
+        assertMaintenanceLifecycle('session_host_kill', instance().configDir);
+        const current = getHostProcessIdentity();
+        if (!current || current.pid !== expected.pid || current.birth !== expected.birth) return false;
+        // A wedged host cannot run a SIGTERM handler (its main thread may be
+        // parked in a libuv join), so this is the one place that sends SIGKILL.
+        try {
+            if (!canSignalPid(expected.pid)) return false;
+            if (process.platform === 'win32') {
+                hiddenExecFileSync('taskkill', ['/PID', String(expected.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+            } else {
+                process.kill(expected.pid, 'SIGKILL');
+            }
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    function wedgeRecoveryDeps(): Pick<WedgedHostSupervisorDeps, 'probe' | 'identity' | 'capture' | 'kill'> {
+        return {
+            probe: (longTimeout) => probeHostForWedge(getEndpoint(), longTimeout),
+            identity: getHostProcessIdentity,
+            capture: (identity, context) => captureWedgeDiagnostics(
+                identity, context, path.join(instance().configDir, 'logs'),
+                path.join(instance().configDir, 'logs', 'session-host.log'),
+            ),
+            kill: killWedgedHost,
+        };
     }
 
     /**
@@ -887,6 +936,9 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         killPid,
         spawnHost,
         stopManagedSessionHostProcess,
+        getHostProcessIdentity,
+        killWedgedHost,
+        wedgeRecoveryDeps,
         acquireIdleReplacementAuthority,
         ensureReady,
         getStatusPaths() {

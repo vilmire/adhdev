@@ -13,7 +13,7 @@ function noteStageReviewRefusal(candidate: MeshWorkQueueEntry, refusal: string |
 }
 import { attestLocalOwnership, comparePhysicalOwnership, currentPhysicalScope, explainPhysicalOverlap } from './mesh-physical-ownership.js';
 import type { PhysicalOwnershipScope } from '@adhdev/mesh-shared';
-import { queueHoldContext, setQueueTaskHold } from './mesh-queue-hold.js';
+import { ownershipUnprovenResolution, queueHoldContext, setQueueTaskHold } from './mesh-queue-hold.js';
 /**
  * The queue claim transaction of MeshRuntimeStore: one session atomically claims
  * the next pending task it may run — the dependency gate, notBefore, target pins,
@@ -575,7 +575,7 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
                     const escaped = message.match(/ownership_symlink_escape:\s*(\S+)/);
                     const unknownField = forbidden?.[1] || escaped?.[1] || (/ownedPaths/.test(message) ? 'ownedPaths' : 'workspace');
                     context.blockingTaskIds = [];
-                    context.detail = { unknownField, resolution: message };
+                    context.detail = { unknownField, resolution: ownershipUnprovenResolution(message) };
                 }
                 if (gate.reason === 'dependencies_unsatisfied') context.blockingTaskIds = (candidate.dependsOn || []).filter(id => depStatus.get(id) !== 'completed');
                 const previousHold = JSON.stringify(candidate.hold);

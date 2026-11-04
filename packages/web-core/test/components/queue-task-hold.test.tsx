@@ -18,4 +18,16 @@ describe('held task presentation', () => {
         expect(html).toContain('Held: owned_paths_conflict')
         expect(html).not.toContain(' by ')
     })
+    it('names the colliding path or shared resource and the way out', () => {
+        const held = { ...task, hold: { ...task.hold!, detail: {
+            overlappingPaths: [{ taskId: 'holder-task-id', ownedPath: 'src/a.ts', blockingPath: 'src/**' }, { taskId: 'holder-task-id', ownedPath: 'physical_workspace_or_shared_resource', blockingPath: 'physical_workspace_or_shared_resource' }],
+            canonicalResource: '/repo/.git/refs',
+            resolution: 'resolves when task holder-task-id is no longer assigned',
+        } } } as RepoMeshQueueTask
+        const html = renderToStaticMarkup(<QueueTaskHold task={held} nowMs={Date.parse('2026-10-18T00:04:00Z')} />)
+        expect(html).toContain('src/a.ts ↔ src/**')
+        expect(html).toContain('physical_workspace_or_shared_resource')
+        expect(html).toContain('/repo/.git/refs')
+        expect(html).toContain('resolves when task holder-task-id is no longer assigned')
+    })
 })

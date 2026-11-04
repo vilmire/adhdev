@@ -26,6 +26,8 @@ import type { CliTransportFactoryParams, HostedCliRuntimeDescriptor } from '../c
 import type { SessionHostBoot } from '../boot/daemon-components.js';
 import { getObservedSessionHostIdentity, listHostedCliRuntimes } from './runtime-support.js';
 import { SessionHostController } from './session-host-controller.js';
+import { createWedgedHostSupervisor, type WedgedHostSupervisorDeps, type WedgedHostSupervisorOptions } from './wedged-host-supervisor.js';
+import { LOG } from '../logging/logger.js';
 
 export type SessionHostManagedBy = 'adhdev-cloud' | 'adhdev-standalone';
 
@@ -42,6 +44,14 @@ export interface SessionHostBootOptions {
     managedBy: SessionHostManagedBy;
     /** Every host event (after the controller's own logging). */
     onHostEvent?(event: SessionHostEvent): void;
+    /**
+     * Probe/identity/capture/kill for a host that is alive but serves nothing
+     * (`ManagedSessionHost.wedgeRecoveryDeps()`). Omitted = no daemon-side
+     * wedge recovery (the host's own watchdog still applies).
+     */
+    wedgeRecovery?: Pick<WedgedHostSupervisorDeps, 'probe' | 'identity' | 'capture' | 'kill'>;
+    /** Test seam for supervisor timing. */
+    wedgeRecoveryOptions?: WedgedHostSupervisorOptions;
     /** Test seam: the persistent controller (default {@link SessionHostController}). */
     createController?(
         endpoint: SessionHostEndpoint,
@@ -109,6 +119,15 @@ export async function bootSessionHost(opts: SessionHostBootOptions): Promise<Ses
         ? opts.createController(current, onEvent, ensure)
         : new SessionHostController(current, onEvent, ensure);
     await control.start();
+    const wedgeSupervisor = opts.wedgeRecovery
+        ? createWedgedHostSupervisor({
+            ...opts.wedgeRecovery,
+            respawn: ensure,
+            maintenanceHeld: () => maintenanceHeld(),
+            log: (level, message) => LOG[level]('SessionHost', message),
+        }, opts.wedgeRecoveryOptions)
+        : null;
+    wedgeSupervisor?.start();
 
     const listHostedRuntimes = (options?: { includeLaunchDetails?: boolean }) => options
         ? (opts.listHostedRuntimes ?? listHostedCliRuntimes)(current, options)
@@ -150,6 +169,6 @@ export async function bootSessionHost(opts: SessionHostBootOptions): Promise<Ses
                 replacedListeners.add(listener);
             },
         }),
-        stop: () => control.stop(),
+        stop: () => { wedgeSupervisor?.stop(); return control.stop(); },
     };
 }

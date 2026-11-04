@@ -28,7 +28,7 @@ export const MESH_MISSION_UPSERT_TOOL = {
             summary: { type: 'string', description: 'One-line current state (≤300 chars; longer is clipped). Shown in lists instead of the goal.' },
             release_note: { type: 'string', description: 'One user/operator-visible sentence (≤400 chars, English, no internal wave/rc/mission wording) describing this mission\'s result for the release CHANGELOG draft. Optionally start with [Added]/[Fixed]/[Changed]. Empty string clears it.' },
             outcome: { type: 'string', enum: ['merged', 'verified_live', 'superseded', 'not_needed', 'owner_abandoned', 'unspecified'], description: 'Why the mission closed (set with status completed/abandoned; omitted → unspecified). owner_abandoned asks the owner to confirm — only use it when the owner really decided.' },
-            outcome_reason: { type: 'string', description: 'Optional (≤500 chars): the evidence/reasoning behind the outcome. Start it with `scope:` and say what was checked and what was NOT checked (e.g. `scope: checked merge + unit tests; not checked live`) — closed missions without a `scope:` statement are shown to the owner as "scope not recorded".' },
+            outcome_reason: { type: 'string', description: 'Optional (≤500 chars): the evidence/reasoning behind the outcome. Start it with `scope:` and say what was checked and what was NOT checked (e.g. `scope: checked the requested change + unit tests; not checked live`) — closed missions without a `scope:` statement are shown to the owner as "scope not recorded".' },
             carry_over_to: { type: 'string', description: 'On close: mission id that receives the still-open items (default: the mesh carry-over mission).' },
             items_add: {
                 type: 'array',

@@ -506,7 +506,7 @@ export interface QueueReviseRequest {
     expectedRevision: number
     dryRun?: boolean
     deferScheduling?: boolean
-    patch: { message?: string; ownedPaths?: string[]; phase?: 'source' | 'integration'; dependsOn?: string[]; routingPreferences?: import('./task-source-phase').MeshRoutingPreferences; review?: import('./task-source-phase').MeshReviewConstraint; difficulty?: 'easy' | 'medium' | 'difficult' | 'freeform'; requestQuotaOverride?: true }
+    patch: { message?: string; ownedPaths?: string[]; phase?: 'source' | 'integration'; dependsOn?: string[]; routingPreferences?: import('./task-source-phase').MeshRoutingPreferences; review?: import('./task-source-phase').MeshReviewConstraint; difficulty?: 'easy' | 'medium' | 'difficult' | 'freeform'; requestQuotaOverride?: true; attestActiveOwnership?: true }
 }
 export type QueueReviseResponse = QueueRequeueResponse
 export function decodeQueueReviseRequest(value: unknown): QueueReviseRequest | null {
@@ -514,12 +514,15 @@ export function decodeQueueReviseRequest(value: unknown): QueueReviseRequest | n
         || value.v !== TURN_IPC_PROTOCOL_VERSION || !isEvidenceIdentifier(value.meshId) || !isEvidenceIdentifier(value.taskId)
         || !Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 0
         || !isRecord(value.patch) || !Object.keys(value.patch).length
-        || !hasOnlyKeys(value.patch, ['message', 'ownedPaths', 'phase', 'dependsOn', 'routingPreferences', 'review', 'difficulty', 'requestQuotaOverride'])) return null
+        || !hasOnlyKeys(value.patch, ['message', 'ownedPaths', 'phase', 'dependsOn', 'routingPreferences', 'review', 'difficulty', 'requestQuotaOverride', 'attestActiveOwnership'])) return null
     if (value.dryRun !== undefined && typeof value.dryRun !== 'boolean') return null
     if (value.deferScheduling !== undefined && typeof value.deferScheduling !== 'boolean') return null
     const p = value.patch
     if (p.requestQuotaOverride && (value.dryRun !== undefined || value.deferScheduling !== undefined)) return null
     if (p.requestQuotaOverride !== undefined && (p.requestQuotaOverride !== true || Object.keys(p).length !== 1)) return null
+    // Alone, like the quota request: it edits no field, it only attaches the missing physical proof of a running writer.
+    if (p.attestActiveOwnership && (value.dryRun !== undefined || value.deferScheduling !== undefined)) return null
+    if (p.attestActiveOwnership !== undefined && (p.attestActiveOwnership !== true || Object.keys(p).length !== 1)) return null
     if (p.message !== undefined && (typeof p.message !== 'string' || !p.message.trim())) return null
     if (p.phase !== undefined && p.phase !== 'source' && p.phase !== 'integration') return null
     if (p.difficulty !== undefined && p.difficulty !== 'easy' && p.difficulty !== 'medium' && p.difficulty !== 'difficult' && p.difficulty !== 'freeform') return null
