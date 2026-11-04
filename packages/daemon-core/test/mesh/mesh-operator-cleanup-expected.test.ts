@@ -251,7 +251,7 @@ describe('B1 operator cleanupMeshSessions expected-assignment CAS', () => {
 
         it('refuses a session that is generating a turn', async () => {
             const f = legacyFixture();
-            f.self.deps.getInstanceManager = () => ({ getByCategory: () => [{ getState: () => ({ instanceId: f.sessionId, status: 'generating' }) }] });
+            f.self.deps.instanceManager = { getByCategory: () => [{ getState: () => ({ instanceId: f.sessionId, status: 'generating' }) }] };
             const result = await cleanupMeshSessions(f.self, f.args);
             expect(result.errors?.[0]?.error).toBe('cleanup_legacy_stop_session_active');
             expect(f.control.stopSession).not.toHaveBeenCalled();
@@ -260,7 +260,7 @@ describe('B1 operator cleanupMeshSessions expected-assignment CAS', () => {
 
         it('allows a session waiting on approval/quota (not generating)', async () => {
             const f = legacyFixture();
-            f.self.deps.getInstanceManager = () => ({ getByCategory: () => [{ getState: () => ({ instanceId: f.sessionId, status: 'waiting_approval' }) }] });
+            f.self.deps.instanceManager = { getByCategory: () => [{ getState: () => ({ instanceId: f.sessionId, status: 'waiting_approval' }) }] };
             const result = await cleanupMeshSessions(f.self, f.args);
             expect(result).toMatchObject({ success: true, stoppedSessionIds: [f.sessionId] });
         });

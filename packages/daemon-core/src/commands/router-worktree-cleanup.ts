@@ -976,7 +976,7 @@ export async function recordIntentionalMeshSessionStop(self: DaemonCommandRouter
 /** Is the session mid-turn? Unknown state counts as active only when the host record shows a bound task. */
 function legacyStopSessionActive(self: DaemonCommandRouter, sessionId: string, record: any): boolean {
     try {
-        const state = (self.deps as any).getInstanceManager?.()?.getByCategory?.('cli')
+        const state = self.deps.instanceManager?.getByCategory?.('cli')
             ?.find((inst: any) => inst.getState?.().instanceId === sessionId)?.getState?.();
         if (state?.status) return state.status === 'generating' || state.status === 'starting';
     } catch { /* fall through to the host record */ }

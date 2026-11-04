@@ -76,13 +76,20 @@ function createRouter(overrides: Record<string, unknown> = {}, depsOverrides: Re
     listSessions: _listSessions,
     ...controlOverrides
   } = overrides
+  // Like a real host: a session it was asked to stop reports stopped afterwards, which is the stop proof.
+  const stoppedByHost = new Set<string>()
   const sessionHostControl = {
     listSessions: vi.fn(async (...args: unknown[]) => {
       const sessions = userListSessions ? await userListSessions(...args) : []
-      return (Array.isArray(sessions) ? sessions : []).map((s: any) => withIncarnation(s))
+      return (Array.isArray(sessions) ? sessions : []).map((s: any) => withIncarnation(
+        stoppedByHost.has(s?.sessionId) ? { ...s, lifecycle: 'stopped' } : s,
+      ))
     }),
     stopSession: vi.fn(async (sessionId: string) => ({ sessionId })),
-    stopSessionIfExpected: vi.fn(async (sessionId: string) => ({ sessionId, lifecycle: 'stopping' })),
+    stopSessionIfExpected: vi.fn(async (sessionId: string) => {
+      stoppedByHost.add(sessionId)
+      return { sessionId, lifecycle: 'stopping' }
+    }),
     deleteSession: vi.fn(async (sessionId: string) => ({ sessionId, deleted: true })),
     deleteSessionIfExpected: vi.fn(async (sessionId: string) => ({ sessionId, deleted: true })),
     resolveHostBootId: vi.fn(async () => HOST_BOOT_ID),

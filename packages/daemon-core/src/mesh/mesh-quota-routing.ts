@@ -439,7 +439,7 @@ export function evaluateProviderQuotaGate(
     // MODEL-UNSPECIFIED Antigravity admission: the provider headline is the WORST pool, so a Gemini slot with
     // headroom was refused because Claude/GPT in the same account was low. With no model to judge, admit when
     // ANY pool is clear; the claim gate re-judges the session's live model once it is known.
-    if (providerType === 'antigravity-cli' && !antigravityPoolFromLeadingLabel(target?.model)) {
+    if (providerType === 'antigravity-cli' && !target?.model?.trim()) {
         const pools = ['Gemini', 'Claude'].filter(model => quotaWindowsForGateTarget(providerType, quota, { model }));
         if (pools.length >= 2) {
             const blocks = pools.map(model => evaluateProviderQuotaGate(node, providerType, policy, now, context, { model }));

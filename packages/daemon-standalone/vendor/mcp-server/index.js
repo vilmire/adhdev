@@ -72071,7 +72071,7 @@ ${mergeTreeErr?.stderr || ""}`;
           ...cliEvidence.resetsAt !== void 0 ? { resetsAt: cliEvidence.resetsAt } : {}
         };
       }
-      if (providerType === "antigravity-cli" && !antigravityPoolFromLeadingLabel(target2?.model)) {
+      if (providerType === "antigravity-cli" && !target2?.model?.trim()) {
         const pools = ["Gemini", "Claude"].filter((model) => quotaWindowsForGateTarget(providerType, quota, { model }));
         if (pools.length >= 2) {
           const blocks2 = pools.map((model) => evaluateProviderQuotaGate3(node, providerType, policy, now, context2, { model }));
@@ -209322,7 +209322,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     }
     function legacyStopSessionActive(self, sessionId, record8) {
       try {
-        const state2 = self.deps.getInstanceManager?.()?.getByCategory?.("cli")?.find((inst) => inst.getState?.().instanceId === sessionId)?.getState?.();
+        const state2 = self.deps.instanceManager?.getByCategory?.("cli")?.find((inst) => inst.getState?.().instanceId === sessionId)?.getState?.();
         if (state2?.status) return state2.status === "generating" || state2.status === "starting";
       } catch {
       }
