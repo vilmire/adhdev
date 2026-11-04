@@ -31,6 +31,13 @@ import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 export const QUOTA_HARD_EXHAUSTED_PERCENT = 0.5;
 /** With no reset time known, a CLI rate-limit hold needs a newer reading with at least this much headroom everywhere. */
 export const CLI_RATE_LIMIT_CLEAR_MIN_PERCENT = 5;
+/** A CLI report with no readable reset time is a hard block for this long, then only reset-unconfirmed (owner-waivable): a misread banner can never hold a provider indefinitely. */
+export const CLI_RATE_LIMIT_UNKNOWN_RESET_HARD_MS = 6 * 60 * 60_000;
+
+/** Has the stated (or, lacking one, the assumed) reset passed on THIS clock? Decides hard block vs reset-unconfirmed. */
+export function cliRateLimitResetPassed(evidence: CliRateLimitEvidence, now: number): boolean {
+    return now >= (evidence.resetsAt ?? evidence.observedAt + CLI_RATE_LIMIT_UNKNOWN_RESET_HARD_MS);
+}
 
 export interface CliRateLimitEvidence {
     /** Unix ms (this daemon's clock) the CLI reported its usage limit. */

@@ -48,6 +48,8 @@ export interface NeedsYouAnswerInput {
     optionId?: string
     text?: string
     undo?: boolean
+    /** The decision revision the card showed; the daemon refuses the answer as stale when it moved on. */
+    expectedRevision?: number
 }
 
 export interface NeedsYouLiveCheckInput {
@@ -368,6 +370,7 @@ export function NeedsYouProvider({ children }: { children: ReactNode }) {
                 ...(input.optionId ? { optionId: input.optionId } : {}),
                 ...(input.text ? { text: input.text } : {}),
                 ...(input.undo ? { undo: true } : {}),
+                ...(typeof input.expectedRevision === 'number' ? { expectedRevision: input.expectedRevision } : {}),
                 via: 'dashboard',
             })
             const body = unwrapCommandBody(raw)

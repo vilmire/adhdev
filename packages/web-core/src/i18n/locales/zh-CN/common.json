@@ -4965,6 +4965,14 @@
             "optionCorrect": "正确",
             "optionReopen": "重新打开"
         },
+        "quota": {
+            "wait": "等待重置",
+            "runAnyway": "仍然运行",
+            "otherProvider": "使用其他提供方",
+            "switchTo": "切换到 {{provider}}",
+            "stale": "此决定已变更。请重新加载后再选择。",
+            "switchFailed": "未能确认旧会话已停止，因此没有任何更改 ({{code}})。请重试，或自行关闭该 CLI。"
+        },
         "decisionsWaiting": "{{count}} 项决定待处理",
         "openItems": "{{count}} 个未完成项",
         "liveChecksOpen": "{{count}} 项实机检查",

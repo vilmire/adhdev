@@ -57,6 +57,8 @@ export interface DecisionAnswerRequest {
     interpretedFrom?: string;
     /** Clear the answer back to open (§6.4). */
     undo?: boolean;
+    /** The decision revision the caller saw (`OwnerDecisionEntry.revision`). A different current revision is refused as stale. */
+    expectedRevision?: number;
 }
 
 export type DecisionAnswerResult =
@@ -132,6 +134,9 @@ export function answerMissionDecision(
         const nowIso = new Date(nowMs).toISOString();
         const prevRevision = d.answerRevision ?? (d.answer ? 1 : 0);
         const { promptAckedAt: _seen, ...dRest } = d;
+        if (typeof req.expectedRevision === 'number' && req.expectedRevision !== prevRevision) {
+            return fail('stale_revision', `this decision changed (revision ${prevRevision}, you saw ${req.expectedRevision}) - reload it and decide again`);
+        }
 
         // ── undo ──
         if (req.undo === true) {
@@ -254,6 +259,8 @@ export interface OwnerDecisionEntry {
     remindedAt?: string;
     /** Set on a file-transfer approval (agent request): the dashboard renders the preview card and sends the approvals. */
     transferId?: string;
+    /** Answer revision (0 = never answered). Callers echo it as `expectedRevision` to refuse answering a changed decision. */
+    revision: number;
 }
 
 function sourceOf(createdBy: string | undefined): OwnerDecisionEntry['source'] {
@@ -297,6 +304,7 @@ function toEntry(item: MissionItemRecord, missionTitle: string, carryOver: boole
         onDue: d.onDue,
         source: sourceOf(item.createdBy),
         createdAt: item.createdAt,
+        revision: d.answerRevision ?? (d.answer ? 1 : 0),
         ...(carryOver ? { carryOver: true as const } : {}),
         ...(d.remindedAt ? { remindedAt: d.remindedAt } : {}),
         ...(transferIdFromDecisionKey(item.dedupeKey) ? { transferId: transferIdFromDecisionKey(item.dedupeKey)! } : {}),

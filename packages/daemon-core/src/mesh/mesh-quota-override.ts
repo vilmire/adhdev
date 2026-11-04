@@ -40,6 +40,16 @@ export const DEFAULT_QUOTA_HOLD_DECISION_AFTER_MS = 10 * 60_000;
 /** Option labels are the contract (ids are positional and shift when an option is omitted); "Wait" is always first = id 'a'. */
 export const QUOTA_OVERRIDE_LABELS = { wait: 'Wait for reset', runAnyway: 'Run anyway', otherProvider: 'Use another provider' } as const;
 export const QUOTA_OVERRIDE_WAIT_OPTION_ID = 'a';
+/** Option label prefix of the owner-approved CLI switch for an ASSIGNED task whose session hit its usage limit ("Switch to codex-cli"). */
+export const QUOTA_SWITCH_LABEL_PREFIX = 'Switch to ';
+const PROVIDER_TYPE_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+
+/** The provider named by a switch option label, or null when the label is not a switch option. */
+export function parseQuotaSwitchProvider(label: string | undefined): string | null {
+    if (!label?.startsWith(QUOTA_SWITCH_LABEL_PREFIX)) return null;
+    const type = label.slice(QUOTA_SWITCH_LABEL_PREFIX.length).trim();
+    return PROVIDER_TYPE_RE.test(type) ? type : null;
+}
 /** Below this remaining percent a provider is treated as fully used (matches the group-exhausted cut). */
 export const QUOTA_HARD_LIMIT_PERCENT = 0.5;
 
@@ -238,6 +248,43 @@ export function raiseQuotaOverrideDecision(
             taskId: task.id,
             payload: { phase: 'decision_raised', taskId: task.id, decisionId: r.id, deduped: !!r.deduped, options: options.length },
         }, { local: true });
+        return { itemId: r.id, deduped: !!r.deduped, options: options.map(o => o.label) };
+    } catch (e: any) {
+        return { error: String(e?.message || e) };
+    }
+}
+
+/**
+ * Raise (idempotently) the owner decision for an ASSIGNED task whose session's provider hit a confirmed
+ * usage limit: Wait, or "Switch to <cli>" for each installed, usable alternative (max 3). Same dedupe key and
+ * the same ingress guard as the quota override card: the assistant and the push relay may only choose Wait,
+ * and only an owner answer runs the switch (answerAndDeliver -> switchQuotaExhaustedSession).
+ */
+export function raiseQuotaSwitchDecision(
+    meshId: string,
+    task: MeshWorkQueueEntry,
+    opts: { fromProvider: string; alternatives: readonly string[] },
+): RaisedQuotaDecision | { error: string } {
+    const alternatives = [...new Set(opts.alternatives)].filter(a => a !== opts.fromProvider && PROVIDER_TYPE_RE.test(a)).slice(0, 3);
+    if (!alternatives.length) return { error: 'nothing_to_decide: no other installed CLI can take this task' };
+    const shortId = task.id.slice(0, 8);
+    const question = clip(`Task ${shortId} stopped: ${opts.fromProvider} reached its usage limit. Move it to another CLI?`, 120);
+    const options = [
+        { label: QUOTA_OVERRIDE_LABELS.wait, detail: 'Keep the session as is; the task continues after the limit resets.' },
+        ...alternatives.map(a => ({ label: `${QUOTA_SWITCH_LABEL_PREFIX}${a}`, detail: `Stops the ${opts.fromProvider} session (it must be proven stopped), then continues this task on ${a} with its progress notes. Other tasks and your slots are not changed.` })),
+    ];
+    const context = clip(`Task ${task.id}: ${(task.message || '').trim().split('\n')[0].slice(0, 100)}. Session ${task.assignedSessionId ?? '?'} on ${opts.fromProvider} reported its usage limit.`, 580);
+    try {
+        const { result } = upsertStructuredMission(meshId, {
+            toCarryOver: true,
+            itemsAdd: [{
+                kind: 'decision', question, context, options, recommended: QUOTA_OVERRIDE_LABELS.wait, allowFreeText: false,
+                urgency: 'blocking', onDue: 'remind', dedupe_key: quotaOverrideDecisionKey(task.id),
+            }],
+        }, { actor: 'daemon' });
+        const r = result.itemResults[0];
+        if (!r || r.error || !r.id) return { error: r?.error ?? 'the decision was not recorded' };
+        meshRecord(meshId, 'quota_gate_override', { taskId: task.id, payload: { phase: 'switch_decision_raised', taskId: task.id, decisionId: r.id, deduped: !!r.deduped, options: options.length } }, { local: true });
         return { itemId: r.id, deduped: !!r.deduped, options: options.map(o => o.label) };
     } catch (e: any) {
         return { error: String(e?.message || e) };

@@ -31,7 +31,7 @@ import { isWeakCompletionEvidence } from '../../mesh/mesh-events-utils.js';
 import type { ProviderModule } from '../contracts.js';
 import { emitTurnEnd, type TurnEvidencePort } from '../turn-evidence-port.js';
 import { recordCliRateLimitEvidence } from '../../quota/refresh.js';
-import { classifyOwnAuthFailureOnlyReply, classifyOwnQuotaFailureOnlyReply } from '../spec/provider-output-attribution.js';
+import { classifyOwnAuthFailureOnlyReply, classifyOwnQuotaFailureOnlyReply, parseClaudeUsageLimitBanner } from '../spec/provider-output-attribution.js';
 import type { TurnAttemptRef, TurnEndBlockReason, NativeTurnOutcome } from '@adhdev/mesh-shared';
 
 /**
@@ -412,7 +412,11 @@ export function emitGeneratingCompleted(host: CompletionEmitHost, opts: {
         && !classifyOwnAuthFailureOnlyReply(host.type, summary)
         ? classifyOwnQuotaFailureOnlyReply(host.type, summary) : null;
     if (nativeQuotaVerdict === 'usage_limit_exceeded') {
-        try { recordCliRateLimitEvidence(host.type, { observedAt: Date.now() }); } catch { /* evidence is best-effort */ }
+        try {
+            const observedAt = Date.now();
+            const resetsAt = host.type === 'claude-cli' ? parseClaudeUsageLimitBanner(summary as string, observedAt)?.resetsAt : undefined;
+            recordCliRateLimitEvidence(host.type, { observedAt, ...(resetsAt ? { resetsAt } : {}) });
+        } catch { /* evidence is best-effort */ }
     }
     if (host.turnEvidencePort) {
         emitTurnEnd(host.turnEvidencePort, {

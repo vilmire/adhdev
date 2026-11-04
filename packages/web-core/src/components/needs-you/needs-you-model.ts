@@ -32,6 +32,8 @@ export interface NeedsYouDecision {
     carryOver?: boolean
     /** A file-transfer approval requested by an agent: rendered as a preview card, approved on both machines. */
     transferId?: string
+    /** Answer revision the daemon reported; echoed as `expectedRevision` so an answer to a changed decision is refused. */
+    revision?: number
 }
 
 export interface NeedsYouLiveCheck {
@@ -137,6 +139,7 @@ export function parseNeedsYouList(raw: unknown, daemonId: string): NeedsYouSnaps
             ...(s(d.dueAt) ? { dueAt: s(d.dueAt) } : {}),
             onDue: d.onDue === 'apply_recommended' ? 'apply_recommended' : 'remind',
             source: d.source === 'worker' ? 'worker' : d.source === 'daemon' ? 'daemon' : 'coordinator',
+            ...(typeof d.revision === 'number' ? { revision: d.revision } : {}),
             createdAt: s(d.createdAt),
             ...(d.carryOver === true ? { carryOver: true } : {}),
             ...(/^[0-9a-f]{32}$/.test(s(d.transferId)) ? { transferId: s(d.transferId) } : {}),

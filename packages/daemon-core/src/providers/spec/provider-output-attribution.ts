@@ -149,17 +149,31 @@ export function classifyOwnAuthFailureOnlyReply(cliType: string, reply: string):
  * No captured provider text or error id leaves this classifier.
  */
 export function classifyOwnQuotaFailureOnlyReply(cliType: string, reply: string): 'usage_limit_exceeded' | null {
-    if (cliType === 'claude-cli' && reply.length <= 400) {
-        // Claude Code's own limit banner as the WHOLE reply ("Claude usage limit reached. Your limit will reset at
-        // 10:40am (Asia/Seoul)." / "5-hour limit reached ∙ resets 10:40am"). Reset time zones are not parsed here:
-        // the hold ends on a measurement taken after the report, never on a guessed clock.
-        const banner = stripAnsi(reply).replace(/\s+/g, ' ').trim();
-        return /^(?:[⎿●⏺!⚠]\s*)?(?:claude (?:ai )?)?(?:(?:usage|5-hour|five-hour|weekly|session|opus) )?limit reached(?:\s*[.∙·|-]\s*(?:your limit will reset|resets?)\b[^\n]{0,120})?\.?$/i.test(banner)
-            || /^(?:[⎿●⏺!⚠]\s*)?you(?:'|’)ve hit your (?:usage |session |weekly |5-hour )?limit(?:\s*[.∙·|-]\s*resets?\b[^\n]{0,120})?\.?$/i.test(banner)
-            ? 'usage_limit_exceeded' : null;
-    }
+    if (cliType === 'claude-cli') return parseClaudeUsageLimitBanner(reply) ? 'usage_limit_exceeded' : null;
     if (cliType !== 'antigravity-cli' || reply.length > 2048) return null;
     const text = stripAnsi(reply).replace(/\s+/g, ' ').trim();
     return /^(?:… \d+ more actions \([\d a-z,:]+\) … )?⚠ Individual quota reached\. Please upgrade your subscription to increase your limits\. Resets in (?:\d+h)?(?:\d+m)?\d+s\.(?: Error ID: [a-f0-9-]{8,80})?$/i.test(text)
         ? 'usage_limit_exceeded' : null;
+}
+
+/**
+ * Claude Code's own usage-limit status line, as captured in real session transcripts (2026-10-26..11-03, system
+ * messages): `Usage limit reached · continuing automatically at 5:30pm · esc to cancel`, also
+ * `Usage limit reached again · …`. WHOLE-reply match only: the line is provider chrome, so assistant prose that
+ * merely mentions a limit never matches. No other wording is recognised - an earlier draft guessed at
+ * "Your limit will reset at…" / "You've hit your limit" banners that no captured transcript contains.
+ * Returns the reset time (epoch ms; the CLI prints machine-local clock time without a date, so it is the next
+ * occurrence after `now`), or `{}` when the clock time cannot be read.
+ */
+export function parseClaudeUsageLimitBanner(reply: string, now: number = Date.now()): { resetsAt?: number } | null {
+    if (reply.length > 200) return null;
+    const text = stripAnsi(reply).replace(/\s+/g, ' ').trim();
+    const m = /^Usage limit reached(?: again)? · continuing automatically at (\d{1,2})(?::(\d{2}))?\s?([ap])m · esc to cancel$/i.exec(text);
+    if (!m) return null;
+    const hour12 = Number(m[1]), minute = Number(m[2] ?? '0');
+    if (hour12 < 1 || hour12 > 12 || minute > 59) return {};
+    const at = new Date(now);
+    at.setHours((hour12 % 12) + (m[3].toLowerCase() === 'p' ? 12 : 0), minute, 0, 0);
+    if (at.getTime() <= now) at.setDate(at.getDate() + 1);
+    return { resetsAt: at.getTime() };
 }

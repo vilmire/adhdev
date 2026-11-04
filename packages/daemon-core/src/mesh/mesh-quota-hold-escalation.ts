@@ -20,6 +20,7 @@ import {
     quotaHoldDecisionAfterMs,
     quotaOverrideDecisionKey,
     raiseQuotaOverrideDecision,
+    raiseQuotaSwitchDecision,
     taskIdFromQuotaOverrideKey,
     withdrawQuotaOverrideDecision,
     type RaisedQuotaDecision,
@@ -28,6 +29,7 @@ import type { MeshWorkQueueEntry } from './mesh-work-queue-types.js';
 import { resolveUsableProvider } from './mesh-autolaunch-usable-provider.js';
 import { quotaFactsContextForLiveRouting } from './mesh-quota-sources.js';
 import { isLocalAutoLaunchNode } from './mesh-candidacy-predicates.js';
+import { evaluateProviderQuotaGate, PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON, PROVIDER_QUOTA_RESET_UNCONFIRMED_SKIP_REASON } from './mesh-quota-routing.js';
 
 type AlternativeFinder = (task: MeshWorkQueueEntry) => Promise<string[]>;
 
@@ -53,6 +55,17 @@ export function usableAlternativeFinder(components: DaemonComponents, meshId: st
         }
         return [...found];
     };
+}
+
+/** An assigned task whose session's provider the gate reports as confirmed exhausted (usage limit / reset unconfirmed). */
+function assignedStillExhausted(task: MeshWorkQueueEntry | undefined, mesh: any, components: DaemonComponents | null): boolean {
+    const from = (task as { assignedProviderType?: string } | undefined)?.assignedProviderType;
+    if (!task || task.status !== 'assigned' || !from || !task.assignedSessionId || !mesh) return false;
+    const node = (Array.isArray(mesh.nodes) ? mesh.nodes : []).find((n: any) => task.assignedNodeId && meshNodeIdMatches(n, task.assignedNodeId));
+    if (!node) return false;
+    const block = evaluateProviderQuotaGate(node, from, mesh.policy?.quotaRouting ?? null, Date.now(),
+        quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components?.providerLoader));
+    return block?.reason === PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON || block?.reason === PROVIDER_QUOTA_RESET_UNCONFIRMED_SKIP_REASON;
 }
 
 const attempted = new Map<string, number>();
@@ -87,13 +100,30 @@ export async function escalateQuotaHeldTasks(
     const now = deps.now ?? Date.now();
     const afterMs = deps.afterMs ?? quotaHoldDecisionAfterMs();
     const pending = store.getQueueEntries(meshId, ['pending']);
+    const assigned = store.getQueueEntries(meshId, ['assigned']);
     const raised: string[] = [];
 
     for (const open of store.missionItems().listByKindStates(meshId, 'decision', ['open'])) {
         const taskId = taskIdFromQuotaOverrideKey(open.dedupeKey);
         if (!taskId) continue;
-        const task = pending.find(t => t.id === taskId);
-        if (!task || !task.hold || !isQuotaGateHoldReason(task.hold.reason)) withdrawQuotaOverrideDecision(meshId, open.id, 'task_no_longer_quota_held');
+        const pendingTask = pending.find(t => t.id === taskId);
+        const assignedTask = assigned.find(t => t.id === taskId);
+        const stillNeeded = pendingTask
+            ? !!pendingTask.hold && isQuotaGateHoldReason(pendingTask.hold.reason)
+            : assignedStillExhausted(assignedTask, mesh, components);
+        if (!stillNeeded) withdrawQuotaOverrideDecision(meshId, open.id, 'task_no_longer_quota_held');
+    }
+    // Assigned tasks whose session's provider is confirmed exhausted: offer the owner a switch to another installed CLI.
+    for (const task of assigned) {
+        if (!assignedStillExhausted(task, mesh, components) || existingDecision(meshId, task.id)) continue;
+        const key = `${meshId}:${task.id}`;
+        if (recentlyAttempted(key, now)) continue;
+        attempted.set(key, now);
+        const from = task.assignedProviderType as string;
+        const alternatives = await (deps.findAlternatives ?? (components ? usableAlternativeFinder(components, meshId, mesh) : async () => []))(
+            { ...task, requiredTags: [...(task.requiredTags ?? []).filter(t => !t.startsWith('provider=')), `provider=${from}`] } as MeshWorkQueueEntry);
+        const result = raiseQuotaSwitchDecision(meshId, task, { fromProvider: from, alternatives });
+        if (!('error' in result) && !result.deduped) raised.push(result.itemId);
     }
 
     const find = deps.findAlternatives ?? (components ? usableAlternativeFinder(components, meshId, mesh) : async () => []);

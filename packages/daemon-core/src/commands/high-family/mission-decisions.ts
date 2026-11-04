@@ -51,6 +51,7 @@ import { hostedMeshes } from '../../mesh/mesh-housekeeping-tick.js';
 import { LOG } from '../../logging/logger.js';
 import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
 import { taskIdFromQuotaOverrideKey } from '../../mesh/mesh-quota-override.js';
+import { applyOwnerQuotaSwitch } from './quota-switch-answer.js';
 import { triggerMeshQueue } from '../../mesh/mesh-queue-trigger.js';
 
 export const MISSION_DECISION_ANSWER = 'mission_decision_answer';
@@ -126,6 +127,7 @@ const answer: HighFamilyHandler = async (ctx, rawArgs) => {
         ...(typeof args.text === 'string' ? { text: args.text } : {}),
         ...(typeof args.interpretedFrom === 'string' ? { interpretedFrom: args.interpretedFrom } : {}),
         ...(args.undo === true ? { undo: true } : {}),
+        ...(typeof args.expectedRevision === 'number' && Number.isInteger(args.expectedRevision) ? { expectedRevision: args.expectedRevision } : {}),
     }, caller.actor);
 };
 
@@ -139,6 +141,13 @@ export async function answerAndDeliver(
     const result = answerMissionDecision(req, actor);
     if (!result.ok) {
         return { success: false, code: result.code, error: result.error, ...(result.validOptions ? { validOptions: result.validOptions } : {}) };
+    }
+    // "Switch to <cli>": the owner's answer runs the proved-stop switch; a failure reopens the decision untouched.
+    if (result.action === 'answered' || result.action === 'changed') {
+        const switched = await applyOwnerQuotaSwitch(ctx, { meshId, itemId }, actor);
+        if (switched && !switched.ok) {
+            return { success: false, code: switched.code, error: switched.error, ...(switched.recovery ? { recovery: switched.recovery } : {}) };
+        }
     }
     // A quota-override answer changes what the queue may start: re-run it now instead of waiting for the next tick.
     if (result.action !== 'unchanged' && taskIdFromQuotaOverrideKey(MeshRuntimeStore.getInstance().missionItems().getItem(meshId, itemId)?.dedupeKey)) {

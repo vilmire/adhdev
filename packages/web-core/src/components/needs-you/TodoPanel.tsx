@@ -116,7 +116,7 @@ export default function TodoPanel() {
     }, [link.decisionId, location.pathname, location.search, navigate])
 
     const answerDecision = useCallback(async (d: NeedsYouDecision, input: { optionId?: string; text?: string }, confirmation = false) => {
-        const outcome = await state.answer({ daemonId: d.daemonId, meshId: d.meshId, missionId: d.missionId, itemId: d.itemId, ...input })
+        const outcome = await state.answer({ daemonId: d.daemonId, meshId: d.meshId, missionId: d.missionId, itemId: d.itemId, ...(typeof d.revision === 'number' ? { expectedRevision: d.revision } : {}), ...input })
         if (outcome.ok) {
             clearDeepLink(d.itemId)
             const options = localizeConfirmation(t, d, confirmation).options

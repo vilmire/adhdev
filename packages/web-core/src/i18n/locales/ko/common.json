@@ -4965,6 +4965,14 @@
             "optionCorrect": "맞아요",
             "optionReopen": "다시 열기"
         },
+        "quota": {
+            "wait": "리셋까지 대기",
+            "runAnyway": "그래도 실행",
+            "otherProvider": "다른 프로바이더 사용",
+            "switchTo": "{{provider}}(으)로 전환",
+            "stale": "이 결정이 변경되었습니다. 새로고침 후 다시 선택하세요.",
+            "switchFailed": "이전 세션이 중지된 것을 확인하지 못해 아무것도 바뀌지 않았습니다 ({{code}}). 다시 시도하거나 해당 CLI를 직접 종료하세요."
+        },
         "decisionsWaiting": "결정 {{count}}건 대기",
         "openItems": "열린 항목 {{count}}",
         "liveChecksOpen": "라이브 확인 {{count}}",

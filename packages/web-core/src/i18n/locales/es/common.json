@@ -4968,6 +4968,14 @@
             "optionCorrect": "Correcto",
             "optionReopen": "Reabrir"
         },
+        "quota": {
+            "wait": "Esperar al reinicio",
+            "runAnyway": "Ejecutar igualmente",
+            "otherProvider": "Usar otro proveedor",
+            "switchTo": "Cambiar a {{provider}}",
+            "stale": "Esta decisión cambió. Recárgala y elige de nuevo.",
+            "switchFailed": "No se comprobó que la sesión anterior se detuviera, así que nada cambió ({{code}}). Reintenta o cierra ese CLI tú mismo."
+        },
         "decisionsWaiting": "{{count}} decisiones en espera",
         "openItems": "{{count}} elementos abiertos",
         "liveChecksOpen": "{{count}} comprobaciones en vivo",

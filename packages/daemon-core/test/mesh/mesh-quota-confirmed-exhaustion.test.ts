@@ -35,7 +35,7 @@ import { evaluateQuotaClaimGateForAssignment } from '../../src/mesh/mesh-queue-c
 import { quotaBlockOverridable, quotaBlockPinOverridable } from '../../src/mesh/mesh-quota-override.js'
 import { resetPinCrossingForTests } from '../../src/mesh/mesh-quota-pin-crossing.js'
 import { preserveCliRateLimitEvidence, withCliRateLimitEvidence } from '../../src/quota/exhaustion-hold.js'
-import { classifyOwnQuotaFailureOnlyReply } from '../../src/providers/spec/provider-output-attribution.js'
+import { classifyOwnQuotaFailureOnlyReply, parseClaudeUsageLimitBanner } from '../../src/providers/spec/provider-output-attribution.js'
 import { clearQuotaCache, readQuotaCache, recordCliRateLimitEvidence } from '../../src/quota/refresh.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask } from '../../src/mesh/mesh-work-queue.js'
 
@@ -184,14 +184,36 @@ describe('provider pin vs the reserve line (owner decision A) and confirmed exha
 describe('CLI rate-limit evidence recording', () => {
   afterEach(() => clearQuotaCache())
 
-  it('recognises only a whole-reply Claude limit banner', () => {
-    for (const ok of ['Claude usage limit reached. Your limit will reset at 10:40am (Asia/Seoul).', '5-hour limit reached ∙ resets 10:40am', "You've hit your limit · resets 3pm (Asia/Seoul)"]) {
+  it('recognises only the captured Claude Code limit status line, as the WHOLE reply', () => {
+    // Real wording captured from Claude Code session transcripts (system messages, 2026-10/11).
+    for (const ok of ['Usage limit reached · continuing automatically at 5:30pm · esc to cancel', 'Usage limit reached again · continuing automatically at 12am · esc to cancel', 'Usage limit reached · continuing automatically at 11:50pm · esc to cancel']) {
       expect(classifyOwnQuotaFailureOnlyReply('claude-cli', ok), ok).toBe('usage_limit_exceeded')
     }
-    for (const no of ['I read the code that prints "usage limit reached" and fixed the parser.', 'Refactored the rate limit handling; the 5-hour limit reached branch now logs.']) {
+    // Wording that is NOT in any captured transcript, and assistant prose, never matches.
+    for (const no of ['Claude usage limit reached. Your limit will reset at 10:40am (Asia/Seoul).', "You've hit your limit · resets 3pm", '5-hour limit reached ∙ resets 10:40am',
+      'I read the code that prints "Usage limit reached · continuing automatically at 5am · esc to cancel" and fixed the parser.',
+      'Usage limit reached · continuing automatically at 5am · esc to cancel. Anyway, here is the plan.', 'The test asserts Usage limit reached is handled.']) {
       expect(classifyOwnQuotaFailureOnlyReply('claude-cli', no), no).toBeNull()
     }
-    expect(classifyOwnQuotaFailureOnlyReply('codex-cli', 'Claude usage limit reached.')).toBeNull()
+    expect(classifyOwnQuotaFailureOnlyReply('codex-cli', 'Usage limit reached · continuing automatically at 5am · esc to cancel')).toBeNull()
+  })
+
+  it('parses the banner clock time as the next local occurrence', () => {
+    const now = new Date(2026, 9, 26, 23, 0, 0).getTime()
+    const at = parseClaudeUsageLimitBanner('Usage limit reached · continuing automatically at 12am · esc to cancel', now)!.resetsAt!
+    expect(new Date(at).getHours()).toBe(0)
+    expect(at).toBeGreaterThan(now)
+    expect(at - now).toBeLessThanOrEqual(24 * 3_600_000)
+    expect(parseClaudeUsageLimitBanner('Usage limit reached · continuing automatically at 5:30pm · esc to cancel', new Date(2026, 9, 26, 10, 0).getTime())!.resetsAt)
+      .toBe(new Date(2026, 9, 26, 17, 30).getTime())
+  })
+
+  it('a CLI report with no readable reset cannot hold a provider indefinitely: hard for 6h, then owner-waivable reset_unconfirmed', () => {
+    const q = withCliRateLimitEvidence('claude-cli', { provider: 'claude-cli', status: 'ok', updatedAt: Date.now() - 3 * HOUR, error: null, session: null, weekly: null } as any, { observedAt: Date.now() - HOUR })
+    expect(evaluateProviderQuotaGate(node({ 'claude-cli': q }), 'claude-cli', null, Date.now())?.reason).toBe('provider_quota_exhausted')
+    const later = evaluateProviderQuotaGate(node({ 'claude-cli': q }), 'claude-cli', null, Date.now() + 7 * HOUR)
+    expect(later?.reason).toBe('provider_quota_reset_unconfirmed')
+    expect(quotaBlockOverridable(later!)).toBe(true)
   })
 
   it('stamps the cache entry so the gate holds the provider, creating a minimal entry when none exists', () => {

@@ -36261,6 +36261,9 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
         };
       }
     });
+    function cliRateLimitResetPassed(evidence, now) {
+      return now >= (evidence.resetsAt ?? evidence.observedAt + CLI_RATE_LIMIT_UNKNOWN_RESET_HARD_MS);
+    }
     function remaining(window) {
       if (!window) return void 0;
       const used2 = Number(window.usedPercent);
@@ -36319,11 +36322,13 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
     }
     var QUOTA_HARD_EXHAUSTED_PERCENT;
     var CLI_RATE_LIMIT_CLEAR_MIN_PERCENT;
+    var CLI_RATE_LIMIT_UNKNOWN_RESET_HARD_MS;
     var init_exhaustion_hold = __esm2({
       "src/quota/exhaustion-hold.ts"() {
         "use strict";
         QUOTA_HARD_EXHAUSTED_PERCENT = 0.5;
         CLI_RATE_LIMIT_CLEAR_MIN_PERCENT = 5;
+        CLI_RATE_LIMIT_UNKNOWN_RESET_HARD_MS = 6 * 60 * 6e4;
       }
     });
     function cliJwtIdentity(token) {
@@ -72023,7 +72028,7 @@ ${mergeTreeErr?.stderr || ""}`;
       const { facts, quota } = entry;
       const cliEvidence = readCliRateLimitEvidence(quota);
       if (cliEvidence && cliRateLimitHoldActive(cliEvidence, quota)) {
-        const resetPassed = cliEvidence.resetsAt !== void 0 && now >= cliEvidence.resetsAt;
+        const resetPassed = cliRateLimitResetPassed(cliEvidence, now);
         return {
           reason: resetPassed ? PROVIDER_QUOTA_RESET_UNCONFIRMED_SKIP_REASON : PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON,
           window: "unknown",
@@ -86926,6 +86931,11 @@ ${includeRefs[0]}`;
         BUSY_PROJECTION_RECHECK_MS = 2e4;
       }
     });
+    function parseQuotaSwitchProvider(label2) {
+      if (!label2?.startsWith(QUOTA_SWITCH_LABEL_PREFIX)) return null;
+      const type2 = label2.slice(QUOTA_SWITCH_LABEL_PREFIX.length).trim();
+      return PROVIDER_TYPE_RE.test(type2) ? type2 : null;
+    }
     function quotaHoldDecisionAfterMs(env2 = process.env) {
       const raw = Number(env2.ADHDEV_QUOTA_HOLD_DECISION_AFTER_MS);
       return Number.isFinite(raw) && raw >= 0 && env2.ADHDEV_QUOTA_HOLD_DECISION_AFTER_MS !== void 0 && env2.ADHDEV_QUOTA_HOLD_DECISION_AFTER_MS !== "" ? raw : DEFAULT_QUOTA_HOLD_DECISION_AFTER_MS;
@@ -87061,6 +87071,39 @@ ${includeRefs[0]}`;
         return { error: String(e?.message || e) };
       }
     }
+    function raiseQuotaSwitchDecision(meshId, task, opts) {
+      const alternatives = [...new Set(opts.alternatives)].filter((a) => a !== opts.fromProvider && PROVIDER_TYPE_RE.test(a)).slice(0, 3);
+      if (!alternatives.length) return { error: "nothing_to_decide: no other installed CLI can take this task" };
+      const shortId4 = task.id.slice(0, 8);
+      const question = clip(`Task ${shortId4} stopped: ${opts.fromProvider} reached its usage limit. Move it to another CLI?`, 120);
+      const options = [
+        { label: QUOTA_OVERRIDE_LABELS.wait, detail: "Keep the session as is; the task continues after the limit resets." },
+        ...alternatives.map((a) => ({ label: `${QUOTA_SWITCH_LABEL_PREFIX}${a}`, detail: `Stops the ${opts.fromProvider} session (it must be proven stopped), then continues this task on ${a} with its progress notes. Other tasks and your slots are not changed.` }))
+      ];
+      const context2 = clip(`Task ${task.id}: ${(task.message || "").trim().split("\n")[0].slice(0, 100)}. Session ${task.assignedSessionId ?? "?"} on ${opts.fromProvider} reported its usage limit.`, 580);
+      try {
+        const { result } = upsertStructuredMission(meshId, {
+          toCarryOver: true,
+          itemsAdd: [{
+            kind: "decision",
+            question,
+            context: context2,
+            options,
+            recommended: QUOTA_OVERRIDE_LABELS.wait,
+            allowFreeText: false,
+            urgency: "blocking",
+            onDue: "remind",
+            dedupe_key: quotaOverrideDecisionKey(task.id)
+          }]
+        }, { actor: "daemon" });
+        const r = result.itemResults[0];
+        if (!r || r.error || !r.id) return { error: r?.error ?? "the decision was not recorded" };
+        meshRecord(meshId, "quota_gate_override", { taskId: task.id, payload: { phase: "switch_decision_raised", taskId: task.id, decisionId: r.id, deduped: !!r.deduped, options: options.length } }, { local: true });
+        return { itemId: r.id, deduped: !!r.deduped, options: options.map((o) => o.label) };
+      } catch (e) {
+        return { error: String(e?.message || e) };
+      }
+    }
     function persistTask(store5, task) {
       store5.db.prepare("UPDATE mesh_queue SET payload = ? WHERE mesh_id = ? AND id = ? AND status = 'pending'").run(JSON.stringify(task), task.meshId, task.id);
     }
@@ -87127,6 +87170,8 @@ ${includeRefs[0]}`;
     var DEFAULT_QUOTA_HOLD_DECISION_AFTER_MS;
     var QUOTA_OVERRIDE_LABELS;
     var QUOTA_OVERRIDE_WAIT_OPTION_ID;
+    var QUOTA_SWITCH_LABEL_PREFIX;
+    var PROVIDER_TYPE_RE;
     var QUOTA_HARD_LIMIT_PERCENT;
     var evidenceByTask;
     var EVIDENCE_MAX;
@@ -87144,6 +87189,8 @@ ${includeRefs[0]}`;
         DEFAULT_QUOTA_HOLD_DECISION_AFTER_MS = 10 * 6e4;
         QUOTA_OVERRIDE_LABELS = { wait: "Wait for reset", runAnyway: "Run anyway", otherProvider: "Use another provider" };
         QUOTA_OVERRIDE_WAIT_OPTION_ID = "a";
+        QUOTA_SWITCH_LABEL_PREFIX = "Switch to ";
+        PROVIDER_TYPE_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
         QUOTA_HARD_LIMIT_PERCENT = 0.5;
         evidenceByTask = /* @__PURE__ */ new Map();
         EVIDENCE_MAX = 500;
@@ -94502,6 +94549,20 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         return [...found];
       };
     }
+    function assignedStillExhausted(task, mesh, components) {
+      const from = task?.assignedProviderType;
+      if (!task || task.status !== "assigned" || !from || !task.assignedSessionId || !mesh) return false;
+      const node = (Array.isArray(mesh.nodes) ? mesh.nodes : []).find((n) => task.assignedNodeId && meshNodeIdMatches7(n, task.assignedNodeId));
+      if (!node) return false;
+      const block3 = evaluateProviderQuotaGate3(
+        node,
+        from,
+        mesh.policy?.quotaRouting ?? null,
+        Date.now(),
+        quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components?.providerLoader)
+      );
+      return block3?.reason === PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON || block3?.reason === PROVIDER_QUOTA_RESET_UNCONFIRMED_SKIP_REASON;
+    }
     function recentlyAttempted(key7, now) {
       const at = attempted.get(key7);
       return at !== void 0 && now - at < RETRY_AFTER_MS;
@@ -94514,12 +94575,27 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const now = deps.now ?? Date.now();
       const afterMs = deps.afterMs ?? quotaHoldDecisionAfterMs();
       const pending = store5.getQueueEntries(meshId, ["pending"]);
+      const assigned = store5.getQueueEntries(meshId, ["assigned"]);
       const raised = [];
       for (const open of store5.missionItems().listByKindStates(meshId, "decision", ["open"])) {
         const taskId = taskIdFromQuotaOverrideKey(open.dedupeKey);
         if (!taskId) continue;
-        const task = pending.find((t) => t.id === taskId);
-        if (!task || !task.hold || !isQuotaGateHoldReason(task.hold.reason)) withdrawQuotaOverrideDecision(meshId, open.id, "task_no_longer_quota_held");
+        const pendingTask = pending.find((t) => t.id === taskId);
+        const assignedTask = assigned.find((t) => t.id === taskId);
+        const stillNeeded = pendingTask ? !!pendingTask.hold && isQuotaGateHoldReason(pendingTask.hold.reason) : assignedStillExhausted(assignedTask, mesh, components);
+        if (!stillNeeded) withdrawQuotaOverrideDecision(meshId, open.id, "task_no_longer_quota_held");
+      }
+      for (const task of assigned) {
+        if (!assignedStillExhausted(task, mesh, components) || existingDecision(meshId, task.id)) continue;
+        const key7 = `${meshId}:${task.id}`;
+        if (recentlyAttempted(key7, now)) continue;
+        attempted.set(key7, now);
+        const from = task.assignedProviderType;
+        const alternatives = await (deps.findAlternatives ?? (components ? usableAlternativeFinder(components, meshId, mesh) : async () => []))(
+          { ...task, requiredTags: [...(task.requiredTags ?? []).filter((t) => !t.startsWith("provider=")), `provider=${from}`] }
+        );
+        const result = raiseQuotaSwitchDecision(meshId, task, { fromProvider: from, alternatives });
+        if (!("error" in result) && !result.deduped) raised.push(result.itemId);
       }
       const find = deps.findAlternatives ?? (components ? usableAlternativeFinder(components, meshId, mesh) : async () => []);
       for (const task of pending) {
@@ -94563,6 +94639,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         init_mesh_autolaunch_usable_provider();
         init_mesh_quota_sources();
         init_mesh_candidacy_predicates();
+        init_mesh_quota_routing();
         attempted = /* @__PURE__ */ new Map();
         RETRY_AFTER_MS = 6e4;
       }
@@ -142047,6 +142124,9 @@ ${tail}` : ""
         const nowIso = new Date(nowMs2).toISOString();
         const prevRevision = d.answerRevision ?? (d.answer ? 1 : 0);
         const { promptAckedAt: _seen, ...dRest } = d;
+        if (typeof req.expectedRevision === "number" && req.expectedRevision !== prevRevision) {
+          return fail6("stale_revision", `this decision changed (revision ${prevRevision}, you saw ${req.expectedRevision}) - reload it and decide again`);
+        }
         if (req.undo === true) {
           if (item.state !== "answered" || !d.answer) return fail6("nothing_to_undo", "this decision has no answer to undo");
           const revision2 = prevRevision + 1;
@@ -142186,6 +142266,7 @@ ${tail}` : ""
         onDue: d.onDue,
         source: sourceOf(item.createdBy),
         createdAt: item.createdAt,
+        revision: d.answerRevision ?? (d.answer ? 1 : 0),
         ...carryOver ? { carryOver: true } : {},
         ...d.remindedAt ? { remindedAt: d.remindedAt } : {},
         ...transferIdFromDecisionKey(item.dedupeKey) ? { transferId: transferIdFromDecisionKey(item.dedupeKey) } : {}
@@ -204854,6 +204935,46 @@ ${lines.join("\n")}
     init_logger();
     init_mesh_runtime_store();
     init_mesh_quota_override();
+    init_dist();
+    init_mesh_runtime_store();
+    init_mesh_quota_override();
+    init_mesh_mission_decisions();
+    async function applyOwnerQuotaSwitch(ctx, req, actor) {
+      const store5 = MeshRuntimeStore.getInstance();
+      const item = store5.missionItems().getItem(req.meshId, req.itemId);
+      const taskId = taskIdFromQuotaOverrideKey(item?.dedupeKey);
+      const decision = item?.decision;
+      const answer2 = decision?.answer;
+      const toProvider = parseQuotaSwitchProvider(decision?.options.find((o) => o.id === answer2?.optionId)?.label);
+      if (!item || !taskId || !toProvider) return null;
+      const reopen = (outcome) => {
+        answerMissionDecision({ meshId: req.meshId, itemId: req.itemId, undo: true }, actor);
+        return outcome;
+      };
+      if (!(actor.by === "owner" && (actor.via === "dashboard" || actor.via === "cli"))) {
+        return reopen({ ok: false, code: "quota_switch_owner_only", error: "only the owner, from the dashboard or CLI, can move a task to another CLI" });
+      }
+      const task = store5.findQueueEntryById(req.meshId, taskId);
+      const sessionId = task?.assignedSessionId;
+      const fromProvider = task?.assignedProviderType;
+      if (!task || task.status !== "assigned" || !sessionId || !fromProvider || !task.assignedNodeId) {
+        return reopen({ ok: false, code: "quota_switch_task_moved", error: "the task is no longer assigned to a running session; nothing was stopped" });
+      }
+      const loader2 = ctx.deps.providerLoader;
+      if (loader2?.resolve && !loader2.resolve(toProvider)) {
+        return reopen({ ok: false, code: "quota_switch_provider_unknown", error: `${toProvider} is not an installed provider on this machine` });
+      }
+      const resolved = await ctx.getMeshForCommand(req.meshId, void 0, { preferInline: true });
+      const node = resolved?.mesh?.nodes?.find((n) => meshNodeIdMatches7(n, task.assignedNodeId));
+      if (!node) return reopen({ ok: false, code: "quota_switch_node_missing", error: "the node that ran the task is no longer in the project" });
+      const control = ctx.deps.sessionHostControl;
+      const result = await switchQuotaExhaustedSession({
+        hostHasSession: control ? async (id4) => (await control.listSessions()).some((r) => r?.sessionId === id4) : void 0,
+        cleanupMeshSessions: (args) => ctx.execute("cleanup_mesh_sessions", { meshId: args.meshId, nodeId: args.nodeId, mode: args.mode, sessionIds: args.sessionIds }, "internal", { inProcess: true })
+      }, { meshId: req.meshId, nodeId: task.assignedNodeId, node, taskId, sessionId, fromProvider, toProvider, approvedBy: "owner" });
+      if (!result.ok) return reopen({ ok: false, code: result.code, error: result.error, ...result.recovery ? { recovery: result.recovery } : {} });
+      return { ok: true, taskId, toProvider };
+    }
     init_mesh_queue_trigger();
     var MISSION_DECISION_ANSWER = "mission_decision_answer";
     var MISSION_DECISIONS_LIST = "mission_decisions_list";
@@ -204909,7 +205030,8 @@ ${lines.join("\n")}
         ...typeof args.optionId === "string" ? { optionId: args.optionId } : {},
         ...typeof args.text === "string" ? { text: args.text } : {},
         ...typeof args.interpretedFrom === "string" ? { interpretedFrom: args.interpretedFrom } : {},
-        ...args.undo === true ? { undo: true } : {}
+        ...args.undo === true ? { undo: true } : {},
+        ...typeof args.expectedRevision === "number" && Number.isInteger(args.expectedRevision) ? { expectedRevision: args.expectedRevision } : {}
       }, caller.actor);
     };
     async function answerAndDeliver(ctx, req, actor) {
@@ -204917,6 +205039,12 @@ ${lines.join("\n")}
       const result = answerMissionDecision(req, actor);
       if (!result.ok) {
         return { success: false, code: result.code, error: result.error, ...result.validOptions ? { validOptions: result.validOptions } : {} };
+      }
+      if (result.action === "answered" || result.action === "changed") {
+        const switched = await applyOwnerQuotaSwitch(ctx, { meshId, itemId }, actor);
+        if (switched && !switched.ok) {
+          return { success: false, code: switched.code, error: switched.error, ...switched.recovery ? { recovery: switched.recovery } : {} };
+        }
       }
       if (result.action !== "unchanged" && taskIdFromQuotaOverrideKey(MeshRuntimeStore.getInstance().missionItems().getItem(meshId, itemId)?.dedupeKey)) {
         try {
@@ -219065,13 +219193,22 @@ ${text9}` : text9;
       return detectAuthFailureOnlyReply(maskForeignProviderText(cliType, reply2));
     }
     function classifyOwnQuotaFailureOnlyReply(cliType, reply2) {
-      if (cliType === "claude-cli" && reply2.length <= 400) {
-        const banner = stripAnsi3(reply2).replace(/\s+/g, " ").trim();
-        return /^(?:[⎿●⏺!⚠]\s*)?(?:claude (?:ai )?)?(?:(?:usage|5-hour|five-hour|weekly|session|opus) )?limit reached(?:\s*[.∙·|-]\s*(?:your limit will reset|resets?)\b[^\n]{0,120})?\.?$/i.test(banner) || /^(?:[⎿●⏺!⚠]\s*)?you(?:'|’)ve hit your (?:usage |session |weekly |5-hour )?limit(?:\s*[.∙·|-]\s*resets?\b[^\n]{0,120})?\.?$/i.test(banner) ? "usage_limit_exceeded" : null;
-      }
+      if (cliType === "claude-cli") return parseClaudeUsageLimitBanner(reply2) ? "usage_limit_exceeded" : null;
       if (cliType !== "antigravity-cli" || reply2.length > 2048) return null;
       const text9 = stripAnsi3(reply2).replace(/\s+/g, " ").trim();
       return /^(?:… \d+ more actions \([\d a-z,:]+\) … )?⚠ Individual quota reached\. Please upgrade your subscription to increase your limits\. Resets in (?:\d+h)?(?:\d+m)?\d+s\.(?: Error ID: [a-f0-9-]{8,80})?$/i.test(text9) ? "usage_limit_exceeded" : null;
+    }
+    function parseClaudeUsageLimitBanner(reply2, now = Date.now()) {
+      if (reply2.length > 200) return null;
+      const text9 = stripAnsi3(reply2).replace(/\s+/g, " ").trim();
+      const m = /^Usage limit reached(?: again)? · continuing automatically at (\d{1,2})(?::(\d{2}))?\s?([ap])m · esc to cancel$/i.exec(text9);
+      if (!m) return null;
+      const hour12 = Number(m[1]), minute = Number(m[2] ?? "0");
+      if (hour12 < 1 || hour12 > 12 || minute > 59) return {};
+      const at = new Date(now);
+      at.setHours(hour12 % 12 + (m[3].toLowerCase() === "p" ? 12 : 0), minute, 0, 0);
+      if (at.getTime() <= now) at.setDate(at.getDate() + 1);
+      return { resetsAt: at.getTime() };
     }
     var TAIL_BYTES5 = 16 * 1024;
     var MIN_SUSPECT_AGE_MS = 5e3;
@@ -224264,7 +224401,9 @@ ${buttons.join("\n")}`;
       const nativeQuotaVerdict = host.turnEvidencePort && typeof summary === "string" && summary && !classifyOwnAuthFailureOnlyReply(host.type, summary) ? classifyOwnQuotaFailureOnlyReply(host.type, summary) : null;
       if (nativeQuotaVerdict === "usage_limit_exceeded") {
         try {
-          recordCliRateLimitEvidence(host.type, { observedAt: Date.now() });
+          const observedAt = Date.now();
+          const resetsAt = host.type === "claude-cli" ? parseClaudeUsageLimitBanner(summary, observedAt)?.resetsAt : void 0;
+          recordCliRateLimitEvidence(host.type, { observedAt, ...resetsAt ? { resetsAt } : {} });
         } catch {
         }
       }

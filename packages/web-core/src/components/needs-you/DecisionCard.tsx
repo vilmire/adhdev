@@ -48,8 +48,20 @@ export interface DecisionCardProps {
  * Close-confirmation text through the locale (stored canonical text stays English): question, the
  * mission title + reason without its id, and the two option labels. Other cards pass through.
  */
+/**
+ * The daemon's quota-decision option labels are stable English (the contract); show them through the locale.
+ * "Switch to <cli>" keeps the provider id. Anything else passes through.
+ */
+export function localizeQuotaOption(t: TFunction, label: string): string {
+    if (label === 'Wait for reset') return t('needsYou.quota.wait')
+    if (label === 'Run anyway') return t('needsYou.quota.runAnyway')
+    if (label === 'Use another provider') return t('needsYou.quota.otherProvider')
+    const m = /^Switch to ([a-z0-9][a-z0-9._-]{0,63})$/.exec(label)
+    return m ? t('needsYou.quota.switchTo', { provider: m[1] }) : label
+}
+
 export function localizeConfirmation(t: TFunction, d: { question: string; context?: string; options: NeedsYouOption[] }, confirmation: boolean): { question: string; context?: string; options: NeedsYouOption[] } {
-    if (!confirmation) return d
+    if (!confirmation) return { ...d, options: d.options.map(o => { const label = localizeQuotaOption(t, o.label); return label === o.label ? o : { ...o, label } }) }
     const parsed = parseCloseConfirmationContext(d.context)
     return {
         question: t('needsYou.confirm.question'),
@@ -196,7 +208,7 @@ export default function DecisionCard({
                 </div>
             )}
             {busy && <div className="text-2xs text-text-muted" role="status" data-testid="needs-you-sending">{t('needsYou.sending')}</div>}
-            {outcome && !outcome.ok && <div className="text-2xs" style={{ color: 'var(--status-error)' }} role="alert">{t('needsYou.answerFailed', { code: outcome.code ?? '' })}</div>}
+            {outcome && !outcome.ok && <div className="text-2xs" style={{ color: 'var(--status-error)' }} role="alert">{outcome.code === 'stale_revision' ? t('needsYou.quota.stale') : outcome.code?.startsWith('cleanup_') || outcome.code?.startsWith('quota_switch_') ? t('needsYou.quota.switchFailed', { code: outcome.code }) : t('needsYou.answerFailed', { code: outcome.code ?? '' })}</div>}
         </div>
     )
 }

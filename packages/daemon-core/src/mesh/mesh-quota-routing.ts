@@ -106,7 +106,7 @@
  */
 import { type MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 import { resolveQuotaReserve } from '../quota/quota-reserve.js';
-import { cliRateLimitHoldActive, readCliRateLimitEvidence, windowResetUnconfirmed } from '../quota/exhaustion-hold.js';
+import { cliRateLimitHoldActive, cliRateLimitResetPassed, readCliRateLimitEvidence, windowResetUnconfirmed } from '../quota/exhaustion-hold.js';
 import { recordQuotaReserveBlock } from '../quota/quota-reserve-metrics.js';
 import { quotaAccountLineage } from '../quota/account-lineage.js';
 import {
@@ -427,7 +427,7 @@ export function evaluateProviderQuotaGate(
     // fact about the account, stronger than any percentage, and only a measurement taken after it can end it.
     const cliEvidence = readCliRateLimitEvidence(quota);
     if (cliEvidence && cliRateLimitHoldActive(cliEvidence, quota)) {
-        const resetPassed = cliEvidence.resetsAt !== undefined && now >= cliEvidence.resetsAt;
+        const resetPassed = cliRateLimitResetPassed(cliEvidence, now);
         return {
             reason: resetPassed ? PROVIDER_QUOTA_RESET_UNCONFIRMED_SKIP_REASON : PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON,
             window: 'unknown',
