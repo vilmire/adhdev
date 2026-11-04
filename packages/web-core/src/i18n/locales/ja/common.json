@@ -568,7 +568,15 @@
             "peerReconnecting": "再接続中",
             "peerDisconnected": "切断",
             "peerLastConnected": "最終接続 {{time}}",
-            "peerFailure": "失敗コード: {{code}}"
+            "peerFailure": "失敗コード: {{code}}",
+            "tabPin": "キー登録",
+            "pinIntro": "プロジェクトに接続済みのマシンがホストのアーティファクト署名キーを持たない場合、リモートアーティファクトは拒否されます。ホストタブで作成したコードを入力して、そのマシンにキーを登録してください。",
+            "pinMachine": "マシン",
+            "pinSelect": "マシンを選択",
+            "pinNoMachines": "ホスト以外に接続されたマシンがありません。先にプロジェクトへマシンを接続してください。",
+            "pinAction": "キーを登録",
+            "pinning": "登録中…",
+            "pinned": "キー登録完了: {{machine}}"
         },
         "hint": {
             "daemon": {

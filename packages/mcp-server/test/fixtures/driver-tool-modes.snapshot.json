@@ -52,6 +52,7 @@
     "mesh_add_node",
     "mesh_reattach_source_parent",
     "mesh_attach_remote",
+    "mesh_host_pairing",
     "mesh_clone_node",
     "mesh_remove_node",
     "mesh_retry_node_bootstrap",

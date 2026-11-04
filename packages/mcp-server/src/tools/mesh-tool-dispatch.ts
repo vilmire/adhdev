@@ -32,6 +32,7 @@
  * ★Aliases are deliberately NOT in this table — see MESH_ALIAS_DISPATCH below.
  */
 import { meshReattachSourceParent } from './mesh-tools-crud.js';
+import { meshHostPairing } from './mesh-host-pairing-tool.js';
 import { callDriverTool } from './driver-tools.js';
 import {
     callCoordinatorArtifactList,
@@ -106,6 +107,7 @@ export const MESH_TOOL_DISPATCH: Readonly<Record<CanonicalMeshToolName, MeshTool
     mesh_list_pending_approvals: (ctx, a) => meshListPendingApprovals(ctx, a as any),
     mesh_create: (ctx, a) => meshCreateOrPlan(ctx.transport, a, ctx.mesh.id),
     mesh_attach_remote: async (ctx, a) => JSON.stringify(await ctx.transport.command('attach_remote_project', { meshId: ctx.mesh.id, targetDaemonId: a.targetDaemonId })),
+    mesh_host_pairing: (ctx, a) => meshHostPairing(ctx, a),
     mesh_add_node: (ctx, a) => meshAddNode(ctx.transport, { ...a, inline_mesh: ctx.mesh } as any, ctx.mesh.id),
     mesh_reattach_source_parent: (ctx, a) => meshReattachSourceParent(ctx.transport, a as any, ctx.mesh.id),
     mesh_clone_node: (ctx, a) => meshCloneNode(ctx, a as any),

@@ -387,6 +387,17 @@ export function resolveTrustedHostOriginGrantPublicKey(params: {
     return '';
 }
 
+/**
+ * The exact next step when this machine holds no pinned artifact-signing key
+ * for the project host. Names no key material; only ids and the supported path.
+ */
+export function hostPinMissingMessage(meshId: string, hostDaemonId: string): string {
+    return `This machine has not pinned the project host's artifact signing key (host ${hostDaemonId}, mesh ${meshId}), so it cannot verify the host's artifact access grant (host_pin_missing). `
+        + 'Next step: on the host machine create a pairing code (dashboard Mesh > Connect another machine > Host > Create code, or the MCP tool mesh_host_pairing action=create_token); '
+        + 'then on THIS machine enter that code (dashboard Mesh > Connect another machine > Member, or the MCP tool mesh_host_pairing action=pin with token and hostDaemonId). '
+        + 'The code is single-use and expires in 10 minutes.';
+}
+
 export function verifyArtifactOriginFetchGrant(
     rawGrant: unknown,
     expected: {
@@ -1082,6 +1093,15 @@ export function authorizeWorkerOriginFetch(params: {
                     error:
                         grantCheck.error ||
                         `Host originFetchGrant verification failed: peer missed more than ${MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH} key rotations; re-pair required (re_pair_required)`,
+                };
+            }
+            if (grantCheck.reason === 'untrusted_or_missing_host_public_key') {
+                return {
+                    success: false,
+                    code: 'host_pin_missing',
+                    meshId: meshIdToVerify,
+                    hostDaemonId,
+                    error: hostPinMissingMessage(meshIdToVerify, hostDaemonId),
                 };
             }
             const denialCode =

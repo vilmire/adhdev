@@ -107,7 +107,8 @@ export default function MeshOverviewCards({
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
     // Standalone has no P2P layer; there, machines join a mesh by manual
-    // pairing (design 2026-10-07 §4.6). Cloud joins machines via the account.
+    // pairing (design 2026-10-07 §4.6). Cloud joins machines via the account, but
+    // still needs the host-key pin on each member (pin tab of the same card).
     const { usesP2P } = useBaseDaemonIdentity()
 
     const queueSummary: RepoMeshQueueSummary | null = canonicalStatus.queue?.summary ?? null
@@ -222,15 +223,14 @@ export default function MeshOverviewCards({
 
             <NodesCard meshTheme={meshTheme} nodes={canonicalStatus.nodes} showPeerLink={usesP2P === false} />
 
-            {usesP2P === false && (
-                <MeshMachinePairingCard
-                    meshTheme={meshTheme}
-                    status={canonicalStatus}
-                    daemonId={daemonId}
-                    meshId={meshId ?? canonicalStatus.meshId ?? null}
-                    sendDaemonCommand={sendDaemonCommand}
-                />
-            )}
+            <MeshMachinePairingCard
+                meshTheme={meshTheme}
+                status={canonicalStatus}
+                daemonId={daemonId}
+                meshId={meshId ?? canonicalStatus.meshId ?? null}
+                sendDaemonCommand={sendDaemonCommand}
+                mode={usesP2P === false ? 'standalone' : 'cloud'}
+            />
 
             <div className="grid gap-3 sm:grid-cols-2">
                 <SessionsCard

@@ -27911,6 +27911,7 @@ ${renderWorkerProtocolFooter2(input)}`;
           "mesh_add_node",
           "mesh_reattach_source_parent",
           "mesh_attach_remote",
+          "mesh_host_pairing",
           "mesh_clone_node",
           "mesh_remove_node",
           "mesh_retry_node_bootstrap",
@@ -55978,7 +55979,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       }
     });
     var init_types4 = __esm2({
-      "../../vendor/seqscribe/dist/types.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/types.js"() {
         "use strict";
       }
     });
@@ -55987,7 +55988,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     }
     var SeqscribeError;
     var init_errors = __esm2({
-      "../../vendor/seqscribe/dist/errors.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/errors.js"() {
         "use strict";
         SeqscribeError = class extends Error {
           code;
@@ -56004,7 +56005,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     }
     var DEFAULT_CONSTANTS;
     var init_constants = __esm2({
-      "../../vendor/seqscribe/dist/constants.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/constants.js"() {
         "use strict";
         DEFAULT_CONSTANTS = {
           MAX_ENTRY_BYTES: 65536,
@@ -56601,7 +56602,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var canonicalizeLib;
     var utf8;
     var init_encoding = __esm2({
-      "../../vendor/seqscribe/dist/encoding.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/encoding.js"() {
         "use strict";
         import_canonicalize = __toESM2(require_canonicalize(), 1);
         init_sha256();
@@ -56660,7 +56661,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     }
     var HLC_C_LIMIT;
     var init_hlc = __esm2({
-      "../../vendor/seqscribe/dist/hlc.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/hlc.js"() {
         "use strict";
         init_errors();
         HLC_C_LIMIT = 2 ** 32;
@@ -56764,7 +56765,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var RESERVED_NAME;
     var MAX_NUMERIC_FIELD;
     var init_codec = __esm2({
-      "../../vendor/seqscribe/dist/codec.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/codec.js"() {
         "use strict";
         init_encoding();
         init_errors();
@@ -56850,7 +56851,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var OVERRIDE_GLOB_RE;
     var TopicRegistry;
     var init_topics = __esm2({
-      "../../vendor/seqscribe/dist/topics.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/topics.js"() {
         "use strict";
         init_codec();
         init_encoding();
@@ -56968,7 +56969,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     }
     var EXPORT_BATCH;
     var init_export = __esm2({
-      "../../vendor/seqscribe/dist/export.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/export.js"() {
         "use strict";
         init_codec();
         init_errors();
@@ -56977,7 +56978,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     });
     var BeaconHub;
     var init_beacon = __esm2({
-      "../../vendor/seqscribe/dist/beacon.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/beacon.js"() {
         "use strict";
         init_encoding();
         init_errors();
@@ -57287,7 +57288,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var PRE_OPEN_CAP;
     var textDec;
     var init_ws = __esm2({
-      "../../vendor/seqscribe/dist/ws.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/ws.js"() {
         "use strict";
         PRE_OPEN_CAP = 1024;
         textDec = new globalThis.TextDecoder();
@@ -57353,7 +57354,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       };
     }
     var init_adapters = __esm2({
-      "../../vendor/seqscribe/dist/adapters.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/adapters.js"() {
         "use strict";
       }
     });
@@ -57618,7 +57619,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var g;
     var defaultTimers;
     var init_host = __esm2({
-      "../../vendor/seqscribe/dist/host.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/host.js"() {
         "use strict";
         init_hmac();
         init_sha256();
@@ -57638,7 +57639,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var BACKOFF_MAX_MS;
     var ConsumerHub;
     var init_consume = __esm2({
-      "../../vendor/seqscribe/dist/consume.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/consume.js"() {
         "use strict";
         init_errors();
         BATCH = 64;
@@ -57877,7 +57878,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     });
     var DirectiveHub;
     var init_directives = __esm2({
-      "../../vendor/seqscribe/dist/directives.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/directives.js"() {
         "use strict";
         init_encoding();
         init_errors();
@@ -58009,7 +58010,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     });
     var FinalityHub;
     var init_finality = __esm2({
-      "../../vendor/seqscribe/dist/finality.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/finality.js"() {
         "use strict";
         init_encoding();
         init_errors();
@@ -58213,7 +58214,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var RetentionStats;
     var AckRecorder;
     var init_retention = __esm2({
-      "../../vendor/seqscribe/dist/retention.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/retention.js"() {
         "use strict";
         ACKED_PRUNE_DEFAULT_MAX_ROWS = 1e3;
         ACKED_PRUNE_MAX_ROWS_CAP = 1e4;
@@ -58360,7 +58361,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var textDec2;
     var SubHub;
     var init_subs = __esm2({
-      "../../vendor/seqscribe/dist/subs.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/subs.js"() {
         "use strict";
         init_encoding();
         init_errors();
@@ -59086,7 +59087,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var HLC_META_KEY;
     var LogCore;
     var init_log = __esm2({
-      "../../vendor/seqscribe/dist/log.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/log.js"() {
         "use strict";
         init_codec();
         init_encoding();
@@ -60293,7 +60294,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     });
     var ArchiveHub;
     var init_archive = __esm2({
-      "../../vendor/seqscribe/dist/archive.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/archive.js"() {
         "use strict";
         ArchiveHub = class {
           deps;
@@ -60361,7 +60362,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var DEDUPE_CAP;
     var RegisterHub;
     var init_register = __esm2({
-      "../../vendor/seqscribe/dist/register.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/register.js"() {
         "use strict";
         init_encoding();
         init_errors();
@@ -61097,7 +61098,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var textDec3;
     var SnapshotHub;
     var init_snapshot2 = __esm2({
-      "../../vendor/seqscribe/dist/snapshot.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/snapshot.js"() {
         "use strict";
         init_encoding();
         init_errors();
@@ -61323,7 +61324,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var DDL;
     var Store;
     var init_store2 = __esm2({
-      "../../vendor/seqscribe/dist/store.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/store.js"() {
         "use strict";
         init_errors();
         DDL = `
@@ -62282,7 +62283,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var ALL_TYPES;
     var MAX_PROBE_SEQS;
     var init_messages = __esm2({
-      "../../vendor/seqscribe/dist/messages.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/messages.js"() {
         "use strict";
         init_codec();
         init_encoding();
@@ -62317,7 +62318,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var PROTO_MAX;
     var Session;
     var init_session = __esm2({
-      "../../vendor/seqscribe/dist/session.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/session.js"() {
         "use strict";
         init_errors();
         init_messages();
@@ -62750,7 +62751,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var SYNC_HOTSPOT_TOP_N;
     var SyncEngine;
     var init_sync = __esm2({
-      "../../vendor/seqscribe/dist/sync.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/sync.js"() {
         "use strict";
         init_codec();
         init_encoding();
@@ -63666,7 +63667,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var IDENT_RE;
     var ViewHub;
     var init_views = __esm2({
-      "../../vendor/seqscribe/dist/views.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/views.js"() {
         "use strict";
         init_encoding();
         init_errors();
@@ -64531,7 +64532,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var g2;
     var defaultTimers2;
     var init_node = __esm2({
-      "../../vendor/seqscribe/dist/node.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/node.js"() {
         "use strict";
         init_beacon();
         init_codec();
@@ -64560,7 +64561,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }
     });
     var init_dist2 = __esm2({
-      "../../vendor/seqscribe/dist/index.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/index.js"() {
         "use strict";
         init_types4();
         init_errors();
@@ -100273,7 +100274,7 @@ Index only \u2014 each tool's own description carries its parameters and contrac
 - Sessions: \`mesh_send_task\`, \`mesh_launch_session\`, \`mesh_notify_worker\` (memo to a busy worker; published only while worker MCP is on, \`ADHDEV_WORKER_MCP\`, default on), \`mesh_read_chat\`, \`mesh_read_debug\`, \`mesh_read_terminal\`, \`mesh_send_keys\`
 - Approvals: \`mesh_approve\` (yes/no), \`mesh_answer_question\` (multi-choice questions \u2014 never \`mesh_approve\`), \`mesh_list_pending_approvals\`
 - Missions & ledger: \`mesh_mission_upsert\`, \`mesh_mission_list\` (the authority for "what work remains"; \`git: true\` adds each mission's \`gitState\`), \`mesh_mission_git_eval\` (are this mission's referenced commits on the default branch? \`landed\` is NOT done, \`unknown\` is NOT "not landed"), Releases (a named group of missions plus deploy facts): \`mesh_release_upsert\`, \`mesh_release_scope\` (add/move/remove missions \u2014 membership is only ever what you set; the daemon merely suggests), \`mesh_release_list\`, \`mesh_release_record_deploy\`, \`mesh_release_changelog_draft\` (set each mission's user-facing \`release_note\` on \`mesh_mission_upsert\` first; the draft never edits CHANGELOG.md), \`mesh_task_history\` (ledger by task, kind, time or node), \`mesh_ledger_query\` (deprecated alias of \`mesh_task_history\`), \`mesh_reconcile_ledger\`, \`mesh_note\`
-- Nodes & convergence: \`mesh_clone_node\`, \`mesh_add_node\`, \`mesh_reattach_source_parent\` (owner CAS repair; dry-run first), \`mesh_attach_remote\` (owner-named machine only), \`mesh_remove_node\`, \`mesh_retry_node_bootstrap\` (retry a failed worktree bootstrap), \`mesh_recover_node_identity\` (existing local node identity CAS repair; dry-run first), \`mesh_checkpoint\`, \`mesh_fast_forward_node\`, \`mesh_refine_node\`, \`mesh_refine_batch\`, \`mesh_review_inbox\`, \`mesh_cleanup_worktree_nodes\`, \`mesh_cleanup_sessions\`, \`mesh_restart_daemon\`
+- Nodes & convergence: \`mesh_clone_node\`, \`mesh_add_node\`, \`mesh_reattach_source_parent\` (owner CAS repair; dry-run first), \`mesh_attach_remote\` (owner-named machine only), \`mesh_host_pairing\` (a machine already attached gets \`host_pin_missing\` on remote artifacts: \`create_code\` on the host, then \`pin_host_key\` on that member), \`mesh_remove_node\`, \`mesh_retry_node_bootstrap\` (retry a failed worktree bootstrap), \`mesh_recover_node_identity\` (existing local node identity CAS repair; dry-run first), \`mesh_checkpoint\`, \`mesh_fast_forward_node\`, \`mesh_refine_node\`, \`mesh_refine_batch\`, \`mesh_review_inbox\`, \`mesh_cleanup_worktree_nodes\`, \`mesh_cleanup_sessions\`, \`mesh_restart_daemon\`
 - File transfer: \`mesh_file_transfer\` (request/status/cancel moving project files between machines, source may be another node (from_node_id); you only REQUEST - the owner approves in the dashboard, unless both machines auto-approve and nothing is replaced; secrets are never sent; existing_path overwrite always needs the owner)
 - Setup & config: \`mesh_create\`, \`mesh_init\`, \`mesh_config\`, \`mesh_node_slots\`
 
@@ -109941,20 +109942,6 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         keyPairCache = /* @__PURE__ */ new Map();
       }
     });
-    var mesh_host_memory_exports = {};
-    __export2(mesh_host_memory_exports, {
-      MESH_HOST_RECORDS_SCHEMA_VERSION: () => MESH_HOST_RECORDS_SCHEMA_VERSION,
-      __resetAuthenticatedPeerKeysForTest: () => __resetAuthenticatedPeerKeysForTest,
-      applyAuthenticatedHostKeyRotation: () => applyAuthenticatedHostKeyRotation,
-      canAcceptPeerOriginGrantPublicKey: () => canAcceptPeerOriginGrantPublicKey,
-      clearAuthenticatedPeerOriginGrantPublicKey: () => clearAuthenticatedPeerOriginGrantPublicKey,
-      listMeshHostRecords: () => listMeshHostRecords,
-      migrateBogusPairingHostRecords: () => migrateBogusPairingHostRecords,
-      readAuthenticatedPeerOriginGrantPublicKey: () => readAuthenticatedPeerOriginGrantPublicKey,
-      readMeshHostRecord: () => readMeshHostRecord,
-      recordAuthenticatedPeerOriginGrantPublicKey: () => recordAuthenticatedPeerOriginGrantPublicKey,
-      writeMeshHostRecord: () => writeMeshHostRecord
-    });
     function peerKey(meshId, peerDaemonId, configDir = getConfigDir2()) {
       const canon4 = canonicalDaemonId2(peerDaemonId.trim()) || peerDaemonId.trim();
       return `${configDir}\0${meshId.trim()}\0${canon4}`;
@@ -110386,9 +110373,6 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         return { ok: false, reason: "rotation_old_key_mismatch" };
       }
       return verified;
-    }
-    function __resetAuthenticatedPeerKeysForTest() {
-      authenticatedPeerPublicKeys.clear();
     }
     var import_fs27;
     var import_path24;
@@ -126228,6 +126212,9 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       }
       return "";
     }
+    function hostPinMissingMessage(meshId, hostDaemonId) {
+      return `This machine has not pinned the project host's artifact signing key (host ${hostDaemonId}, mesh ${meshId}), so it cannot verify the host's artifact access grant (host_pin_missing). Next step: on the host machine create a pairing code (dashboard Mesh > Connect another machine > Host > Create code, or the MCP tool mesh_host_pairing action=create_token); then on THIS machine enter that code (dashboard Mesh > Connect another machine > Member, or the MCP tool mesh_host_pairing action=pin with token and hostDaemonId). The code is single-use and expires in 10 minutes.`;
+    }
     function verifyArtifactOriginFetchGrant(rawGrant, expected, nowMs2 = Date.now()) {
       if (!rawGrant || typeof rawGrant !== "object") {
         return { ok: false, reason: "missing_or_malformed_grant" };
@@ -126782,6 +126769,15 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
               success: false,
               code: "re_pair_required",
               error: grantCheck.error || `Host originFetchGrant verification failed: peer missed more than ${MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH} key rotations; re-pair required (re_pair_required)`
+            };
+          }
+          if (grantCheck.reason === "untrusted_or_missing_host_public_key") {
+            return {
+              success: false,
+              code: "host_pin_missing",
+              meshId: meshIdToVerify,
+              hostDaemonId,
+              error: hostPinMissingMessage(meshIdToVerify, hostDaemonId)
             };
           }
           const denialCode = grantCheck.reason === "grant_capacity_exhausted" ? "grant_capacity_exhausted" : "artifact_access_denied";
@@ -139359,6 +139355,27 @@ ${tail}` : ""
         mesh.updatedAt = now;
         saveMeshConfig(config);
         return { accepted: false, mesh, meshHost: mesh.meshHost, tokenId: validation.presentedTokenId, reason: validation.reason };
+      }
+      if (opts.pinOnly) {
+        const memberDaemon = typeof opts.memberNode.daemonId === "string" ? opts.memberNode.daemonId.trim() : "";
+        const rosterNode = memberDaemon ? mesh.nodes.find((n) => n.daemonId && daemonIdsEquivalent5(n.daemonId, memberDaemon)) : void 0;
+        if (!rosterNode) {
+          return { accepted: false, mesh, meshHost: mesh.meshHost, tokenId: validation.tokenId, reason: "member_not_on_roster: attach this machine to the project from the host first (mesh_attach_remote), then pin" };
+        }
+        mesh.meshHost = {
+          ...meshHost,
+          pairing: {
+            ...meshHost.pairing || {},
+            status: "paired",
+            tokenId: validation.tokenId,
+            joinedAt: now,
+            lastPairedAt: meshHost.pairing?.lastPairedAt || now,
+            ...meshHost.pairing?.expiresAt ? { expiresAt: meshHost.pairing.expiresAt } : {}
+          }
+        };
+        mesh.updatedAt = now;
+        saveMeshConfig(config);
+        return { accepted: true, mesh, meshHost: mesh.meshHost, node: rosterNode, tokenId: validation.tokenId };
       }
       const workspace = opts.memberNode.workspace.trim();
       if (!workspace) throw new Error("memberNode.workspace required");
@@ -209728,8 +209745,11 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     };
     init_command_registry();
     init_mesh_relay_result();
+    init_mesh_sender();
     init_mesh_peer_secrets();
     init_artifact_origin_grant();
+    init_origin_grant_keypair();
+    init_mesh_host_memory();
     init_logger();
     init_mask_daemon_id();
     init_mesh_host_endpoints();
@@ -209871,7 +209891,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           const applied = applyMeshHostJoinRequest2(meshId, {
             token,
             memberNode,
-            memberMeshId: typeof args?.memberMeshId === "string" ? args.memberMeshId : void 0
+            memberMeshId: typeof args?.memberMeshId === "string" ? args.memberMeshId : void 0,
+            ...args?.pinOnly === true ? { pinOnly: true } : {}
           });
           if (!applied) return { success: false, error: "Mesh not found" };
           const requestedMeshId = meshId;
@@ -209998,7 +210019,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             return { success: false, code: hostResult?.code || "mesh_host_join_rejected", meshId, meshHost, transport, error: hostResult?.error || "Mesh Host rejected join request", hostResult: redactHostJoinResult(hostResult) };
           }
           const pairedHostDaemonIdForSecret = readTrimmed2(hostResult.hostDaemonId) || readTrimmed2(hostResult.meshHost?.hostDaemonId) || readTrimmed2(hostDaemonId);
-          const hostOriginGrantPublicKey = readTrimmed2(hostResult.originGrantPublicKey) || readTrimmed2(hostResult.meshHost?.originGrantPublicKey);
+          const offeredHostKey = readTrimmed2(hostResult.originGrantPublicKey) || readTrimmed2(hostResult.meshHost?.originGrantPublicKey);
+          const hostOriginGrantPublicKey = isValidOriginGrantPublicKey(offeredHostKey) ? offeredHostKey : pairedHostDaemonIdForSecret ? resolveTrustedHostOriginGrantPublicKey({ meshId: readTrimmed2(hostResult.meshId) || hostMeshId, hostDaemonId: pairedHostDaemonIdForSecret }) || resolveTrustedHostOriginGrantPublicKey({ meshId, hostDaemonId: pairedHostDaemonIdForSecret }) : "";
           const peerSecret = readTrimmed2(hostResult.peerSecret);
           const secretMeshId = readTrimmed2(hostResult.meshId) || hostMeshId;
           let peerSecretStored = false;
@@ -210045,12 +210067,11 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           }
           const pairedHostDaemonId = typeof hostResult.meshHost?.hostDaemonId === "string" && hostResult.meshHost.hostDaemonId.trim() ? hostResult.meshHost.hostDaemonId.trim() : hostDaemonId;
           if (pairedHostDaemonId) {
-            const { writeMeshHostRecord: writeMeshHostRecord2 } = await Promise.resolve().then(() => (init_mesh_host_memory(), mesh_host_memory_exports));
-            writeMeshHostRecord2(meshId, pairedHostDaemonId, "pairing", hostOriginGrantPublicKey || void 0, {
+            writeMeshHostRecord(meshId, pairedHostDaemonId, "pairing", hostOriginGrantPublicKey || void 0, {
               pairingVerified: true
             });
             if (secretMeshId && secretMeshId !== meshId) {
-              writeMeshHostRecord2(
+              writeMeshHostRecord(
                 secretMeshId,
                 pairedHostDaemonId,
                 "pairing",
@@ -210084,6 +210105,108 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }
       },
       /**
+       * Add the missing host artifact-signing key pin on a member that is already
+       * attached to the project (authenticated attach registers the host but
+       * cannot carry a key). The pairing code minted by the host is the
+       * credential: it is verified by the host (single use, 10 minutes), which
+       * answers with its public key and a fresh peer secret. Nothing is accepted
+       * from request arguments, an existing pin is replaced only by the key the
+       * host returns for this exact code, and a host that returns no key leaves
+       * the member exactly as it was.
+       */
+      pin_mesh_host_key: async (ctx, args) => {
+        const meshId = readTrimmed2(args?.meshId);
+        const token = readTrimmed2(args?.token);
+        if (!meshId) return { success: false, error: "meshId required" };
+        if (!token) return { success: false, code: "mesh_host_pin_token_required", meshId, error: "A pairing code is required: create one on the host (create_mesh_host_pairing_token / mesh_host_pairing action=create_token) and pass it as token." };
+        const selfDaemonId = readTrimmed2(ctx.deps.statusInstanceId);
+        if (!selfDaemonId) return { success: false, code: "mesh_host_pin_identity_unknown", meshId, error: "This daemon has no machine identity yet; wait for it to finish connecting and retry." };
+        const record8 = readMeshHostRecord(meshId);
+        const relayedBy = readMeshSender(args);
+        if (relayedBy) {
+          if (!record8 || !daemonIdsEquivalent5(record8.hostDaemonId, relayedBy)) {
+            return { success: false, code: "mesh_host_pin_sender_not_host", meshId, error: "Only the project host this machine recognises may ask it to pin the host key." };
+          }
+        }
+        const explicitHost = relayedBy ? "" : readTrimmed2(args?.hostDaemonId);
+        const hostDaemonId = explicitHost || record8?.hostDaemonId || "";
+        if (!hostDaemonId) {
+          return { success: false, code: "mesh_host_unknown", meshId, error: "This machine does not know the project host. Attach it from the host first (mesh_attach_remote) or pass hostDaemonId." };
+        }
+        if (daemonIdsEquivalent5(hostDaemonId, selfDaemonId)) {
+          return { success: false, code: "mesh_host_pin_is_host", meshId, error: "This machine is the project host; run the pin on the member machine." };
+        }
+        if (record8 && explicitHost && !daemonIdsEquivalent5(record8.hostDaemonId, explicitHost)) {
+          return { success: false, code: "mesh_host_conflict", meshId, error: "This machine already recognises a different project host for this project; resolve that locally before pinning another." };
+        }
+        const hostAddress = relayedBy ? "" : readTrimmed2(args?.hostAddress);
+        const memberNode = { daemonId: selfDaemonId, workspace: "" };
+        const joinBody = { meshId, token, memberMeshId: meshId, memberNode, pinOnly: true };
+        let hostResult;
+        let transport;
+        try {
+          if (hostAddress) {
+            transport = "standalone_http_mesh_join";
+            const response = await fetch(normalizeStandaloneHostJoinUrl(hostAddress), {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(joinBody)
+            });
+            hostResult = await response.json().catch(() => ({ success: false, error: `Host returned HTTP ${response.status}` }));
+            if (!response.ok && hostResult?.success !== false) hostResult = { success: false, error: `Host returned HTTP ${response.status}` };
+          } else if (ctx.deps.dispatchMeshCommand) {
+            transport = "mesh_command_dispatch";
+            hostResult = unwrapMeshRelayResult(await ctx.deps.dispatchMeshCommand(hostDaemonId, "apply_mesh_host_join", joinBody), { command: "apply_mesh_host_join", peerDaemonId: hostDaemonId });
+          } else {
+            return { success: false, code: "mesh_host_join_transport_unavailable", meshId, error: "No path to the host: pass hostAddress (ip:port of the host daemon) or run this from a connected cloud daemon." };
+          }
+        } catch (e) {
+          return { success: false, code: "mesh_host_pin_unreachable", meshId, error: `Could not reach the project host: ${e?.message || String(e)}. Check the host is online${hostAddress ? " and the address is reachable from this machine" : ""}, then retry with a fresh code.` };
+        }
+        if (!hostResult?.success) {
+          return { success: false, code: hostResult?.code || "mesh_host_join_rejected", meshId, transport, error: hostResult?.error || "The project host rejected the pairing code. Create a new code on the host and retry.", hostResult: redactHostJoinResult(hostResult) };
+        }
+        const answeredHost = readTrimmed2(hostResult.hostDaemonId) || readTrimmed2(hostResult.meshHost?.hostDaemonId) || hostDaemonId;
+        if (!daemonIdsEquivalent5(answeredHost, hostDaemonId)) {
+          return { success: false, code: "mesh_host_pin_identity_mismatch", meshId, transport, error: "The machine that answered is not the project host this machine recognises; nothing was pinned." };
+        }
+        const offeredKey = readTrimmed2(hostResult.originGrantPublicKey) || readTrimmed2(hostResult.meshHost?.originGrantPublicKey);
+        if (!isValidOriginGrantPublicKey(offeredKey)) {
+          return { success: false, code: "mesh_host_pin_key_unavailable", meshId, transport, error: "The project host accepted the code but returned no artifact signing key (it may run an older build). Update the host daemon, create a new code and retry." };
+        }
+        const secretMeshId = readTrimmed2(hostResult.meshId) || meshId;
+        const peerSecret = readTrimmed2(hostResult.peerSecret);
+        try {
+          if (peerSecret) {
+            putPeerSecret({
+              meshId: secretMeshId,
+              peerDaemonId: canonicalDaemonId2(answeredHost) || answeredHost,
+              role: "member",
+              secret: peerSecret,
+              ...hostAddress ? { hostAddress } : {},
+              originGrantPublicKey: offeredKey,
+              createdAt: (/* @__PURE__ */ new Date()).toISOString()
+            });
+          }
+        } catch (e) {
+          return { success: false, code: "mesh_host_peer_secret_store_failed", meshId, transport, error: `Host accepted the code but the credential could not be stored: ${e?.message || String(e)}` };
+        }
+        const recorded = [meshId, ...secretMeshId !== meshId ? [secretMeshId] : []].map((id4) => writeMeshHostRecord(id4, answeredHost, "pairing", offeredKey, { pairingVerified: true })).every(Boolean);
+        if (!recorded) {
+          return { success: false, code: "mesh_host_record_write_failed", meshId, transport, error: "Host accepted the code but this machine could not save the pin; restore writable daemon configuration and retry with a new code." };
+        }
+        LOG.info("MeshPairing", `pinned host key mesh=${meshId} host=${maskDaemonId(answeredHost)} via=${transport}`);
+        return {
+          success: true,
+          code: "mesh_host_pin_applied",
+          meshId,
+          hostDaemonId: answeredHost,
+          transport,
+          pinned: true,
+          peerSecretStored: !!peerSecret
+        };
+      },
+      /**
        * Forget one peer's secret (design §4.4 step 6). Either side may run it:
        * the host revokes a member, a member forgets its host. The WS transport
        * closes the peer's open sockets through onPeerSecretsChanged; this command
@@ -210115,7 +210238,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       // The joining member is not on the host's roster yet (the pairing token
       // authorises it): the sender must be the daemon its memberNode names.
       apply_mesh_host_join: { meshSender: "pairing_member" },
-      revoke_mesh_peer: { sources: LOCAL_OPERATOR_SOURCES, meshSender: void 0 }
+      revoke_mesh_peer: { sources: LOCAL_OPERATOR_SOURCES, meshSender: void 0 },
+      // 'mesh' is allowed only for the recorded host (checked in the handler); the cloud dashboard uses 'p2p'.
+      pin_mesh_host_key: { sources: [...LOCAL_OPERATOR_SOURCES, "mesh"], meshSender: "authenticated_peer" }
     }, { meshSender: "authenticated_peer" });
     init_dist2();
     init_dist();
@@ -240669,6 +240794,7 @@ var CANONICAL_MESH_TOOL_NAMES = [
   "mesh_add_node",
   "mesh_reattach_source_parent",
   "mesh_attach_remote",
+  "mesh_host_pairing",
   "mesh_clone_node",
   "mesh_remove_node",
   "mesh_retry_node_bootstrap",
@@ -244906,6 +245032,8 @@ var TOOL_ANNOTATIONS = {
   mesh_add_node: WRITE_LOCAL_ACCUMULATING,
   mesh_reattach_source_parent: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   mesh_attach_remote: CONTROL_REMOTE_IDEMPOTENT,
+  // create_code mints a credential (accumulating); pin_host_key writes a trust pin on a member machine.
+  mesh_host_pairing: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   // Creates a git WORKTREE on disk for a (possibly remote) node.
   mesh_clone_node: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   // Deregisters a node.
@@ -245682,6 +245810,42 @@ var MESH_CHECKPOINT_TOOL = {
   }
 };
 
+// src/tools/mesh-host-pairing-tool.ts
+var MESH_HOST_PAIRING_TOOL = {
+  name: "mesh_host_pairing",
+  description: `Fix "host_pin_missing" artifact refusals on a machine that is already attached to this project. Step 1: action=create_code on the host (returns a single-use pairing code valid 10 minutes; share it only with the owner). Step 2: action=pin_host_key with target_daemon_id (the member machine) and code; the member contacts the host with the code and stores the host's artifact signing key. Never pass a key; the code is the only credential and is verified by the host.`,
+  inputSchema: {
+    type: "object",
+    properties: {
+      action: { type: "string", enum: ["create_code", "pin_host_key"], description: "create_code (on the host) or pin_host_key (on a member machine)." },
+      target_daemon_id: { type: "string", description: "pin_host_key only: exact canonical daemon_mach_* of the member machine that must hold the pin." },
+      code: { type: "string", description: "pin_host_key only: the pairing code returned by create_code." }
+    },
+    required: ["action"]
+  }
+};
+async function meshHostPairing(ctx, args) {
+  const action = typeof args?.action === "string" ? args.action : "";
+  if (action === "create_code") {
+    return JSON.stringify(await ctx.transport.command("create_mesh_host_pairing_token", { meshId: ctx.mesh.id }));
+  }
+  if (action === "pin_host_key") {
+    const target = typeof args?.target_daemon_id === "string" ? args.target_daemon_id.trim() : "";
+    const code = typeof args?.code === "string" ? args.code.trim() : "";
+    if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(target)) {
+      return JSON.stringify({ success: false, code: "INVALID_TARGET", error: "Pass the exact canonical daemon_mach_* of the member machine as target_daemon_id." });
+    }
+    if (!code) {
+      return JSON.stringify({ success: false, code: "mesh_host_pin_token_required", error: "Pass the pairing code from action=create_code as code." });
+    }
+    if (!supportsMeshRelay(ctx.transport)) {
+      return JSON.stringify({ success: false, code: "mesh_relay_unavailable", error: "This transport cannot reach other machines; run pin_host_key from the member machine or use the dashboard Mesh > Connect another machine card." });
+    }
+    return JSON.stringify(await ctx.transport.meshCommand(target, "pin_mesh_host_key", { meshId: ctx.mesh.id, token: code }));
+  }
+  return JSON.stringify({ success: false, code: "INVALID_ARGUMENTS", error: "action must be create_code or pin_host_key." });
+}
+
 // src/tools/mesh-tool-schemas-admin.ts
 var MESH_MISSION_UPSERT_TOOL = {
   name: "mesh_mission_upsert",
@@ -246279,6 +246443,7 @@ var ALL_MESH_TOOLS = [
   MESH_ADD_NODE_TOOL,
   MESH_REATTACH_SOURCE_PARENT_TOOL,
   MESH_ATTACH_REMOTE_TOOL,
+  MESH_HOST_PAIRING_TOOL,
   MESH_CLONE_NODE_TOOL,
   MESH_REMOVE_NODE_TOOL,
   MESH_RETRY_NODE_BOOTSTRAP_TOOL,
@@ -255455,6 +255620,7 @@ var MESH_TOOL_DISPATCH = {
   mesh_list_pending_approvals: (ctx, a) => meshListPendingApprovals(ctx, a),
   mesh_create: (ctx, a) => meshCreateOrPlan(ctx.transport, a, ctx.mesh.id),
   mesh_attach_remote: async (ctx, a) => JSON.stringify(await ctx.transport.command("attach_remote_project", { meshId: ctx.mesh.id, targetDaemonId: a.targetDaemonId })),
+  mesh_host_pairing: (ctx, a) => meshHostPairing(ctx, a),
   mesh_add_node: (ctx, a) => meshAddNode(ctx.transport, { ...a, inline_mesh: ctx.mesh }, ctx.mesh.id),
   mesh_reattach_source_parent: (ctx, a) => meshReattachSourceParent(ctx.transport, a, ctx.mesh.id),
   mesh_clone_node: (ctx, a) => meshCloneNode(ctx, a),
