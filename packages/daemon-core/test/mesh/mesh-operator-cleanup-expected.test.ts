@@ -1,6 +1,6 @@
 /** B1 barrier tests: generic operator cleanupMeshSessions must carry expected
  * assignment through host stop/delete CAS — never unconditional stop then delete. */
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import {
     hostBootIdFromStartedAt, refuseCleanupExpectedStop, refuseCleanupExpectedDelete,
@@ -211,13 +211,79 @@ describe('B1 operator cleanupMeshSessions expected-assignment CAS', () => {
         expect(f.stops()).toBe(0);
     });
 
-    it('old host without stop_session_if_expected fails closed and retains writer', async () => {
-        const f = fixture();
-        delete f.control.stopSessionIfExpected;
-        const result = await cleanupMeshSessions(f.self, f.args);
-        expect(result).toMatchObject({ success: false, retained: true });
-        expect(result.errors?.[0]?.error).toBe('cleanup_expected_stop_unsupported');
-        expect(f.control.stopSession).not.toHaveBeenCalled();
+    describe('old host without stop_session_if_expected (legacy exact-stop fallback)', () => {
+        const legacyFixture = () => {
+            const f = fixture();
+            delete f.control.stopSessionIfExpected;
+            // The legacy host stops by id; the daemon proves it by re-listing.
+            f.control.stopSession = vi.fn(async () => { f.record.lifecycle = 'stopped'; return { ...f.record }; });
+            return f;
+        };
+        const prevTimeout = process.env.ADHDEV_LEGACY_STOP_TIMEOUT_MS;
+        beforeEach(() => { process.env.ADHDEV_LEGACY_STOP_TIMEOUT_MS = '300'; });
+        afterEach(() => {
+            if (prevTimeout === undefined) delete process.env.ADHDEV_LEGACY_STOP_TIMEOUT_MS;
+            else process.env.ADHDEV_LEGACY_STOP_TIMEOUT_MS = prevTimeout;
+        });
+
+        it('stops a NAMED idle session after re-verifying the exact tuple, proves it, and keeps the fence tombstone', async () => {
+            const f = legacyFixture();
+            const result = await cleanupMeshSessions(f.self, f.args);
+            expect(result).toMatchObject({ success: true, stoppedSessionIds: [f.sessionId] });
+            expect(f.control.stopSession).toHaveBeenCalledTimes(1);
+            expect(sessionIsStopping(MeshRuntimeStore.getInstance().db, f.sessionId)).toBe(true);
+            // Duplicate stop of the already-stopped incarnation is a no-op, not a second kill.
+            const again = await cleanupMeshSessions(f.self, f.args);
+            expect(again.stoppedSessionIds ?? []).toEqual([]);
+        });
+
+        it('refuses a bulk sweep (no explicit session_ids): unsupported stays fail-closed with a concrete recovery', async () => {
+            const f = legacyFixture();
+            const result = await cleanupMeshSessions(f.self, { ...f.args, sessionIds: undefined });
+            expect(result).toMatchObject({ success: false, retained: true });
+            expect(result.errors?.[0]?.error).toBe('cleanup_expected_stop_unsupported');
+            expect(result.errors?.[0]?.recovery).toMatch(/session host/);
+            expect(result.errors?.[0]?.recovery).toMatch(/Do not use Ctrl-C/);
+            expect(f.control.stopSession).not.toHaveBeenCalled();
+        });
+
+        it('refuses a session that is generating a turn', async () => {
+            const f = legacyFixture();
+            f.self.deps.getInstanceManager = () => ({ getByCategory: () => [{ getState: () => ({ instanceId: f.sessionId, status: 'generating' }) }] });
+            const result = await cleanupMeshSessions(f.self, f.args);
+            expect(result.errors?.[0]?.error).toBe('cleanup_legacy_stop_session_active');
+            expect(f.control.stopSession).not.toHaveBeenCalled();
+            expect(sessionIsStopping(MeshRuntimeStore.getInstance().db, f.sessionId)).toBe(false);
+        });
+
+        it('allows a session waiting on approval/quota (not generating)', async () => {
+            const f = legacyFixture();
+            f.self.deps.getInstanceManager = () => ({ getByCategory: () => [{ getState: () => ({ instanceId: f.sessionId, status: 'waiting_approval' }) }] });
+            const result = await cleanupMeshSessions(f.self, f.args);
+            expect(result).toMatchObject({ success: true, stoppedSessionIds: [f.sessionId] });
+        });
+
+        it('refuses when the incarnation changed after selection (no stop sent)', async () => {
+            const f = legacyFixture();
+            const realList = f.control.listSessions;
+            let calls = 0;
+            // Selection sees the original record; the pre-stop re-verification sees a restarted runtime.
+            f.control.listSessions = async () => (++calls === 1 ? realList() : [{ ...f.record, runtimeKey: 'rt-restarted' }]);
+            const result = await cleanupMeshSessions(f.self, f.args);
+            expect(result.errors?.[0]?.error).toBe('cleanup_assignment_mismatch');
+            expect(f.control.stopSession).not.toHaveBeenCalled();
+        });
+
+        it('an unproven stop fails with cleanup_stop_not_proven and KEEPS ownership fenced', async () => {
+            const f = legacyFixture();
+            f.control.stopSession = vi.fn(async () => ({ lifecycle: 'stopping' })); // host never reports it stopped
+            const result = await cleanupMeshSessions(f.self, f.args);
+            expect(result).toMatchObject({ success: false, retained: true });
+            expect(result.errors?.[0]).toMatchObject({ error: 'cleanup_stop_not_proven' });
+            expect(result.errors?.[0]?.recovery).toMatch(/fenced/);
+            expect(sessionIsStopping(MeshRuntimeStore.getInstance().db, f.sessionId)).toBe(true);
+            expect(sessionStopPending(MeshRuntimeStore.getInstance().db, f.sessionId)).toBe(true);
+        });
     });
 
     it('missing expected tuple (no incarnation) fails closed', async () => {
@@ -486,7 +552,7 @@ describe('F2 production-shaped delete unsupported (method present + RPC refuse)'
         expect(f.control.deleteSession).not.toHaveBeenCalled();
     });
 
-    it('stop_and_delete: unsupported delete + unsupported stop fails closed and retains writer', async () => {
+    it('stop_and_delete: unsupported delete + unsupported stop fails closed when the legacy fallback does not apply (bulk sweep)', async () => {
         const f = fixture();
         f.control.deleteSessionIfExpected = async () => {
             throw new Error('Unsupported session host request: delete_session_if_expected');
@@ -494,7 +560,7 @@ describe('F2 production-shaped delete unsupported (method present + RPC refuse)'
         f.control.stopSessionIfExpected = async () => {
             throw new Error('Unsupported session host request: stop_session_if_expected');
         };
-        const result = await cleanupMeshSessions(f.self, { ...f.args, mode: 'stop_and_delete' });
+        const result = await cleanupMeshSessions(f.self, { ...f.args, mode: 'stop_and_delete', sessionIds: undefined });
         expect(result).toMatchObject({ success: false, retained: true });
         expect(result.errors?.[0]?.error).toBe('cleanup_expected_stop_unsupported');
         expect(result.deletedSessionIds).toEqual([]);

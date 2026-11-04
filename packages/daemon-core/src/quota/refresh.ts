@@ -34,6 +34,7 @@
  */
 'use strict';
 
+import { preserveCliRateLimitEvidence, withCliRateLimitEvidence, type CliRateLimitEvidence } from './exhaustion-hold.js';
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
 import { canTransferQuotaReading, isConfirmedAccountSwitch, retainUnconfirmedDisplay, quotaAccountLineage, sameQuotaAccount, unconfirmedQuotaReading, UNKNOWN_ACCOUNT_LINEAGE, type QuotaAccountLineage, withQuotaAccountLineage } from './account-lineage.js';
@@ -427,6 +428,16 @@ export function isDueBySwrTtl(provider: QuotaProvider, now: number = Date.now())
  * the separate `readQuotaCacheWithRevalidate()` below, which only the low-rate
  * human-facing surfaces call.
  */
+/**
+ * The CLI itself reported its usage limit (a session printed "usage limit reached"). Stamp that onto the
+ * provider's cache entry so routing holds the provider until a measurement taken after the reset says
+ * otherwise (exhaustion-hold.ts). Evidence only ever ADDS a hold; it never invents windows.
+ */
+export function recordCliRateLimitEvidence(provider: string, evidence: CliRateLimitEvidence): void {
+    cache.set(provider, withCliRateLimitEvidence(provider, cache.get(provider), evidence));
+    notifyQuotaCacheChanged();
+}
+
 export function readQuotaCache(): Record<string, MeshNodeFactsProviderQuota> | undefined {
     if (cache.size === 0) return undefined;
     return Object.fromEntries(cache);
@@ -737,7 +748,7 @@ export async function refreshQuotaCacheOnce(
                 // transiently look permanently un-probed and re-probe forever.
                 cache.set(
                     provider,
-                    stampFetchedAt(carryForwardLastGoodWindows(cache.get(provider), fresh), Date.now()),
+                    preserveCliRateLimitEvidence(cache.get(provider), stampFetchedAt(carryForwardLastGoodWindows(cache.get(provider), fresh), Date.now())),
                 );
                 committed.set(provider, attempt);
                 hydratedOnly.delete(provider); // measured in this process now

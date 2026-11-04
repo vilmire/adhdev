@@ -373,14 +373,15 @@ describe('member quota ingestion → two mesh projections and persisted routing'
         await expectBoth(failure);
     });
 
-    it('retains a measured unreset 5h window past the age threshold and clears it at its own reset', async () => {
+    it('retains a measured unreset 5h window past the age threshold; at its own reset it stays held as reset-unconfirmed until re-measured', async () => {
         const measured = quota(100, NOW - 3 * 3_600_000);
         await pushToBoth(measured);
         await expectBoth(measured);
         for (const meshId of MESHES) {
             const node = getMesh(meshId)!.nodes[0];
             expect(evaluateProviderQuotaGate(node, PROVIDER, undefined, NOW)).toMatchObject({ reason: 'provider_quota_session_low' });
-            expect(evaluateProviderQuotaGate(node, PROVIDER, undefined, NOW + 3_600_001)).toBeNull();
+            // Exhausted (100% used) reading + reset passed + no newer measurement: elapsed time alone does not unblock.
+            expect(evaluateProviderQuotaGate(node, PROVIDER, undefined, NOW + 3_600_001)).toMatchObject({ reason: 'provider_quota_reset_unconfirmed', window: 'session' });
         }
     });
 

@@ -115,7 +115,9 @@ export function unconfirmedQuotaReading<T extends MeshNodeFactsProviderQuota | P
     for (const field of ['accountSwitched', 'lastGood', 'lastGoodWindows', 'accountEmail', 'planType', 'usage', 'cursorUsage', 'unconfirmedReading']) delete metadata[field];
     if (display) metadata.unconfirmedReading = display;
     // A CONFIRMED switch is remembered so a later carry-forward cannot re-attach the old account's numbers.
-    if (options.switched) metadata.accountSwitched = true;
+    // The CLI's own "usage limit reached" report belongs to the account that printed it: a CONFIRMED
+    // switch to another account drops it; an unprovable account keeps it (the safe direction for a hold).
+    if (options.switched) { metadata.accountSwitched = true; delete metadata.cliRateLimit; }
     return { ...quota, session: null, weekly: null, monthly: null, buckets: [],
         status: 'unavailable', error: 'Quota account lineage could not be confirmed; previous readings were not transferred.',
         // A provider-method 429 cooldown is not account headroom. Retain its

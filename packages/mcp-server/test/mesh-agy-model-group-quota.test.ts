@@ -44,15 +44,15 @@ function node(now = Date.now(), policy: Record<string, unknown> = {}) {
     } as any;
 }
 
-test('direct dispatch: Claude/GPT session passes, Gemini session is refused, no model keeps the blended gate', () => {
+test('direct dispatch: Claude/GPT session passes, Gemini session is refused, no model is admitted while any pool has headroom', () => {
     const n = node();
     assert.equal(checkDirectDispatchQuotaGate(n, 'antigravity-cli', null, CLAUDE), null);
     const gemini = checkDirectDispatchQuotaGate(n, 'antigravity-cli', null, GEMINI);
     assert.equal(gemini?.block.group, 'gemini');
     assert.equal(gemini?.block.window, 'weekly');
     assert.equal(typeof gemini?.resetsAt, 'number', 'names the group window reset');
-    // Legacy callers without a model retain the headline decision.
-    assert.ok(checkDirectDispatchQuotaGate(n, 'antigravity-cli', null));
+    // Callers without a model are judged by the best pool, not the blended worst-pool headline: Claude/GPT has headroom here.
+    assert.equal(checkDirectDispatchQuotaGate(n, 'antigravity-cli', null), null);
 });
 
 function makeLaunchCtx(policy: Record<string, unknown>, extra: Record<string, unknown> = {}) {

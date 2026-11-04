@@ -4965,6 +4965,14 @@
             "optionCorrect": "Correct",
             "optionReopen": "Reopen"
         },
+        "quota": {
+            "wait": "Wait for reset",
+            "runAnyway": "Run anyway",
+            "otherProvider": "Use another provider",
+            "switchTo": "Switch to {{provider}}",
+            "stale": "This decision changed. Reload it and choose again.",
+            "switchFailed": "The old session was not proven stopped, so nothing changed ({{code}}). Try again, or close that CLI yourself."
+        },
         "decisionsWaiting": "{{count}} decisions waiting",
         "openItems": "{{count}} open items",
         "liveChecksOpen": "{{count}} live checks",

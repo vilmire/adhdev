@@ -1,6 +1,7 @@
 import type { ProviderLoader } from '../providers/provider-loader.js';
 import { evaluateProviderQuotaGate } from './mesh-quota-routing.js';
-import { hasQuotaOverride, providerPinOf, quotaBlockOverridable } from './mesh-quota-override.js';
+import { hasQuotaOverride, providerPinOf, quotaBlockOverridable, quotaBlockPinOverridable } from './mesh-quota-override.js';
+import { forgetPinCrossings, notePinnedClaimCrossedReserve } from './mesh-quota-pin-crossing.js';
 import { quotaFactsContextForLiveRouting } from './mesh-quota-sources.js';
 import { clearQuotaClaimBlockState, logQuotaClaimBlockTransition, type QuotaClaimDrainTrace } from './mesh-queue-observability.js';
 import { getQueue } from './mesh-work-queue.js';
@@ -8,7 +9,8 @@ import { isLocalAutoLaunchNode } from './mesh-candidacy-predicates.js';
 
 /**
  * PIN OVERRIDE: when a pending task is explicitly pinned to this provider via
- * requiredTags (e.g. provider=codex-cli), the pin is authoritative: the claim
+ * requiredTags (e.g. provider=codex-cli), the pin is authoritative over the quota RESERVE (never over a
+ * confirmed exhaustion — see quotaBlockPinOverridable): the claim
  * proceeds and the ledger records 'overridden_by_pin' instead of 'blocked', so
  * an operator can later see "the gate was low but the pin was honored". The
  * candidate task id is included in the ledger context to distinguish this from
@@ -94,8 +96,11 @@ export function evaluateQuotaClaimGateForAssignment(args: {
             block: quotaClaimBlock,
             context: { trigger, candidateTaskId: pinCandidateTaskId, pinOverride: isPinOverride },
         };
-        if (isPinOverride) {
+        // Owner decision A (2026-11-03): the pin passes the RESERVE line, once-notified. It never passes a
+        // confirmed exhaustion (provider-level, model-group, or reset-unconfirmed): those need the owner.
+        if (isPinOverride && quotaBlockPinOverridable(quotaClaimBlock)) {
             logQuotaClaimBlockTransition(meshId, observation, 'overridden_by_pin');
+            notePinnedClaimCrossedReserve({ meshId, nodeId, sessionId, providerType, taskId: pinCandidateTaskId!, block: quotaClaimBlock });
             return false;
         }
         const ownerOverrideTaskId = args.quotaOverrideOnly && quotaBlockOverridable(quotaClaimBlock) ? quotaOverrideCandidateTaskId(meshId, providerType) : undefined;
@@ -109,6 +114,7 @@ export function evaluateQuotaClaimGateForAssignment(args: {
         return true;
     }
     clearQuotaClaimBlockState(meshId, nodeId, sessionId, providerType);
+    forgetPinCrossings(meshId, nodeId, sessionId, providerType);
     if (quotaClaimTrace) quotaClaimTrace.clear += 1;
     return false;
 }

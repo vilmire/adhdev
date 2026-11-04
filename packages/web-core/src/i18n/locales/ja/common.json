@@ -4965,6 +4965,14 @@
             "optionCorrect": "合っています",
             "optionReopen": "再開"
         },
+        "quota": {
+            "wait": "リセットまで待つ",
+            "runAnyway": "それでも実行",
+            "otherProvider": "別のプロバイダーを使う",
+            "switchTo": "{{provider}} に切り替える",
+            "stale": "この判断は変更されました。再読み込みしてもう一度選んでください。",
+            "switchFailed": "古いセッションの停止を確認できなかったため、何も変更していません ({{code}})。再試行するか、そのCLIを自分で閉じてください。"
+        },
         "decisionsWaiting": "決定 {{count}} 件待ち",
         "openItems": "未完了 {{count}} 件",
         "liveChecksOpen": "ライブ確認 {{count}} 件",

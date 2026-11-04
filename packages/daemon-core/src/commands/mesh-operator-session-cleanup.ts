@@ -29,6 +29,9 @@ export interface OperatorCleanupHostControl {
         sessionId: string,
         expected: SessionCleanupExpectedAssignment,
     ): Promise<{ lifecycle?: string } | null>;
+    /** Legacy-host fallback only (see legacyVerifiedStop): list the host's records / stop by id. */
+    listSessions?(): Promise<any[]>;
+    stopSession?(sessionId: string): Promise<any>;
     deleteSessionIfExpected?(
         sessionId: string,
         expected: SessionCleanupExpectedAssignment,
@@ -83,6 +86,110 @@ export async function resolveOperatorCleanupHostBootId(control: OperatorCleanupH
     return resolveOperatorHostBootId(control);
 }
 
+const STOPPED_LIFECYCLES = new Set(['stopped', 'failed', 'interrupted']);
+export const LEGACY_STOP_POLL_MS = 250;
+export const LEGACY_STOP_TIMEOUT_MS = 5_000;
+/** `ADHDEV_LEGACY_STOP_TIMEOUT_MS` shortens the proof wait (tests, tuning). */
+function proofTimeoutMs(explicit?: number): number {
+    if (explicit !== undefined) return explicit;
+    const raw = Number(process.env.ADHDEV_LEGACY_STOP_TIMEOUT_MS);
+    return Number.isFinite(raw) && raw >= 0 && process.env.ADHDEV_LEGACY_STOP_TIMEOUT_MS ? raw : LEGACY_STOP_TIMEOUT_MS;
+}
+
+/**
+ * Recovery text for a refused cleanup/stop, naming what the operator can actually do next. The codes are
+ * the machine contract; this is what a coordinator or dashboard shows. It never suggests Ctrl-C/ESC: those
+ * keys are behind the destructive double gate (mesh_send_keys) and are not a session-stop mechanism.
+ */
+export function describeCleanupRecovery(error: string): string | undefined {
+    switch (error) {
+        case 'cleanup_expected_stop_unsupported':
+            return 'The session host that runs this session predates exact-stop support and the safe fallback was not applicable '
+                + '(name the session explicitly in session_ids, and it must be idle or waiting on approval/quota with no task generating). '
+                + 'Otherwise restart that machine\'s session host (a daemon restart alone does not replace it) or close the CLI yourself, then re-run the cleanup to confirm. '
+                + 'Do not use Ctrl-C/ESC keys to stop it. The session stays owned and fenced until a stop is proven.';
+        case 'cleanup_stop_not_proven':
+            return 'The stop was sent but the host still lists this exact session as running. Ownership stays fenced (no second writer can start). '
+                + 'Re-run mesh_cleanup_sessions(mode: "stop") to re-check, or close the CLI process manually; handover continues once the host reports it stopped.';
+        case 'cleanup_legacy_stop_session_active':
+            return 'The session is generating a turn, so the legacy-host fallback refuses to stop it. Wait for it to go idle, or answer its pending prompt first.';
+        case 'cleanup_assignment_mismatch':
+        case 'cleanup_native_incarnation_mismatch':
+            return 'The session changed after it was selected (new task or restarted CLI). Re-read the node state and decide again; nothing was stopped.';
+        case 'cleanup_host_boot_mismatch':
+            return 'The session host restarted since selection. Re-run the cleanup; nothing was stopped.';
+        default:
+            return undefined;
+    }
+}
+
+/**
+ * Wait until the host no longer lists THIS incarnation as live: absent, a different incarnation (runtimeKey/
+ * startedAt differ) or a stopped lifecycle. Returns false when the deadline passes first — the caller must then
+ * keep ownership fenced and say so; "stopping" is not a proof.
+ */
+export async function awaitSessionStopProof(args: {
+    control: Pick<OperatorCleanupHostControl, 'listSessions'>;
+    sessionId: string;
+    expected: Pick<SessionCleanupExpectedAssignment, 'runtimeKey' | 'startedAt'>;
+    timeoutMs?: number;
+    pollMs?: number;
+}): Promise<boolean> {
+    if (typeof args.control.listSessions !== 'function') return false;
+    const deadline = Date.now() + proofTimeoutMs(args.timeoutMs);
+    const pollMs = args.pollMs ?? LEGACY_STOP_POLL_MS;
+    for (;;) {
+        try {
+            const record = (await args.control.listSessions()).find(r => r?.sessionId === args.sessionId);
+            if (!record) return true;
+            const sameIncarnation = (args.expected.runtimeKey === undefined || record.runtimeKey === args.expected.runtimeKey)
+                && (args.expected.startedAt === undefined || record.startedAt === args.expected.startedAt);
+            if (!sameIncarnation || STOPPED_LIFECYCLES.has(String(record.lifecycle))) return true;
+        } catch { /* host busy: keep polling until the deadline */ }
+        if (Date.now() >= deadline) return false;
+        await new Promise(resolve => setTimeout(resolve, pollMs));
+    }
+}
+
+/**
+ * Stop a session on a host that predates stop_session_if_expected. The host cannot compare-and-stop, so the
+ * daemon re-verifies, immediately before the stop, everything the host would have: same host boot, same
+ * incarnation and assignment tuple, still running, and (caller-supplied) not generating a turn. The durable
+ * stop fence is already held, so claim/reuse/send-input stay refused across the remaining window. The stop is
+ * then PROVEN by polling; anything short of that is a failure that keeps the fence.
+ */
+async function legacyVerifiedStop(args: {
+    control: OperatorCleanupHostControl;
+    sessionId: string;
+    expected: SessionCleanupExpectedAssignment;
+    sessionActive: boolean;
+    timeoutMs?: number;
+    pollMs?: number;
+}): Promise<{ ok: true } | { ok: false; error: string; mutated: boolean }> {
+    const { control, sessionId, expected } = args;
+    if (typeof control.listSessions !== 'function' || typeof control.stopSession !== 'function') {
+        return { ok: false, error: 'cleanup_expected_stop_unsupported', mutated: false };
+    }
+    if (args.sessionActive) return { ok: false, error: 'cleanup_legacy_stop_session_active', mutated: false };
+    const bootId = await resolveOperatorHostBootId(control);
+    if (!bootId || bootId !== expected.hostBootId) return { ok: false, error: 'cleanup_host_boot_mismatch', mutated: false };
+    const record = (await control.listSessions()).find(r => r?.sessionId === sessionId);
+    if (!record) return { ok: true };
+    const current = captureOperatorCleanupExpected(bootId, record);
+    if (!current || JSON.stringify(current) !== JSON.stringify(expected)) {
+        return { ok: false, error: 'cleanup_assignment_mismatch', mutated: false };
+    }
+    if (STOPPED_LIFECYCLES.has(String(record.lifecycle))) return { ok: true };
+    if (record.lifecycle !== 'running') return { ok: false, error: 'cleanup_session_not_running', mutated: false };
+    try {
+        await control.stopSession(sessionId);
+    } catch {
+        // The RPC outcome is ambiguous (the host may have acted): fall through to the proof.
+    }
+    const proven = await awaitSessionStopProof({ control, sessionId, expected, timeoutMs: args.timeoutMs, pollMs: args.pollMs });
+    return proven ? { ok: true } : { ok: false, error: 'cleanup_stop_not_proven', mutated: true };
+}
+
 /**
  * Stop only the captured expected incarnation/assignment at the host critical section.
  * On refusal/mismatch: retains the writer, does not fabricate success.
@@ -93,17 +200,37 @@ export async function operatorStopSessionIfExpected(args: {
     sessionId: string;
     expected: SessionCleanupExpectedAssignment;
     beforeHostStop?: () => Promise<void>;
-}): Promise<{ success: true; expected: SessionCleanupExpectedAssignment }
+    /** Legacy-host fallback gate: set by the caller only for an explicitly named session. */
+    legacyHostStop?: { allow: boolean; sessionActive: boolean; timeoutMs?: number; pollMs?: number };
+}): Promise<{ success: true; expected: SessionCleanupExpectedAssignment; legacyHostStop?: true }
     | { success: false; error: string; retained: true }> {
     const { control, meshId, sessionId, expected } = args;
-    if (typeof control.stopSessionIfExpected !== 'function') {
+    const legacy = args.legacyHostStop;
+    const legacyAvailable = legacy?.allow === true && typeof control.stopSession === 'function' && typeof control.listSessions === 'function';
+    if (typeof control.stopSessionIfExpected !== 'function' && !legacyAvailable) {
         return { success: false, error: 'cleanup_expected_stop_unsupported', retained: true };
     }
     const db = MeshRuntimeStore.getInstance().db;
     const stopId = reserveSessionStop(db, meshId, sessionId, undefined, expected);
+    // Returns undefined when the legacy path does not apply (caller keeps the original refusal).
+    const runLegacy = async (): Promise<{ success: true; expected: SessionCleanupExpectedAssignment; legacyHostStop: true }
+        | { success: false; error: string; retained: true } | undefined> => {
+        if (!legacyAvailable) return undefined;
+        const outcome = await legacyVerifiedStop({ control, sessionId, expected, sessionActive: legacy!.sessionActive, timeoutMs: legacy!.timeoutMs, pollMs: legacy!.pollMs });
+        if (outcome.ok) {
+            confirmSessionStop(db, sessionId, stopId);
+            return { success: true, expected, legacyHostStop: true };
+        }
+        // Before-action refusals prove no mutation: drop the fence. An unproven stop keeps it.
+        if (!outcome.mutated) abortSessionStopAfterHostRefusal(db, sessionId, stopId);
+        return { success: false, error: outcome.error, retained: true };
+    };
     try {
         if (args.beforeHostStop) await args.beforeHostStop();
         markSessionStopSent(db, sessionId, stopId);
+        if (typeof control.stopSessionIfExpected !== 'function') {
+            return await runLegacy() ?? { success: false, error: 'cleanup_expected_stop_unsupported', retained: true };
+        }
         try {
             const stopped = await control.stopSessionIfExpected(sessionId, expected);
             if (!stopped || (stopped.lifecycle !== 'stopped' && stopped.lifecycle !== 'stopping')) {
@@ -113,6 +240,10 @@ export async function operatorStopSessionIfExpected(args: {
             return { success: true, expected };
         } catch (error) {
             const code = sanitizeOperatorCleanupError(error);
+            if (code === 'cleanup_expected_stop_unsupported') {
+                const fallback = await runLegacy();
+                if (fallback) return fallback;
+            }
             if (isProvenBeforeActionRefusal(error, code) || code === 'cleanup_expected_stop_unsupported') {
                 abortSessionStopAfterHostRefusal(db, sessionId, stopId);
             }
@@ -209,6 +340,7 @@ export async function applyOperatorSessionCleanupMode(args: {
     completed: boolean;
     dryRun: boolean;
     markIntentionalStop: (action: 'stop_session' | 'delete_session_force') => Promise<void>;
+    legacyHostStop?: { allow: boolean; sessionActive: boolean; timeoutMs?: number; pollMs?: number };
 }): Promise<OperatorCleanupModeOutcome> {
     const { control, meshId, sessionId, mode, completed, dryRun } = args;
     const expected = dryRun ? null : captureOperatorCleanupExpected(args.hostBootId, args.record);
@@ -220,6 +352,7 @@ export async function applyOperatorSessionCleanupMode(args: {
             const stopped = await operatorStopSessionIfExpected({
                 control, meshId, sessionId, expected,
                 beforeHostStop: () => args.markIntentionalStop('stop_session'),
+                legacyHostStop: args.legacyHostStop,
             });
             if (!stopped.success) return { kind: 'refused', error: stopped.error };
         }
@@ -260,6 +393,7 @@ export async function applyOperatorSessionCleanupMode(args: {
                     const stopped = await operatorStopSessionIfExpected({
                         control, meshId, sessionId, expected,
                         beforeHostStop: () => args.markIntentionalStop('stop_session'),
+                        legacyHostStop: args.legacyHostStop,
                     });
                     if (!stopped.success) return { kind: 'refused', error: stopped.error };
                     return { kind: 'delete_unsupported', stopped: true };
@@ -273,6 +407,7 @@ export async function applyOperatorSessionCleanupMode(args: {
             const stopped = await operatorStopSessionIfExpected({
                 control, meshId, sessionId, expected,
                 beforeHostStop: () => args.markIntentionalStop('stop_session'),
+                legacyHostStop: args.legacyHostStop,
             });
             if (!stopped.success) return { kind: 'refused', error: stopped.error };
             return { kind: 'delete_unsupported', stopped: true };

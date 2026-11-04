@@ -647,14 +647,14 @@ describe('evaluateProviderQuotaGate — retained last-good windows', () => {
             .toBe(PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON);
     });
 
-    it('fails OPEN on a stale exhausted retained window after its own reset has passed', () => {
+    it('keeps an exhausted retained window blocked after its own reset passed until a newer measurement exists (elapsed time alone never unblocks)', () => {
         const node = nodeWithQuota({
             kimi: retainedQuota({
                 weekly: { usedPercent: 100, windowMinutes: 10080, resetsAt: NOW - MIN },
                 updatedAt: NOW - 85 * MIN,
             }),
         });
-        expect(evaluateProviderQuotaGate(node, 'kimi', null, NOW)).toBeNull();
+        expect(evaluateProviderQuotaGate(node, 'kimi', null, NOW)?.reason).toBe('provider_quota_reset_unconfirmed');
     });
 
     it('keeps a stale retained window with sufficient headroom gate-clear before reset', () => {

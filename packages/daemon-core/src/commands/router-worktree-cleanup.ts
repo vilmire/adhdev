@@ -25,6 +25,7 @@ import { getSessionHostSurfaceKind } from '../session-host/runtime-surface.js';
 import type { RepoMeshSessionCleanupMode } from '../repo-mesh-types.js';
 import {
     applyOperatorSessionCleanupMode,
+    describeCleanupRecovery,
     operatorCleanupDeleteUnsupportedFallback,
     resolveOperatorCleanupHostBootId,
 } from './mesh-operator-session-cleanup.js';
@@ -972,6 +973,16 @@ export async function recordIntentionalMeshSessionStop(self: DaemonCommandRouter
         }
     }
 
+/** Is the session mid-turn? Unknown state counts as active only when the host record shows a bound task. */
+function legacyStopSessionActive(self: DaemonCommandRouter, sessionId: string, record: any): boolean {
+    try {
+        const state = (self.deps as any).getInstanceManager?.()?.getByCategory?.('cli')
+            ?.find((inst: any) => inst.getState?.().instanceId === sessionId)?.getState?.();
+        if (state?.status) return state.status === 'generating' || state.status === 'starting';
+    } catch { /* fall through to the host record */ }
+    return !!record?.meta?.meshActiveAssignment;
+}
+
 export async function cleanupMeshSessions(self: DaemonCommandRouter, args: {
         meshId: string;
         nodeId: string;
@@ -1038,7 +1049,7 @@ export async function cleanupMeshSessions(self: DaemonCommandRouter, args: {
         const deleteUnsupportedSessionIds: string[] = [];
         const recordsRemainSessionIds: string[] = [];
         const retainedSessionIds: string[] = [];
-        const errors: Array<{ sessionId: string; error: string; retained?: true }> = [];
+        const errors: Array<{ sessionId: string; error: string; retained?: true; recovery?: string }> = [];
         const cleanupSource = args.source || 'mesh_cleanup_sessions';
         const markedIntentionalStopSessionIds = new Set<string>();
         const markIntentionalStop = async (sessionId: string, action: 'stop_session' | 'delete_session_force') => {
@@ -1056,7 +1067,8 @@ export async function cleanupMeshSessions(self: DaemonCommandRouter, args: {
         };
         const refuseSession = (sessionId: string, error: string) => {
             retainedSessionIds.push(sessionId);
-            errors.push({ sessionId, error, retained: true });
+            const recovery = describeCleanupRecovery(error);
+            errors.push({ sessionId, error, retained: true, ...(recovery ? { recovery } : {}) });
         };
         const matchedBySurfaceKind = {
             live_runtime: 0,
@@ -1165,6 +1177,8 @@ export async function cleanupMeshSessions(self: DaemonCommandRouter, args: {
                     completed,
                     dryRun: args.dryRun === true,
                     markIntentionalStop: (action) => markIntentionalStop(sessionId, action),
+                    // Legacy-host exact-stop fallback: only for a session the operator NAMED, never a bulk sweep.
+                    legacyHostStop: { allow: hasExplicitSessionIds, sessionActive: legacyStopSessionActive(self, sessionId, record) },
                 });
                 if (outcome.kind === 'stopped') stoppedSessionIds.push(sessionId);
                 else if (outcome.kind === 'deleted') deletedSessionIds.push(sessionId);
