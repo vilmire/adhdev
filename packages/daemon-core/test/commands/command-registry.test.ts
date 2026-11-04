@@ -143,6 +143,7 @@ const LEGACY_DAEMON_METADATA_COMMANDS: ReadonlySet<string> = new Set([
     'assistant_launch_defaults_set',
     // Source-parent repair updates mesh metadata; added after the legacy migration.
     'reattach_mesh_source_parent',
+    'recover_mesh_node_identity',
 ]);
 
 // Formerly invalidated the retired `session.modal` topic; since its removal
@@ -301,8 +302,8 @@ const LEGACY_MED_FAMILY_COMMANDS = [
     'difficulty_brains_get', 'difficulty_brains_set', 'mesh_quota_routing_get', 'mesh_quota_routing_set',
     'add_mesh_node', 'update_mesh_node', 'cleanup_mesh_sessions', 'remove_mesh_node', 'clone_mesh_node',
     'retry_mesh_node_bootstrap', 'get_mesh_host_pairing', 'configure_mesh_host_pairing',
-    // Explicit source-parent repair; added after the legacy migration.
-    'reattach_mesh_source_parent',
+    // Explicit repairs; added after the legacy migration.
+    'reattach_mesh_source_parent', 'recover_mesh_node_identity', 'stage_recover_mesh_review',
     'create_mesh_host_pairing_token', 'apply_mesh_host_join', 'join_mesh_host_pairing', 'revoke_mesh_peer', 'get_mesh_queue',
     'cancel_mesh_queue_task', 'requeue_mesh_queue_task', 'trigger_mesh_queue', 'stage_decide_mesh_task', 'mesh_init',
     'plan_mesh_refine_node', 'fast_forward_mesh_node', 'refine_mesh_node', 'batch_refine_mesh_nodes',
