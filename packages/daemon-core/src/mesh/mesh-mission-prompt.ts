@@ -170,7 +170,7 @@ export function renderMissionBlock(input: MissionBlockInput): string {
 const SECTION_FOOTER =
     'Continue each mission from its current task state. Do not re-enqueue tasks that already exist — check mesh_view_queue first. '
     + 'Update a mission with mesh_mission_upsert (summary, items_add / items_update) when it changes or reaches a terminal state (completed/abandoned). '
-    + 'When you close a mission, start outcome_reason with `scope:` and say what was checked and what was NOT checked (e.g. `scope: checked X on main; not checked Y live`) — a bare "not needed"/"superseded" claim is flagged "scope not recorded" on the owner dashboard. '
+    + 'When you close a mission, start outcome_reason with `scope:` and say what was checked and what was NOT checked (e.g. `scope: checked X and its tests; not checked Y live`) — a bare "not needed"/"superseded" claim is flagged "scope not recorded" on the owner dashboard. '
     + 'Decision items are the OWNER\'s to answer — never answer one yourself; when an answer arrives act on it. '
     + 'A "Git: landed" line means only that the referenced commits are on the default branch — it is not completion evidence: close live_check and remaining items separately, and never read "unknown" as "not landed". Put a PR\'s merge SHA (a commit ref) in refs, not only its number — PR numbers are not evaluated. '
     + 'Full goal text: mesh_mission_list verbose.';

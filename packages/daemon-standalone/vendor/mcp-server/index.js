@@ -81847,7 +81847,7 @@ ${report}`;
         LABEL_MAX = 24;
         MORE_LINE_RESERVE = 14;
         MISSION_MIGRATION_HINT = "Migrate: on your next update of this mission, add a summary + items (mesh_mission_upsert summary / items_add).";
-        SECTION_FOOTER = 'Continue each mission from its current task state. Do not re-enqueue tasks that already exist \u2014 check mesh_view_queue first. Update a mission with mesh_mission_upsert (summary, items_add / items_update) when it changes or reaches a terminal state (completed/abandoned). When you close a mission, start outcome_reason with `scope:` and say what was checked and what was NOT checked (e.g. `scope: checked X on main; not checked Y live`) \u2014 a bare "not needed"/"superseded" claim is flagged "scope not recorded" on the owner dashboard. Decision items are the OWNER\'s to answer \u2014 never answer one yourself; when an answer arrives act on it. A "Git: landed" line means only that the referenced commits are on the default branch \u2014 it is not completion evidence: close live_check and remaining items separately, and never read "unknown" as "not landed". Put a PR\'s merge SHA (a commit ref) in refs, not only its number \u2014 PR numbers are not evaluated. Full goal text: mesh_mission_list verbose.';
+        SECTION_FOOTER = 'Continue each mission from its current task state. Do not re-enqueue tasks that already exist \u2014 check mesh_view_queue first. Update a mission with mesh_mission_upsert (summary, items_add / items_update) when it changes or reaches a terminal state (completed/abandoned). When you close a mission, start outcome_reason with `scope:` and say what was checked and what was NOT checked (e.g. `scope: checked X and its tests; not checked Y live`) \u2014 a bare "not needed"/"superseded" claim is flagged "scope not recorded" on the owner dashboard. Decision items are the OWNER\'s to answer \u2014 never answer one yourself; when an answer arrives act on it. A "Git: landed" line means only that the referenced commits are on the default branch \u2014 it is not completion evidence: close live_check and remaining items separately, and never read "unknown" as "not landed". Put a PR\'s merge SHA (a commit ref) in refs, not only its number \u2014 PR numbers are not evaluated. Full goal text: mesh_mission_list verbose.';
       }
     });
     function extractOwnerQuestion(finalMessage) {
@@ -100310,7 +100310,7 @@ When to reach for the rarely used ones:
           "",
           "- When two or more `code_change` tasks may touch the same files (parallel worktrees, a fix + its follow-up, a split refactor), declare `owned_paths` on each \u2014 repo-relative files/dirs (`src/foo.ts`, or `src/mesh/**` for a subtree). Overlap is refused at claim time (`owned_paths_conflict`, see Workers); omitting it performs no check, so declare it whenever a collision is plausible.",
           "- `ownedPathsMismatch` in a completion means `touched_files` escaped the declared `owned_paths`. It is evidence, not a rejection (the completion already committed): decide whether the task drifted or your declaration was too narrow \u2014 do not re-run anything.",
-          '- When you close a mission (`status` completed/abandoned), record its verification scope in `outcome_reason`: start it with `scope:` and state what you checked and what you did NOT check (e.g. `scope: checked merge on main + unit tests; not checked live on the second machine`). This matters most for `not_needed`, `superseded` and `owner_abandoned` \u2014 a bare claim shows the owner a "scope not recorded" chip. It never blocks the close.',
+          '- When you close a mission (`status` completed/abandoned), record its verification scope in `outcome_reason`: start it with `scope:` and state what you checked and what you did NOT check (e.g. `scope: checked the requested deliverable and its unit tests; not checked live on the second machine`). This matters most for `not_needed`, `superseded` and `owner_abandoned` \u2014 a bare claim shows the owner a "scope not recorded" chip. It never blocks the close.',
           "- Attach a `brief` (`goal`, `constraints`, `doneCriteria`, `handoffNotes`, `ownedPaths`) via `mesh_mission_upsert` when a mission should outlive this coordinator session (a long plan, or one another coordinator may pick up). It is rendered into every task dispatched under that mission, and `mesh_mission_list` / the upsert response echo it back. A mission that finishes within this session needs none."
         ].join("\n");
         TOOL_EXPOSURE_PREFLIGHT_SECTION = `## Tool Exposure Preflight
@@ -155714,7 +155714,7 @@ ${section3}` : DIGEST_INPUT_TEXT, messageId, forSessionId: sid });
 Run these checks before every project_send, in order.
 
 1. **No duplicate.** Call project_status for the project. If an equivalent task is already in flight, do not send it again; tell the user it is already running and wait for its report.
-2. **Reuse the idle session.** If the coordinator already has an idle session for the same workstream, send the follow-up there (review to fix, merge to deploy, verify to cleanup). Send only what changed since the last verified state; do not start a new session just because the previous step finished.
+2. **Reuse the idle session.** If the coordinator already has an idle session for the same workstream, send the follow-up there (review to fix, then the next step the user asked for). Send only what changed since the last verified state; do not start a new session just because the previous step finished.
 3. **Do not poll a busy session.** While the coordinator is generating, do not call project_read or project_status again to check progress. Completion, progress and blocked reports arrive on their own as relays. Wait for them, or for an explicit request from the user.
 4. **One progress line.** After sending, tell the user the project and what was sent in one short line, then stop.
 5. **Verify side effects.** When the report says files changed, confirm with project_status or project_read before telling the user it succeeded.
@@ -155729,19 +155729,21 @@ Run these checks before every project_send, in order.
 Before telling the user a task is complete, classify every node and branch the task touched into exactly one final state:
 
 - **merged_to_main**: the change is on the main branch.
-- **pushed_feature_branch_needs_merge**: pushed to a feature branch; merging is the next step.
+- **pushed_feature_branch_needs_merge**: pushed to a feature branch and not merged. Merging is the next step only if the request or the done criteria ask for landing.
 - **blocked_review**: something needs the user's decision or approval first (for example unpushed commits in a nested repository). Name what is needed.
 - **cleanup_candidate**: nothing left to merge; the branch or worktree can be removed.
 - **not_mergeable**: conflicts or failing checks; say why.
 
-Report each branch with its state in one line. A task that remains on a non-main branch is not fully complete unless the report names the follow-up state and the next step. If repo changes were expected, confirm with the project's git status instead of trusting a worker's "done".
+Report each branch with its state in one line and name the next step. Merging is part of done only when the request or the done criteria ask for landing; a reviewed draft, a pull request or a tested local change can be the finish line the user asked for. If repo changes were expected, confirm with the project's git status instead of trusting a worker's "done".
 `
           },
           {
             name: "deploy-verify-checklist",
-            description: "Generic skeleton for shipping a change: merge check, rebuild, live verification, only then release.",
+            description: "For requests to deploy or release: merge check, rebuild, live verification, only then release.",
             triggers: ["deploy a change", "release a preview", "ship this build", "verify before deploying"],
             body: `# Deploy and verify checklist
+
+Use this only when the user asked to deploy or release. A request to build, fix or review something is not a request to ship it.
 
 Adapt the commands to the project; keep the order.
 
@@ -245655,7 +245657,7 @@ var MESH_QUEUE_REVISE_TOOL = {
 };
 var MESH_LIGHT_LAND_TOOL = {
   name: "mesh_light_land",
-  description: "Land finished light tasks (mesh_enqueue_task light=true) whose result is `ready`. Default mode refine: composes the results on the current base and runs the refinery with the repo's fast validation profile (publish approval and push guards still apply). apply_to_checkout (interactive MCP sessions only) stages the patches in your own checkout, uncommitted. Use dry_run first; conflicts are resolved in the task's own session via mesh_send_task.",
+  description: "Land finished light tasks (mesh_enqueue_task light=true) whose result is `ready`. Call it only when the request or the done criteria ask for landing; leaving a tested patch in its light workspace is a valid finish. Default mode refine: composes the results on the current base and runs the refinery with the repo's fast validation profile (publish approval and push guards still apply). apply_to_checkout (interactive MCP sessions only) stages the patches in your own checkout, uncommitted. Use dry_run first; conflicts are resolved in the task's own session via mesh_send_task.",
   inputSchema: {
     type: "object",
     properties: {
@@ -246053,7 +246055,7 @@ var MESH_MISSION_UPSERT_TOOL = {
       summary: { type: "string", description: "One-line current state (\u2264300 chars; longer is clipped). Shown in lists instead of the goal." },
       release_note: { type: "string", description: "One user/operator-visible sentence (\u2264400 chars, English, no internal wave/rc/mission wording) describing this mission's result for the release CHANGELOG draft. Optionally start with [Added]/[Fixed]/[Changed]. Empty string clears it." },
       outcome: { type: "string", enum: ["merged", "verified_live", "superseded", "not_needed", "owner_abandoned", "unspecified"], description: "Why the mission closed (set with status completed/abandoned; omitted \u2192 unspecified). owner_abandoned asks the owner to confirm \u2014 only use it when the owner really decided." },
-      outcome_reason: { type: "string", description: 'Optional (\u2264500 chars): the evidence/reasoning behind the outcome. Start it with `scope:` and say what was checked and what was NOT checked (e.g. `scope: checked merge + unit tests; not checked live`) \u2014 closed missions without a `scope:` statement are shown to the owner as "scope not recorded".' },
+      outcome_reason: { type: "string", description: 'Optional (\u2264500 chars): the evidence/reasoning behind the outcome. Start it with `scope:` and say what was checked and what was NOT checked (e.g. `scope: checked the requested change + unit tests; not checked live`) \u2014 closed missions without a `scope:` statement are shown to the owner as "scope not recorded".' },
       carry_over_to: { type: "string", description: "On close: mission id that receives the still-open items (default: the mesh carry-over mission)." },
       items_add: {
         type: "array",
