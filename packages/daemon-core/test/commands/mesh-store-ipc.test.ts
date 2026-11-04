@@ -324,6 +324,32 @@ describe('authenticated existing local node identity recovery', () => {
             expect(() => f.repair({ ...f.request, dryRun: false, expectedFingerprint: preview.receipt.fingerprint } as any)).toThrow(/stale_node_identity/);
         } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
     });
+    it('accepts cached daemon aliases but refuses missing, foreign or changed cache identity without writes', async () => {
+        const f = await fixture();
+        try {
+            const cachedNode = { ...f.node } as any;
+            const host = { ...f.host, cachedNode };
+            expect(f.repair(f.request, host).dryRun).toBe(true);
+            cachedNode.daemonId = 'mach_local';
+            expect(() => f.repair(f.request, host)).toThrow(/node_identity_cache_conflict/);
+            Object.assign(f.node, { daemonId: 'daemon_mach_local', machineId: 'mach_local' }); f.save();
+            cachedNode.machineId = 'mach_local';
+            const request = { ...f.request, expectedDaemonId: 'daemon_mach_local', expectedMachineId: 'mach_local' } as any;
+            const before = fs.readFileSync(f.configPath, 'utf8');
+            expect(f.repair(request, host).dryRun).toBe(true);
+            cachedNode.daemonId = 'standalone_mach_local';
+            expect(f.repair(request, host).dryRun).toBe(true);
+            for (const daemonId of [undefined, '', 'daemon_mach_foreign']) {
+                cachedNode.daemonId = daemonId;
+                expect(() => f.repair(request, host)).toThrow(/node_identity_cache_conflict/);
+            }
+            cachedNode.daemonId = 'mach_local'; cachedNode.machineId = 'mach_foreign';
+            expect(() => f.repair(request, host)).toThrow(/node_identity_cache_conflict/);
+            cachedNode.machineId = 'mach_local'; cachedNode.workspace = f.anchor;
+            expect(() => f.repair(request, host)).toThrow(/node_identity_cache_conflict/);
+            expect(fs.readFileSync(f.configPath, 'utf8')).toBe(before);
+        } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+    });
     it('refuses foreign identities, wrong repository, stale workspace and fingerprint without writes', async () => {
         const f = await fixture();
         try {

@@ -514,7 +514,10 @@ export function recoverLocalNodeIdentity(meshId: string, nodeId: string, request
         const node = mesh?.nodes.find(n => n.id === nodeId);
         if (!config || !mesh || !node) throw new Error('node_not_found');
         const cached = host.cachedNode;
-        if (cached && (cached.workspace !== node.workspace || cached.daemonId !== node.daemonId || cached.machineId !== node.machineId)) throw new Error('node_identity_cache_conflict');
+        // Missing identity must agree; populated daemon aliases identify the same machine.
+        const cachedDaemonMatches = !cached || (cached.daemonId === undefined && node.daemonId === undefined)
+            || daemonIdsEquivalent(cached.daemonId, node.daemonId);
+        if (cached && (cached.workspace !== node.workspace || !cachedDaemonMatches || cached.machineId !== node.machineId)) throw new Error('node_identity_cache_conflict');
         const owner = resolveMeshHostStatus(mesh, { localDaemonId: host.actor });
         if (!host.actor || !host.machineId || !daemonIdsEquivalent(host.actor, host.machineId)
             || !mesh.meshHost?.hostDaemonId || !daemonIdsEquivalent(mesh.meshHost.hostDaemonId, host.actor)

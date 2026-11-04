@@ -99422,7 +99422,8 @@ ${continuationNotice}` } : dispatchTask,
         const node = mesh?.nodes.find((n) => n.id === nodeId);
         if (!config || !mesh || !node) throw new Error("node_not_found");
         const cached5 = host.cachedNode;
-        if (cached5 && (cached5.workspace !== node.workspace || cached5.daemonId !== node.daemonId || cached5.machineId !== node.machineId)) throw new Error("node_identity_cache_conflict");
+        const cachedDaemonMatches = !cached5 || cached5.daemonId === void 0 && node.daemonId === void 0 || daemonIdsEquivalent5(cached5.daemonId, node.daemonId);
+        if (cached5 && (cached5.workspace !== node.workspace || !cachedDaemonMatches || cached5.machineId !== node.machineId)) throw new Error("node_identity_cache_conflict");
         const owner = resolveMeshHostStatus(mesh, { localDaemonId: host.actor });
         if (!host.actor || !host.machineId || !daemonIdsEquivalent5(host.actor, host.machineId) || !mesh.meshHost?.hostDaemonId || !daemonIdsEquivalent5(mesh.meshHost.hostDaemonId, host.actor) || owner.role !== "host" || !daemonIdsEquivalent5(owner.hostDaemonId, host.actor)) throw new Error("authenticated_local_mesh_host_required");
         if ((node.daemonId ?? null) !== request.expectedDaemonId || (node.machineId ?? null) !== request.expectedMachineId)
