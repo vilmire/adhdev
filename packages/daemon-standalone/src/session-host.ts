@@ -48,7 +48,7 @@ function buildSessionHostEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return managedHost.buildEnv(baseEnv);
 }
 
-export function getSessionHostWedgeRecovery() {
+export function getSessionHostWedgeRecovery(): ReturnType<typeof managedHost.wedgeRecoveryDeps> {
   return managedHost.wedgeRecoveryDeps();
 }
 
