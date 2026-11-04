@@ -83394,7 +83394,7 @@ ${block3.text}`,
           hasHandoffNotes: !!report.handoffNotes,
           atMs: nowMs2
         });
-        return { accepted: false, refusal: "rejected_by_reducer", detail: "checkpoint_pending:report retained; physical writer stop is unconfirmed" };
+        return { accepted: false, refusal: "rejected_by_reducer", detail: "checkpoint_pending:report NOT accepted yet; physical writer stop is unconfirmed (the worker re-sends it after the stop settles)" };
       }
       let commit2;
       stashStageReportForIdentity(identity5, report, nowMs2);
@@ -196268,7 +196268,7 @@ ${marker2}`,
           success: false,
           error: result.refusal,
           ...result.detail ? { detail: result.detail } : {},
-          hint: result.refusal === "unauthenticated" ? "No live task is bound to this worker session \u2014 the task may already be terminal or reassigned." : result.refusal === "bind_unknown_after_restart" ? "This daemon does not recognise the worker session bind \u2014 it was issued before a daemon restart that did not carry it over. A retry will not help: put your result in your final message so the coordinator can read it, and say that this worker session must be relaunched (stopped and launched fresh) before it can report again." : result.refusal === "invalid_for_task_mode" ? "Fix the touchedFiles list to match the task mode and call again." : result.refusal === "storage_failed" ? "Nothing was recorded \u2014 call again." : result.refusal === "stale_report" ? "This report was written for an earlier task of this session and can no longer be filed against it; nothing was recorded." : "The completion was refused by the turn ledger; the task state is authoritative."
+          hint: result.refusal === "unauthenticated" ? "No live task is bound to this worker session \u2014 the task may already be terminal or reassigned." : result.refusal === "bind_unknown_after_restart" ? "This daemon does not recognise the worker session bind \u2014 it was issued before a daemon restart that did not carry it over. A retry will not help: put your result in your final message so the coordinator can read it, and say that this worker session must be relaunched (stopped and launched fresh) before it can report again." : result.refusal === "invalid_for_task_mode" ? "Fix the touchedFiles list to match the task mode and call again." : result.refusal === "storage_failed" ? "Nothing was recorded \u2014 call again." : result.refusal === "stale_report" ? "This report was written for an earlier task of this session and can no longer be filed against it; nothing was recorded." : result.refusal === "rejected_by_reducer" && result.detail?.startsWith("checkpoint_pending") ? "The completion is NOT accepted yet: this session's physical writer stop is unconfirmed. Nothing is completed; keep the saved report and let it be re-sent after the stop settles." : "The completion was refused by the turn ledger; the task state is authoritative."
         };
       }
       return {
@@ -256188,6 +256188,9 @@ var WorkerReportDelivery = class {
       return this.retryable(entry, e?.message || String(e), true);
     }
     const error = typeof result?.error === "string" ? result.error : "";
+    if (result?.success !== true && error === "rejected_by_reducer" && typeof result?.detail === "string" && result.detail.startsWith("checkpoint_pending")) {
+      return this.retryable(entry, `${error} \u2014 ${result.detail}`, false);
+    }
     if (result?.success !== true && (RETRYABLE_REFUSALS[entry.kind].has(error) || error.includes("request failed decode") || error.startsWith("Unknown command: worker_") || TRANSIENT_ERROR_TEXT.test(error))) {
       const detail = typeof result?.detail === "string" && result.detail ? ` \u2014 ${result.detail}` : "";
       return this.retryable(entry, `${error}${detail}`, false);
@@ -256545,6 +256548,14 @@ function ignoredKeysWarning(ignoredHandoffKeys) {
 }
 function renderQueued(kind, outcome, ignoredHandoffKeys = []) {
   const windowMin = Math.round(WORKER_OUTBOX_MAX_AGE_MS / 6e4);
+  if (kind === "report" && outcome.error.includes("checkpoint_pending")) {
+    const lines2 = [
+      `Report NOT yet accepted (${outcome.entryId}): the coordinator daemon is still confirming that your session's writer has stopped (${outcome.error}). The report is saved locally only \u2014 that is not coordinator receipt and the task is not completed.`,
+      `It is re-sent automatically after the stop settles, for up to ${windowMin} min, and a later tool call reports the final verdict. Do not call report_completion again for this report.`
+    ];
+    if (ignoredHandoffKeys.length) lines2.push(ignoredKeysWarning(ignoredHandoffKeys));
+    return lines2.join("\n");
+  }
   const lines = kind === "report" ? [
     `Report saved and QUEUED for delivery (${outcome.entryId}) \u2014 the daemon did not answer in time (${outcome.attempts} attempt(s); last error: ${outcome.error}).`,
     `It is re-sent automatically in the background and on your next tool call, for up to ${windowMin} min; the daemon ignores duplicate deliveries. Your work is NOT lost. Do not call report_completion again for this report \u2014 if you make another tool call, its response will say when the report landed.`

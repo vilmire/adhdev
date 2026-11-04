@@ -236,3 +236,41 @@ test('a summary of exactly 8000 chars still goes through the outbox as before', 
   assert.equal(daemon.effects.length, 1);
   assert.equal(delivery.pendingCount(), 0);
 });
+
+test('a report the daemon observed but did not accept (writer stop unconfirmed) stays in the outbox, is described as NOT received, and settles on the later verdict', async () => {
+  const dir = tmpDir();
+  let phase: 'pending' | 'settled' = 'pending';
+  const calls: any[] = [];
+  const transport = {
+    async command(command: string, args: any) {
+      calls.push({ command, deliveryId: args.deliveryId });
+      if (phase === 'pending') {
+        return { success: false, error: 'rejected_by_reducer', detail: 'checkpoint_pending:report NOT accepted yet; physical writer stop is unconfirmed' };
+      }
+      return { success: false, error: 'rejected_by_reducer', detail: 'already_terminal' };
+    },
+    async ping() { return true; },
+  } as any;
+  const delivery = new WorkerReportDelivery({
+    transport, credentials: { bind: 'wsb_cp' }, dir, sleep: noSleep, autoSchedule: false,
+    describeAnswer: describeWorkerDeliveryAnswer, log: () => {},
+  });
+  const first = await reportCompletion(transport, { bind: 'wsb_cp' }, { outcome: 'completed', summary: 'done' }, delivery);
+  assert.equal(first.isError, undefined);
+  assert.match(first.text, /NOT yet accepted/);
+  assert.match(first.text, /not coordinator receipt/);
+  assert.doesNotMatch(first.text, /Completion recorded/);
+  // The same delivery id was re-sent inline and nothing was removed.
+  assert.equal(delivery.pendingCount(), 1);
+  const ids = new Set(calls.map((c) => c.deliveryId));
+  assert.equal(ids.size, 1);
+
+  // Later the stop settles and the daemon gives a definitive verdict: the entry is settled with a notice, not silently dropped.
+  phase = 'settled';
+  await delivery.flush();
+  assert.equal(delivery.pendingCount(), 0);
+  const notices = delivery.takeNotices();
+  assert.equal(notices.length, 1);
+  assert.match(notices[0], /refused/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

@@ -1000,7 +1000,7 @@ export function acceptWorkerCompletionReportForIdentity(
         if (!ledger) return { accepted: false, refusal: 'rejected_by_reducer', detail: 'checkpoint_pending:no_owner_ledger' };
         observeAcceptedWorkerReport(ledger, { ...identity, outcome: report.outcome, summary: report.summary,
             hasHandoffNotes: !!report.handoffNotes, atMs: nowMs });
-        return { accepted: false, refusal: 'rejected_by_reducer', detail: 'checkpoint_pending:report retained; physical writer stop is unconfirmed' };
+        return { accepted: false, refusal: 'rejected_by_reducer', detail: 'checkpoint_pending:report NOT accepted yet; physical writer stop is unconfirmed (the worker re-sends it after the stop settles)' };
     }
     let commit: ReturnType<typeof commitTaskTerminal>;
     stashStageReportForIdentity(identity, report, nowMs); // review-in-task: pipeline reads it from the terminal hook

@@ -394,7 +394,7 @@ describe('combined composition physical writer checkpoints', () => {
             const identity = { token: 'fixture-identity', meshId: mesh, taskId: task.id, sessionId: 's1', ...(explicitAttempt ? { attemptId: ref.attemptRef.attemptId } : {}) };
             const report = { outcome: 'blocked' as const, summary: 'Report during stop' };
             const result = acceptWorkerCompletionReportForIdentity(identity, report, {});
-            expect(result).toMatchObject({ accepted: false, refusal: 'rejected_by_reducer', detail: expect.stringContaining('checkpoint_pending:report retained') });
+            expect(result).toMatchObject({ accepted: false, refusal: 'rejected_by_reducer', detail: expect.stringContaining('checkpoint_pending:report NOT accepted yet') });
             expect(store.findQueueEntryById(mesh, task.id)?.status).toBe('assigned');
             expect(ledger.getAttempt(ref.attemptRef.attemptId)).toMatchObject({ state: 'stopping', terminal: null });
             expect(store.getLatestTaskOutput(task.id)).toBeNull();
