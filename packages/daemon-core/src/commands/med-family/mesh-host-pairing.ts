@@ -573,13 +573,26 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
         if (!hostResult?.success) {
             return { success: false, code: hostResult?.code || 'mesh_host_join_rejected', meshId, transport, error: hostResult?.error || 'The project host rejected the pairing code. Create a new code on the host and retry.', hostResult: redactHostJoinResult(hostResult) };
         }
-        const answeredHost = readTrimmed(hostResult.hostDaemonId) || readTrimmed(hostResult.meshHost?.hostDaemonId) || hostDaemonId;
+        const claimedHost = readTrimmed(hostResult.hostDaemonId) || readTrimmed(hostResult.meshHost?.hostDaemonId);
+        // The address path is plain HTTP to an address the operator typed: the answer must NAME the expected host,
+        // otherwise the identity check below would compare the expected id with itself and prove nothing.
+        if (hostAddress && !claimedHost) {
+            return { success: false, code: 'mesh_host_pin_identity_missing', meshId, transport, error: 'The machine at that address did not say which project host it is, so its key cannot be trusted over plain HTTP; nothing was pinned. Update the host daemon, or pin through the relayed path from the host.' };
+        }
+        const answeredHost = claimedHost || hostDaemonId;
         if (!daemonIdsEquivalent(answeredHost, hostDaemonId)) {
             return { success: false, code: 'mesh_host_pin_identity_mismatch', meshId, transport, error: 'The machine that answered is not the project host this machine recognises; nothing was pinned.' };
         }
         const offeredKey = readTrimmed(hostResult.originGrantPublicKey) || readTrimmed(hostResult.meshHost?.originGrantPublicKey);
         if (!isValidOriginGrantPublicKey(offeredKey)) {
             return { success: false, code: 'mesh_host_pin_key_unavailable', meshId, transport, error: 'The project host accepted the code but returned no artifact signing key (it may run an older build). Update the host daemon, create a new code and retry.' };
+        }
+        // Trust on first use over HTTP only: an address-supplied key may fill a missing pin, never replace one.
+        if (hostAddress) {
+            const existingPin = resolveTrustedHostOriginGrantPublicKey({ meshId, hostDaemonId });
+            if (existingPin && existingPin !== offeredKey) {
+                return { success: false, code: 'mesh_host_pin_key_changed', meshId, transport, error: 'This machine already pins a different signing key for the project host. Plain HTTP cannot replace it: pin through the relayed path from the host, or revoke the existing pin first (revoke_mesh_peer), then retry with a fresh code.' };
+            }
         }
         const secretMeshId = readTrimmed(hostResult.meshId) || meshId;
         const peerSecret = readTrimmed(hostResult.peerSecret);

@@ -185,6 +185,57 @@ describe('pin_mesh_host_key relayed by a coordinator tool', () => {
     });
 });
 
+/** Address path: the host's real answer, delivered as an HTTP response, optionally edited by a hostile/old peer. */
+function httpFromHost(edit?: (body: any) => any) {
+    return async (_url: string, init: any) => {
+        const body = JSON.parse(init.body);
+        useDir(hostDir);
+        let result: any;
+        try { result = await meshHostPairingHandlers.apply_mesh_host_join(makeCtx(HOST_ID), body); } finally { useDir(memberDir); }
+        return { ok: true, status: 200, json: async () => (edit ? edit(structuredClone(result)) : result) };
+    };
+}
+
+describe('pin_mesh_host_key over a typed address (plain HTTP)', () => {
+    it('refuses an answer that does not name the host, so the identity check cannot compare the expected id with itself', async () => {
+        const hostMesh = setupHost('code-6');
+        useDir(memberDir);
+        writeMeshHostRecord(hostMesh.id, HOST_ID, 'pairing', undefined, { pairingVerified: true });
+        vi.stubGlobal('fetch', httpFromHost(b => { delete b.hostDaemonId; if (b.meshHost) delete b.meshHost.hostDaemonId; return b; }));
+        const res: any = await meshHostPairingHandlers.pin_mesh_host_key(makeCtx(MEMBER_ID), { meshId: hostMesh.id, token: 'code-6', hostAddress: '203.0.113.9:3847' });
+        expect(res).toMatchObject({ success: false, code: 'mesh_host_pin_identity_missing' });
+        expect(resolveTrustedHostOriginGrantPublicKey({ meshId: hostMesh.id, hostDaemonId: HOST_ID })).toBe('');
+    });
+
+    it('fills a missing pin when the answer names the host, but never replaces an existing different pin', async () => {
+        const hostMesh = setupHost('code-7');
+        useDir(hostDir);
+        const hostKey = getHostOriginGrantPublicKey(HOST_ID);
+        useDir(memberDir);
+        writeMeshHostRecord(hostMesh.id, HOST_ID, 'pairing', undefined, { pairingVerified: true });
+        vi.stubGlobal('fetch', httpFromHost());
+        const ok: any = await meshHostPairingHandlers.pin_mesh_host_key(makeCtx(MEMBER_ID), { meshId: hostMesh.id, token: 'code-7', hostAddress: '203.0.113.9:3847' });
+        expect(ok).toMatchObject({ success: true, pinned: true });
+        expect(resolveTrustedHostOriginGrantPublicKey({ meshId: hostMesh.id, hostDaemonId: HOST_ID })).toBe(hostKey);
+
+        // A later answer over HTTP offering a different key must not replace the pin.
+        useDir(hostDir);
+        createMeshHostPairingToken(hostMesh.id, { token: 'code-8' });
+        useDir(memberDir);
+        const otherDir = mkdtempSync(join(tmpdir(), 'pin-other-'));
+        useDir(otherDir);
+        const otherKey = getHostOriginGrantPublicKey(HOST_ID);
+        useDir(memberDir);
+        rmSync(otherDir, { recursive: true, force: true });
+        expect(otherKey).not.toBe(hostKey);
+        vi.stubGlobal('fetch', httpFromHost(b => { b.originGrantPublicKey = otherKey; if (b.meshHost) b.meshHost.originGrantPublicKey = otherKey; return b; }));
+        const swap: any = await meshHostPairingHandlers.pin_mesh_host_key(makeCtx(MEMBER_ID), { meshId: hostMesh.id, token: 'code-8', hostAddress: '203.0.113.9:3847' });
+        expect(swap.success).toBe(false);
+        expect(swap.code).toBe('mesh_host_pin_key_changed');
+        expect(resolveTrustedHostOriginGrantPublicKey({ meshId: hostMesh.id, hostDaemonId: HOST_ID })).toBe(hostKey);
+    });
+});
+
 describe('join_mesh_host_pairing preserves an existing pin', () => {
     it('keeps the pin when the host answers without a key', async () => {
         const hostMesh = setupHost('code-4');
