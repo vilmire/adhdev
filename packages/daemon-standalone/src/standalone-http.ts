@@ -1165,8 +1165,7 @@ export class StandaloneHttpApi {
         meshId,
         token,
         memberNode: memberNode as Record<string, unknown>,
-        ...(memberMeshId ? { memberMeshId } : {}),
-        ...(record?.pinOnly === true ? { pinOnly: true } : {}),
+        ...(memberMeshId ? { memberMeshId } : {}), ...(record?.pinOnly === true ? { pinOnly: true } : {}),
       }, 'ipc');
       const ok = (result as { success?: boolean } | null)?.success === true;
       const rejected = (result as { code?: string } | null)?.code === 'mesh_host_join_rejected';
