@@ -11,6 +11,7 @@
  * Host and member run in one process; the config dir is swapped per side.
  */
 import { mkdtempSync, rmSync } from 'fs';
+import { saveMeshConfig } from '../../../src/config/mesh-config-store.js';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -129,6 +130,32 @@ describe('pin_mesh_host_key', () => {
         const replay: any = await meshHostPairingHandlers.pin_mesh_host_key(makeCtx(MEMBER_ID, hostDispatch()), { meshId: hostMesh.id, token: 'code-1' });
         expect(replay.success).toBe(false);
         expect(String(replay.error)).toContain('already used');
+    });
+
+    it('trusts the host key a verified transfer left in this machine\'s own mesh config', () => {
+        const hostMesh = setupHost('code-transfer', false);
+        useDir(hostDir);
+        const hostKey = getHostOriginGrantPublicKey(HOST_ID);
+        useDir(memberDir);
+        const writeMember = (meshHost: Record<string, unknown>) => saveMeshConfig({ meshes: [{ ...hostMesh, meshHost }] } as any);
+
+        writeMember({ role: 'member', hostDaemonId: HOST_ID, originGrantPublicKey: hostKey });
+        expect(resolveTrustedHostOriginGrantPublicKey({ meshId: hostMesh.id, hostDaemonId: HOST_ID })).toBe(hostKey);
+
+        // Pinned for another host: not evidence for this one.
+        expect(resolveTrustedHostOriginGrantPublicKey({ meshId: hostMesh.id, hostDaemonId: 'daemon_mach_ffffffffffffffffffffffffffffffff' })).toBe('');
+
+        // A record that does not say member is not a pin.
+        writeMember({ role: 'host', hostDaemonId: HOST_ID, originGrantPublicKey: hostKey });
+        expect(resolveTrustedHostOriginGrantPublicKey({ meshId: hostMesh.id, hostDaemonId: HOST_ID })).toBe('');
+
+        // A peer-supplied mesh object is never a source for the key.
+        writeMember({ role: 'member', hostDaemonId: HOST_ID });
+        expect(resolveTrustedHostOriginGrantPublicKey({
+            meshId: hostMesh.id,
+            hostDaemonId: HOST_ID,
+            meshObj: { meshHost: { hostDaemonId: HOST_ID, originGrantPublicKey: hostKey } },
+        })).toBe('');
     });
 
     it('refuses a member that is not on the host roster and does not consume the code or pin anything', async () => {

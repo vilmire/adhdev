@@ -7,6 +7,7 @@ import {
     readAuthenticatedPeerOriginGrantPublicKey,
 } from '../../mesh/mesh-host-memory.js';
 import { readMeshNodeDaemonId } from '../../mesh/mesh-node-identity.js';
+import { loadMeshConfig } from '../../config/mesh-config-store.js';
 import {
     __resetOriginGrantKeyPairCacheForTest,
     MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH,
@@ -384,7 +385,26 @@ export function resolveTrustedHostOriginGrantPublicKey(params: {
         return trimStr(fromPeerSecret);
     }
 
-    return '';
+    return readLocalMemberHostPublicKey(meshId, hostDaemonId);
+}
+
+/**
+ * The key a member keeps in its own mesh config after a verified host transfer. A
+ * machine that took part in a host move holds the new host's key only here. Read
+ * from this daemon's config, never from `meshObj`: an inline mesh is peer supplied
+ * and its cache strips this field for that reason.
+ */
+function readLocalMemberHostPublicKey(meshId: string, hostDaemonId: string): string {
+    let meshHost: { role?: string; hostDaemonId?: string; originGrantPublicKey?: string } | undefined;
+    try {
+        meshHost = (loadMeshConfig().meshes as Array<{ id?: string; meshHost?: typeof meshHost }> | undefined)
+            ?.find((mesh) => mesh?.id === meshId)?.meshHost;
+    } catch {
+        return '';
+    }
+    const key = trimStr(meshHost?.originGrantPublicKey);
+    if (meshHost?.role !== 'member' || !key || !isValidOriginGrantPublicKey(key)) return '';
+    return daemonIdsEquivalent(trimStr(meshHost.hostDaemonId), hostDaemonId) ? key : '';
 }
 
 /**

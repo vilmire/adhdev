@@ -126702,7 +126702,18 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       if (trimStr2(fromPeerSecret) && isValidOriginGrantPublicKey(fromPeerSecret)) {
         return trimStr2(fromPeerSecret);
       }
-      return "";
+      return readLocalMemberHostPublicKey(meshId, hostDaemonId);
+    }
+    function readLocalMemberHostPublicKey(meshId, hostDaemonId) {
+      let meshHost;
+      try {
+        meshHost = loadMeshConfig().meshes?.find((mesh) => mesh?.id === meshId)?.meshHost;
+      } catch {
+        return "";
+      }
+      const key7 = trimStr2(meshHost?.originGrantPublicKey);
+      if (meshHost?.role !== "member" || !key7 || !isValidOriginGrantPublicKey(key7)) return "";
+      return daemonIdsEquivalent5(trimStr2(meshHost.hostDaemonId), hostDaemonId) ? key7 : "";
     }
     function hostPinMissingMessage(meshId, hostDaemonId) {
       return `This machine has not pinned the project host's artifact signing key (host ${hostDaemonId}, mesh ${meshId}), so it cannot verify the host's artifact access grant (host_pin_missing). Next step: on the host machine create a pairing code (dashboard Mesh > Connect another machine > Host > Create code, or the MCP tool mesh_host_pairing action=create_token); then on THIS machine enter that code (dashboard Mesh > Connect another machine > Member, or the MCP tool mesh_host_pairing action=pin with token and hostDaemonId). The code is single-use and expires in 10 minutes.`;
@@ -127391,6 +127402,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         init_dist();
         init_mesh_host_memory();
         init_mesh_node_identity();
+        init_mesh_config_store();
         init_origin_grant_keypair();
         init_mesh_peer_secrets();
         init_worker_mcp_isolation();
@@ -127986,6 +127998,11 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         attachment: toChatAttachmentMeta(record8)
       };
     }
+    function meshFromHostRecord(meshId, senderDaemonId) {
+      const hostDaemonId = trimString22(readMeshHostRecord(meshId)?.hostDaemonId);
+      if (!hostDaemonId || !daemonIdsEquivalent5(hostDaemonId, senderDaemonId)) return null;
+      return { meshHost: { hostDaemonId }, nodes: [] };
+    }
     var handleArtifactIndexForwarded;
     var handleArtifactFetchOrigin;
     var init_artifact_sharing = __esm2({
@@ -127996,6 +128013,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         init_mesh_relay_result();
         init_artifacts();
         init_mesh_node_identity();
+        init_mesh_host_memory();
         init_worker_mcp_isolation();
         init_worker_report_forwarded();
         init_cli_provider_mesh_assignment();
@@ -128235,7 +128253,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
               return { success: false, code: "unauthenticated", error: `Artifact "${artifactId}" has no mesh binding for cross-daemon origin fetch (unauthenticated)` };
             }
             const cmdRes = await ctx.getMeshForCommand?.(meshIdToVerify, void 0, { preferInline: true });
-            const meshObj = cmdRes?.mesh ?? cmdRes ?? ctx.getCachedInlineMesh?.(meshIdToVerify);
+            const meshObj = cmdRes?.mesh ?? cmdRes ?? ctx.getCachedInlineMesh?.(meshIdToVerify) ?? meshFromHostRecord(meshIdToVerify, senderDaemonId);
             if (!meshObj) {
               return { success: false, code: "unauthenticated", error: `Mesh "${meshIdToVerify}" is not available to authorize origin fetch (unauthenticated)` };
             }

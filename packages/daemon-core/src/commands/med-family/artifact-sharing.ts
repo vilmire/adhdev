@@ -22,6 +22,7 @@ import {
     type ArtifactRecord,
 } from '../../artifacts/index.js';
 import { readMeshNodeDaemonId } from '../../mesh/mesh-node-identity.js';
+import { readMeshHostRecord } from '../../mesh/mesh-host-memory.js';
 import { verifyWorkerSessionBind, verifyWorkerTaskToken } from '../../mesh/worker-mcp-isolation.js';
 import {
     resolveForwardedWorkerIdentity,
@@ -1105,6 +1106,12 @@ export const handleArtifactIndexForwarded: MedFamilyHandler = async (ctx, args) 
     }
 };
 
+function meshFromHostRecord(meshId: string, senderDaemonId: string): { meshHost: { hostDaemonId: string }; nodes: never[] } | null {
+    const hostDaemonId = trimString(readMeshHostRecord(meshId)?.hostDaemonId);
+    if (!hostDaemonId || !daemonIdsEquivalent(hostDaemonId, senderDaemonId)) return null;
+    return { meshHost: { hostDaemonId }, nodes: [] };
+}
+
 export const handleArtifactFetchOrigin: MedFamilyHandler = async (ctx, args) => {
     const senderDaemonId = readMeshSender(args);
     if (!senderDaemonId) {
@@ -1136,7 +1143,11 @@ export const handleArtifactFetchOrigin: MedFamilyHandler = async (ctx, args) => 
             return { success: false, code: 'unauthenticated', error: `Artifact "${artifactId}" has no mesh binding for cross-daemon origin fetch (unauthenticated)` };
         }
         const cmdRes: any = await ctx.getMeshForCommand?.(meshIdToVerify, undefined, { preferInline: true });
-        const meshObj = cmdRes?.mesh ?? cmdRes ?? ctx.getCachedInlineMesh?.(meshIdToVerify);
+        // A member usually holds no copy of a mesh hosted elsewhere, so a read by the host
+        // must not depend on one. The persisted host record is the same evidence the mesh
+        // sender gate accepts, and it survives restarts.
+        const meshObj = cmdRes?.mesh ?? cmdRes ?? ctx.getCachedInlineMesh?.(meshIdToVerify)
+            ?? meshFromHostRecord(meshIdToVerify, senderDaemonId);
         if (!meshObj) {
             return { success: false, code: 'unauthenticated', error: `Mesh "${meshIdToVerify}" is not available to authorize origin fetch (unauthenticated)` };
         }

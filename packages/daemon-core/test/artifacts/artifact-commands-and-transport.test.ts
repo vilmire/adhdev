@@ -2780,6 +2780,26 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
                 // Verify the response was split into multiple 16 KB mesh_chunk frames over MeshRpcEndpoint
                 expect(chunkFramesObserved.length).toBeGreaterThanOrEqual(2);
 
+                // A member holding no copy of the mesh (normal after a host move) still serves
+                // the host on the strength of the persisted host record, and nobody else.
+                const memberWithoutMesh: ArtifactCommandContext = {
+                    deps: remoteDeps,
+                    getMeshForCommand: async () => null,
+                    getCachedInlineMesh: () => null,
+                };
+                const originRead = (sender: string) => (artifactHandlers as any).artifact_fetch_origin(memberWithoutMesh, {
+                    meshId: 'mesh-p2p-1',
+                    artifactId: remoteReg.artifactId,
+                    requesterRole: 'coordinator',
+                    mode: 'read',
+                    asChunks: true,
+                    [MESH_SENDER_DAEMON_ID_ARG]: sender,
+                });
+                expect(await originRead('daemon_host_1')).toMatchObject({ success: false, code: 'unauthenticated' });
+                writeMeshHostRecord('mesh-p2p-1', 'daemon_host_1', 'pairing');
+                expect(await originRead('daemon_host_1')).toMatchObject({ success: true });
+                expect(await originRead('daemon_someone_else')).toMatchObject({ success: false, code: 'unauthenticated' });
+
                 // 3) Finding 2: Remote-machine worker OD-4 list and read of allowed inputArtifactIds vs refused unlisted artifact
                 sessionRegistry.register({
                     sessionId: 'sess-host-producer',
