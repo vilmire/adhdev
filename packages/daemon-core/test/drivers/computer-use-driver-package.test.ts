@@ -101,6 +101,21 @@ describe.skipIf(!present)('computer-use driver package', () => {
         expect(JSON.stringify(shot.output)).not.toContain('iVBOR');
     }, 30_000);
 
+    it('ui_tree needs the screen box, then reads the tree through the real server without a password value', async () => {
+        // Checking an unrelated box activates the driver, so the refusal below is about the screen box only.
+        service.setGrants(TYPE, { input: true });
+        const refused = await service.invoke(worker, { type: TYPE, action: 'ui_tree', args: {} });
+        expect(refused).toMatchObject({ code: 'driver_grant_required', grant: 'screen' });
+        service.setGrants(TYPE, { screen: true });
+        const tree = await service.invoke(worker, { type: TYPE, action: 'ui_tree', args: { maxNodes: 10 } });
+        expect(tree).toMatchObject({ success: true });
+        const text = JSON.stringify(tree.output);
+        expect(text).toContain('AXButton');
+        expect(text).toContain('AXSecureTextField');
+        expect(text).not.toContain('hunter2');
+        expect(await service.invoke(worker, { type: TYPE, action: 'ui_tree', args: { maxDepth: 17 } })).toMatchObject({ code: 'invalid_arguments' });
+    }, 30_000);
+
     it('refuses extra arguments before reaching the backend', async () => {
         service.setGrants(TYPE, { input: true });
         expect(await service.invoke(worker, { type: TYPE, action: 'click', args: { x: 1, y: 1, script: 'x' } })).toMatchObject({ code: 'invalid_arguments' });

@@ -4449,7 +4449,7 @@
             "grants": {
                 "screen": {
                     "title": "Captura de pantalla",
-                    "description": "Captura la pantalla de esta máquina. Las capturas pueden contener contraseñas e información personal y se guardan en el espacio de trabajo."
+                    "description": "Captura la pantalla de esta máquina y lee el texto de la ventana enfocada (sin contraseñas). Ambos pueden contener información personal; las capturas se guardan en el espacio de trabajo."
                 },
                 "input": {
                     "title": "Teclado y ratón",

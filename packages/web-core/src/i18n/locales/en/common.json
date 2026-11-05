@@ -4446,7 +4446,7 @@
             "grants": {
                 "screen": {
                     "title": "Screen capture",
-                    "description": "Take screenshots of this machine's screen. Screenshots can contain passwords and personal information and are saved in the workspace."
+                    "description": "Take screenshots of this machine's screen and read the text in the focused window (passwords excluded). Both can contain personal information; screenshots are saved in the workspace."
                 },
                 "input": {
                     "title": "Keyboard and mouse",
