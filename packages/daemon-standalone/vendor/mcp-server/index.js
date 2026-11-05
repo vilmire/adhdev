@@ -44090,8 +44090,17 @@ ${error.message || ""}`;
            * coordinator read). Own-writer by construction: a notify row is only ever
            * written by this daemon's ledger. Read-only (check:turn-single-emitter rule 1).
            */
+          /** Whether any notice is undelivered: stops at the first one, with no sort or row decode. */
+          hasUndeliveredNotify(meshId, sinceMs = 0) {
+            return this.stmt(`SELECT 1 FROM turn_events n INDEXED BY ix_turn_events_recent_notify
+            WHERE n.kind = 'notify' AND n.mesh_id = ? AND n.publish_state = 'published' AND n.recorded_at >= ?
+              AND NOT EXISTS (SELECT 1 FROM turn_events d WHERE d.kind = 'delivered' AND (
+                    d.event_id = 'delivered:' || n.mesh_id || ':' || n.src_writer || ':' || n.published_seq
+                 OR (d.event_id = 'delivered:' || n.src_writer || ':' || n.published_seq AND d.mesh_id = n.mesh_id)))
+            LIMIT 1`).get(meshId, sinceMs) !== void 0;
+          }
           listUndeliveredNotifies(meshId, opts = {}) {
-            const rows = this.stmt(`SELECT n.* FROM turn_events n
+            const rows = this.stmt(`SELECT n.* FROM turn_events n INDEXED BY ix_turn_events_recent_notify
             WHERE n.kind = 'notify' AND n.mesh_id = ? AND n.publish_state = 'published' AND n.recorded_at >= ?
               AND NOT EXISTS (SELECT 1 FROM turn_events d WHERE d.kind = 'delivered' AND (
                     d.event_id = 'delivered:' || n.mesh_id || ':' || n.src_writer || ':' || n.published_seq
@@ -44480,6 +44489,11 @@ ${error.message || ""}`;
     -- (~700k on the preview coordinator) per delivered notice, per sweep pass.
     CREATE INDEX IF NOT EXISTS ix_turn_events_published_coords
         ON turn_events(src_writer, published_seq) WHERE publish_state = 'published';
+
+    -- The undelivered-notice scan runs on every delivery tick. Without this it read every
+    -- notice the mesh ever had just to keep the last day's (profiled live, 2026-11-05).
+    CREATE INDEX IF NOT EXISTS ix_turn_events_recent_notify
+        ON turn_events(mesh_id, recorded_at) WHERE kind = 'notify' AND publish_state = 'published';
 
     CREATE TABLE IF NOT EXISTS turn_holds (
         hold_id TEXT PRIMARY KEY,
@@ -92698,6 +92712,8 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         if (nodeIsLocal) {
           const verdict = resolveSessionBusyVerdict(components, targetSessionId);
           if (verdict === "UNKNOWN") {
+            const restore = components.cliManager?.hostedRestoreState;
+            if (restore === "pending" || restore === "failed") return NOT_DEAD;
             return { dead: true, nodeDead: false, reason: "dead_target_session_absent" };
           }
         }
@@ -153047,7 +153063,10 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
     }
     function handoffTickerContext(components) {
       return {
-        deps: components.router.deps,
+        // Read on use: the ticker starts during boot, before anything addresses the router.
+        get deps() {
+          return components.router.deps;
+        },
         components: () => components,
         execute: (cmd, args, source2, opts) => components.router.execute(cmd, args, source2, opts)
       };
@@ -163132,7 +163151,7 @@ ${defangRelayBody(text9)}`;
         readNotices: (meshId, readOpts) => readCoordinatorNotices({ ...deliverDeps, waiter }, meshId, readOpts),
         controlNotices: (meshId, event) => listControlNotices({ ledger, selfDaemonIds, resolveHandoff }, meshId, event),
         retract: (meshId, match) => retractCoordinatorNotices({ ledger, selfDaemonIds }, meshId, match),
-        hasUndelivered: (meshId) => ledger.store.listUndeliveredNotifies(meshId, { sinceMs: Date.now() - 24 * 60 * 60 * 1e3, limit: 1 }).length > 0,
+        hasUndelivered: (meshId) => ledger.store.hasUndeliveredNotify(meshId, Date.now() - 24 * 60 * 60 * 1e3),
         hasLiveCliCoordinator: (meshId) => listLocalCoordinatorSessions(components, meshId).length > 0,
         recentDeliveredNotices: (sinceMs) => listRecentDeliveredNotices({ ledger, resolveHandoff }, sinceMs),
         releaseDelivery: (claimEventId) => {
@@ -228285,7 +228304,7 @@ ${buttons.join("\n")}`;
       const plan = planSessionStart(host, cliType, workingDir, options);
       return withMaintenanceAdmission(() => {
         assertNewWorkHoldAdmission({ settings: options?.settingsOverride, command: "start_session" });
-        return startCliPtySession(host, plan, cliType, cliArgs, initialModel);
+        return startCliPtySession(host, plan, cliType, withCoordinatorMcpSessionArgs(plan, cliArgs), initialModel);
       });
     }
     function planSessionStart(host, cliType, workingDir, options) {
@@ -228322,6 +228341,16 @@ Enable and detect this provider from the Machine Providers page before starting 
       }
       options = withSessionAnchorEnv(options, key7);
       return { resolvedDir, normalizedType, provider, key: key7, options };
+    }
+    function withCoordinatorMcpSessionArgs(plan, cliArgs) {
+      const settings2 = plan.options?.settingsOverride;
+      const serverName = plan.provider?.meshCoordinator?.mcpConfig?.serverName;
+      return coordinatorMcpSessionArgs(plan.normalizedType, typeof serverName === "string" ? serverName : void 0, settings2, plan.key, cliArgs);
+    }
+    function coordinatorMcpSessionArgs(providerType, serverName, settings2, key7, cliArgs) {
+      const coordinatorMeshId = settings2?.meshCoordinatorFor;
+      if (providerType !== "codex-cli" || !serverName || typeof coordinatorMeshId !== "string" || !coordinatorMeshId.trim()) return cliArgs;
+      return [...cliArgs ?? [], "-c", `mcp_servers.${serverName}.env.ADHDEV_COORDINATOR_SESSION_ID=${JSON.stringify(key7)}`];
     }
     function userLaunchTrustStoreHome(extraEnv) {
       const home = typeof extraEnv?.HOME === "string" ? extraEnv.HOME.trim() : "";

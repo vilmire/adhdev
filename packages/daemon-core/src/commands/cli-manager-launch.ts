@@ -64,7 +64,7 @@ export async function startSession(host: CliLaunchHost, cliType: string, working
     const plan = planSessionStart(host, cliType, workingDir, options);
     return withMaintenanceAdmission(() => {
         assertNewWorkHoldAdmission({ settings: options?.settingsOverride, command: 'start_session' });
-        return startCliPtySession(host, plan, cliType, cliArgs, initialModel);
+        return startCliPtySession(host, plan, cliType, withCoordinatorMcpSessionArgs(plan, cliArgs), initialModel);
     });
 }
 
@@ -146,6 +146,23 @@ function planSessionStart(host: CliLaunchHost, cliType: string, workingDir: stri
     // case routing falls back to the daemon level (no wedge — see mesh-reconcile-loop).
     options = withSessionAnchorEnv(options, key);
     return { resolvedDir, normalizedType, provider, key, options };
+}
+
+/**
+ * Codex hands an MCP child only the env its config lists, so a coordinator's MCP server never
+ * inherits `ADHDEV_COORDINATOR_SESSION_ID`: it could not name its own session, which refused its
+ * artifact reads and dropped dispatches to daemon-level routing. The id is known only here.
+ */
+function withCoordinatorMcpSessionArgs(plan: SessionStartPlan, cliArgs: string[] | undefined): string[] | undefined {
+    const settings = plan.options?.settingsOverride as Record<string, unknown> | undefined;
+    const serverName = (plan.provider as { meshCoordinator?: { mcpConfig?: { serverName?: unknown } } } | undefined)?.meshCoordinator?.mcpConfig?.serverName;
+    return coordinatorMcpSessionArgs(plan.normalizedType, typeof serverName === 'string' ? serverName : undefined, settings, plan.key, cliArgs);
+}
+
+export function coordinatorMcpSessionArgs(providerType: string, serverName: string | undefined, settings: Record<string, unknown> | undefined, key: string, cliArgs: string[] | undefined): string[] | undefined {
+    const coordinatorMeshId = settings?.meshCoordinatorFor;
+    if (providerType !== 'codex-cli' || !serverName || typeof coordinatorMeshId !== 'string' || !coordinatorMeshId.trim()) return cliArgs;
+    return [...(cliArgs ?? []), '-c', `mcp_servers.${serverName}.env.ADHDEV_COORDINATOR_SESSION_ID=${JSON.stringify(key)}`];
 }
 
 /** The HOME a non-delegated launch's trust store resolves against: the launch's own `HOME` override, else the daemon's. */

@@ -164,6 +164,11 @@ export const TURN_LEDGER_DDL = `
     CREATE INDEX IF NOT EXISTS ix_turn_events_published_coords
         ON turn_events(src_writer, published_seq) WHERE publish_state = 'published';
 
+    -- The undelivered-notice scan runs on every delivery tick. Without this it read every
+    -- notice the mesh ever had just to keep the last day's (profiled live, 2026-11-05).
+    CREATE INDEX IF NOT EXISTS ix_turn_events_recent_notify
+        ON turn_events(mesh_id, recorded_at) WHERE kind = 'notify' AND publish_state = 'published';
+
     CREATE TABLE IF NOT EXISTS turn_holds (
         hold_id TEXT PRIMARY KEY,
         attempt_id TEXT NOT NULL,

@@ -254,6 +254,18 @@ describe('SessionRegistry launch record', () => {
   })
 })
 
+describe('coordinatorMcpSessionArgs', () => {
+  it('names the session to a codex coordinator MCP server only', async () => {
+    const { coordinatorMcpSessionArgs: args } = await import('../../src/commands/cli-manager-launch.js')
+    const coordinator = { meshCoordinatorFor: 'm1' }
+    expect(args('codex-cli', 'adhdev-mesh', coordinator, 'k1', ['--x'])).toEqual(['--x', '-c', 'mcp_servers.adhdev-mesh.env.ADHDEV_COORDINATOR_SESSION_ID="k1"'])
+    expect(args('codex-cli', 'adhdev-mesh', coordinator, 'k1', undefined)).toEqual(['-c', 'mcp_servers.adhdev-mesh.env.ADHDEV_COORDINATOR_SESSION_ID="k1"'])
+    expect(args('claude-cli', 'adhdev-mesh', coordinator, 'k1', ['--x'])).toEqual(['--x'])
+    expect(args('codex-cli', 'adhdev-mesh', { meshNodeFor: 'm1' }, 'k1', ['--x'])).toEqual(['--x'])
+    expect(args('codex-cli', undefined, coordinator, 'k1', undefined)).toBeUndefined()
+  })
+})
+
 describe('withSessionAnchorEnv (launch_cli session-anchor env)', () => {
   it('stamps the coordinator id for a coordinator and the assistant id for the assistant only', async () => {
     const { withSessionAnchorEnv } = await import('../../src/commands/cli-manager-launch.js')

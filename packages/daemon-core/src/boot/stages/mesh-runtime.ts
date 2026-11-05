@@ -388,7 +388,7 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
         readNotices: (meshId, readOpts) => readCoordinatorNotices({ ...deliverDeps, waiter }, meshId, readOpts),
         controlNotices: (meshId, event) => listControlNotices({ ledger, selfDaemonIds, resolveHandoff }, meshId, event),
         retract: (meshId, match) => retractCoordinatorNotices({ ledger, selfDaemonIds }, meshId, match),
-        hasUndelivered: (meshId) => ledger.store.listUndeliveredNotifies(meshId, { sinceMs: Date.now() - 24 * 60 * 60 * 1000, limit: 1 }).length > 0,
+        hasUndelivered: (meshId) => ledger.store.hasUndeliveredNotify(meshId, Date.now() - 24 * 60 * 60 * 1000),
         hasLiveCliCoordinator: (meshId) => listLocalCoordinatorSessions(components, meshId).length > 0,
         recentDeliveredNotices: (sinceMs) => listRecentDeliveredNotices({ ledger, resolveHandoff }, sinceMs),
         releaseDelivery: (claimEventId) => {

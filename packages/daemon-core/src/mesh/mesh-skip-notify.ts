@@ -390,6 +390,9 @@ export function resolveDeadTargetVerdict(components: DaemonComponents, meshId: s
         if (nodeIsLocal) {
             const verdict = resolveSessionBusyVerdict(components, targetSessionId);
             if (verdict === 'UNKNOWN') {
+                // Right after a daemon restart a live session is not restored yet: its absence proves nothing.
+                const restore = (components as { cliManager?: { hostedRestoreState?: string } }).cliManager?.hostedRestoreState;
+                if (restore === 'pending' || restore === 'failed') return NOT_DEAD;
                 // Session absent from the complete local session view → genuinely gone.
                 return { dead: true, nodeDead: false, reason: 'dead_target_session_absent' };
             }
