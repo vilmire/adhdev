@@ -7,6 +7,7 @@
  * (a genuinely unknown host stays unknown); this only records the host's last stated reason and names the
  * way out: stop the worker session, after which the host can attest absence and the cancel goes through.
  */
+import { LOG } from '../logging/logger.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue-types.js';
 
 const lastPending = new Map<string, { reason: string; at: number }>();
@@ -19,6 +20,7 @@ export function noteWriterStopPending(sessionId: string | undefined, reason: str
         const oldest = lastPending.keys().next().value;
         if (oldest !== undefined) lastPending.delete(oldest);
     }
+    if (lastPending.get(sessionId)?.reason !== reason) LOG.warn('MeshWriterStop', `Session ${sessionId} has not stopped yet: ${reason}`);
     lastPending.set(sessionId, { reason, at: Date.now() });
 }
 
