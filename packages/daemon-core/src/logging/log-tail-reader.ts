@@ -52,6 +52,11 @@ export interface ReadDaemonLogTailArgs {
     grep?: string;
     /** Optional epoch-ms floor; only lines whose leading [HH:MM:SS...] / ISO ts >= this are kept. */
     sinceMs?: number;
+    /**
+     * Read this file instead of the dated daemon log; `date` is then ignored. For a
+     * path the daemon chose itself: never pass one taken from a request.
+     */
+    filePath?: string;
 }
 
 export interface DaemonLogTailResult {
@@ -191,7 +196,7 @@ function parseLineEpochMs(line: string, fileDate: Date): number | null {
     const m = line.match(/^\[(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?\]/);
     if (!m) {
         // Try an embedded ISO timestamp as a fallback.
-        const iso = line.match(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?/);
+        const iso = line.match(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?/);
         if (iso) {
             const t = Date.parse(iso[0].replace(' ', 'T'));
             return Number.isNaN(t) ? null : t;
@@ -292,7 +297,7 @@ function errorResult(error: string, logPath: string, platform: NodeJS.Platform):
 export function readDaemonLogTail(args: ReadDaemonLogTailArgs = {}): DaemonLogTailResult {
     const platform = process.platform;
     const limitBytes = clampTailBytes(args.tailBytes);
-    const primaryPath = resolveLogPath(args.date);
+    const primaryPath = args.filePath ?? resolveLogPath(args.date);
     const backupPaths = sizeRotationPaths(primaryPath);
     const primaryExists = fs.existsSync(primaryPath);
     const existingBackupPaths = backupPaths.filter((backupPath) => fs.existsSync(backupPath));

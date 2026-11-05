@@ -35844,11 +35844,11 @@ ${tail}`;
       };
     }
     async function evaluatePublicPublishApprovalForDestinations(submodulePath, commit2, branch, approvedShas, remoteName, patternRepo, destinations) {
-      const { execFile: execFile18 } = await import("child_process");
+      const { execFile: execFile19 } = await import("child_process");
       const run5 = async (args, input) => {
         let child;
         const result = new Promise((resolve76, reject) => {
-          child = execFile18(GIT, args, {
+          child = execFile19(GIT, args, {
             cwd: submodulePath,
             encoding: "utf8",
             timeout: GIT_LOCAL_TIMEOUT_MS,
@@ -35969,9 +35969,9 @@ ${tail}`;
       const startedAt = Date.now();
       const entries2 = [];
       try {
-        const { execFile: execFile18 } = await import("child_process");
+        const { execFile: execFile19 } = await import("child_process");
         const { promisify: promisify19 } = await import("util");
-        const execFileAsync10 = promisify19(execFile18);
+        const execFileAsync10 = promisify19(execFile19);
         const runGit5 = async (cwd, args) => {
           const { stdout } = await execFileAsync10(GIT, realGitArgs(args), {
             cwd,
@@ -66266,9 +66266,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }
       const commandArgs = ["submodule", "update", "--init", "--recursive", "--", ...updatePaths];
       try {
-        const { execFile: execFile18 } = await import("child_process");
+        const { execFile: execFile19 } = await import("child_process");
         const { promisify: promisify19 } = await import("util");
-        const execFileAsync10 = promisify19(execFile18);
+        const execFileAsync10 = promisify19(execFile19);
         const result = await execFileAsync10(GIT, commandArgs, {
           cwd: repoRoot,
           encoding: "utf8",
@@ -80365,8 +80365,8 @@ ${asText(streams.stderr)}
       return !report.aborted;
     }
     async function runMeshRefineValidationGate(mesh, workspace, opts) {
-      const { execFile: execFile18 } = await import("child_process");
-      const execFileAsync10 = (file, args, options, callback) => execFile18(file, args, Object.assign(options, { windowsHide: true }), callback);
+      const { execFile: execFile19 } = await import("child_process");
+      const execFileAsync10 = (file, args, options, callback) => execFile19(file, args, Object.assign(options, { windowsHide: true }), callback);
       const selection = resolveMeshRefineValidationPlan(mesh, workspace, opts?.configBaseRefs?.length ? { baseRefs: opts.configBaseRefs } : void 0);
       const summary = {
         status: "skipped",
@@ -135232,9 +135232,9 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
     }
     async function refineResolveRefsTail(self, p) {
       const { meshId, nodeId, args, refineStages, mesh, node, sourceNode, repoRoot } = p;
-      const { execFile: execFile18 } = await import("child_process");
+      const { execFile: execFile19 } = await import("child_process");
       const { promisify: promisify19 } = await import("util");
-      const execFileAsync10 = promisify19(execFile18);
+      const execFileAsync10 = promisify19(execFile19);
       const resolveStarted = Date.now();
       const { stdout: branchStdout } = await execFileAsync10("git", ["branch", "--show-current"], { cwd: node.workspace, encoding: "utf8", windowsHide: true, env: gitChildEnv() });
       const branch = branchStdout.trim();
@@ -140849,9 +140849,9 @@ ${tail}` : ""
       }
     }
     async function defaultRunGit(args, cwd) {
-      const { execFile: execFile18 } = await import("child_process");
+      const { execFile: execFile19 } = await import("child_process");
       const { promisify: promisify19 } = await import("util");
-      const { stdout } = await promisify19(execFile18)("git", args, {
+      const { stdout } = await promisify19(execFile19)("git", args, {
         cwd,
         encoding: "utf8",
         timeout: 3e4,
@@ -184332,6 +184332,37 @@ exec "${portableNode}" "${cliEntry}" "$@"
         }
       );
     }
+    var NPM_ASYNC_EXIT_GRACE_MS = 2e3;
+    function execNpmCommandAsync(args, options = {}, surface) {
+      const execOptions = surface?.execOptions || getNpmExecOptions();
+      return new Promise((resolve76, reject) => {
+        let hardStop = null;
+        const settle2 = (error, stdout) => {
+          if (hardStop) clearTimeout(hardStop);
+          hardStop = null;
+          if (error) reject(error);
+          else resolve76(stdout ?? "");
+        };
+        const child = (0, import_child_process12.execFile)(
+          surface?.npmExecutable || "npm",
+          [...surface?.npmArgsPrefix || [], ...args],
+          {
+            encoding: "utf-8",
+            ...options,
+            ...execOptions,
+            ...process.platform === "win32" ? { windowsHide: true } : {}
+          },
+          (error, stdout) => settle2(error, String(stdout ?? ""))
+        );
+        if (options.timeout !== void 0) {
+          hardStop = setTimeout(() => {
+            child.kill("SIGKILL");
+            settle2(Object.assign(new Error(`npm ${args[0]} did not exit within ${options.timeout}ms`), { code: "ETIMEDOUT" }));
+          }, options.timeout + NPM_ASYNC_EXIT_GRACE_MS);
+          hardStop.unref?.();
+        }
+      });
+    }
     function resolveNpmPublishedVersion(packageName, tagOrVersion, surface, options = {}) {
       const args = ["view", `${packageName}@${tagOrVersion}`, "version"];
       const effectiveTimeout = "timeout" in options ? options.timeout : 1e4;
@@ -184374,6 +184405,18 @@ exec "${portableNode}" "${cliEntry}" "$@"
         }
       }
       throw lastError;
+    }
+    async function resolveNpmPublishedVersionAsync(packageName, tagOrVersion, surface, options = {}) {
+      const timeout = options.timeout ?? 1e4;
+      const attempts = Math.max(0, options.timeoutRetries ?? 1) + 1;
+      for (let attempt = 1; ; attempt++) {
+        try {
+          return (await execNpmCommandAsync(["view", `${packageName}@${tagOrVersion}`, "version"], { timeout }, surface)).trim();
+        } catch (error) {
+          if (attempt >= attempts || !isSpawnTimeoutError(error)) throw error;
+          options.onRetry?.({ attempt, attempts, timeoutMs: timeout, error });
+        }
+      }
     }
     init_config();
     var fs81 = __toESM2(require("fs"));
@@ -185028,6 +185071,7 @@ ${marker2}`,
       }
       if (process.platform === "win32" || payload.killSessionHost === true) {
         const hostStop = await stopSessionHostProcesses(sessionHostAppName);
+        appendUpgradeLog(`Session-host stop: pid=${hostStop.pid ?? "none"} stopped=${hostStop.stopped} survived=${hostStop.survived}`);
         if (process.platform === "win32" && hostStop.survived && hostStop.pid !== null) {
           const message = `Cannot upgrade: the session-host process (pid ${hostStop.pid}) is still running and could not be stopped. Upgrading now would delete the install it is running from and break every new session.`;
           emitUpgradeFailureNotice([
@@ -185272,9 +185316,14 @@ ${marker2}`,
     function isStandaloneArgv(argv1) {
       return !!argv1 && ARGV_STANDALONE_PATH_SEGMENT.test(argv1);
     }
+    var upgradeLookupInFlight = false;
     var daemonLifecycleHandlers = {
       daemon_upgrade: async (ctx, args) => {
         LOG.info("Upgrade", "Remote upgrade requested from dashboard");
+        if (upgradeLookupInFlight) {
+          return { success: false, code: "upgrade_in_progress", error: "An upgrade request is already resolving its target version on this daemon." };
+        }
+        upgradeLookupInFlight = true;
         try {
           assertWorkerBridgeLifecycleAdmission("daemon_upgrade", void 0, MeshRuntimeStore.getInstance().db);
           const isStandalone = ctx.deps.packageName === "@adhdev/daemon-standalone" || isStandaloneArgv(process.argv[1]);
@@ -185296,23 +185345,17 @@ ${marker2}`,
             reason: `The requested channel/tag was IGNORED. Since Phase 3 the release channel is a build-time identity of the installed binary, so this daemon can only upgrade on its own '${TRACK}' track (${pkgName}@${npmTag}). Switching tracks requires installing the other track's package, not an upgrade argument.`
           } : null;
           const withChannelNotice = (payload) => channelOverride ? { ...payload, channelOverride } : payload;
-          const latest = resolveNpmPublishedVersion(pkgName, npmTag, npmSurface, {
-            onRetry: ({ attempt, attempts, timeoutMs }) => {
-              LOG.info("Upgrade", `Version lookup timed out after ${timeoutMs}ms (attempt ${attempt}/${attempts}); retrying \u2014 first-run antivirus scanning of the bundled node/npm binaries is the usual cause.`);
-            }
-          });
+          const [latest, currentInstalled] = await Promise.all([
+            resolveNpmPublishedVersionAsync(pkgName, npmTag, npmSurface, {
+              onRetry: ({ attempt, attempts, timeoutMs }) => {
+                LOG.info("Upgrade", `Version lookup timed out after ${timeoutMs}ms (attempt ${attempt}/${attempts}); retrying \u2014 first-run antivirus scanning of the bundled node/npm binaries is the usual cause.`);
+              }
+            }),
+            // ls failures are ignored; the upgrade can still proceed.
+            execNpmCommandAsync(["ls", "-g", pkgName, "--depth=0", "--json"], { timeout: 1e4 }, npmSurface).then((stdout) => JSON.parse(stdout.trim())?.dependencies?.[pkgName]?.version || null).catch(() => null)
+          ]);
           LOG.info("Upgrade", `Latest ${pkgName}@${npmTag}: v${latest}`);
-          let currentInstalled = null;
-          try {
-            const currentJson = String(execNpmCommandSync(["ls", "-g", pkgName, "--depth=0", "--json"], {
-              encoding: "utf-8",
-              timeout: 1e4,
-              stdio: ["pipe", "pipe", "pipe"]
-            }, npmSurface)).trim();
-            const parsed = JSON.parse(currentJson);
-            currentInstalled = parsed?.dependencies?.[pkgName]?.version || null;
-          } catch {
-          }
+          assertWorkerBridgeLifecycleAdmission("daemon_upgrade", void 0, MeshRuntimeStore.getInstance().db);
           const runningVersion = typeof ctx.deps.statusVersion === "string" ? ctx.deps.statusVersion.trim().replace(/^v/, "") : null;
           if (currentInstalled === latest && runningVersion === latest) {
             LOG.info("Upgrade", `Already on ${TRACK} track version v${latest}; skipping install`);
@@ -185392,6 +185435,8 @@ ${marker2}`,
         } catch (e) {
           LOG.error("Upgrade", `Failed: ${e.message}`);
           return { success: false, error: e.message };
+        } finally {
+          upgradeLookupInFlight = false;
         }
       },
       // Restart-only path (mesh restart_daemon_node mode="restart"): re-spawn the
@@ -197243,7 +197288,7 @@ ${marker2}`,
     function parseLineEpochMs(line, fileDate) {
       const m = line.match(/^\[(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?\]/);
       if (!m) {
-        const iso = line.match(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?/);
+        const iso = line.match(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?/);
         if (iso) {
           const t = Date.parse(iso[0].replace(" ", "T"));
           return Number.isNaN(t) ? null : t;
@@ -197298,7 +197343,7 @@ ${marker2}`,
     function readDaemonLogTail(args = {}) {
       const platform10 = process.platform;
       const limitBytes = clampTailBytes(args.tailBytes);
-      const primaryPath = resolveLogPath(args.date);
+      const primaryPath = args.filePath ?? resolveLogPath(args.date);
       const backupPaths = sizeRotationPaths(primaryPath);
       const primaryExists = fs106.existsSync(primaryPath);
       const existingBackupPaths = backupPaths.filter((backupPath2) => fs106.existsSync(backupPath2));
@@ -197533,13 +197578,18 @@ ${marker2}`,
             nodeId
           };
         }
+        const source2 = args?.source === void 0 ? "daemon" : args.source;
+        if (source2 !== "daemon" && source2 !== "upgrade") {
+          return { success: false, error: `unknown log source: ${String(source2).slice(0, 40)} (expected daemon or upgrade)`, nodeId };
+        }
         const rawTailBytes = Number(args?.tailBytes);
         const tailBytes = Number.isFinite(rawTailBytes) && rawTailBytes > 0 ? Math.min(rawTailBytes, MAX_TAIL_BYTES2) : void 0;
         const tail = readDaemonLogTail({
           date: typeof args?.date === "string" ? args.date : void 0,
           tailBytes,
           grep: rawGrep,
-          sinceMs: Number.isFinite(Number(args?.sinceMs)) ? Number(args?.sinceMs) : void 0
+          sinceMs: Number.isFinite(Number(args?.sinceMs)) ? Number(args?.sinceMs) : void 0,
+          ...source2 === "upgrade" ? { filePath: getUpgradeLogPath() } : {}
         });
         if (!tail.success) {
           return {
@@ -208530,9 +208580,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       }
       const authorityRefusal = targetNodes.map((node) => refinePublicationAuthorityRefusal(args, node.id)).find(Boolean);
       if (authorityRefusal) return authorityRefusal;
-      const { execFile: execFile18 } = await import("child_process");
+      const { execFile: execFile19 } = await import("child_process");
       const { promisify: promisify19 } = await import("util");
-      const execFileAsync10 = promisify19(execFile18);
+      const execFileAsync10 = promisify19(execFile19);
       const resolveRepoRootFor = (node) => {
         const sourceNode = node.clonedFromNodeId ? allNodes.find((n) => meshNodeIdMatches7(n, node.clonedFromNodeId)) : allNodes.find((n) => !n.isLocalWorktree);
         return sourceNode?.repoRoot || sourceNode?.workspace;
@@ -209427,9 +209477,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     }
     async function hasUnpushedWorktreeCommits(workspace) {
       try {
-        const { execFile: execFile18 } = await import("child_process");
+        const { execFile: execFile19 } = await import("child_process");
         const { promisify: promisify19 } = await import("util");
-        const execFileAsync10 = promisify19(execFile18);
+        const execFileAsync10 = promisify19(execFile19);
         const git12 = async (gitArgs) => {
           const { stdout } = await execFileAsync10("git", gitArgs, {
             cwd: workspace,
@@ -209580,9 +209630,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }
       }
       if (args.force !== true) {
-        const { execFile: execFile18 } = await import("child_process");
+        const { execFile: execFile19 } = await import("child_process");
         const { promisify: promisify19 } = await import("util");
-        const execFileAsync10 = promisify19(execFile18);
+        const execFileAsync10 = promisify19(execFile19);
         try {
           const { stdout } = await execFileAsync10("git", ["status", "--porcelain"], {
             cwd: workspace,
@@ -209689,9 +209739,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const managedEntry = entries2.find((entry) => normalizePath2(entry.path) === actualPath);
       if (!managedEntry) {
         try {
-          const { execFile: execFile18 } = await import("child_process");
+          const { execFile: execFile19 } = await import("child_process");
           const { promisify: promisify19 } = await import("util");
-          const execFileAsync10 = promisify19(execFile18);
+          const execFileAsync10 = promisify19(execFile19);
           await execFileAsync10("git", ["worktree", "prune"], {
             cwd: repoRoot,
             encoding: "utf8",
@@ -209801,9 +209851,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         const isSubmoduleGuard = /working trees containing submodules cannot be moved or removed/i.test(message);
         const submoduleForceBlocked = isSubmoduleGuard && !forceFallbackConvergence.allow;
         if (forceFallbackConvergence.allow && !dirty) {
-          const { execFile: execFile18 } = await import("child_process");
+          const { execFile: execFile19 } = await import("child_process");
           const { promisify: promisify19 } = await import("util");
-          const execFileAsync10 = promisify19(execFile18);
+          const execFileAsync10 = promisify19(execFile19);
           const GIT_TIMEOUT_CLEANUP = 3e4;
           const GIT_MAX_BUFFER_CLEANUP = 4 * 1024 * 1024;
           const fallbackReason = isSubmoduleGuard ? "working_trees_containing_submodules" : "worktree_remove_failed";
@@ -209885,9 +209935,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       if (refinedConvergence === "merged_pushed" || refinedConvergence === "merged_to_main") {
         return { allow: true, status: refinedConvergence, source: "node_refine_state" };
       }
-      const { execFile: execFile18 } = await import("child_process");
+      const { execFile: execFile19 } = await import("child_process");
       const { promisify: promisify19 } = await import("util");
-      const execFileAsync10 = promisify19(execFile18);
+      const execFileAsync10 = promisify19(execFile19);
       const runGit5 = async (gitArgs, cwd) => {
         const { stdout } = await execFileAsync10("git", gitArgs, {
           cwd,
@@ -248007,7 +248057,8 @@ var MESH_READ_NODE_LOGS_TOOL = {
       grep: { type: "string", description: "Optional regex (case-insensitive) \u2014 only matching log lines are returned. Invalid regex falls back to a literal substring match." },
       since_ms: { type: "number", description: "Optional epoch-ms floor \u2014 only log lines at/after this time are returned (lines without a parseable timestamp are kept)." },
       tail_bytes: { type: "number", description: "Max bytes of log tail to read (default 65536, capped at 131072). Larger files are truncated to the newest tail_bytes." },
-      date: { type: "string", description: "Optional YYYY-MM-DD log date (defaults to today). Falls back to the size-rotation backup when the active file is absent." }
+      date: { type: "string", description: "Optional YYYY-MM-DD log date (defaults to today). Falls back to the size-rotation backup when the active file is absent." },
+      source: { type: "string", enum: ["daemon", "upgrade"], description: 'Which log to read. "daemon" (default) is the daemon log. "upgrade" is the upgrade helper trace (pre-flight, install, session-host stop, health gate), written while the daemon is down. date is ignored for it.' }
     },
     required: ["node_id"]
   }
@@ -255383,7 +255434,8 @@ async function meshReadNodeLogs(ctx, args) {
       ...typeof args.grep === "string" && args.grep.trim() ? { grep: args.grep.trim() } : {},
       ...Number.isFinite(args.since_ms) ? { sinceMs: args.since_ms } : {},
       ...Number.isFinite(args.tail_bytes) ? { tailBytes: args.tail_bytes } : {},
-      ...typeof args.date === "string" && args.date.trim() ? { date: args.date.trim() } : {}
+      ...typeof args.date === "string" && args.date.trim() ? { date: args.date.trim() } : {},
+      ...args.source ? { source: args.source } : {}
     });
     const payload = unwrapCommandPayload(result);
     return JSON.stringify(payload, null, 2);

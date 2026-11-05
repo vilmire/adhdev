@@ -10,7 +10,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { resolveInstanceDir, appendUpgradeLog } from './upgrade-log.js';
 import { isSpawnTimeoutError } from './upgrade-process-stop.js';
-import { execFileSync, type ExecFileSyncOptions } from 'child_process';
+import { execFile, execFileSync, type ExecFileSyncOptions } from 'child_process';
 
 export interface CurrentGlobalInstallSurface {
   npmExecutable: string;
@@ -286,6 +286,53 @@ export function execNpmCommandSync(
 }
 
 /**
+ * Grace after `timeout` before an async npm call gives up on the child's exit.
+ * execFile only calls back once stdout closes, so a grandchild holding the pipe
+ * open would otherwise outlive the timeout and hold the caller with it.
+ */
+const NPM_ASYNC_EXIT_GRACE_MS = 2_000;
+
+/**
+ * Non-blocking counterpart of execNpmCommandSync, for callers on the daemon's
+ * event loop. Resolves with stdout. A timeout rejects with an error that
+ * isSpawnTimeoutError recognises, like the synchronous path.
+ */
+export function execNpmCommandAsync(
+  args: string[],
+  options: { timeout?: number } = {},
+  surface?: Pick<CurrentGlobalInstallSurface, 'npmExecutable' | 'npmArgsPrefix' | 'execOptions'>,
+): Promise<string> {
+  const execOptions = surface?.execOptions || getNpmExecOptions();
+  return new Promise((resolve, reject) => {
+    let hardStop: ReturnType<typeof setTimeout> | null = null;
+    const settle = (error: unknown, stdout?: string) => {
+      if (hardStop) clearTimeout(hardStop);
+      hardStop = null;
+      if (error) reject(error);
+      else resolve(stdout ?? '');
+    };
+    const child = execFile(
+      surface?.npmExecutable || 'npm',
+      [...(surface?.npmArgsPrefix || []), ...args],
+      {
+        encoding: 'utf-8',
+        ...options,
+        ...execOptions,
+        ...(process.platform === 'win32' ? { windowsHide: true } : {}),
+      },
+      (error, stdout) => settle(error, String(stdout ?? '')),
+    );
+    if (options.timeout !== undefined) {
+      hardStop = setTimeout(() => {
+        child.kill('SIGKILL');
+        settle(Object.assign(new Error(`npm ${args[0]} did not exit within ${options.timeout}ms`), { code: 'ETIMEDOUT' }));
+      }, options.timeout + NPM_ASYNC_EXIT_GRACE_MS);
+      hardStop.unref?.();
+    }
+  });
+}
+
+/**
  * Ask the registry which concrete version a dist-tag or exact version resolves
  * to: `npm view <pkg>@<tagOrVersion> version`.
  *
@@ -428,4 +475,33 @@ export function resolveNpmPublishedVersion(
     }
   }
   throw lastError;
+}
+
+/**
+ * resolveNpmPublishedVersion for callers on the daemon's event loop. The blocking
+ * form holds the whole daemon for up to timeout × attempts, which starves the
+ * connections and every other command (measured: 30s, ending in p2p_timeout on the
+ * caller). Same retry rule: only a timeout is retried, a real failure is rethrown.
+ */
+export async function resolveNpmPublishedVersionAsync(
+  packageName: string,
+  tagOrVersion: string,
+  surface?: Pick<CurrentGlobalInstallSurface, 'npmExecutable' | 'npmArgsPrefix' | 'execOptions'>,
+  options: {
+    timeout?: number;
+    /** Extra attempts after a timeout. Defaults to 1 → at most 2 spawns (20s). */
+    timeoutRetries?: number;
+    onRetry?: (info: { attempt: number; attempts: number; timeoutMs: number; error: unknown }) => void;
+  } = {},
+): Promise<string> {
+  const timeout = options.timeout ?? 10_000;
+  const attempts = Math.max(0, options.timeoutRetries ?? 1) + 1;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return (await execNpmCommandAsync(['view', `${packageName}@${tagOrVersion}`, 'version'], { timeout }, surface)).trim();
+    } catch (error) {
+      if (attempt >= attempts || !isSpawnTimeoutError(error)) throw error;
+      options.onRetry?.({ attempt, attempts, timeoutMs: timeout, error });
+    }
+  }
 }

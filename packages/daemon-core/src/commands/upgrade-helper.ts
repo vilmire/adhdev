@@ -859,6 +859,7 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
   // kill_session_host) that forces the same teardown on any platform.
   if (process.platform === 'win32' || payload.killSessionHost === true) {
     const hostStop = await stopSessionHostProcesses(sessionHostAppName);
+    appendUpgradeLog(`Session-host stop: pid=${hostStop.pid ?? 'none'} stopped=${hostStop.stopped} survived=${hostStop.survived}`);
     // Fail closed on a surviving host. Continuing would install a new prefix and
     // then delete the old one while a live session-host still resolves its lazy
     // `require`s (node-pty → conpty.node) against that tree — the exact state

@@ -14,7 +14,7 @@ for(const source of ['ipc','standalone'])for(const command of ['daemon_restart',
  const store=new (MeshRuntimeStore as any)(':memory:') as MeshRuntimeStore;close.push(()=>store.close());vi.spyOn(MeshRuntimeStore,'getInstance').mockReturnValue(store);
  setBridgePolicy(store.db,{meshId:'synthetic-lifecycle',rolloutId:'synthetic-rollout',frozen:true,builds:[{commit:'b'.repeat(40),version:'1.0.81-test'}]});
  const spawn=vi.spyOn(helper,'spawnDetachedDaemonUpgradeHelper').mockImplementation(()=>{});
- const lookup=vi.spyOn(surface,'resolveNpmPublishedVersion').mockReturnValue('9.0.0');vi.spyOn(surface,'resolveCurrentGlobalInstallSurface').mockReturnValue({} as any);vi.spyOn(surface,'execNpmCommandSync').mockReturnValue('{}');
+ const lookup=vi.spyOn(surface,'resolveNpmPublishedVersionAsync').mockResolvedValue('9.0.0');vi.spyOn(surface,'resolveCurrentGlobalInstallSurface').mockReturnValue({} as any);vi.spyOn(surface,'execNpmCommandAsync').mockResolvedValue('{}');
  const router=new DaemonCommandRouter({commandHandler:{handle:vi.fn(async()=>({success:false}))} as any,statusVersion:'1.0.81',instanceManager:{collectAllStates:()=>[],listInstanceIds:()=>[],getInstance:()=>null} as any});close.push(()=>{router.meshNodeStatePusher.stop();router.localMeshNodeGitWatch.stop();});
  vi.spyOn(LOG,'error').mockImplementation(()=>{});
  const timers=vi.spyOn(globalThis,'setTimeout');expect(await router.execute(command,{killSessionHost:true,force:true,allowDowngrade:true,bridgeAuthority:{ready:true}},source)).toMatchObject({success:false,error:'strict_bridge_lifecycle_authority_unavailable'});
