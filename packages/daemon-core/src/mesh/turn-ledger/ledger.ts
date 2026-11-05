@@ -798,6 +798,8 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
                     if ((receipt as { reason?: unknown } | null | undefined)?.reason === 'exact_stop_never_attempted') {
                         log.warn(`turn-ledger: exact stop never reached the writer of ${a.attemptId}; sending it now`);
                         receipt = await ports.cancelDispatch?.({ ...request, inspectOnly: false });
+                        const answer = receipt as { success?: unknown; reason?: unknown } | null | undefined;
+                        if (answer?.success !== true) log.warn(`turn-ledger: exact stop of ${a.attemptId} refused by the writer's host: ${String(answer?.reason ?? 'no reason given')}`);
                     }
                     outcome = { receipt }; settleWriterStop(request, receipt);
                 }

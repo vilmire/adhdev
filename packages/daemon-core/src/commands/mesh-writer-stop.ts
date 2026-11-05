@@ -65,18 +65,24 @@ export interface WriterStopPorts {
     read(): Promise<NativeWriterProcess[] | null>;
     pause(): Promise<void>;
 }
+/** One unreadable row voids the table: a process we cannot read could be the writer. */
+export function parseNativeProcessTable(stdout: string): NativeWriterProcess[] | null {
+    const rows: NativeWriterProcess[] = [];
+    for (const line of stdout.split('\n').filter(x => x.trim())) {
+        // macOS runs some daemons as `nobody`, whose uid prints as -2.
+        const m = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(-?\d+)\s+(.+)$/);
+        if (!m || !Number.isFinite(Date.parse(m[5]))) return null;
+        rows.push({ pid: +m[1], ppid: +m[2], pgid: +m[3], uid: +m[4], birth: m[5].replace(/\s+/g, ' ') });
+    }
+    return rows.length ? rows : null;
+}
+
 export const nativeWriterStopPorts: WriterStopPorts = {
     async read() {
         if (process.platform === 'win32') return nativeProcessesFromWindowsTable(await readSystemProcessTableAsync('win32'));
         const { stdout } = await hiddenExecFileAsync('/bin/ps', ['-A', '-o', 'pid=,ppid=,pgid=,uid=,lstart='],
             { encoding: 'utf8', timeout: 2000, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C' } });
-        const rows: NativeWriterProcess[] = [];
-        for (const line of String(stdout).split('\n').filter(x => x.trim())) {
-            const m = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(.+)$/);
-            if (!m || !Number.isFinite(Date.parse(m[5]))) return null;
-            rows.push({ pid: +m[1], ppid: +m[2], pgid: +m[3], uid: +m[4], birth: m[5].replace(/\s+/g, ' ') });
-        }
-        return rows.length ? rows : null;
+        return parseNativeProcessTable(String(stdout));
     },
     pause: () => new Promise(resolve => setTimeout(resolve, 100)),
 };

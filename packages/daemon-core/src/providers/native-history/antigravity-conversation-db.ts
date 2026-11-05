@@ -5,6 +5,7 @@
  *
  * Split out of antigravity-cli-transcript.ts (file-size gate).
  */
+import * as fs from 'fs';
 import * as path from 'path';
 import { loadBetterSqlite3 } from '../../system/load-better-sqlite3.js';
 import { LOG } from '../../logging/logger.js';
@@ -539,6 +540,10 @@ export interface AgyTaskLifecycleStep {
  * full protobuf message decode is unnecessary here.
  */
 export function readTaskLifecycleSteps(filePath: string): AgyTaskLifecycleStep[] | null {
+  const stamp = lifecycleFileStamp(filePath);
+  if (!stamp) return null;
+  const known = lifecycleCache.get(filePath);
+  if (known?.stamp.signature === stamp.signature) return known.result;
   let Database: any;
   try {
     Database = loadBetterSqlite3();
@@ -546,9 +551,10 @@ export function readTaskLifecycleSteps(filePath: string): AgyTaskLifecycleStep[]
     // Native binding unavailable — same degradation as parseConversationDb.
     return null;
   }
+  // A replaced or shrunken store (VACUUM, rewrite) has no reusable cursor.
+  const base = known && known.stamp.ino === stamp.ino && stamp.dbSize >= known.stamp.dbSize ? known : null;
 
-  interface Row { idx: number; step_type: number; step_payload: Buffer | null; task_details?: Buffer | null }
-  let rows: Row[] | null = null;
+  let rows: AgyLifecycleRow[] | null = null;
 
   for (let attempt = 1; attempt <= AGY_DB_MAX_ATTEMPTS; attempt++) {
     let db: any;
@@ -567,15 +573,18 @@ export function readTaskLifecycleSteps(filePath: string): AgyTaskLifecycleStep[]
       } catch {
         columns = new Set<string>();
       }
-      const hasTaskDetails = columns.has('task_details');
+      const extra = ['task_details', 'status'].filter((c) => columns.has(c)).map((c) => `, ${c}`).join('');
       rows = db
         .prepare(
-          `SELECT idx, step_type, step_payload${hasTaskDetails ? ', task_details' : ''}
+          `SELECT idx, step_type, step_payload${extra}
              FROM steps
             WHERE step_type IN (${AGY_STEP_TYPE_USER}, ${AGY_STEP_TYPE_TOOL}, ${AGY_STEP_TYPE_TOOL_ALT}, ${AGY_STEP_TYPE_TASK_MESSAGE})
+              AND idx > ?
             ORDER BY idx ASC`,
         )
-        .all() as Row[];
+        .all(base?.cursor ?? -1) as AgyLifecycleRow[];
+      lifecycleStats.queries++;
+      lifecycleStats.rows += rows.length;
       break; // success
     } catch (err) {
       if (isSqliteBusyError(err)) {
@@ -597,42 +606,97 @@ export function readTaskLifecycleSteps(filePath: string): AgyTaskLifecycleStep[]
     }
   }
 
-  if (!Array.isArray(rows) || rows.length === 0) return null;
-
-  const out: AgyTaskLifecycleStep[] = [];
+  if (!Array.isArray(rows)) return null;
+  const settled = base?.settled ?? [];
+  const live: AgyTaskLifecycleStep[] = [];
+  let cursor = base?.cursor ?? -1;
+  let contiguous = true;
   for (const row of rows) {
-    if (row.step_type === AGY_STEP_TYPE_USER) {
-      out.push({ idx: row.idx, kind: 'user' });
-      continue;
-    }
-    if (row.step_type === AGY_STEP_TYPE_TASK_MESSAGE) {
-      const text = row.step_payload ? row.step_payload.toString('utf8') : '';
-      // `Task id "<id>" finished with result:` / `… was canceled with result:`.
-      // Every observed step_type 101 task message is a TERMINAL delivery.
-      for (const match of text.matchAll(/Task id "([0-9a-f-]{36}\/task-\d+)"[^:]{0,80}?\bwith result\b/gi)) {
-        out.push({ idx: row.idx, kind: 'notification', taskId: match[1], terminal: true });
-      }
-      continue;
-    }
-    // Tool step (21 or 132): an async launch is (task id in `task_details`)
-    // AND (payload tool name is run_command) — the tool-name test excludes
-    // `schedule` timers, which carry a task id but never resolve. A manage_task
-    // status result lives in the payload as `Task:/Status:` lines.
-    const payload = row.step_payload ? row.step_payload.toString('utf8') : '';
-    const details = row.task_details && Buffer.isBuffer(row.task_details)
-      ? row.task_details.toString('utf8')
-      : '';
-    const launchId = details.match(AGY_TASK_ID_RE);
-    if (launchId && isBackgroundLaunchPayload(payload)) {
-      out.push({ idx: row.idx, kind: 'launch', taskId: launchId[0] });
-    }
-    for (const match of payload.matchAll(/Task:\s*([0-9a-f-]{36}\/task-\d+)[\s\S]{0,200}?\bStatus:\s*([A-Z_]+)/gi)) {
-      const status = match[2].toUpperCase();
-      out.push({ idx: row.idx, kind: 'status', taskId: match[1], terminal: AGY_TERMINAL_TASK_STATUSES.has(status) });
+    // A step grows in place until it settles, so the cursor stops at the first open one.
+    if (contiguous && typeof row.status === 'number' && AGY_LIFECYCLE_SETTLED_STATUSES.has(row.status)) {
+      appendLifecycleSteps(row, settled);
+      cursor = row.idx;
+    } else {
+      contiguous = false;
+      appendLifecycleSteps(row, live);
     }
   }
-  return out;
+  const sawRows = !!base?.sawRows || rows.length > 0;
+  const result = sawRows ? [...settled, ...live] : null;
+  lifecycleCache.delete(filePath);
+  if (lifecycleCache.size >= LIFECYCLE_CACHE_MAX_FILES) lifecycleCache.delete(lifecycleCache.keys().next().value!);
+  lifecycleCache.set(filePath, { stamp, settled, cursor, sawRows, result });
+  return result;
 }
+
+function appendLifecycleSteps(row: AgyLifecycleRow, out: AgyTaskLifecycleStep[]): void {
+  if (row.step_type === AGY_STEP_TYPE_USER) {
+    out.push({ idx: row.idx, kind: 'user' });
+    return;
+  }
+  if (row.step_type === AGY_STEP_TYPE_TASK_MESSAGE) {
+    const text = row.step_payload ? row.step_payload.toString('utf8') : '';
+    // `Task id "<id>" finished with result:` / `… was canceled with result:`.
+    // Every observed step_type 101 task message is a TERMINAL delivery.
+    for (const match of text.matchAll(/Task id "([0-9a-f-]{36}\/task-\d+)"[^:]{0,80}?\bwith result\b/gi)) {
+      out.push({ idx: row.idx, kind: 'notification', taskId: match[1], terminal: true });
+    }
+    return;
+  }
+  // Tool step (21 or 132): an async launch is (task id in `task_details`)
+  // AND (payload tool name is run_command) — the tool-name test excludes
+  // `schedule` timers, which carry a task id but never resolve. A manage_task
+  // status result lives in the payload as `Task:/Status:` lines.
+  const payload = row.step_payload ? row.step_payload.toString('utf8') : '';
+  const details = row.task_details && Buffer.isBuffer(row.task_details)
+    ? row.task_details.toString('utf8')
+    : '';
+  const launchId = details.match(AGY_TASK_ID_RE);
+  if (launchId && isBackgroundLaunchPayload(payload)) {
+    out.push({ idx: row.idx, kind: 'launch', taskId: launchId[0] });
+  }
+  for (const match of payload.matchAll(/Task:\s*([0-9a-f-]{36}\/task-\d+)[\s\S]{0,200}?\bStatus:\s*([A-Z_]+)/gi)) {
+    const status = match[2].toUpperCase();
+    out.push({ idx: row.idx, kind: 'status', taskId: match[1], terminal: AGY_TERMINAL_TASK_STATUSES.has(status) });
+  }
+}
+
+interface AgyLifecycleRow { idx: number; step_type: number; step_payload: Buffer | null; task_details?: Buffer | null; status?: number }
+interface LifecycleFileStamp { signature: string; ino: number; dbSize: number }
+interface LifecycleCacheEntry {
+  stamp: LifecycleFileStamp;
+  /** Steps of rows at or before `cursor`: settled, so never read again. */
+  settled: AgyTaskLifecycleStep[];
+  cursor: number;
+  sawRows: boolean;
+  result: AgyTaskLifecycleStep[] | null;
+}
+
+// This read runs on every session state build. Decoding a long conversation's whole
+// tool history there held the daemon's event loop for seconds at a time (profiled live,
+// 2026-11-04: over half of all JS time on a host running antigravity workers).
+const LIFECYCLE_CACHE_MAX_FILES = 32;
+/** Done, cancelled, denied and errored steps do not change again; running and waiting ones do. */
+const AGY_LIFECYCLE_SETTLED_STATUSES: ReadonlySet<number> = new Set([3, 4, 6, 7]);
+const lifecycleCache = new Map<string, LifecycleCacheEntry>();
+const lifecycleStats = { queries: 0, rows: 0 };
+
+/** Any commit touches the db or its WAL, so an unchanged stamp means nothing new to read. */
+function lifecycleFileStamp(filePath: string): LifecycleFileStamp | null {
+  try {
+    const db = fs.statSync(filePath);
+    let wal = 'no-wal';
+    try { const w = fs.statSync(`${filePath}-wal`); wal = `${w.size}:${w.mtimeMs}`; } catch { /* not in WAL mode, or checkpointed */ }
+    return { signature: `${db.ino}:${db.size}:${db.mtimeMs}:${wal}`, ino: db.ino, dbSize: db.size };
+  } catch {
+    return null;
+  }
+}
+
+/** TESTS ONLY. */
+export function __taskLifecycleReadStatsForTests(): { queries: number; rows: number } { return { ...lifecycleStats }; }
+/** TESTS ONLY. */
+export function __resetTaskLifecycleCacheForTests(): void { lifecycleCache.clear(); lifecycleStats.queries = 0; lifecycleStats.rows = 0; }
 
 // ─── Pending AskQuestion step reader (WAITING status 9 authority) ────────────
 

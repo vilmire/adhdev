@@ -36,7 +36,7 @@ import { agentCommand } from '../../src/commands/cli-manager-agent-command.js';
 import { ProviderInstanceManager } from '../../src/providers/provider-instance-manager.js';
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js';
 import { stopStaleMeshWorker } from '../../src/mesh/mesh-event-forwarding.js';
-import { __setWriterStopPortsForTests, nativeProcessesFromWindowsTable, type NativeWriterProcess } from '../../src/commands/mesh-writer-stop.js';
+import { __setWriterStopPortsForTests, nativeProcessesFromWindowsTable, parseNativeProcessTable, type NativeWriterProcess } from '../../src/commands/mesh-writer-stop.js';
 import type { CancelDispatchRequest } from '../../src/mesh/turn-ledger/effects.js';
 import { resumePendingHolderReconciles, reconcileDuplicateHolder } from '../../src/mesh/mesh-holder-reconcile.js';
 import { retireOpenQueueAttemptForRequeue } from '../../src/mesh/mesh-queue-attempt-guard.js';
@@ -767,6 +767,15 @@ describe('a stop outage followed by a restart of the writer daemon (live 2026-11
         wireNativeStop(f, () => [nativeRoot, nativeChild]);
         await ledger.resumeStoppingWriters();
         expect(ledger.getAttempt(ATTEMPT)).toMatchObject({ state: 'stopping', terminal: null });
+    });
+
+    it('reads a process table with a macOS nobody daemon, whose uid prints as -2', () => {
+        expect(parseNativeProcessTable('  590     1   590    -2 Sat Oct 31 09:51:36 2026    \n  417     1   417   501 Wed Nov  4 13:06:49 2026\n')).toEqual([
+            { pid: 590, ppid: 1, pgid: 590, uid: -2, birth: 'Sat Oct 31 09:51:36 2026' },
+            { pid: 417, ppid: 1, pgid: 417, uid: 501, birth: 'Wed Nov 4 13:06:49 2026' },
+        ]);
+        expect(parseNativeProcessTable('  417     1   417   501 not-a-date\n')).toBeNull();
+        expect(parseNativeProcessTable('')).toBeNull();
     });
 
     describe('on Windows, where there are no process groups', () => {
