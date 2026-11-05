@@ -1,3 +1,4 @@
+import { readdirSync } from 'node:fs';
 import * as path from 'path';
 import {
   SESSION_HOST_SUPPORTED_REQUEST_TYPES,
@@ -96,6 +97,21 @@ export interface BuildHostDiagnosticsParams {
   recentTransitions: SessionHostRuntimeTransition[];
 }
 
+/** Open descriptors of this process, without spawning anything. Undefined where /dev/fd does not exist. */
+export function countOpenFds(): number | undefined {
+  try {
+    return readdirSync('/dev/fd').length;
+  } catch {
+    return undefined;
+  }
+}
+
+/** One line of what a wedged or leaking host looks like, for the next time it happens. */
+export function describeHostResources(runtimeCount: number): string {
+  const fds = countOpenFds();
+  return `fds=${fds ?? 'unknown'} runtimes=${runtimeCount} rssMb=${Math.round(process.memoryUsage().rss / 1048576)}`;
+}
+
 export function buildHostDiagnostics(params: BuildHostDiagnosticsParams): SessionHostDiagnostics {
   const limit = Math.max(1, Math.min(200, Number(params.payload?.limit) || 50));
   const allSessions = params.payload?.includeSessions === false
@@ -113,6 +129,7 @@ export function buildHostDiagnostics(params: BuildHostDiagnosticsParams): Sessio
       ...(inactiveRecords || []),
     ]
     : undefined;
+  const openFdCount = countOpenFds();
   return {
     hostStartedAt: params.hostStartedAt,
     endpoint: params.endpointPath,
@@ -121,6 +138,7 @@ export function buildHostDiagnostics(params: BuildHostDiagnosticsParams): Sessio
     hostEntryPath: resolveHostEntryPath(),
     ...(params.hostBootId ? { hostBootId: params.hostBootId } : {}),
     runtimeCount: params.runtimeCount,
+    ...(openFdCount !== undefined ? { openFdCount } : {}),
     supportedRequestTypes: [...SESSION_HOST_SUPPORTED_REQUEST_TYPES],
     sessions,
     liveRuntimes,

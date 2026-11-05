@@ -77,3 +77,9 @@ test('a Windows runtime stops without a signal, which node-pty refuses there', (
   } finally { Object.defineProperty(process, 'platform', platform); }
   assert.deepEqual(kills, [[], ['SIGKILL']]);
 });
+
+test('host diagnostics report open descriptors, and resources read as one line', async () => {
+  const { countOpenFds, describeHostResources } = await import('../src/session-diagnostics.js');
+  if (process.platform !== 'win32') assert.ok((countOpenFds() ?? 0) > 0);
+  assert.match(describeHostResources(3), /fds=\S+ runtimes=3 rssMb=\d+/);
+});

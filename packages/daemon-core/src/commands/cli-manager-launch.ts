@@ -43,6 +43,7 @@ import {
 import type { DaemonCliManager } from './cli-manager.js';
 import { IDENTITY } from '../track-identity.js';
 import { ADHDEV_MCP_SESSION_CREDENTIAL_ENV } from '../standalone-mcp-auth.js';
+import { describeLaunchIdentity } from '../process/launch-identity-diagnostics.js';
 import { ensureMcpSessionCredential } from './mcp-command-ingress.js';
 import { recordPersistedProviderSessionPin } from '../config/state-store.js';
 
@@ -410,6 +411,7 @@ async function startCliPtySession(
             await adapter.spawn();
         } catch (spawnErr: any) {
             LOG.error('CLI', `[${cliType}] Spawn failed: ${spawnErr?.message}`);
+            LOG.warn('CLI', `[${cliType}] Spawn failure identity: ${describeLaunchIdentity(effectiveExtraEnv)}`);
             throw new Error(`Failed to start ${cliInfo.displayName}: ${spawnErr?.message}`);
         }
 

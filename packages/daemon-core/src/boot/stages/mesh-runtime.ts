@@ -5,6 +5,7 @@ import {createNoticeSubmitInventory} from '../../mesh/turn-ledger/notice-submit-
 import { registerSessionArtifact } from '../../artifacts/artifact-store.js';
 import { setStageArtifactRegistrar } from '../../mesh/stage-ports-default.js';
 import { setLightSessionStopper } from '../../mesh/light-task-result.js';
+import { armQuotaRestartWarmup } from '../../mesh/mesh-quota-sources.js';
 import { maintenanceHeld, withMaintenanceAdmission } from '../../maintenance/cooperative-gate.js';
 /**
  * S7 bootMeshRuntime — assemble `DaemonComponents`, attach the mesh bus
@@ -898,6 +899,7 @@ function installWorkerSessionBindPersistence(components: DaemonComponents): () =
 }
 
 export function bootMeshRuntime(s6: ProjectionsStage): MeshRuntimeStage {
+    armQuotaRestartWarmup();
     const components = assembleDaemonComponents(s6);
     const { bus } = s6;
     const offBindPersistence = installWorkerSessionBindPersistence(components);

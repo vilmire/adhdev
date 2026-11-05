@@ -36628,11 +36628,11 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
     }
     function windowsExtraBinDirs() {
       const dirs = [];
-      const fs145 = require("fs");
+      const fs146 = require("fs");
       const push = (dir) => {
         if (!dir) return;
         try {
-          if (fs145.existsSync(dir)) dirs.push(dir);
+          if (fs146.existsSync(dir)) dirs.push(dir);
         } catch {
         }
       };
@@ -36648,12 +36648,12 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
     }
     function unixExtraBinDirs() {
       const dirs = [];
-      const fs145 = require("fs");
+      const fs146 = require("fs");
       const home = os22.homedir();
       const push = (dir) => {
         if (!dir) return;
         try {
-          if (fs145.existsSync(dir)) dirs.push(dir);
+          if (fs146.existsSync(dir)) dirs.push(dir);
         } catch {
         }
       };
@@ -36692,9 +36692,9 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
         for (const ext of exes) {
           const fullPath = path6.join(p, trimmed3 + ext);
           try {
-            const fs145 = require("fs");
-            if (fs145.existsSync(fullPath)) {
-              const stat2 = fs145.statSync(fullPath);
+            const fs146 = require("fs");
+            if (fs146.existsSync(fullPath)) {
+              const stat2 = fs146.statSync(fullPath);
               if (stat2.isFile() && (isWin || stat2.mode & 73)) {
                 return fullPath;
               }
@@ -36708,12 +36708,12 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
     function isScriptBinary(binaryPath) {
       if (!path6.isAbsolute(binaryPath)) return false;
       try {
-        const fs145 = require("fs");
-        const resolved = fs145.realpathSync(binaryPath);
+        const fs146 = require("fs");
+        const resolved = fs146.realpathSync(binaryPath);
         const head = Buffer.alloc(8);
-        const fd = fs145.openSync(resolved, "r");
-        fs145.readSync(fd, head, 0, 8, 0);
-        fs145.closeSync(fd);
+        const fd = fs146.openSync(resolved, "r");
+        fs146.readSync(fd, head, 0, 8, 0);
+        fs146.closeSync(fd);
         let i = 0;
         if (head[0] === 239 && head[1] === 187 && head[2] === 191) i = 3;
         return head[i] === 35 && head[i + 1] === 33;
@@ -36724,12 +36724,12 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
     function looksLikeMachOOrElf(filePath2) {
       if (!path6.isAbsolute(filePath2)) return false;
       try {
-        const fs145 = require("fs");
-        const resolved = fs145.realpathSync(filePath2);
+        const fs146 = require("fs");
+        const resolved = fs146.realpathSync(filePath2);
         const buf = Buffer.alloc(8);
-        const fd = fs145.openSync(resolved, "r");
-        fs145.readSync(fd, buf, 0, 8, 0);
-        fs145.closeSync(fd);
+        const fd = fs146.openSync(resolved, "r");
+        fs146.readSync(fd, buf, 0, 8, 0);
+        fs146.closeSync(fd);
         let i = 0;
         if (buf[0] === 239 && buf[1] === 187 && buf[2] === 191) i = 3;
         const b = buf.subarray(i);
@@ -56056,11 +56056,11 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       const pinnedProvider = typeof providerType === "string" && providerType.trim() ? providerType.trim() : void 0;
       const providerTags = pinnedProvider ? [pinnedProvider] : readNodeProviderTypes(node?.policy);
       const worktreeBranch = typeof node?.worktreeBranch === "string" && node.worktreeBranch.trim() ? node.worktreeBranch.trim() : null;
-      const os52 = readNodeOverride(node, "platform") ?? readNodeReporter(node, "platform") ?? process.platform;
+      const os53 = readNodeOverride(node, "platform") ?? readNodeReporter(node, "platform") ?? process.platform;
       const arch2 = readNodeOverride(node, "arch") ?? readNodeReporter(node, "arch") ?? process.arch;
       return normalizeMeshCapabilityTags2([
         ...Array.isArray(node?.capabilities) ? node.capabilities : [],
-        `os=${os52}`,
+        `os=${os53}`,
         `arch=${arch2}`,
         ...providerTags.map((p) => `provider=${p}`),
         // Worktree nodes automatically expose a "worktree=<branch>" tag so that
@@ -72012,6 +72012,12 @@ ${mergeTreeErr?.stderr || ""}`;
       if (typeof enabled !== "boolean" || typeof quotaEnabled !== "boolean") return void 0;
       return { enabled, quotaEnabled };
     }
+    function quotaStillWarmingUp(providerStates, now = Date.now()) {
+      return quotaWarmupArmedAt !== null && now - quotaWarmupArmedAt < QUOTA_RESTART_WARMUP_SECONDS * 1e3 && providerStates.length > 0 && providerStates.every((state2) => state2 === "not_measured");
+    }
+    function armQuotaRestartWarmup(now = Date.now()) {
+      quotaWarmupArmedAt = now;
+    }
     function logAbsentQuotaFailOpen(node, providerType, policy, now, context2) {
       if (context2?.suppressObservabilityLogs === true) return;
       const staleAfterMs = resolveQuotaRoutingPolicy(policy).staleAfterMs;
@@ -72026,6 +72032,8 @@ ${mergeTreeErr?.stderr || ""}`;
     }
     var staleFailOpenLoggedAt;
     var absentFailOpenLoggedAt;
+    var QUOTA_RESTART_WARMUP_SECONDS;
+    var quotaWarmupArmedAt;
     var init_mesh_quota_sources = __esm2({
       "src/mesh/mesh-quota-sources.ts"() {
         "use strict";
@@ -72036,6 +72044,8 @@ ${mergeTreeErr?.stderr || ""}`;
         init_logger();
         staleFailOpenLoggedAt = /* @__PURE__ */ new Map();
         absentFailOpenLoggedAt = /* @__PURE__ */ new Map();
+        QUOTA_RESTART_WARMUP_SECONDS = 120;
+        quotaWarmupArmedAt = null;
       }
     });
     function resetsAtOf(window) {
@@ -94621,6 +94631,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         return { reason: `provider_priority_unusable: ${failed.join("; ") || nodeId}`, preScoreExclusions };
       }
       const overrideQuotaGate = !!(meshId && taskId) && hasQuotaOverride(getQueueEntryById(meshId, taskId));
+      if (!overrideQuotaGate && quotaStillWarmingUp(usableSlots.map(({ providerType }) => quotaEntryFor(node, providerType, quotaFactsContext, Date.now()) ? "measured" : classifyAbsentQuotaReason(node, providerType, quotaFactsContext)))) return { reason: "quota_not_measured_after_restart", preScoreExclusions };
       const selection = selectProviderWithDiagnostics({
         overrideQuotaGate,
         node,
@@ -94693,6 +94704,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         init_mesh_node_slots();
         init_mesh_quota_routing();
         init_mesh_quota_ranking_records();
+        init_mesh_quota_sources();
         init_mesh_work_queue();
         init_mesh_quota_override();
         init_mesh_scheduling_fitness();
@@ -159878,8 +159890,8 @@ ${defangRelayBody(text9)}`;
             let cwd = options.cwd;
             if (cwd) {
               try {
-                const fs145 = require("fs");
-                const stat2 = fs145.statSync(cwd);
+                const fs146 = require("fs");
+                const stat2 = fs146.statSync(cwd);
                 if (!stat2.isDirectory()) cwd = os42.homedir();
               } catch {
                 cwd = os42.homedir();
@@ -163477,6 +163489,7 @@ ${defangRelayBody(text9)}`;
       return () => setWorkerSessionBindPersistence(null);
     }
     function bootMeshRuntime(s6) {
+      armQuotaRestartWarmup();
       const components = assembleDaemonComponents(s6);
       const { bus } = s6;
       const offBindPersistence = installWorkerSessionBindPersistence(components);
@@ -163590,6 +163603,7 @@ ${defangRelayBody(text9)}`;
         init_artifact_store();
         init_stage_ports_default();
         init_light_task_result();
+        init_mesh_quota_sources();
         init_cooperative_gate();
         init_mesh_termination_bridge();
         init_mesh_signal_bridge();
@@ -171798,17 +171812,17 @@ ${defangRelayBody(text9)}`;
       return null;
     }
     async function detectIDEs(providerLoader) {
-      const os52 = (0, import_os3.platform)();
+      const os53 = (0, import_os3.platform)();
       const results = [];
       for (const def of getMergedDefinitions()) {
         const cliPath = findCliCommand(providerLoader?.getIdeCliCommand(def.id, def.cli) || def.cli);
-        const appPath = checkPathExists2(providerLoader?.getIdePathCandidates(def.id, def.paths[os52] || []) || []);
+        const appPath = checkPathExists2(providerLoader?.getIdePathCandidates(def.id, def.paths[os53] || []) || []);
         let resolvedCli = cliPath;
-        if (!resolvedCli && appPath && os52 === "darwin") {
+        if (!resolvedCli && appPath && os53 === "darwin") {
           const bundledCli = `${appPath}/Contents/Resources/app/bin/${def.cli}`;
           if ((0, import_fs29.existsSync)(bundledCli)) resolvedCli = bundledCli;
         }
-        if (!resolvedCli && appPath && os52 === "win32") {
+        if (!resolvedCli && appPath && os53 === "win32") {
           const { dirname: dirname74 } = await import("path");
           const appDir = dirname74(appPath);
           const candidates = [
@@ -171825,7 +171839,7 @@ ${defangRelayBody(text9)}`;
             }
           }
         }
-        const installed2 = os52 === "darwin" ? !!(resolvedCli || appPath) : !!resolvedCli;
+        const installed2 = os53 === "darwin" ? !!(resolvedCli || appPath) : !!resolvedCli;
         const version2 = null;
         results.push({
           id: def.id,
@@ -178619,16 +178633,16 @@ ${output}` : "";
     function applySpecNativeHistoryWiring(resolved, base, providerDir, currentVersion) {
       if (providerDir) {
         try {
-          const fs145 = require("fs");
+          const fs146 = require("fs");
           const path141 = require("path");
           const candidates = specCandidatePaths(providerDir, base.compatibility, currentVersion);
-          const specPath = candidates.find((p) => fs145.existsSync(p));
+          const specPath = candidates.find((p) => fs146.existsSync(p));
           let nh;
           if (specPath) {
             resolved._resolvedSpecPath = specPath;
             let specControls;
             try {
-              const rawSpec = JSON.parse(fs145.readFileSync(specPath, "utf8"));
+              const rawSpec = JSON.parse(fs146.readFileSync(specPath, "utf8"));
               specControls = rawSpec.control_bar;
               nh = rawSpec.native_history;
             } catch {
@@ -178671,7 +178685,7 @@ ${output}` : "";
               }
             } else if (nh.override_path) {
               const overrideFile = path141.resolve(providerDir, nh.override_path);
-              if (fs145.existsSync(overrideFile)) {
+              if (fs146.existsSync(overrideFile)) {
                 try {
                   registerProviderScriptRootSafely(path141.dirname(path141.dirname(providerDir)));
                   delete require.cache[require.resolve(overrideFile)];
@@ -181786,7 +181800,7 @@ ${output}` : "";
         }
       } else if (plat === "win32") {
         try {
-          const fs145 = require("fs");
+          const fs146 = require("fs");
           const appNameMap = getMacAppIdentifiers();
           const appName = appNameMap[ideId];
           if (appName) {
@@ -181795,8 +181809,8 @@ ${output}` : "";
               appName,
               "storage.json"
             );
-            if (fs145.existsSync(storagePath)) {
-              const data = JSON.parse(fs145.readFileSync(storagePath, "utf-8"));
+            if (fs146.existsSync(storagePath)) {
+              const data = JSON.parse(fs146.readFileSync(storagePath, "utf-8"));
               const workspaces = data?.openedPathsList?.workspaces3 || data?.openedPathsList?.entries || [];
               if (workspaces.length > 0) {
                 const recent = workspaces[0];
@@ -213175,28 +213189,28 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       return { success: true, providers: mergeChannelPinRows(host, listUpstreamInstalledProviders(host)) };
     }
     function listUpstreamInstalledProviders(host) {
-      const fs145 = require("fs");
+      const fs146 = require("fs");
       const path141 = require("path");
       const installRoot = host.getUpstreamInstallRoot();
-      if (!fs145.existsSync(installRoot)) return [];
+      if (!fs146.existsSync(installRoot)) return [];
       const CATEGORIES = ["cli", "ide", "extension", "driver"];
       const items = [];
       for (const category of CATEGORIES) {
         const categoryDir = path141.join(installRoot, category);
-        if (!fs145.existsSync(categoryDir)) continue;
+        if (!fs146.existsSync(categoryDir)) continue;
         let entries2;
         try {
-          entries2 = fs145.readdirSync(categoryDir);
+          entries2 = fs146.readdirSync(categoryDir);
         } catch {
           continue;
         }
         for (const type2 of entries2) {
           const v1Path = path141.join(categoryDir, type2, "provider.v1.json");
           const v0Path = path141.join(categoryDir, type2, "provider.json");
-          const manifestPath = fs145.existsSync(v1Path) ? v1Path : fs145.existsSync(v0Path) ? v0Path : null;
+          const manifestPath = fs146.existsSync(v1Path) ? v1Path : fs146.existsSync(v0Path) ? v0Path : null;
           if (!manifestPath) continue;
           try {
-            const m = JSON.parse(fs145.readFileSync(manifestPath, "utf-8"));
+            const m = JSON.parse(fs146.readFileSync(manifestPath, "utf-8"));
             const modelOptions = Array.isArray(m.modelOptions) ? m.modelOptions.filter((x) => typeof x === "string" && !!x.trim()) : [];
             const thinkingLevelOptions = Array.isArray(m.thinkingLevelOptions) ? m.thinkingLevelOptions.filter((x) => typeof x === "string" && !!x.trim()) : [];
             items.push({
@@ -213432,7 +213446,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       if (!/^@[a-z0-9_-]+$/i.test(requestedName)) {
         return { success: false, error: "name must match @[a-z0-9_-]+" };
       }
-      const fs145 = require("fs");
+      const fs146 = require("fs");
       const path141 = require("path");
       const { hiddenSpawnSync: hiddenSpawnSync2 } = (init_hidden_spawn(), __toCommonJS2(hidden_spawn_exports));
       const file = ext.loadExternalSources();
@@ -213443,8 +213457,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         return { success: false, error: `source url+ref already registered (use a different name to track another ref)` };
       }
       const sourceDir = path141.join(ext.externalRoot(), requestedName);
-      if (!fs145.existsSync(ext.externalRoot())) fs145.mkdirSync(ext.externalRoot(), { recursive: true });
-      if (fs145.existsSync(sourceDir)) {
+      if (!fs146.existsSync(ext.externalRoot())) fs146.mkdirSync(ext.externalRoot(), { recursive: true });
+      if (fs146.existsSync(sourceDir)) {
         return { success: false, error: `directory already exists: ${sourceDir} (rename or remove first)` };
       }
       const clone2 = hiddenSpawnSync2("git", ["clone", "--depth=1", "--branch", ref2, "--", url, sourceDir], {
@@ -213454,7 +213468,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       });
       if (clone2.status !== 0) {
         try {
-          fs145.rmSync(sourceDir, { recursive: true, force: true });
+          fs146.rmSync(sourceDir, { recursive: true, force: true });
         } catch {
         }
         return { success: false, error: `git clone failed: ${(clone2.stderr || clone2.stdout || "").trim() || "unknown error"}` };
@@ -213492,15 +213506,15 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const name = typeof args?.name === "string" ? args.name.trim() : "";
       if (!name) return { success: false, error: "name is required" };
       const ext = (init_external_sources(), __toCommonJS2(external_sources_exports));
-      const fs145 = require("fs");
+      const fs146 = require("fs");
       const path141 = require("path");
       const file = ext.loadExternalSources();
       const match = file.sources.find((s2) => s2.name === name);
       if (!match) return { success: false, error: `source "${name}" not registered` };
       const sourceDir = path141.join(ext.externalRoot(), name);
-      if (fs145.existsSync(sourceDir)) {
+      if (fs146.existsSync(sourceDir)) {
         try {
-          fs145.rmSync(sourceDir, { recursive: true, force: true });
+          fs146.rmSync(sourceDir, { recursive: true, force: true });
         } catch (e) {
           return { success: false, error: `failed to delete ${sourceDir}: ${e?.message || e}` };
         }
@@ -214026,7 +214040,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (!["cli", "ide", "extension"].includes(category)) {
           return { success: false, error: `unknown category: ${category}` };
         }
-        const fs145 = require("fs");
+        const fs146 = require("fs");
         const path141 = require("path");
         try {
           const installRoot = this.getUpstreamInstallRoot();
@@ -214035,9 +214049,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           if (!targetDir.startsWith(installRootResolved + path141.sep)) {
             return { success: false, error: "refusing to delete outside upstream root" };
           }
-          const hadUpstreamDir = fs145.existsSync(targetDir);
+          const hadUpstreamDir = fs146.existsSync(targetDir);
           if (hadUpstreamDir) {
-            fs145.rmSync(targetDir, { recursive: true, force: true });
+            fs146.rmSync(targetDir, { recursive: true, force: true });
           }
           let channelDeactivated = false;
           try {
@@ -228206,7 +228220,7 @@ ${buttons.join("\n")}`;
     init_ports();
     init_cooperative_gate();
     init_new_work_hold();
-    var os50 = __toESM2(require("os"));
+    var os51 = __toESM2(require("os"));
     var path134 = __toESM2(require("path"));
     var crypto22 = __toESM2(require("crypto"));
     var import_chalk = __toESM2((init_source(), __toCommonJS(source_exports)));
@@ -228312,6 +228326,26 @@ ${buttons.join("\n")}`;
     }
     init_track_identity();
     init_standalone_mcp_auth();
+    var fs137 = __toESM2(require("fs"));
+    var os50 = __toESM2(require("os"));
+    function describeLaunchIdentity(extraEnv, env2 = process.env, userInfo2 = () => os50.userInfo()) {
+      let passwd = "ok";
+      try {
+        userInfo2();
+      } catch (e) {
+        passwd = String(e?.code ?? "failed");
+      }
+      const home = extraEnv?.HOME ?? env2.HOME;
+      let homeState = "unset";
+      if (home) {
+        try {
+          homeState = fs137.statSync(home).isDirectory() ? "dir" : "not_dir";
+        } catch {
+          homeState = "missing";
+        }
+      }
+      return `uid=${process.getuid?.() ?? "n/a"} passwd=${passwd} home=${homeState} privateHome=${extraEnv?.HOME ? "yes" : "no"}`;
+    }
     init_mcp_command_ingress();
     init_state_store();
     async function startSession(host, cliType, workingDir, cliArgs, initialModel, options) {
@@ -228326,7 +228360,7 @@ ${buttons.join("\n")}`;
     function planSessionStart(host, cliType, workingDir, options) {
       const trimmed3 = (workingDir || "").trim();
       if (!trimmed3) throw new Error("working directory required");
-      const resolvedDir = trimmed3.startsWith("~") ? trimmed3.replace(/^~/, os50.homedir()) : path134.resolve(trimmed3);
+      const resolvedDir = trimmed3.startsWith("~") ? trimmed3.replace(/^~/, os51.homedir()) : path134.resolve(trimmed3);
       const normalizedType = host.providerLoader.resolveAlias(cliType);
       const rawProvider = host.providerLoader.getByAlias(cliType);
       const provider = rawProvider ? host.providerLoader.resolve(normalizedType) || rawProvider : void 0;
@@ -228371,7 +228405,7 @@ Enable and detect this provider from the Machine Providers page before starting 
     }
     function userLaunchTrustStoreHome(extraEnv) {
       const home = typeof extraEnv?.HOME === "string" ? extraEnv.HOME.trim() : "";
-      return home || os50.homedir();
+      return home || os51.homedir();
     }
     function withSessionAnchorEnv(options, key7) {
       const settings2 = options?.settingsOverride;
@@ -228554,6 +228588,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           await adapter.spawn();
         } catch (spawnErr) {
           LOG.error("CLI", `[${cliType}] Spawn failed: ${spawnErr?.message}`);
+          LOG.warn("CLI", `[${cliType}] Spawn failure identity: ${describeLaunchIdentity(effectiveExtraEnv)}`);
           throw new Error(`Failed to start ${cliInfo.displayName}: ${spawnErr?.message}`);
         }
         adapter.setOnStatusChange(() => {
@@ -231645,7 +231680,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
     init_chat_message_normalization();
     init_version_archive();
     var http3 = __toESM2(require("http"));
-    var fs140 = __toESM2(require("fs"));
+    var fs141 = __toESM2(require("fs"));
     var path138 = __toESM2(require("path"));
     init_config();
     function generateFiles(type2, name, category, opts = {}) {
@@ -231989,7 +232024,7 @@ async (params) => {
         files
       };
     }
-    var fs137 = __toESM2(require("fs"));
+    var fs138 = __toESM2(require("fs"));
     var path135 = __toESM2(require("path"));
     var CUSTOM_PROVIDERS_DOCS_URL = "https://docs.adhf.dev/guide/custom-providers";
     var INIT_SCAFFOLDABLE_CATEGORIES = /* @__PURE__ */ new Set(["cli"]);
@@ -232094,12 +232129,12 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
       candidates.push(path135.join(manifestDir, "specs", "default.json"));
       candidates.push(path135.join(manifestDir, "spec.json"));
-      return candidates.find((p) => fs137.existsSync(p)) || null;
+      return candidates.find((p) => fs138.existsSync(p)) || null;
     }
     init_version_archive();
     init_logger();
     init_builders();
-    var fs138 = __toESM2(require("fs"));
+    var fs139 = __toESM2(require("fs"));
     var path136 = __toESM2(require("path"));
     init_logger();
     async function handleCdpEvaluate(ctx, req, res) {
@@ -232280,17 +232315,17 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
       let scriptsPath = "";
       const directScripts = path136.join(dir, "scripts.js");
-      if (fs138.existsSync(directScripts)) {
+      if (fs139.existsSync(directScripts)) {
         scriptsPath = directScripts;
       } else {
         const scriptsDir = path136.join(dir, "scripts");
-        if (fs138.existsSync(scriptsDir)) {
-          const versions = fs138.readdirSync(scriptsDir).filter((d) => {
-            return fs138.statSync(path136.join(scriptsDir, d)).isDirectory();
+        if (fs139.existsSync(scriptsDir)) {
+          const versions = fs139.readdirSync(scriptsDir).filter((d) => {
+            return fs139.statSync(path136.join(scriptsDir, d)).isDirectory();
           }).sort().reverse();
           for (const ver of versions) {
             const p = path136.join(scriptsDir, ver, "scripts.js");
-            if (fs138.existsSync(p)) {
+            if (fs139.existsSync(p)) {
               scriptsPath = p;
               break;
             }
@@ -232302,7 +232337,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         return;
       }
       try {
-        const source2 = fs138.readFileSync(scriptsPath, "utf-8");
+        const source2 = fs139.readFileSync(scriptsPath, "utf-8");
         const hints = {};
         const funcRegex = /module\.exports\.(\w+)\s*=\s*function\s+\w+\s*\(params\)/g;
         let match;
@@ -233115,7 +233150,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         ctx.json(res, 500, { error: `DOM context collection failed: ${e.message}` });
       }
     }
-    var fs139 = __toESM2(require("fs"));
+    var fs140 = __toESM2(require("fs"));
     var path137 = __toESM2(require("path"));
     function slugifyFixtureName(value) {
       const normalized = String(value || "").trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
@@ -233131,10 +233166,10 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     function readCliFixture(ctx, type2, name) {
       const fixtureDir = getCliFixtureDir(ctx, type2);
       const filePath2 = path137.join(fixtureDir, `${name}.json`);
-      if (!fs139.existsSync(filePath2)) {
+      if (!fs140.existsSync(filePath2)) {
         throw new Error(`Fixture not found: ${filePath2}`);
       }
-      return JSON.parse(fs139.readFileSync(filePath2, "utf-8"));
+      return JSON.parse(fs140.readFileSync(filePath2, "utf-8"));
     }
     function getExerciseTranscriptText(result) {
       const parts = [];
@@ -233808,7 +233843,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           return;
         }
         const fixtureDir = getCliFixtureDir(ctx, type2);
-        fs139.mkdirSync(fixtureDir, { recursive: true });
+        fs140.mkdirSync(fixtureDir, { recursive: true });
         const name = slugifyFixtureName(String(body?.name || `${type2}-${Date.now()}`));
         const result = await runCliExerciseInternal(ctx, { ...request, type: type2 });
         const fixture = {
@@ -233836,7 +233871,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           notes: typeof body?.notes === "string" ? body.notes : void 0
         };
         const filePath2 = path137.join(fixtureDir, `${name}.json`);
-        fs139.writeFileSync(filePath2, JSON.stringify(fixture, null, 2));
+        fs140.writeFileSync(filePath2, JSON.stringify(fixture, null, 2));
         ctx.json(res, 200, {
           saved: true,
           name,
@@ -233854,14 +233889,14 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     async function handleCliFixtureList(ctx, type2, _req, res) {
       try {
         const fixtureDir = getCliFixtureDir(ctx, type2);
-        if (!fs139.existsSync(fixtureDir)) {
+        if (!fs140.existsSync(fixtureDir)) {
           ctx.json(res, 200, { fixtures: [], count: 0 });
           return;
         }
-        const fixtures = fs139.readdirSync(fixtureDir).filter((file) => file.endsWith(".json")).sort((a, b) => b.localeCompare(a, void 0, { numeric: true, sensitivity: "base" })).map((file) => {
+        const fixtures = fs140.readdirSync(fixtureDir).filter((file) => file.endsWith(".json")).sort((a, b) => b.localeCompare(a, void 0, { numeric: true, sensitivity: "base" })).map((file) => {
           const fullPath = path137.join(fixtureDir, file);
           try {
-            const raw = JSON.parse(fs139.readFileSync(fullPath, "utf-8"));
+            const raw = JSON.parse(fs140.readFileSync(fullPath, "utf-8"));
             return {
               name: raw.name || file.replace(/\.json$/i, ""),
               path: fullPath,
@@ -234496,14 +234531,14 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const files = [];
         const scan2 = (d, prefix) => {
           try {
-            for (const entry of fs140.readdirSync(d, { withFileTypes: true })) {
+            for (const entry of fs141.readdirSync(d, { withFileTypes: true })) {
               if (entry.name.startsWith(".") || entry.name.endsWith(".bak")) continue;
               const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
               if (entry.isDirectory()) {
                 files.push({ path: rel, size: 0, type: "dir" });
                 scan2(path138.join(d, entry.name), rel);
               } else {
-                const stat2 = fs140.statSync(path138.join(d, entry.name));
+                const stat2 = fs141.statSync(path138.join(d, entry.name));
                 files.push({ path: rel, size: stat2.size, type: "file" });
               }
             }
@@ -234531,11 +234566,11 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           this.json(res, 403, { error: "Forbidden" });
           return;
         }
-        if (!fs140.existsSync(fullPath) || fs140.statSync(fullPath).isDirectory()) {
+        if (!fs141.existsSync(fullPath) || fs141.statSync(fullPath).isDirectory()) {
           this.json(res, 404, { error: `File not found: ${filePath2}` });
           return;
         }
-        const content = fs140.readFileSync(fullPath, "utf-8");
+        const content = fs141.readFileSync(fullPath, "utf-8");
         this.json(res, 200, { type: type2, path: filePath2, content, lines: content.split("\n").length });
       }
       /** POST /api/providers/:type/file — write a file { path, content } */
@@ -234557,9 +234592,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           return;
         }
         try {
-          if (fs140.existsSync(fullPath)) fs140.copyFileSync(fullPath, fullPath + ".bak");
-          fs140.mkdirSync(path138.dirname(fullPath), { recursive: true });
-          fs140.writeFileSync(fullPath, content, "utf-8");
+          if (fs141.existsSync(fullPath)) fs141.copyFileSync(fullPath, fullPath + ".bak");
+          fs141.mkdirSync(path138.dirname(fullPath), { recursive: true });
+          fs141.writeFileSync(fullPath, content, "utf-8");
           this.log(`File saved: ${fullPath} (${content.length} chars)`);
           this.providerLoader.reload();
           this.json(res, 200, { saved: true, path: filePath2, chars: content.length });
@@ -234576,8 +234611,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         }
         for (const name of ["scripts.js", "provider.json"]) {
           const p = path138.join(dir, name);
-          if (fs140.existsSync(p)) {
-            const source2 = fs140.readFileSync(p, "utf-8");
+          if (fs141.existsSync(p)) {
+            const source2 = fs141.readFileSync(p, "utf-8");
             this.json(res, 200, { type: type2, path: p, source: source2, lines: source2.split("\n").length });
             return;
           }
@@ -234596,11 +234631,11 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           this.json(res, 404, { error: `Provider not found: ${type2}` });
           return;
         }
-        const target2 = fs140.existsSync(path138.join(dir, "scripts.js")) ? "scripts.js" : "provider.json";
+        const target2 = fs141.existsSync(path138.join(dir, "scripts.js")) ? "scripts.js" : "provider.json";
         const targetPath = path138.join(dir, target2);
         try {
-          if (fs140.existsSync(targetPath)) fs140.copyFileSync(targetPath, targetPath + ".bak");
-          fs140.writeFileSync(targetPath, source2, "utf-8");
+          if (fs141.existsSync(targetPath)) fs141.copyFileSync(targetPath, targetPath + ".bak");
+          fs141.writeFileSync(targetPath, source2, "utf-8");
           this.log(`Saved provider: ${targetPath} (${source2.length} chars)`);
           this.providerLoader.reload();
           this.json(res, 200, { saved: true, path: targetPath, chars: source2.length });
@@ -234682,30 +234717,30 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const isV1Category = category === "cli";
         const manifestFileName = isV1Category ? "provider.v1.json" : "provider.json";
         const jsonPath = path138.join(targetDir, manifestFileName);
-        if (fs140.existsSync(jsonPath)) {
+        if (fs141.existsSync(jsonPath)) {
           this.json(res, 409, { error: `Provider already exists at ${targetDir}`, path: targetDir });
           return;
         }
         try {
           const createdFiles = [];
-          fs140.mkdirSync(targetDir, { recursive: true });
+          fs141.mkdirSync(targetDir, { recursive: true });
           if (category === "cli") {
             const scaffold = buildCliProviderV1Scaffold({ type: type2, name, binary: binary2 });
-            fs140.writeFileSync(jsonPath, JSON.stringify(scaffold.manifest, null, 2) + "\n", "utf-8");
+            fs141.writeFileSync(jsonPath, JSON.stringify(scaffold.manifest, null, 2) + "\n", "utf-8");
             createdFiles.push(scaffold.manifestPath);
             const specFullPath = path138.join(targetDir, scaffold.specPath);
-            fs140.mkdirSync(path138.dirname(specFullPath), { recursive: true });
-            fs140.writeFileSync(specFullPath, JSON.stringify(scaffold.spec, null, 2) + "\n", "utf-8");
+            fs141.mkdirSync(path138.dirname(specFullPath), { recursive: true });
+            fs141.writeFileSync(specFullPath, JSON.stringify(scaffold.spec, null, 2) + "\n", "utf-8");
             createdFiles.push(scaffold.specPath);
           } else {
             const result = generateFiles(type2, name, category, { cdpPorts, cli, processName, installPath, binary: binary2, extensionId, version: version2, osPaths, processNames });
-            fs140.writeFileSync(jsonPath, result["provider.json"], "utf-8");
+            fs141.writeFileSync(jsonPath, result["provider.json"], "utf-8");
             createdFiles.push("provider.json");
             if (result.files) {
               for (const [relPath, content] of Object.entries(result.files)) {
                 const fullPath = path138.join(targetDir, relPath);
-                fs140.mkdirSync(path138.dirname(fullPath), { recursive: true });
-                fs140.writeFileSync(fullPath, content, "utf-8");
+                fs141.mkdirSync(path138.dirname(fullPath), { recursive: true });
+                fs141.writeFileSync(fullPath, content, "utf-8");
                 createdFiles.push(relPath);
               }
             }
@@ -235903,7 +235938,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         await attachment.close();
       }
     }
-    var fs141 = __toESM2(require("fs"));
+    var fs142 = __toESM2(require("fs"));
     var import_session_host_core22 = require_dist();
     init_runtime_defaults();
     var STARTUP_TIMEOUT_MS = DEFAULT_SESSION_HOST_READY_TIMEOUT_MS;
@@ -235953,7 +235988,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     function isExistingSocketPathPresent(endpoint) {
       if (endpoint.kind !== "unix" || !endpoint.path) return false;
       try {
-        return fs141.existsSync(endpoint.path);
+        return fs142.existsSync(endpoint.path);
       } catch {
         return false;
       }
@@ -236122,7 +236157,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         let endpointIdentity = "missing";
         if (endpoint.kind === "unix") {
           try {
-            const stat2 = fs141.lstatSync(endpoint.path, { bigint: true });
+            const stat2 = fs142.lstatSync(endpoint.path, { bigint: true });
             endpointIdentity = `${stat2.dev}:${stat2.ino}`;
           } catch (error) {
             if (error.code !== "ENOENT") throw error;
@@ -236269,13 +236304,13 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     init_cooperative_gate();
     var import_child_process16 = require("child_process");
     init_hidden_spawn();
-    var fs143 = __toESM2(require("fs"));
-    var os51 = __toESM2(require("os"));
+    var fs144 = __toESM2(require("fs"));
+    var os52 = __toESM2(require("os"));
     var path140 = __toESM2(require("path"));
     var import_session_host_core24 = require_dist();
     init_logger();
     init_disk_space_preflight();
-    var fs142 = __toESM2(require("fs"));
+    var fs143 = __toESM2(require("fs"));
     var path139 = __toESM2(require("path"));
     var import_session_host_core23 = require_dist();
     init_hidden_spawn();
@@ -236349,27 +236384,27 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
       if (hostLogFile) {
         try {
-          const stat2 = fs142.statSync(hostLogFile);
-          const fd = fs142.openSync(hostLogFile, "r");
+          const stat2 = fs143.statSync(hostLogFile);
+          const fd = fs143.openSync(hostLogFile, "r");
           try {
             const length = Math.min(stat2.size, MAX_LOG_TAIL_BYTES);
             const buffer = Buffer.alloc(length);
-            fs142.readSync(fd, buffer, 0, length, stat2.size - length);
+            fs143.readSync(fd, buffer, 0, length, stat2.size - length);
             lines.push("--- host log tail ---", buffer.toString("utf8"));
           } finally {
-            fs142.closeSync(fd);
+            fs143.closeSync(fd);
           }
         } catch {
         }
       }
       try {
-        fs142.mkdirSync(logDir, { recursive: true });
+        fs143.mkdirSync(logDir, { recursive: true });
         const file = path139.join(logDir, `${CAPTURE_PREFIX}${Date.now()}-${pid}.txt`);
-        fs142.writeFileSync(file, lines.join("\n"), { mode: 384 });
-        const old = fs142.readdirSync(logDir).filter((n) => n.startsWith(CAPTURE_PREFIX)).sort();
+        fs143.writeFileSync(file, lines.join("\n"), { mode: 384 });
+        const old = fs143.readdirSync(logDir).filter((n) => n.startsWith(CAPTURE_PREFIX)).sort();
         for (const name of old.slice(0, Math.max(0, old.length - KEEP_CAPTURES))) {
           try {
-            fs142.unlinkSync(path139.join(logDir, name));
+            fs143.unlinkSync(path139.join(logDir, name));
           } catch {
           }
         }
@@ -236402,7 +236437,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           path140.resolve(__dirname, "../../vendor/session-host-daemon/index.js")
         ];
         for (const candidate of packagedCandidates) {
-          if (fs143.existsSync(candidate)) {
+          if (fs144.existsSync(candidate)) {
             return candidate;
           }
         }
@@ -236427,7 +236462,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
       function pathIdentity(file) {
         try {
-          const stat2 = fs143.lstatSync(file, { bigint: true });
+          const stat2 = fs144.lstatSync(file, { bigint: true });
           return `${stat2.dev}:${stat2.ino}:${stat2.mode}`;
         } catch (error) {
           if (error.code === "ENOENT") return "missing";
@@ -236467,8 +236502,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       function readPidFileState() {
         try {
           const pidFile = getPidFile();
-          if (!fs143.existsSync(pidFile)) return { status: "missing" };
-          const raw = fs143.readFileSync(pidFile, "utf8").trim();
+          if (!fs144.existsSync(pidFile)) return { status: "missing" };
+          const raw = fs144.readFileSync(pidFile, "utf8").trim();
           if (!/^\d+$/.test(raw)) return { status: "corrupt" };
           const pid = Number.parseInt(raw, 10);
           return Number.isSafeInteger(pid) && pid > 0 ? { status: "ok", pid } : { status: "corrupt" };
@@ -236498,7 +236533,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
       function getSocketOwnerPids(endpointPath) {
         if (options.getSocketOwnerPids) return options.getSocketOwnerPids(endpointPath);
-        if (process.platform === "win32" || !fs143.existsSync(endpointPath)) return null;
+        if (process.platform === "win32" || !fs144.existsSync(endpointPath)) return null;
         const lsofBin = process.platform === "darwin" ? "/usr/sbin/lsof" : "/usr/bin/lsof";
         try {
           const out = String(
@@ -236540,7 +236575,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       function isOrphanUnixSocket(endpointPath) {
         if (process.platform === "win32") return false;
         try {
-          if (!fs143.lstatSync(endpointPath).isSocket()) return false;
+          if (!fs144.lstatSync(endpointPath).isSocket()) return false;
         } catch {
           return false;
         }
@@ -236565,9 +236600,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       function staleLockIdentity() {
         try {
           const file = `${getPidFile()}.lock/owner.json`;
-          const stat2 = fs143.lstatSync(file, { bigint: true });
+          const stat2 = fs144.lstatSync(file, { bigint: true });
           if (!stat2.isFile() || stat2.nlink !== 1n || (stat2.mode & 0o077n) !== 0n || process.getuid && stat2.uid !== BigInt(process.getuid())) return null;
-          return `${stat2.dev}:${stat2.ino}:${stat2.ctimeNs}:${fs143.readFileSync(file, "utf8")}`;
+          return `${stat2.dev}:${stat2.ino}:${stat2.ctimeNs}:${fs144.readFileSync(file, "utf8")}`;
         } catch {
           return null;
         }
@@ -236576,7 +236611,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const snapshot = staleLockIdentity();
         if (!snapshot) return false;
         try {
-          const owner = JSON.parse(fs143.readFileSync(`${getPidFile()}.lock/owner.json`, "utf8"));
+          const owner = JSON.parse(fs144.readFileSync(`${getPidFile()}.lock/owner.json`, "utf8"));
           if (owner.pid !== pid || typeof owner.nonce !== "string" || !owner.nonce || typeof owner.birth !== "string" || !owner.birth.trim() || ["unknown", "win32"].includes(owner.birth.trim().toLowerCase())) return false;
           process.kill(pid, 0);
           const birth = getProcessBirth(pid);
@@ -236589,16 +236624,16 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const endpoint = getEndpoint();
         const pidState = readPidFileState();
         if (pidState.status === "corrupt" || pidState.status === "missing") {
-          if (endpoint.kind === "unix" && fs143.existsSync(endpoint.path)) {
+          if (endpoint.kind === "unix" && fs144.existsSync(endpoint.path)) {
             return isOrphanUnixSocket(endpoint.path) ? "dead" : "unknown";
           }
           if (pidState.status === "corrupt") return "unknown";
-          return fs143.existsSync(endpoint.path) ? "unknown" : "dead";
+          return fs144.existsSync(endpoint.path) ? "unknown" : "dead";
         }
         const existingPid = pidState.pid;
         if (existingPid === process.pid) return "unknown";
         if (isKnownDeadPid(existingPid)) {
-          if (endpoint.kind === "unix" && fs143.existsSync(endpoint.path)) {
+          if (endpoint.kind === "unix" && fs144.existsSync(endpoint.path)) {
             if (process.platform !== "win32") {
               const owners2 = getSocketOwnerPids(endpoint.path);
               if (owners2 === null) {
@@ -236612,12 +236647,12 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           return "dead";
         }
         if (hasReusedLockPid(existingPid)) {
-          return endpoint.kind === "unix" && (!fs143.existsSync(endpoint.path) || isOrphanUnixSocket(endpoint.path)) ? "dead" : "unknown";
+          return endpoint.kind === "unix" && (!fs144.existsSync(endpoint.path) || isOrphanUnixSocket(endpoint.path)) ? "dead" : "unknown";
         }
         if (!isPidAlive2(existingPid) || !canSignalPid(existingPid)) return "unknown";
         const birth = getProcessBirth(existingPid);
         if (!birth || birth.toLowerCase() === "win32" || birth.toLowerCase() === "unknown") return "unknown";
-        if (endpoint.kind === "unix" && fs143.existsSync(endpoint.path)) {
+        if (endpoint.kind === "unix" && fs144.existsSync(endpoint.path)) {
           if (process.platform !== "win32") {
             const owners2 = getSocketOwnerPids(endpoint.path);
             if (owners2 === null) {
@@ -236683,7 +236718,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         }
         let portableNode = null;
         try {
-          portableNode = findPortableNode22(os51.homedir(), process.execPath, resolveInstanceDir());
+          portableNode = findPortableNode22(os52.homedir(), process.execPath, resolveInstanceDir());
         } catch (error) {
           LOG.warn(
             "SessionHost",
@@ -236707,7 +236742,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (markerIndex === -1) return;
         const activePrefix = entry.slice(0, markerIndex);
         const candidates = resolveConptyPrebuildCandidates(activePrefix);
-        const found = candidates.find((candidate) => fs143.existsSync(candidate));
+        const found = candidates.find((candidate) => fs144.existsSync(candidate));
         if (!found) {
           throw new Error(
             `conpty.node missing at boot despite passing the install-time gate \u2014 likely deleted post-install (checked: ${candidates.join(", ")}). Every session-host spawn would crash requiring node-pty; refusing to spawn.`
@@ -236731,9 +236766,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (options.spawnStdio === "logfile") {
           const logDir = path140.join(instance().configDir, "logs");
           assertStart();
-          fs143.mkdirSync(logDir, { recursive: true });
+          fs144.mkdirSync(logDir, { recursive: true });
           assertStart();
-          logFd = fs143.openSync(path140.join(logDir, "session-host.log"), "a");
+          logFd = fs144.openSync(path140.join(logDir, "session-host.log"), "a");
           stdio = ["ignore", logFd, logFd];
         }
         assertStart();
@@ -236759,7 +236794,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (typeof child?.unref === "function") child.unref();
         if (logFd !== null) {
           try {
-            fs143.closeSync(logFd);
+            fs144.closeSync(logFd);
           } catch {
           }
         }
@@ -236770,8 +236805,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const pidFile = getPidFile();
         let keepPidFile = false;
         try {
-          if (fs143.existsSync(pidFile)) {
-            const pid = Number.parseInt(fs143.readFileSync(pidFile, "utf8").trim(), 10);
+          if (fs144.existsSync(pidFile)) {
+            const pid = Number.parseInt(fs144.readFileSync(pidFile, "utf8").trim(), 10);
             if (Number.isFinite(pid) && pid !== process.pid) {
               const managed = canSignalPid(pid);
               if (managed) {
@@ -236791,7 +236826,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         } finally {
           if (!keepPidFile) {
             try {
-              fs143.unlinkSync(pidFile);
+              fs144.unlinkSync(pidFile);
             } catch {
             }
           }
@@ -236851,7 +236886,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         }
         if (!reported) return;
         if (pathsEquivalent(reported, currentEntry)) return;
-        const reportedExists = fs143.existsSync(reported);
+        const reportedExists = fs144.existsSync(reported);
         if (options2.onlyWhenEntryMissing && reportedExists) return;
         LOG.warn(
           "SessionHost",
@@ -236866,7 +236901,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (maintenance) {
           if (process.platform === "win32") throw new Error("maintenance_windows_retained_host_unsupported");
           const h = maintenance.retainedHost, endpoint = getEndpoint();
-          const nodePath = process.platform === "linux" ? fs143.realpathSync(`/proc/${h.pid}/exe`) : String(hiddenExecFileSync("/bin/ps", ["-o", "comm=", "-p", String(h.pid)], { encoding: "utf8", timeout: 5e3 })).trim();
+          const nodePath = process.platform === "linux" ? fs144.realpathSync(`/proc/${h.pid}/exe`) : String(hiddenExecFileSync("/bin/ps", ["-o", "comm=", "-p", String(h.pid)], { encoding: "utf8", timeout: 5e3 })).trim();
           const birth = String(hiddenExecFileSync("/bin/ps", ["-o", "lstart=", "-p", String(h.pid)], { encoding: "utf8", timeout: 5e3 })).trim();
           const ownerText = String(hiddenExecFileSync(process.platform === "darwin" ? "/usr/sbin/lsof" : "/usr/bin/lsof", ["-t", endpoint.path], { encoding: "utf8", timeout: 5e3 })).trim();
           if (!/^\d+$/.test(ownerText)) throw new Error("maintenance_retained_socket_owner_unknown");
@@ -237019,8 +237054,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           const res = await fetch(extension.vsixUrl);
           if (res.ok) {
             const buffer = Buffer.from(await res.arrayBuffer());
-            const fs145 = await import("fs");
-            fs145.writeFileSync(vsixPath, buffer);
+            const fs146 = await import("fs");
+            fs146.writeFileSync(vsixPath, buffer);
             return new Promise((resolve76) => {
               const cmd = `"${ide.cliCommand}" --install-extension "${vsixPath}" --force`;
               hiddenExec(cmd, { timeout: 6e4 }, (error, _stdout, stderr) => {
@@ -237510,7 +237545,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         "adhdev:override/cli-capability-handler@1"
       ]
     });
-    var fs144 = __toESM2(require("fs"));
+    var fs145 = __toESM2(require("fs"));
     var import_chalk2 = __toESM2((init_source(), __toCommonJS(source_exports)));
     init_dist();
     init_track_identity();
@@ -237696,7 +237731,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         }
         let snapshotMtimeMs = null;
         try {
-          snapshotMtimeMs = fs144.statSync(status.paths.snapshotFile).mtimeMs;
+          snapshotMtimeMs = fs145.statSync(status.paths.snapshotFile).mtimeMs;
         } catch {
         }
         console.log(import_chalk2.default.gray(
