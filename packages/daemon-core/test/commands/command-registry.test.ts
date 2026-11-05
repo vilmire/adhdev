@@ -301,7 +301,7 @@ const LEGACY_MED_FAMILY_COMMANDS = [
     'delete_mesh',
     'difficulty_brains_get', 'difficulty_brains_set', 'mesh_quota_routing_get', 'mesh_quota_routing_set',
     'add_mesh_node', 'update_mesh_node', 'cleanup_mesh_sessions', 'remove_mesh_node', 'clone_mesh_node',
-    'retry_mesh_node_bootstrap', 'get_mesh_host_pairing', 'configure_mesh_host_pairing',
+    'retry_mesh_node_bootstrap', 'get_mesh_host_pairing', 'get_mesh_host_grant_key', 'configure_mesh_host_pairing',
     // Explicit repairs; added after the legacy migration.
     'reattach_mesh_source_parent', 'recover_mesh_node_identity', 'stage_recover_mesh_review', 'pin_mesh_host_key',
     'create_mesh_host_pairing_token', 'apply_mesh_host_join', 'join_mesh_host_pairing', 'revoke_mesh_peer', 'get_mesh_queue',

@@ -569,13 +569,6 @@
             "peerDisconnected": "已断开",
             "peerLastConnected": "上次连接 {{time}}",
             "peerFailure": "失败代码：{{code}}",
-            "tabPin": "登记密钥",
-            "pinIntro": "如果已连接到项目的机器没有主机的工件签名密钥，远程工件会被拒绝。请输入在“主机”标签页创建的代码，在该机器上登记密钥。",
-            "pinMachine": "机器",
-            "pinSelect": "选择机器",
-            "pinNoMachines": "除主机外没有已连接的机器。请先将机器连接到项目。",
-            "pinAction": "登记密钥",
-            "pinning": "登记中…",
             "pinned": "密钥已登记：{{machine}}"
         },
         "hint": {

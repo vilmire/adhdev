@@ -10,6 +10,7 @@
  *   - join_mesh_host_pairing never erases a pin the member already holds.
  * Host and member run in one process; the config dir is swapped per side.
  */
+import { generateKeyPairSync } from 'crypto';
 import { mkdtempSync, rmSync } from 'fs';
 import { saveMeshConfig } from '../../../src/config/mesh-config-store.js';
 import { tmpdir } from 'os';
@@ -27,7 +28,8 @@ import {
 import { meshHostPairingHandlers } from '../../../src/commands/med-family/mesh-host-pairing.js';
 import { addNode, createMesh, getMesh } from '../../../src/config/mesh-config.js';
 import { configureMeshHostPairing, createMeshHostPairingToken } from '../../../src/config/mesh-config-host-pairing.js';
-import { readMeshHostRecord, writeMeshHostRecord } from '../../../src/mesh/mesh-host-memory.js';
+import { readMeshHostRecord, recordAuthenticatedPeerOriginGrantPublicKey, writeMeshHostRecord } from '../../../src/mesh/mesh-host-memory.js';
+import { ensureHostGrantKeyKept, resetHostGrantKeyAutopinForTest } from '../../../src/commands/med-family/artifact-host-key-autopin.js';
 import { getPeerSecret } from '../../../src/mesh/transport/mesh-peer-secrets.js';
 import { LOG } from '../../../src/logging/logger.js';
 
@@ -73,6 +75,7 @@ function hostDispatch() {
 }
 
 beforeEach(() => {
+    resetHostGrantKeyAutopinForTest();
     prev = process.env.ADHDEV_CONFIG_DIR;
     hostDir = mkdtempSync(join(tmpdir(), 'pin-host-'));
     memberDir = mkdtempSync(join(tmpdir(), 'pin-member-'));
@@ -88,7 +91,7 @@ afterEach(() => {
 });
 
 describe('host_pin_missing refusal', () => {
-    it('names the exact next step instead of a generic denial', () => {
+    it('says the machine retries on its own and asks the owner for no pairing step', () => {
         useDir(hostDir);
         const grant = mintArtifactOriginFetchGrant({
             meshId: 'mesh_x', hostDaemonId: HOST_ID, originDaemonId: MEMBER_ID, artifactId: 'art_1',
@@ -104,8 +107,78 @@ describe('host_pin_missing refusal', () => {
         expect(res.success).toBe(false);
         expect(res.code).toBe('host_pin_missing');
         expect(res.error).toBe(hostPinMissingMessage('mesh_x', HOST_ID));
-        expect(res.error).toContain('create a pairing code');
-        expect(res.error).toContain('mesh_host_pairing');
+        expect(res.error).toContain('asks the host again');
+        expect(res.error).not.toMatch(/pairing/i);
+    });
+});
+
+function createMeshAsMember(meshId: string) {
+    saveMeshConfig({ meshes: [{ id: meshId, name: 'member', nodes: [], meshHost: { role: 'member', hostDaemonId: HOST_ID } }] } as any);
+}
+
+describe('automatic host key keeping', () => {
+    const hostAnswers = () => hostDispatch();
+
+    it('takes the key from the recognised host the first time, then keeps it without asking again', async () => {
+        const hostMesh = setupHost('unused');
+        useDir(hostDir);
+        const hostKey = getHostOriginGrantPublicKey(HOST_ID);
+        useDir(memberDir);
+        writeMeshHostRecord(hostMesh.id, HOST_ID, 'first_dispatch');
+        const answer = hostAnswers();
+        const dispatch = vi.fn(answer);
+
+        await ensureHostGrantKeyKept(makeCtx(MEMBER_ID, dispatch), hostMesh.id, HOST_ID);
+        expect(resolveTrustedHostOriginGrantPublicKey({ meshId: hostMesh.id, hostDaemonId: HOST_ID })).toBe(hostKey);
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect(dispatch.mock.calls[0][1]).toBe('get_mesh_host_grant_key');
+
+        await ensureHostGrantKeyKept(makeCtx(MEMBER_ID, dispatch), hostMesh.id, HOST_ID);
+        expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+
+    it('asks nobody but the host this machine already recognises', async () => {
+        const hostMesh = setupHost('unused');
+        useDir(memberDir);
+        writeMeshHostRecord(hostMesh.id, HOST_ID, 'first_dispatch');
+        const dispatch = vi.fn(hostAnswers());
+        await ensureHostGrantKeyKept(makeCtx(MEMBER_ID, dispatch), hostMesh.id, 'daemon_mach_ffffffffffffffffffffffffffffffff');
+        expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it('refuses a key that differs from the one it kept', async () => {
+        const hostMesh = setupHost('unused');
+        useDir(hostDir);
+        const hostKey = getHostOriginGrantPublicKey(HOST_ID);
+        useDir(memberDir);
+        writeMeshHostRecord(hostMesh.id, HOST_ID, 'first_dispatch');
+        await ensureHostGrantKeyKept(makeCtx(MEMBER_ID, hostAnswers()), hostMesh.id, HOST_ID);
+        const other = generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
+        expect(recordAuthenticatedPeerOriginGrantPublicKey(hostMesh.id, HOST_ID, other)).toBe(false);
+        expect(resolveTrustedHostOriginGrantPublicKey({ meshId: hostMesh.id, hostDaemonId: HOST_ID })).toBe(hostKey);
+    });
+
+    it('waits before asking again after a failure, and never throws', async () => {
+        const hostMesh = setupHost('unused');
+        useDir(memberDir);
+        writeMeshHostRecord(hostMesh.id, HOST_ID, 'first_dispatch');
+        const dispatch = vi.fn(async () => { throw new Error('offline'); });
+        await ensureHostGrantKeyKept(makeCtx(MEMBER_ID, dispatch), hostMesh.id, HOST_ID);
+        await ensureHostGrantKeyKept(makeCtx(MEMBER_ID, dispatch), hostMesh.id, HOST_ID);
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect(resolveTrustedHostOriginGrantPublicKey({ meshId: hostMesh.id, hostDaemonId: HOST_ID })).toBe('');
+    });
+
+    it('the host answers only for a mesh it actually hosts', async () => {
+        const hostMesh = setupHost('unused');
+        useDir(hostDir);
+        const asHost: any = await meshHostPairingHandlers.get_mesh_host_grant_key(makeCtx(HOST_ID), { meshId: hostMesh.id });
+        expect(asHost).toMatchObject({ success: true, hostDaemonId: HOST_ID });
+        useDir(memberDir);
+        createMeshAsMember(hostMesh.id);
+        const notHost: any = await meshHostPairingHandlers.get_mesh_host_grant_key(makeCtx(MEMBER_ID), { meshId: hostMesh.id });
+        expect(notHost).toMatchObject({ success: false, code: 'mesh_host_key_not_host' });
+        expect(notHost.originGrantPublicKey).toBeUndefined();
     });
 });
 

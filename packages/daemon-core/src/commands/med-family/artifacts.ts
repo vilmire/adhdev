@@ -1144,7 +1144,8 @@ export const artifactSpecs = defineCommandSpecs(
     artifactHandlers,
     {
         artifact_index_forwarded: { sources: ['mesh'], meshSender: 'roster' },
-        artifact_fetch_origin: { sources: ['mesh'], meshSender: 'roster' },
+        // The handler authorizes: known peers, or a worker's host-signed grant from any machine.
+        artifact_fetch_origin: { sources: ['mesh'], meshSender: 'authenticated_peer' },
     },
     {
         sources: ['ipc', 'standalone', 'p2p'],

@@ -569,13 +569,6 @@
             "peerDisconnected": "Disconnected",
             "peerLastConnected": "Last connected {{time}}",
             "peerFailure": "Failure code: {{code}}",
-            "tabPin": "Pin key",
-            "pinIntro": "Remote artifacts are refused when a machine already attached to the project lacks the host's artifact signing key. Enter the code created on the Host tab to pin the key on that machine.",
-            "pinMachine": "Machine",
-            "pinSelect": "Choose a machine",
-            "pinNoMachines": "No machines besides the host are attached. Attach a machine to the project first.",
-            "pinAction": "Pin key",
-            "pinning": "Pinning…",
             "pinned": "Key pinned: {{machine}}"
         },
         "hint": {

@@ -569,13 +569,6 @@
             "peerDisconnected": "끊김",
             "peerLastConnected": "마지막 연결 {{time}}",
             "peerFailure": "실패 코드: {{code}}",
-            "tabPin": "키 등록",
-            "pinIntro": "프로젝트에 이미 연결된 머신이 호스트의 아티팩트 서명 키를 갖지 못하면 원격 아티팩트가 거부됩니다. 호스트 탭에서 만든 코드를 입력해 그 머신에 키를 등록하세요.",
-            "pinMachine": "머신",
-            "pinSelect": "머신 선택",
-            "pinNoMachines": "호스트 외에 연결된 머신이 없습니다. 먼저 프로젝트에 머신을 연결하세요.",
-            "pinAction": "키 등록",
-            "pinning": "등록 중…",
             "pinned": "키 등록 완료: {{machine}}"
         },
         "hint": {
