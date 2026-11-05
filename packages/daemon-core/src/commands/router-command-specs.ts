@@ -21,6 +21,7 @@ import { quotaReserveSpecs } from './low-family/quota-reserve-commands.js';
 import { meshLedgerSpecs } from './low-family/mesh-ledger.js';
 import { turnLedgerIpcSpecs } from './low-family/turn-ledger-ipc.js';
 import { meshNodeLogsSpecs } from './low-family/mesh-node-logs.js';
+import { meshOwnershipAttestSpecs } from './low-family/mesh-ownership-attest.js';
 import { workerReportSpecs } from './low-family/worker-report.js';
 import { workerBridgeSpecs } from './low-family/worker-bridge.js';
 import { cooperativeMaintenanceSpecs } from './low-family/cooperative-maintenance.js';
@@ -81,6 +82,7 @@ export function buildDaemonCommandSpecs(): CommandSpec[] {
         ...meshLedgerSpecs,
         ...turnLedgerIpcSpecs,
         ...meshNodeLogsSpecs,
+        ...meshOwnershipAttestSpecs,
         ...workerReportSpecs,
         ...workerBridgeSpecs,
         ...cooperativeMaintenanceSpecs,

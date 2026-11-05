@@ -126,6 +126,12 @@ export function ownershipUnprovenResolution(message: string): string {
     if (/source_phase_path_forbidden|ownership_symlink_escape/.test(message)) {
         return `${message} - the declared path cannot be owned from a source checkout; narrow owned_paths or run it as an integration task.`;
     }
+    if (/remote_attestation_pending/.test(message)) {
+        return 'Waiting for the machine that holds this checkout to attest it; the task is claimed on the next attempt. Nothing to do.';
+    }
+    if (/remote_attestation_/.test(message)) {
+        return `${message} - the machine that holds this checkout could not attest it (offline, older daemon, or not a git worktree root there). It is asked again automatically; update that machine if it keeps failing.`;
+    }
     return `${message} - the host could not attest the node checkout this task would write in; check the node workspace is a git worktree root on this machine.`;
 }
 

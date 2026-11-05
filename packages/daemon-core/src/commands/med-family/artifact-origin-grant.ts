@@ -1208,7 +1208,6 @@ export function authorizeWorkerOriginFetch(params: {
     }
     if (!sessionIdsEquivalent(record.sessionId, workerOwner.sessionId)) {
         const queuePayload = (queueEntry.payload ?? {}) as Record<string, unknown>;
-        const workerMissionId = trimStr(queueEntry.missionId) || trimStr(queuePayload.missionId) || '';
         const rawInputIds = Array.isArray(queueEntry.inputArtifactIds)
             ? queueEntry.inputArtifactIds
             : Array.isArray(queuePayload.inputArtifactIds)
@@ -1217,23 +1216,11 @@ export function authorizeWorkerOriginFetch(params: {
         const allowedSet = new Set(
             rawInputIds.map((id: unknown) => trimStr(id)).filter((id: string) => id.length > 0),
         );
-        let recMissionId = trimStr(record.missionId);
-        if (!recMissionId && record.taskId) {
-            try {
-                const pe = meshStore.findQueueEntryById(
-                    record.meshId || meshIdToVerify,
-                    record.taskId,
-                ) as Record<string, unknown> | null;
-                recMissionId =
-                    trimStr(pe?.missionId) ||
-                    trimStr((pe?.payload as Record<string, unknown> | undefined)?.missionId);
-            } catch {
-                recMissionId = '';
-            }
-        }
-        const sameMission = Boolean(workerMissionId && recMissionId && workerMissionId === recMissionId);
-        const sameMesh = !record.meshId || record.meshId === meshIdToVerify;
-        if (!sameMission || !sameMesh || !allowedSet.has(record.artifactId)) {
+        // OD-4 (artifact-sharing.ts isSameBoundMesh): the coordinator naming the artifact
+        // in this task's inputArtifactIds IS the grant; no mission match. The record must
+        // be positively bound to this mesh — an unbound record is never reachable here.
+        const sameBoundMesh = trimStr(record.meshId).length > 0 && trimStr(record.meshId) === meshIdToVerify;
+        if (!sameBoundMesh || !allowedSet.has(record.artifactId)) {
             return {
                 success: false,
                 code: 'artifact_access_denied',

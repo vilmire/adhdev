@@ -5,6 +5,7 @@ import { getMesh } from '../../config/mesh-config.js';
 import { decodeQueueReviseRequest, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { getMachineId } from '../../config/config.js';
 import { attestLocalOwnership } from '../../mesh/mesh-physical-ownership.js';
+import { fetchRemoteOwnership } from '../../mesh/mesh-remote-ownership.js';
 import { attestActiveTaskOwnership } from '../../mesh/mesh-active-ownership.js';
 import { normalizeOwnedPaths } from '@adhdev/mesh-shared';
 import { revisePendingTask } from '../../mesh/mesh-task-revision.js';
@@ -529,6 +530,16 @@ const directDispatchRecord: LowFamilyHandler = async (ctx: LowFamilyContext, arg
                             repoIdentity, machineId, nodeId, workspace, phase: 'source', paths: declared.declaration,
                         }),
                     };
+                } else if (self && repoIdentity && workspace && node?.daemonId && !daemonIdsEquivalent(node.daemonId, self)
+                    && declared.declaration.paths.length > 0 && ctx.deps.dispatchMeshCommand) {
+                    // REMOTE-OWNERSHIP: the machine that holds the checkout attests it.
+                    const proof = await fetchRemoteOwnership(ctx.deps.dispatchMeshCommand, {
+                        meshId: req.meshId, nodeId, daemonId: node.daemonId, workspace, repoIdentity, phase: 'source',
+                        paths: declared.declaration,
+                        ...(typeof task.assignedSessionId === 'string' && task.assignedSessionId ? { sessionId: task.assignedSessionId } : {}),
+                    });
+                    if ('scope' in proof) attested = { phase: 'source', ownershipScope: proof.scope };
+                    else LOG.warn('MeshStoreIpc', `direct_dispatch_record: remote ownership attest for ${req.taskId} failed: ${proof.error}`);
                 }
             } catch (e: any) {
                 LOG.warn('MeshStoreIpc', `direct_dispatch_record: ownership attest for ${req.taskId} failed: ${e?.message ?? String(e)}`);

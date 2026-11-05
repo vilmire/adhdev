@@ -1,5 +1,10 @@
-/** Host-local attestation only. Missing physical proof never establishes writer isolation. */
+/**
+ * Physical ownership attestation. Each machine attests only its own disk; a scope from
+ * another machine is that machine's answer (see isForeignPhysicalScope). Missing
+ * physical proof never establishes writer isolation.
+ */
 import { execFileSync } from 'node:child_process';
+import { getMachineId } from '../config/config.js';
 import { lstatSync, realpathSync, statSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 import { findOwnershipConflicts, type OwnedPathsDeclaration, type PhysicalOwnershipScope, type MeshTaskPhase } from '@adhdev/mesh-shared';
@@ -139,8 +144,18 @@ export function attestLocalOwnership(input: {
 }
 
 /** Re-attest on admission: changing a symlink/worktree after revision never weakens H1. */
+/**
+ * A scope attested by another machine. This machine cannot see that disk, so it cannot
+ * re-check the scope; the attesting machine answered for its own checkout and is the
+ * only one that can. Unknown local identity is never "foreign" (fails closed).
+ */
+export function isForeignPhysicalScope(scope: Pick<PhysicalOwnershipScope, 'machineId'> | undefined, localMachineId: string | undefined = getMachineId()): boolean {
+    return !!scope && !!localMachineId && typeof scope.machineId === 'string' && !!scope.machineId && scope.machineId !== localMachineId;
+}
+
 export function currentPhysicalScope(scope: PhysicalOwnershipScope | undefined, paths: OwnedPathsDeclaration): PhysicalOwnershipScope | undefined {
     if (!scope || scope.version !== 1 || JSON.stringify(paths.paths) !== JSON.stringify(scope.declaration)) return undefined;
+    if (isForeignPhysicalScope(scope)) return scope;
     try {
         const current = attestLocalOwnership({ ...scope, workspace: scope.worktree, paths });
         return current.worktreeIdentity === scope.worktreeIdentity && current.gitDir === scope.gitDir && current.commonGitDir === scope.commonGitDir ? current : undefined;

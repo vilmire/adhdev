@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+// Local attestations carry this machine's id; a different id is another machine's scope.
+vi.mock('../../src/config/config.js', async importOriginal => ({ ...await importOriginal<any>(), getMachineId: () => 'host-machine' }));
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, linkSync } from 'node:fs';
 import { tmpdir } from 'node:os';

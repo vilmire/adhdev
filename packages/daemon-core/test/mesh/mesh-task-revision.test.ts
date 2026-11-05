@@ -27,7 +27,7 @@ beforeEach(() => {
     writeFileSync(join(worktree, 'file.ts'), 'export {};');
 });
 afterEach(() => { __resetMeshRuntimeStoreForTests(); rmSync(state.dir, { recursive: true, force: true }); });
-const context = () => ({ actor: 'authenticated-host', repoIdentity: 'repo', machineId: 'machine', nodeId: 'node', workspace: worktree });
+const context = () => ({ actor: 'authenticated-host', repoIdentity: 'repo', machineId: 'revision-test', nodeId: 'node', workspace: worktree });
 function task(ownedPaths = ['file.ts']) { return enqueueTask(meshId, 'Original', { difficulty: 'medium', ownedPaths, targetNodeId: 'node', missionId: 'mission' }); }
 describe('pending task revision CAS', () => {
     it('preserves identity, mission, dependents and old contract; rejects stale replay atomically', () => {
@@ -99,7 +99,7 @@ describe('real queue claims across physical worktrees', () => {
             const entry = enqueueTask(meshId, `Source ${i}`, { difficulty: 'difficult', targetNodeId: nodeId, ownedPaths: ['file.ts'] });
             return revisePendingTask(meshId, entry.id, 0, { phase: 'source' }, { ...context(), nodeId, workspace });
         });
-        tasks.forEach((entry, i) => expect(store.claimNextQueueTask(meshId, `node-${i}`, `writer-${i}`, [], { ...claim, physicalContext: { workspace: sources[i], machineId: 'machine' } })?.id).toBe(entry.id));
+        tasks.forEach((entry, i) => expect(store.claimNextQueueTask(meshId, `node-${i}`, `writer-${i}`, [], { ...claim, physicalContext: { workspace: sources[i], machineId: 'revision-test' } })?.id).toBe(entry.id));
         expect(getQueueEntryById(meshId, tasks[1].id)?.logicalOverlapWarnings).toMatchObject([{ taskId: tasks[0].id, action: 'serialize_integration' }]);
         const dbPath = store.db.name;
         __resetMeshRuntimeStoreForTests();
@@ -180,7 +180,7 @@ describe('actual claim reviewer and affinity controls', () => {
         const original = task();
         revisePendingTask(meshId, original.id, 0, { phase: 'source' }, context());
         const store = MeshRuntimeStore.getInstance();
-        const proof = { workspace: worktree, machineId: 'machine' };
+        const proof = { workspace: worktree, machineId: 'revision-test' };
         const source = store.claimNextQueueTask(meshId, 'node', 'author', [], { ...claim, physicalContext: proof })!;
         source.status = 'completed'; store.updateQueueEntry(source);
         const reviewer = enqueueTask(meshId, 'Independent review', { difficulty: 'difficult', readonly: true });
@@ -196,7 +196,7 @@ describe('actual claim reviewer and affinity controls', () => {
         expect(() => revisePendingTask(meshId, writer.id, 0, { phase: 'source' }, context())).toThrow(/ownership_collision/);
         reviewerRow.status = 'completed'; store.updateQueueEntry(reviewerRow);
         revisePendingTask(meshId, writer.id, 0, { phase: 'source' }, context());
-        expect(store.claimNextQueueTask(meshId, 'node', 'moved-writer', [], { ...claim, physicalContext: { workspace: state.dir, machineId: 'machine' } })).toBeNull();
+        expect(store.claimNextQueueTask(meshId, 'node', 'moved-writer', [], { ...claim, physicalContext: { workspace: state.dir, machineId: 'revision-test' } })).toBeNull();
         expect(getQueueEntryById(meshId, writer.id)?.hold?.reason).toBe('physical_context_changed');
         expect(store.claimNextQueueTask(meshId, 'node', 'proper-writer', [], { ...claim, physicalContext: proof })?.id).toBe(writer.id);
     });
@@ -204,7 +204,7 @@ describe('actual claim reviewer and affinity controls', () => {
 
 describe('atomic ownership admission', () => {
     const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, stdio: 'pipe' }).toString().trim();
-    const proof = (workspace: string) => ({ workspace, machineId: 'machine', repoIdentity: 'repo' });
+    const proof = (workspace: string) => ({ workspace, machineId: 'revision-test', repoIdentity: 'repo' });
     function initRepo(dir: string, fileName: string) {
         mkdirSync(dir, { recursive: true });
         git(dir, 'init', '--initial-branch=main');

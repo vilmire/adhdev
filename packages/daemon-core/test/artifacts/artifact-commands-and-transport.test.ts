@@ -3267,6 +3267,29 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
                 expect(missionAFetchMissionB.chunks).toBeUndefined();
                 expect(missionAFetchMissionB.content).toBeUndefined();
 
+                // OD-4 on the origin path too: once the coordinator names the artifact in this
+                // task's inputArtifactIds it is granted, whatever mission it belongs to
+                // (live 2026-11-05: a remote-project worker was refused its listed input).
+                meshStore.db
+                    .prepare("UPDATE mesh_queue SET payload = json_set(payload, '$.inputArtifactIds', json(?)) WHERE mesh_id = ? AND id = ?")
+                    .run(JSON.stringify([missionBArt.artifactId]), 'mesh-r3-p2p', 'task-remote-a');
+                const listedOtherMission = await artifactHandlers.artifact_fetch_origin(hostCtx, {
+                    meshId: 'mesh-r3-p2p',
+                    artifactId: missionBArt.artifactId,
+                    requesterSessionId: 'sess-remote-a',
+                    requesterTaskId: 'task-remote-a',
+                    requesterAttemptId: 'att-remote-a',
+                    requesterRole: 'worker',
+                    mode: 'read',
+                    asChunks: true,
+                    [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_remote_r3',
+                });
+                expect(listedOtherMission.success, JSON.stringify(listedOtherMission)).toBe(true);
+                expect(Array.isArray(listedOtherMission.chunks)).toBe(true);
+                meshStore.db
+                    .prepare("UPDATE mesh_queue SET payload = json_set(payload, '$.inputArtifactIds', json(?)) WHERE mesh_id = ? AND id = ?")
+                    .run(JSON.stringify([]), 'mesh-r3-p2p', 'task-remote-a');
+
                 // Finding 5: resolveScopeOnly with unauthorized artifactId returns access denial with NO record fields at all
                 const scopeLeakProbe = await artifactHandlers.artifact_index_forwarded(
                     hostCtx,

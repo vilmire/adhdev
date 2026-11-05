@@ -163,7 +163,7 @@ describe('WTDISPATCH-SELFDIAL — local worktree node must not be dispatched as 
       const task = enqueueTask(meshId, 'MARKER-REMOTE', { targetNodeId: WT_NODE, taskMode: 'code_change',
     difficulty: 'medium',
 })
-      physicalWriterFixture(WS_WT, WT_NODE, LOCAL_MACHINE_ID).bind(task)
+      physicalWriterFixture(WS_WT, WT_NODE, 'mach_remote_attested_by_that_machine').bind(task)
 
       expect(tryAssignQueueTask(components, meshId, WT_NODE, 'sess-remote', 'claude-cli')).toBe(true)
 

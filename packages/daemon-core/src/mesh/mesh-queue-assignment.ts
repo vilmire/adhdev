@@ -12,6 +12,7 @@ import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { resolveTranscriptAuthorityProfile } from '../providers/transcript-evidence.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { findLightWorkspaceByPath } from './mesh-light-workspace-store.js';
+import { remoteOwnershipProofSync } from './mesh-remote-ownership.js';
 import { clearClaimDeferralForNode, noteClaimDeferredForNode, noteSessionClaimRefusal, type MeshClaimRefusal } from './mesh-claim-refusal.js';
 import { resolveProviderMaxParallel, resolveSlotMaxParallel, resolveCoordinatorIdlePushPolicy, resolveMeshPolicy } from '../repo-mesh-types.js';
 import { meshNodeIdMatches, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, type MeshNodeIdentified, readText } from '@adhdev/mesh-shared';
@@ -312,11 +313,31 @@ function buildClaimOptions(p: {
     const lightWorkspaceId = readText((p.claimState?.settings as Record<string, unknown> | undefined)?.lightWorkspaceId)
         || lightWorkspaceIdForPath(readText((components.cliManager?.adapters?.get(sessionId) as { workingDir?: string } | undefined)?.workingDir) || readText(p.claimState?.workspace))
         || undefined;
+    // REMOTE-OWNERSHIP: a node on another machine is attested by that machine; this
+    // host only holds its answer (mesh-remote-ownership.ts). Light workspaces are local.
+    const nodeDaemonId = readMeshNodeDaemonId(node ?? {});
+    const remoteOwnership = !lightWorkspaceId && nodeDaemonId && !isLocalAutoLaunchNode(node)
+        ? (candidate: MeshWorkQueueEntry) => remoteOwnershipProofSync(components.dispatchMeshCommand, {
+            meshId,
+            nodeId,
+            daemonId: nodeDaemonId,
+            workspace: readText(node?.workspace),
+            repoIdentity: readText(mesh?.repoIdentity),
+            phase: candidate.phase === 'integration' ? 'integration' : 'source',
+            paths: candidate.ownedPaths ?? { paths: [] },
+            sessionId,
+        }, () => noteClaimDeferredForNode(meshId, nodeId))
+        : undefined;
     return {
         capabilityTags: buildMeshNodeCapabilityTags(node, providerType),
         assignedTranscriptProfile,
         options: {
-            physicalContext: { workspace: (lightWorkspaceId && readText(p.claimState?.workspace)) || readText(node?.workspace), machineId: getMachineId() ?? '', repoIdentity: mesh.repoIdentity },
+            physicalContext: {
+                workspace: (lightWorkspaceId && readText(p.claimState?.workspace)) || readText(node?.workspace),
+                machineId: getMachineId() ?? '',
+                repoIdentity: mesh.repoIdentity,
+                ...(remoteOwnership ? { remoteOwnership } : {}),
+            },
             ...(lightWorkspaceId ? { lightWorkspaceId } : {}),
             providerType,
             ...(providerMaxParallel !== undefined ? { providerMaxParallel } : {}),

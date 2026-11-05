@@ -4986,3 +4986,58 @@ test('mesh_queue_requeue omits preferredNodeId when the task has no target node'
     try { unlinkSync(queuePath); } catch { /* best-effort */ }
   }
 });
+
+test('mesh_send_task admits a remote write once the remote machine attests its checkout', async () => {
+  // REMOTE-OWNERSHIP: the host cannot attest a member's path on its own disk, so the
+  // write is admitted with the scope the member returned through the daemon.
+  const meshId = `mesh-remote-attested-write-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const relayCalls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
+  const attestCalls: Array<Record<string, unknown>> = [];
+  const ctx = {
+    localDaemonId: 'daemon-coordinator',
+    mesh: {
+      id: meshId, name: 'Remote Attested Write Mesh', repoIdentity: 'example/repo', policy: {}, coordinator: {},
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      nodes: [{ id: 'node-remote-worker', workspace: '/repo-remote', repoRoot: '/repo-remote', daemonId: 'daemon-remote', userOverrides: {}, policy: { providerPriority: ['hermes-cli'] } }],
+    },
+    transport,
+  };
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
+    if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
+    if (command === 'mesh_attest_remote_ownership') {
+      attestCalls.push(__ipcArgs ?? {});
+      return { success: true, scope: {
+        version: 1, repoIdentity: 'example/repo', machineId: 'remote-machine', nodeId: 'node-remote-worker', worktree: '/repo-remote',
+        worktreeIdentity: '1:2', gitDir: '/repo-remote/.git', commonGitDir: '/repo-remote/.git', phase: 'source',
+        gitResources: { index: '/repo-remote/.git/index', refs: '/repo-remote/.git/refs', hooks: '/repo-remote/.git/hooks', config: '/repo-remote/.git/config' },
+        resources: [], declaration: [{ path: 'file.ts', subtree: false }],
+      } };
+    }
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (daemonId, command, args = {}) => {
+    relayCalls.push({ daemonId, command, args });
+    if (command === 'get_status_metadata') {
+      return { success: true, result: { success: true, status: { sessions: [{ id: 'session-remote-writer', providerType: 'hermes-cli', status: 'idle', settings: { meshNodeFor: meshId } }] } } };
+    }
+    if (command === 'agent_command') return { success: true };
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+  holdMemberStatusOnCoordinator(ctx.transport, ctx.mesh, (ctx as any).localDaemonId);
+
+  const send = JSON.parse(await meshSendTask(ctx as any, {
+    node_id: 'node-remote-worker', session_id: 'session-remote-writer',
+    message: 'write file.ts', task_mode: 'code_change', owned_paths: ['file.ts'], difficulty: 'medium',
+  }));
+  assert.equal(send.success, true, JSON.stringify(send));
+  assert.equal(attestCalls.length, 1);
+  assert.equal(attestCalls[0].nodeId, 'node-remote-worker');
+  assert.equal(attestCalls[0].sessionId, 'session-remote-writer');
+  assert.deepEqual(attestCalls[0].ownedPaths, [{ path: 'file.ts', subtree: false }]);
+  assert.ok(relayCalls.some(call => call.command === 'agent_command'), 'the attested remote write is delivered');
+});
