@@ -800,13 +800,22 @@ export function spawnDetachedDaemonUpgradeHelper(payload: DaemonUpgradeHelperPay
   const root=payload.configDir||getConfigDir();
   const operationId=process.platform==='win32'?undefined:beginLifecycleSource('helper',{targetVersion:payload.targetVersion,packageName:payload.packageName,parentPid:payload.parentPid},root);
   const env = buildUpgradeHelperChildEnv({...payload,...(operationId?{maintenanceOperationId:operationId}:{})});
-  const child = spawn(process.execPath, process.argv.slice(1), {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
-    cwd: payload.cwd || process.cwd(),
-    env,
-  });
+  // The helper's own crash output goes to daemon-service.log like the daemon's: with
+  // `stdio: 'ignore'` a helper that died outside its handlers left no trace at all
+  // (Windows, 2026-11-05: log ended at "Waiting for parent pid", daemon stayed down).
+  const { fd: outFd, close: closeOutFd } = openCaptureLogFd();
+  let child: ChildProcess;
+  try {
+    child = spawn(process.execPath, process.argv.slice(1), {
+      detached: true,
+      stdio: ['ignore', outFd, outFd],
+      windowsHide: true,
+      cwd: payload.cwd || process.cwd(),
+      env,
+    });
+  } finally {
+    closeOutFd();
+  }
   if(operationId){
     advanceLifecycleSource(operationId,'scheduled',{childPid:child.pid},root);
     child.once('error',()=>{try{advanceLifecycleSource(operationId,'failed',{},root);}catch{/* intent remains unknown */}});
@@ -835,7 +844,64 @@ export function buildUpgradeHelperChildEnv(
   };
 }
 
+/**
+ * The daemon exits as soon as it has scheduled this helper, and nothing else will
+ * start it again. Until a step that owns its own restart/rollback takes over
+ * (`handedOff`), any failure must bring the previous daemon back: its install is
+ * still untouched. (Windows, 2026-11-05: the helper died after "Waiting for parent
+ * pid" and the machine stayed offline until someone started the daemon by hand.)
+ */
+interface UpgradeHelperStage { handedOff: boolean }
+
 async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Promise<void> {
+  const stage: UpgradeHelperStage = { handedOff: false };
+  try {
+    await runDaemonUpgradeHelperSteps(payload, stage);
+  } catch (error: any) {
+    // A proven worker-bridge state (journal/policy present) owns the daemon's
+    // lifecycle; only an unreadable one says nothing about who owns it.
+    const provenBridgeOwner = error?.code === 'strict_bridge_lifecycle_authority_unavailable'
+      && error?.reason !== 'bridge_state_unreadable';
+    if (!stage.handedOff && !provenBridgeOwner) {
+      // Never start a second daemon beside one that is still exiting.
+      if (Number.isFinite(payload.parentPid) && payload.parentPid > 0) {
+        try { await waitForPidExit(payload.parentPid, 15000); } catch { /* best effort */ }
+      }
+      const reason = error?.reason ? `${error?.message}: ${error.reason}` : (error?.message || String(error));
+      appendUpgradeLog(`Upgrade stopped before ${payload.packageName}@${payload.targetVersion} was installed (${reason}); restarting the previous daemon`);
+      await relaunchPreviousDaemon(payload);
+    }
+    throw error;
+  }
+}
+
+/** How long the relaunch keeps retrying while the bridge state stays unreadable. */
+export const RELAUNCH_UNREADABLE_RETRY = { attempts: 15, delayMs: 2_000 };
+
+/**
+ * Start the previous daemon again. Every spawn passes the worker-bridge guard; an
+ * unreadable bridge state is usually the exiting daemon still holding its store
+ * (Windows file locks), so retry while it stays unreadable, and stop at any other
+ * answer.
+ */
+async function relaunchPreviousDaemon(payload: DaemonUpgradeHelperPayload): Promise<void> {
+  const argv = Array.isArray(payload.restartArgv) ? payload.restartArgv : [];
+  for (let attempt = 1; ; attempt++) {
+    try {
+      spawnDetachedDaemonRestart(argv, payload.cwd);
+      return;
+    } catch (error: any) {
+      const unreadable = error?.code === 'strict_bridge_lifecycle_authority_unavailable' && error?.reason === 'bridge_state_unreadable';
+      if (!unreadable || attempt >= RELAUNCH_UNREADABLE_RETRY.attempts) {
+        appendUpgradeLog(`Restarting the previous daemon failed after ${attempt} attempt(s): ${error?.reason ? `${error.message}: ${error.reason}` : (error?.message || String(error))}`);
+        return;
+      }
+      await new Promise(resolve => setTimeout(resolve, RELAUNCH_UNREADABLE_RETRY.delayMs));
+    }
+  }
+}
+
+async function runDaemonUpgradeHelperSteps(payload: DaemonUpgradeHelperPayload, stage: UpgradeHelperStage): Promise<void> {
   assertWorkerBridgeLifecycleAdmission('helper_execute', payload.configDir);
   const restartArgv = Array.isArray(payload.restartArgv) ? payload.restartArgv : [];
   // Falls back to THIS build's namespace, not a hardcoded 'adhdev'. This value
@@ -899,6 +965,7 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
   // is gone — re-spawn the daemon as-is. No npm install, no prefix rotation, so
   // there is no Windows lock hazard and downtime is just the re-spawn.
   if (payload.skipInstall) {
+    stage.handedOff = true;
     appendUpgradeLog('Restart-only mode — package install skipped, re-spawning daemon');
     spawnDetachedDaemonRestart(restartArgv, payload.cwd);
     clearUpgradeFailureNotice();
@@ -945,6 +1012,8 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
     }
 
     let atomicResult: Awaited<ReturnType<typeof performWindowsAtomicUpgrade>>;
+    // From here performWindowsAtomicUpgrade owns the restart and the rollback.
+    stage.handedOff = true;
     try {
       atomicResult = await performWindowsAtomicUpgrade({
         layout: windowsInstallerLayout,
@@ -996,11 +1065,15 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
   // then a backup + rollback + daemon-restart protected in-place install. The
   // win32 fallback below (lock-retry loop + conpty gate) is unchanged.
   if (process.platform !== 'win32') {
+    stage.handedOff = true;
     await runPosixInPlaceUpgrade({ payload, installCommand, restartArgv });
     return;
   }
 
   const spec = `${payload.packageName}@${payload.targetVersion || 'latest'}`;
+  // The in-place install overwrites the files the old daemon runs from; its own
+  // branches below decide whether a restart is safe.
+  stage.handedOff = true;
   appendUpgradeLog(`Installing ${spec}`);
   // Windows can still race a lingering conpty.node mapping even after the
   // session-host exits, so retry the install on transient lock errors there.
@@ -1187,7 +1260,10 @@ export async function maybeRunDaemonUpgradeHelperFromEnv(): Promise<boolean> {
     process.exit(0);
   } catch (error: any) {
     if(metadataOperation)try{advanceLifecycleSource(metadataOperation,'failed',{},metadataRoot);}catch{/* preserve unresolved intent */}
-    if(error?.code==='strict_bridge_lifecycle_authority_unavailable')throw error;
+    if(error?.code==='strict_bridge_lifecycle_authority_unavailable'){
+      appendUpgradeLog(`Upgrade helper refused by the worker-bridge lifecycle guard (${error?.reason || 'no reason'})`);
+      throw error;
+    }
     const detail = error?.stack || error?.message || String(error);
     appendUpgradeLog(`Upgrade helper failed: ${detail}`);
     // A path that already wrote a specific notice (the POSIX boot health gate's

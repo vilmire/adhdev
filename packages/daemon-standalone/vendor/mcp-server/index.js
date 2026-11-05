@@ -185258,13 +185258,19 @@ ${marker2}`,
       const root = payload.configDir || getConfigDir2();
       const operationId = process.platform === "win32" ? void 0 : beginLifecycleSource("helper", { targetVersion: payload.targetVersion, packageName: payload.packageName, parentPid: payload.parentPid }, root);
       const env2 = buildUpgradeHelperChildEnv({ ...payload, ...operationId ? { maintenanceOperationId: operationId } : {} });
-      const child = spawn8(process.execPath, process.argv.slice(1), {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
-        cwd: payload.cwd || process.cwd(),
-        env: env2
-      });
+      const { fd: outFd, close: closeOutFd } = openCaptureLogFd();
+      let child;
+      try {
+        child = spawn8(process.execPath, process.argv.slice(1), {
+          detached: true,
+          stdio: ["ignore", outFd, outFd],
+          windowsHide: true,
+          cwd: payload.cwd || process.cwd(),
+          env: env2
+        });
+      } finally {
+        closeOutFd();
+      }
       if (operationId) {
         advanceLifecycleSource(operationId, "scheduled", { childPid: child.pid }, root);
         child.once("error", () => {
@@ -185285,6 +185291,43 @@ ${marker2}`,
       };
     }
     async function runDaemonUpgradeHelper(payload) {
+      const stage = { handedOff: false };
+      try {
+        await runDaemonUpgradeHelperSteps(payload, stage);
+      } catch (error) {
+        const provenBridgeOwner = error?.code === "strict_bridge_lifecycle_authority_unavailable" && error?.reason !== "bridge_state_unreadable";
+        if (!stage.handedOff && !provenBridgeOwner) {
+          if (Number.isFinite(payload.parentPid) && payload.parentPid > 0) {
+            try {
+              await waitForPidExit(payload.parentPid, 15e3);
+            } catch {
+            }
+          }
+          const reason = error?.reason ? `${error?.message}: ${error.reason}` : error?.message || String(error);
+          appendUpgradeLog(`Upgrade stopped before ${payload.packageName}@${payload.targetVersion} was installed (${reason}); restarting the previous daemon`);
+          await relaunchPreviousDaemon(payload);
+        }
+        throw error;
+      }
+    }
+    var RELAUNCH_UNREADABLE_RETRY = { attempts: 15, delayMs: 2e3 };
+    async function relaunchPreviousDaemon(payload) {
+      const argv = Array.isArray(payload.restartArgv) ? payload.restartArgv : [];
+      for (let attempt = 1; ; attempt++) {
+        try {
+          spawnDetachedDaemonRestart(argv, payload.cwd);
+          return;
+        } catch (error) {
+          const unreadable = error?.code === "strict_bridge_lifecycle_authority_unavailable" && error?.reason === "bridge_state_unreadable";
+          if (!unreadable || attempt >= RELAUNCH_UNREADABLE_RETRY.attempts) {
+            appendUpgradeLog(`Restarting the previous daemon failed after ${attempt} attempt(s): ${error?.reason ? `${error.message}: ${error.reason}` : error?.message || String(error)}`);
+            return;
+          }
+          await new Promise((resolve76) => setTimeout(resolve76, RELAUNCH_UNREADABLE_RETRY.delayMs));
+        }
+      }
+    }
+    async function runDaemonUpgradeHelperSteps(payload, stage) {
       assertWorkerBridgeLifecycleAdmission("helper_execute", payload.configDir);
       const restartArgv = Array.isArray(payload.restartArgv) ? payload.restartArgv : [];
       const sessionHostAppName = payload.sessionHostAppName || resolveSessionHostAppName();
@@ -185319,6 +185362,7 @@ ${marker2}`,
       }
       removeDaemonPidFile();
       if (payload.skipInstall) {
+        stage.handedOff = true;
         appendUpgradeLog("Restart-only mode \u2014 package install skipped, re-spawning daemon");
         spawnDetachedDaemonRestart(restartArgv, payload.cwd);
         clearUpgradeFailureNotice();
@@ -185354,6 +185398,7 @@ ${marker2}`,
           );
         }
         let atomicResult;
+        stage.handedOff = true;
         try {
           atomicResult = await performWindowsAtomicUpgrade({
             layout: windowsInstallerLayout,
@@ -185392,10 +185437,12 @@ ${marker2}`,
       await stopForeignNativeAddonHolders(installCommand.surface.packageRoot, { parentPid: payload.parentPid });
       cleanupStaleGlobalInstallDirs(payload.packageName, installCommand.surface);
       if (process.platform !== "win32") {
+        stage.handedOff = true;
         await runPosixInPlaceUpgrade({ payload, installCommand, restartArgv });
         return;
       }
       const spec = `${payload.packageName}@${payload.targetVersion || "latest"}`;
+      stage.handedOff = true;
       appendUpgradeLog(`Installing ${spec}`);
       const maxInstallAttempts = process.platform === "win32" ? 3 : 1;
       let installOutput = "";
@@ -185533,7 +185580,10 @@ ${marker2}`,
           advanceLifecycleSource(metadataOperation, "failed", {}, metadataRoot);
         } catch {
         }
-        if (error?.code === "strict_bridge_lifecycle_authority_unavailable") throw error;
+        if (error?.code === "strict_bridge_lifecycle_authority_unavailable") {
+          appendUpgradeLog(`Upgrade helper refused by the worker-bridge lifecycle guard (${error?.reason || "no reason"})`);
+          throw error;
+        }
         const detail = error?.stack || error?.message || String(error);
         appendUpgradeLog(`Upgrade helper failed: ${detail}`);
         if (!(error instanceof UpgradeNoticeEmittedError)) {

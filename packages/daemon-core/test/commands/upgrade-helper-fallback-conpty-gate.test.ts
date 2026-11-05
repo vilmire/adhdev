@@ -30,7 +30,7 @@ const mocks = vi.hoisted(() => ({
 }))
 vi.mock('child_process', () => mocks)
 
-import { maybeRunDaemonUpgradeHelperFromEnv } from '../../src/commands/upgrade-helper'
+import { maybeRunDaemonUpgradeHelperFromEnv, RELAUNCH_UNREADABLE_RETRY } from '../../src/commands/upgrade-helper'
 
 const UPGRADE_HELPER_ENV = 'ADHDEV_DAEMON_UPGRADE_HELPER'
 
@@ -267,5 +267,64 @@ describe('fallback in-place upgrade — conpty verification gate', () => {
       expect(env.npm_config_build_from_source).toBe('false')
       expect(env['npm_config_build-from-source']).toBe('false')
     }
+  })
+})
+
+describe('a helper that fails before the new version takes over', () => {
+  // A Windows machine, 2026-11-05: the log ended at "Waiting for parent pid", the old daemon
+  // was gone, and nothing started it again. The state changes once the parent
+  // exits, so it is injected at the parent-exit probe.
+  function setup(onParentExit: (configDir: string) => void) {
+    const homeDir = makeTempHome()
+    const configDir = path.join(homeDir, '.adhdev')
+    fs.mkdirSync(configDir, { recursive: true })
+    process.env.HOME = homeDir
+    process.env.USERPROFILE = homeDir
+    const surface = stageInstallSurface(homeDir, { withConpty: true })
+    mocks.execFileSync.mockImplementation(() => '')
+    killSpy.mockImplementation((pid: number, signal?: string | number) => {
+      if (signal === 0) {
+        if (pid === 777) onParentExit(configDir)
+        throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' })
+      }
+      return true
+    })
+    return { configDir, surface }
+  }
+
+  it('brings the previous daemon back once the bridge state is readable again, and says why', async () => {
+    RELAUNCH_UNREADABLE_RETRY.delayMs = 20
+    const { configDir, surface } = setup(dir => {
+      // Unreadable while the old daemon exits (a held store), readable again shortly after.
+      fs.mkdirSync(path.join(dir, 'mesh-ledger'), { recursive: true })
+      const db = path.join(dir, 'mesh-ledger', 'mesh-runtime.db')
+      fs.writeFileSync(db, 'not a sqlite database', 'utf8')
+      setTimeout(() => fs.rmSync(path.join(dir, 'mesh-ledger'), { recursive: true, force: true }), 50)
+    })
+
+    await expect(runHelper({
+      packageName: 'adhdev', targetVersion: '9.9.9', parentPid: 777, restartArgv: [surface.cliPath, 'daemon'],
+    }, configDir)).rejects.toMatchObject({ code: 'strict_bridge_lifecycle_authority_unavailable', reason: 'bridge_state_unreadable' })
+
+    const log = fs.readFileSync(path.join(configDir, 'daemon-upgrade.log'), 'utf8')
+    expect(log).toMatch(/Waiting for parent pid 777/)
+    expect(log).toMatch(/restarting the previous daemon/)
+    expect(log).toMatch(/Restarting daemon with args/)
+    expect(log).toMatch(/refused by the worker-bridge lifecycle guard \(bridge_state_unreadable\)/)
+    expect(mocks.spawn.mock.calls.length).toBeGreaterThan(0)
+    expect(mocks.execFileSync.mock.calls.some(([, args]) => (args as string[]).includes('install'))).toBe(false)
+  })
+
+  it('leaves the daemon to a worker bridge that owns its lifecycle', async () => {
+    const { configDir, surface } = setup(dir => fs.writeFileSync(path.join(dir, 'worker-bridge-supervisor.json'), '{}', 'utf8'))
+
+    await expect(runHelper({
+      packageName: 'adhdev', targetVersion: '9.9.9', parentPid: 777, restartArgv: [surface.cliPath, 'daemon'],
+    }, configDir)).rejects.toMatchObject({ reason: 'bridge_journal_present' })
+
+    const log = fs.readFileSync(path.join(configDir, 'daemon-upgrade.log'), 'utf8')
+    expect(log).toMatch(/refused by the worker-bridge lifecycle guard \(bridge_journal_present\)/)
+    expect(log).not.toMatch(/Restarting daemon with args/)
+    expect(mocks.spawn.mock.calls.length).toBe(0)
   })
 })
