@@ -91,7 +91,7 @@ describe('bootDaemonRuntime', () => {
     try {
       const noop = () => {}
       setNewWorkHold({ ttlMs: 3000 })
-      const components: any = { providerLoader: { getAvailableProviderInfos: () => [] },
+      const components: any = { router: { deps: {}, execute: async () => ({}) }, providerLoader: { getAvailableProviderInfos: () => [] },
         cliManager: { adapters: new Map([['working', { getStatus: () => ({ status: 'working' }) }]]) } }
       dispose = await startLoops({ cfg: { restoreHostedSessions: true }, components,
         cliManager: { hostedRestoreState: 'pending', restoreHostedSessions: () => new Promise(() => {}) },
@@ -124,7 +124,7 @@ describe('bootDaemonRuntime', () => {
       .mockImplementationOnce(() => new Promise((_, reject) => { rejectFirst = reject }))
       .mockImplementationOnce(() => new Promise(resolve => { finishSecond = resolve }))
     const noop = () => {}
-    const components: any = { providerLoader: { getAvailableProviderInfos: () => [] } }
+    const components: any = { router: { deps: {}, execute: async () => ({}) }, providerLoader: { getAvailableProviderInfos: () => [] } }
     const stage: any = { cfg: { restoreHostedSessions: true }, components,
       cliManager: { hostedRestoreState: 'pending', restoreHostedSessions: restore },
       cdpInitializer: { startPeriodicScan: noop, startDiscovery: noop, stop: noop },
