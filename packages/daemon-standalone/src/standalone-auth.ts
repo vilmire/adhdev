@@ -454,4 +454,6 @@ export const UNAUTHENTICATED_ARTIFACT_READ_VERBS: ReadonlySet<string> = new Set(
  */
 export const UNAUTHENTICATED_OWNER_APPROVAL_VERBS: ReadonlySet<string> = new Set([
   'assistant_staged_resolve', 'driver_set_enabled',
+  // Driver permission checkboxes (computer-use): same owner grant, same Origin requirement.
+  'driver_grants_get', 'driver_grants_set',
 ]);

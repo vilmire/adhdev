@@ -4423,6 +4423,41 @@
                 "needs_reapproval": "Something changed. Approve again to continue."
             }
         },
+        "driverPermissions": {
+            "sectionTitle": "Driver permissions",
+            "sectionDescription": "Choose what drivers installed on a machine may do without asking each time. Everything is off by default.",
+            "machine": "Machine",
+            "chooseMachine": "Choose a machine to see its driver permissions.",
+            "noMachines": "No machines are connected.",
+            "offline": "This machine is offline. Permissions can be changed once it is back online.",
+            "loading": "Loading permissions...",
+            "loadFailed": "Could not load the permissions from this machine.",
+            "retry": "Retry",
+            "needsUpdate": "This machine needs an update before it can manage driver permissions.",
+            "saveFailed": "Could not save the permission. The previous setting was restored.",
+            "empty": "No driver on this machine asks for permissions yet. The computer-use driver is not installed on this machine yet.",
+            "needsApproval": "This driver is waiting for your approval. Open the Inbox to activate it.",
+            "platformUnsupported": "This driver is not supported on this machine's operating system, so its permissions cannot be changed.",
+            "osHint": "Before it works: on macOS, grant Screen Recording and Accessibility in System Settings to the program that runs the daemon. On Windows, the daemon has to run in the signed-in desktop session. On Linux, only X11 is supported (Wayland is not yet) and xdotool plus maim or scrot must be installed.",
+            "warning": {
+                "control": "Keyboard and mouse control is effectively full control of the machine: it can open a terminal and type into it, so turning off shell commands does not stop it.",
+                "approval": "It can also click an approval button if the dashboard is open on the same screen. Using a separate OS account or a dedicated machine is recommended."
+            },
+            "grants": {
+                "screen": {
+                    "title": "Screen capture",
+                    "description": "Take screenshots of this machine's screen. Screenshots can contain passwords and personal information and are saved in the workspace."
+                },
+                "input": {
+                    "title": "Keyboard and mouse",
+                    "description": "Move the mouse, click and type on this machine's screen."
+                },
+                "shell": {
+                    "title": "Shell commands",
+                    "description": "Run commands as the user who runs the daemon, outside the worker's private home folder."
+                }
+            }
+        },
         "remoteProjectAttach": {
             "sectionTitle": "Remote project attach",
             "sectionDescription": "Owner-only switch per machine for cross-machine project attachment (allowRemoteProjectAttach). Default off.",

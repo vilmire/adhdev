@@ -16,6 +16,7 @@ import {
     Input,
     AppearanceSettingsSection,
     RemoteProjectAttachSection,
+    DriverPermissionsSection,
     useBaseDaemons,
     useTransport,
     IconSettings,
@@ -453,6 +454,14 @@ export default function StandaloneSettings() {
                 description={t('settings.remoteProjectAttach.sectionDescription')}
             >
                 <RemoteProjectAttachSection />
+            </Section>
+
+            {/* ═══ Driver permissions (this machine, owner-only) ═══ */}
+            <Section
+                title={t('settings.driverPermissions.sectionTitle')}
+                description={t('settings.driverPermissions.sectionDescription')}
+            >
+                <DriverPermissionsSection />
             </Section>
         </AppPage>
     )

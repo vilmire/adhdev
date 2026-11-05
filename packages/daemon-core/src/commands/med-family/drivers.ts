@@ -5,6 +5,8 @@ import type { CommandRouterDeps } from '../router.js';
 import { getAssistantServices } from '../../assistant/assistant-services.js';
 import { resolveWorkerIdentity } from '../../mesh/worker-report.js';
 import { depositWorkerMailboxMessage } from '../../mesh/worker-mailbox.js';
+import { dirname } from 'node:path';
+import { DriverGrantStore } from '../../drivers/grant-store.js';
 import { DriverService } from '../../drivers/driver-service.js';
 import { DriverActionStaging } from '../../drivers/staged-action.js';
 import { readInstalledDriver } from '../../drivers/installed-driver.js';
@@ -19,7 +21,7 @@ export function getDriverService(ctx: DriverContext): DriverService {
     if (!assistant.driverActivations || !assistant.driverStaging) throw new Error('Driver activation services unavailable');
     const service = new DriverService({ registry: ctx.deps.providerLoader,
         activations: assistant.driverActivations, activationStaging: assistant.driverStaging,
-        actions: new DriverActionStaging(), bus: ctx.deps.bus, artifacts: createDriverArtifactPort(ctx),
+        actions: new DriverActionStaging(), grants: new DriverGrantStore({ configDir: dirname(dirname(assistant.driverActivations.path)) }), bus: ctx.deps.bus, artifacts: createDriverArtifactPort(ctx),
         readCurrent: type => {
             const current = readInstalledDriver(ctx.deps.providerLoader, type);
             const cwd = ctx.deps.providerLoader.findProviderDir(type);
@@ -54,7 +56,16 @@ export const driverHandlers: Record<string, MedFamilyHandler> = {
         if (typeof args?.enabled !== 'boolean' || typeof args?.type !== 'string') return { success: false, code: 'invalid_arguments' };
         return getDriverService(ctx).setEnabled(args.type, args.enabled);
     },
+    // Owner-only permission checkboxes. Read has no side effects; write may activate or stage the driver.
+    driver_grants_get: async ctx => getDriverService(ctx).getGrants(),
+    driver_grants_set: async (ctx, args) => {
+        if (typeof args?.type !== 'string') return { success: false, code: 'invalid_arguments' };
+        return getDriverService(ctx).setGrants(args.type, args.grants);
+    },
 };
 export const driverSpecs = defineCommandSpecs('med', driverHandlers, {
     driver_set_enabled: { sources: ['p2p', 'ws', 'standalone'] },
+    // No 'ws': a compromised server must not be able to turn on desktop control.
+    driver_grants_get: { sources: ['p2p', 'standalone'] },
+    driver_grants_set: { sources: ['p2p', 'standalone'] },
 }, { sources: ['ipc', 'standalone'] });

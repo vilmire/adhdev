@@ -4426,6 +4426,41 @@
                 "needs_reapproval": "Algo cambió. Aprueba de nuevo para continuar."
             }
         },
+        "driverPermissions": {
+            "sectionTitle": "Permisos de los controladores",
+            "sectionDescription": "Elige lo que pueden hacer los controladores instalados en una máquina sin preguntar cada vez. Todo está desactivado por defecto.",
+            "machine": "Máquina",
+            "chooseMachine": "Elige una máquina para ver los permisos de sus controladores.",
+            "noMachines": "No hay máquinas conectadas.",
+            "offline": "Esta máquina está sin conexión. Podrás cambiar los permisos cuando vuelva a conectarse.",
+            "loading": "Cargando permisos...",
+            "loadFailed": "No se pudieron cargar los permisos de esta máquina.",
+            "retry": "Reintentar",
+            "needsUpdate": "Esta máquina necesita una actualización para gestionar los permisos de los controladores.",
+            "saveFailed": "No se pudo guardar el permiso. Se restauró el ajuste anterior.",
+            "empty": "Ningún controlador de esta máquina pide permisos todavía. El controlador de uso del ordenador aún no está instalado en esta máquina.",
+            "needsApproval": "Este controlador espera tu aprobación. Aprúebalo en la Bandeja para activarlo.",
+            "platformUnsupported": "Este controlador no es compatible con el sistema operativo de esta máquina, así que no se pueden cambiar sus permisos.",
+            "osHint": "Antes de usarlo: en macOS, concede Grabación de pantalla y Accesibilidad en Ajustes del Sistema al programa que ejecuta el demonio. En Windows, el demonio debe ejecutarse en la sesión de escritorio con la sesión iniciada. En Linux solo se admite X11 (Wayland aún no) y deben estar instalados xdotool y maim o scrot.",
+            "warning": {
+                "control": "El control del teclado y el ratón equivale en la práctica a controlar toda la máquina: puede abrir un terminal y escribir en él, así que desactivar los comandos de shell no lo impide.",
+                "approval": "También puede pulsar un botón de aprobación si el panel está abierto en la misma pantalla. Se recomienda usar una cuenta de sistema aparte o una máquina dedicada."
+            },
+            "grants": {
+                "screen": {
+                    "title": "Captura de pantalla",
+                    "description": "Captura la pantalla de esta máquina. Las capturas pueden contener contraseñas e información personal y se guardan en el espacio de trabajo."
+                },
+                "input": {
+                    "title": "Teclado y ratón",
+                    "description": "Mueve el ratón, hace clic y escribe en la pantalla de esta máquina."
+                },
+                "shell": {
+                    "title": "Comandos de shell",
+                    "description": "Ejecuta comandos como el usuario que ejecuta el demonio, fuera de la carpeta personal privada del worker."
+                }
+            }
+        },
         "remoteProjectAttach": {
             "sectionTitle": "Conexión remota de proyectos",
             "sectionDescription": "Interruptor exclusivo del propietario por máquina para conectar proyectos entre máquinas (allowRemoteProjectAttach). Desactivado por defecto.",

@@ -319,6 +319,8 @@ export type {
 } from './components/settings/RemoteProjectAttachSection'
 export { ProjectTransferSection } from './components/settings/ProjectTransferSection'
 export type { ProjectTransferSectionProps, ProjectTransferMachine } from './components/settings/ProjectTransferSection'
+export { DriverPermissionsSection } from './components/settings/DriverPermissionsSection'
+export type { DriverPermissionsSectionProps, DriverPermissionsMachine, DriverGrantsDriverView, DriverGrantView } from './components/settings/DriverPermissionsSection'
 
 // ── Icons ──
 export {

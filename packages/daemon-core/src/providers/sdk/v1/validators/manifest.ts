@@ -97,7 +97,22 @@ export function validateCliProviderManifest(manifest: unknown): ManifestValidati
 // G1a intentionally supports only mcp-stdio; command arrives in G1b.
 export function validateDriverProviderManifest(manifest: unknown): ManifestValidationResult {
     _driverValidator ??= getAjv().compile(driverProviderSchema as unknown as object);
-    return runValidator(_driverValidator, manifest);
+    const result = runValidator(_driverValidator, manifest);
+    if (!result.ok) return result;
+    // The schema cannot express "actions[].grant must name a declared grants[].id".
+    const doc = manifest as { grants?: Array<{ id: string }>; actions: Array<{ grant?: string }> };
+    const issues: ManifestValidationIssue[] = [];
+    const declared = new Set<string>();
+    (doc.grants ?? []).forEach((grant, i) => {
+        if (declared.has(grant.id)) issues.push({ path: `/grants/${i}/id`, keyword: 'uniqueGrantId', message: `duplicate grant id "${grant.id}"` });
+        declared.add(grant.id);
+    });
+    doc.actions.forEach((action, i) => {
+        if (action.grant !== undefined && !declared.has(action.grant)) {
+            issues.push({ path: `/actions/${i}/grant`, keyword: 'undeclaredGrant', message: `grant "${action.grant}" is not declared in grants[]`, allowed: [...declared] });
+        }
+    });
+    return issues.length ? { ok: false, issues } : result;
 }
 
 function runValidator(validator: ValidateFunction, manifest: unknown): ManifestValidationResult {

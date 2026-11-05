@@ -88,6 +88,9 @@ describe('screenshot -> shareable artifact', () => {
         expect(JSON.stringify(res)).not.toContain(PNG.toString('base64'));
         const id = res.artifacts[0].artifactId;
         expect(res.output.content[1]).toMatchObject({ type: 'image', artifactId: id, mime: 'image/png', sizeBytes: PNG.length });
+        // Workspace-relative path the worker can open with its own file reader (daemon-generated).
+        expect(res.artifacts[0].relPath).toMatch(/^\.adhdev\/driver-results\/[0-9a-f-]+\/image-1\.png$/);
+        expect(res.output.content[1].relPath).toBe(res.artifacts[0].relPath);
 
         // Daemon-owned identity and location; checkout untouched.
         const record = store.getById(id)!;
@@ -174,6 +177,7 @@ describe('owner-resolved staged actions', () => {
         expect(JSON.stringify(resolved)).not.toContain(PNG.toString('base64'));
         const mail = JSON.stringify(drainWorkerMailboxForTask(MESH, 'task-1'));
         expect(mail).toContain(id);
+        expect(mail).toContain(resolved.artifacts[0].relPath);
         expect(git('status', '--porcelain', '-uall')).toBe('');
     });
     it('when the requester workspace is no longer known, the result returns inline with a note and no base64', async () => {

@@ -241,6 +241,12 @@
           "type": "integer",
           "minimum": 1,
           "description": "Idle timeout in milliseconds before stopping the managed MCP server."
+        },
+        "requestTimeoutMs": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 600000,
+          "description": "Per tool-call timeout in milliseconds. Overrides the daemon default (30s) for slow drivers."
         }
       }
     },
@@ -279,6 +285,16 @@
             "type": "string",
             "minLength": 1,
             "description": "Relative path to the JSON Schema validating action arguments."
+          },
+          "grant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Id of a declared grants[] entry the owner must have enabled before this action runs. Cross-checked by the validator."
+          },
+          "lease": {
+            "type": "boolean",
+            "default": true,
+            "description": "When false the action neither takes nor checks the resources lease."
           }
         }
       }
@@ -304,6 +320,35 @@
               "session"
             ],
             "description": "Lease mode for the resource."
+          }
+        }
+      }
+    },
+    "grants": {
+      "type": "array",
+      "maxItems": 8,
+      "description": "Owner-controlled permissions (checkboxes). Default off; actions reference them via actions[].grant.",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "title"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Grant identifier."
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Short label shown next to the checkbox."
+          },
+          "description": {
+            "type": "string",
+            "description": "What enabling this grant allows."
           }
         }
       }

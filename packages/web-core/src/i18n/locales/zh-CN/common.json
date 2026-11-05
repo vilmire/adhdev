@@ -4423,6 +4423,41 @@
                 "needs_reapproval": "内容有变化，请重新批准以继续。"
             }
         },
+        "driverPermissions": {
+            "sectionTitle": "驱动权限",
+            "sectionDescription": "选择机器上已安装的驱动无需每次询问就能做的事。默认全部关闭。",
+            "machine": "机器",
+            "chooseMachine": "选择一台机器,查看它的驱动权限。",
+            "noMachines": "没有已连接的机器。",
+            "offline": "这台机器已离线。重新连接后才能修改权限。",
+            "loading": "正在加载权限...",
+            "loadFailed": "无法从这台机器加载权限。",
+            "retry": "重试",
+            "needsUpdate": "这台机器需要先更新,才能管理驱动权限。",
+            "saveFailed": "无法保存权限,已恢复为之前的设置。",
+            "empty": "这台机器上还没有需要权限的驱动。电脑操控驱动尚未安装在这台机器上。",
+            "needsApproval": "该驱动正在等待你的批准。请在收件箱中批准后才能使用。",
+            "platformUnsupported": "这台机器的操作系统不支持该驱动,因此无法修改其权限。",
+            "osHint": "使用前的准备:macOS 需要在系统设置中,为运行守护进程的程序授予“屏幕录制”和“辅助功能”权限。Windows 需要守护进程运行在已登录的桌面会话中。Linux 仅支持 X11(暂不支持 Wayland),并需要安装 xdotool 以及 maim 或 scrot。",
+            "warning": {
+                "control": "键盘和鼠标控制实际上等同于完全控制这台机器:它可以打开终端并输入命令,所以关闭 Shell 命令也无法阻止。",
+                "approval": "如果仪表盘就开在同一屏幕上,它还可能点击审批按钮。建议使用单独的系统账户或专用机器。"
+            },
+            "grants": {
+                "screen": {
+                    "title": "屏幕截图",
+                    "description": "截取这台机器的屏幕。截图可能包含密码和个人信息,并会保存在工作区中。"
+                },
+                "input": {
+                    "title": "键盘和鼠标",
+                    "description": "在这台机器的屏幕上移动鼠标、点击和输入文字。"
+                },
+                "shell": {
+                    "title": "Shell 命令",
+                    "description": "以运行守护进程的用户身份执行命令,不受工作进程私有主目录的限制。"
+                }
+            }
+        },
         "remoteProjectAttach": {
             "sectionTitle": "远程项目挂载",
             "sectionDescription": "按机器控制的仅限所有者开关，用于跨机器挂载项目（allowRemoteProjectAttach）。默认关闭。",

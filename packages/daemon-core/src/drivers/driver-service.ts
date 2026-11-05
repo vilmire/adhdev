@@ -12,6 +12,7 @@ import { DriverActionStaging, type DriverWorkerIdentity, type DriverOwnerSource 
 import { deriveDriverRiskClass } from './risk-class.js';
 import { readDriverInputSchema, validateDriverArgs } from './input-schema.js';
 import { captureDriverArtifacts, type DriverArtifactPort } from './driver-artifacts.js';
+import type { DriverGrantStore } from './grant-store.js';
 import { LOG } from '../logging/logger.js';
 
 export type DriverInstanceState = 'discovered' | 'validated' | 'installed' | 'approved' | 'ready' | 'running' | 'stopped' | 'failed' | 'removed';
@@ -23,7 +24,7 @@ export interface DriverInvocationRecord {
     caller: ({ kind: 'worker' } & DriverWorkerIdentity) | { kind: 'owner'; source: DriverOwnerSource; stagedRequestId: string; resolvedAt: number };
     resourceKeys: string[]; startedAt: number; completedAt?: number;
     status: 'running' | 'completed' | 'failed'; output?: unknown; error?: string;
-    artifacts?: Array<{ type: string; artifactId: string; digest: string }>; artifactError?: { code: string; message: string };
+    artifacts?: Array<{ type: string; artifactId: string; digest: string; relPath: string }>; artifactError?: { code: string; message: string };
 }
 export interface DriverServicePorts {
     registry: Pick<ProviderRegistry, 'getByCategory'>;
@@ -38,6 +39,13 @@ export interface DriverServicePorts {
     createProcess?: (installed: Installed) => ManagedClient;
     /** Registers driver files (screenshots, large results) as session artifacts. Absent = inline only. */
     artifacts?: DriverArtifactPort;
+    /** Owner permission checkboxes. Absent = every action that declares a `grant` is refused. */
+    grants?: Pick<DriverGrantStore, 'isGranted' | 'snapshot' | 'set'>;
+}
+export interface DriverGrantsEntry {
+    type: string; name: string; providerVersion: string;
+    activation: 'ready' | 'needs_approval' | 'disabled'; stagedId?: string; platformSupported: boolean;
+    grants: Array<{ id: string; title: string; description: string; granted: boolean }>;
 }
 const refused = (code: string): DriverReply => ({ success: false, code });
 const LEASE_MS = 30 * 60_000;
@@ -135,6 +143,60 @@ export class DriverService {
         this.ports.activations.setDisabled(installed.module, installed.treeDigest, !enabled);
         return this.describe(type);
     }
+    private grantsEntry(installed: Installed): DriverGrantsEntry | null {
+        const { module, treeDigest } = installed;
+        if (!module.grants?.length) return null;
+        // Read-only: never calls activationStaging.prepare (that may auto-activate or write a proposal).
+        let activation: DriverGrantsEntry['activation'];
+        try {
+            activation = this.ports.activations.isDisabled(module.type) ? 'disabled'
+                : this.ports.activations.isReady(module.type, treeDigest) ? 'ready' : 'needs_approval';
+        } catch { activation = 'disabled'; }
+        let stagedId: string | undefined;
+        if (activation === 'needs_approval') {
+            try { stagedId = this.ports.activationStaging.list().find(r => r.type === module.type && r.treeDigest === treeDigest)?.id; }
+            catch { /* no staged id */ }
+        }
+        const state = this.ports.grants?.snapshot(module.type, module.grants.map(g => g.id)) ?? {};
+        return { type: module.type, name: module.name, providerVersion: module.providerVersion, activation,
+            ...(stagedId ? { stagedId } : {}),
+            platformSupported: !module.runtime.platforms || (module.runtime.platforms as readonly string[]).includes(process.platform),
+            grants: module.grants.map(g => ({ id: g.id, title: g.title, description: g.description ?? '', granted: state[g.id] === true })) };
+    }
+    /** Drivers that declare `grants[]`, with their current checkbox state. No side effects. */
+    getGrants(): DriverReply {
+        const drivers: DriverGrantsEntry[] = [];
+        for (const m of this.ports.registry.getByCategory('driver')) {
+            const installed = this.read(m.type);
+            const entry = installed ? this.grantsEntry(installed) : null;
+            if (entry) drivers.push(entry);
+        }
+        return { success: true, drivers };
+    }
+    /** Owner-only (the command layer restricts sources). Unknown ids are rejected before anything is written. */
+    setGrants(type: string, changes: unknown): DriverReply {
+        const installed = this.read(type);
+        if (!installed) return refused('driver_not_installed');
+        const declared = new Set((installed.module.grants ?? []).map(g => g.id));
+        if (!declared.size || !this.ports.grants || !changes || typeof changes !== 'object' || Array.isArray(changes)) return refused('invalid_arguments');
+        const entries = Object.entries(changes as Record<string, unknown>);
+        if (!entries.length || entries.some(([id, v]) => !declared.has(id) || typeof v !== 'boolean')) return refused('invalid_arguments');
+        try { this.ports.grants.set(type, Object.fromEntries(entries) as Record<string, boolean>); }
+        catch { return refused('grants_unavailable'); }
+        const { module, treeDigest } = installed;
+        if (entries.some(([, v]) => v === true) && !this.ports.activations.isReady(type, treeDigest)) {
+            try {
+                if (module._sourceTrust === 'trusted') this.ports.activations.setDisabled(module, treeDigest, false);
+                else {
+                    // Same as setEnabled: an explicit owner action lifts an owner disable, but external code still needs the Inbox.
+                    if (this.ports.activations.isDisabled(type)) this.ports.activations.clearDisabled(type);
+                    this.ports.activationStaging.write(module, treeDigest);
+                }
+            } catch { return refused('activation_unavailable'); }
+        }
+        const entry = this.grantsEntry(installed);
+        return { success: true, ...(entry ?? {}) };
+    }
     async invoke(identity: DriverWorkerIdentity | null, input: { type: string; action: string; args?: unknown; resourceKey?: string; target?: unknown }): Promise<DriverReply> {
         // 1. Only the command boundary can supply a cryptographically resolved identity.
         if (!identity?.sessionId || !identity.meshId || !identity.taskId) return refused('worker_credential_required');
@@ -158,6 +220,11 @@ export class DriverService {
         const policy = await this.ports.policy(identity.meshId).catch(() => undefined);
         const action = installed.module.actions.find(a => a.id === input.action);
         if (!action || !actionAllowedByPolicy(policy, input.type, input.action)) return refused('driver_not_allowed_for_mesh');
+        // 3b. Owner permission checkbox. Read from disk on every call; absent port = refuse.
+        const grantRequired = (): DriverReply | null => action.grant && !this.ports.grants?.isGranted(input.type, action.grant)
+            ? { ...refused('driver_grant_required'), grant: action.grant } : null;
+        const denied = grantRequired();
+        if (denied) return denied;
         // 4. A worker can propose destructive execution, but cannot execute it.
         if (action.risk === 'destructive' && !approval) {
             const staged = this.ports.actions.write({ type: input.type, action: input.action,
@@ -168,7 +235,9 @@ export class DriverService {
         // 5. Reserve the selected declared resource, or all resources when no key was selected.
         const resources = installed.module.resources ?? [];
         if (input.resourceKey !== undefined && !resources.some(r => r.key === input.resourceKey)) return refused('invalid_arguments');
-        const resourceKeys = resources.filter(r => input.resourceKey === undefined || r.key === input.resourceKey).map(r => r.key);
+        // `lease: false` actions neither take nor check the lease (e.g. a shell does not occupy the desktop).
+        const resourceKeys = action.lease === false ? []
+            : resources.filter(r => input.resourceKey === undefined || r.key === input.resourceKey).map(r => r.key);
         const keys = resourceKeys.map(key => JSON.stringify([input.type, key]));
         for (const key of keys) {
             const lease = this.leases.get(key);
@@ -196,6 +265,9 @@ export class DriverService {
         if (this.read(input.type)?.treeDigest !== installed.treeDigest || !this.ports.activations.isReady(input.type, installed.treeDigest)) {
             releaseNew(); return refused('driver_not_approved');
         }
+        // An uncheck during schema I/O or the policy lookup must refuse this very call.
+        const deniedLate = grantRequired();
+        if (deniedLate) { releaseNew(); return deniedLate; }
         if (keys.some(key => this.leases.get(key)?.sessionId !== identity.sessionId)) { releaseNew(); return refused('lease_held'); }
         if (approval && this.now() >= approval.expiresAt) { releaseNew(); return refused('expired'); }
         if (this.closed) { releaseNew(); return refused('driver_stopped'); }
@@ -212,7 +284,8 @@ export class DriverService {
                 : { kind: 'worker', ...identity } };
         this.records.push(record); if (this.records.length > 100) this.records.shift();
         try {
-            instance.process ??= this.ports.createProcess?.(installed) ?? new ManagedMcpProcess(installed.module.runtime, { cwd: this.runtimeDirFor(installed), packageDir: installed.cwd });
+            instance.process ??= this.ports.createProcess?.(installed) ?? new ManagedMcpProcess(installed.module.runtime, { cwd: this.runtimeDirFor(installed), packageDir: installed.cwd,
+                ...(installed.module.runtime.requestTimeoutMs !== undefined ? { requestTimeoutMs: installed.module.runtime.requestTimeoutMs } : {}) });
             await instance.process.start(); instance.state = 'running';
             const output = await instance.process.callTool(action.tool, (input.args ?? {}) as Record<string, unknown>);
             record.status = output.isError ? 'failed' : 'completed';

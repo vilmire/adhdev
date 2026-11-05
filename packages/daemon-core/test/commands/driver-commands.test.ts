@@ -72,6 +72,44 @@ describe('driver command boundaries', () => {
         expect(isWorkerMcpDaemonVerb('driver_set_enabled')).toBe(false);
     });
 });
+describe('driver permission checkboxes (grants)', () => {
+    beforeEach(() => {
+        manifest.grants = [{ id: 'input', title: 'Input', description: 'Click' }];
+        manifest.actions = [{ id: 'echo', tool: 'echo', risk: 'read', grant: 'input' }]; save();
+    });
+    it.each(['driver_grants_get', 'driver_grants_set'])('%s is owner-only: ws and ipc are rejected, p2p and standalone accepted', async verb => {
+        for (const source of ['ws', 'ipc', 'ext', 'api', 'mesh', 'internal'])
+            expect(await run(verb, { type: 'browser', grants: { input: true } }, source), source).toMatchObject({ code: 'COMMAND_SOURCE_REJECTED' });
+        for (const source of ['p2p', 'standalone'])
+            expect(await run(verb, { type: 'browser', grants: { input: false } }, source), source).toMatchObject({ success: true });
+        expect(isWorkerMcpDaemonVerb(verb)).toBe(false);
+    });
+    it('get has no staging side effect and reports needs_approval for an unactivated digest', async () => {
+        const prepare = vi.spyOn(svc.driverStaging!, 'prepare'); const write = vi.spyOn(svc.driverStaging!, 'write');
+        const res: any = await run('driver_grants_get', {}, 'p2p');
+        expect(res.drivers).toEqual([expect.objectContaining({ type: 'browser', activation: 'needs_approval', platformSupported: true,
+            grants: [{ id: 'input', title: 'Input', description: 'Click', granted: false }] })]);
+        expect(res.drivers[0].stagedId).toBeUndefined();
+        expect(prepare).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+        expect(svc.driverActivations!.isReady('browser', computeDriverTreeDigest(packageDir))).toBe(false);
+    });
+    it('set rejects an undeclared id, then a trusted driver is activated and the worker call goes through', async () => {
+        expect(await run('driver_grants_set', { type: 'browser', grants: { nope: true } }, 'p2p')).toMatchObject({ code: 'invalid_arguments' });
+        expect(await run('driver_grants_set', { type: 'browser' }, 'p2p')).toMatchObject({ code: 'invalid_arguments' });
+        expect(await run('driver_invoke', { token, type: 'browser', action: 'echo', args: { text: 'x' } })).toMatchObject({ code: 'driver_grant_required', grant: 'input' });
+        expect(await run('driver_grants_set', { type: 'browser', grants: { input: true } }, 'standalone'))
+            .toMatchObject({ success: true, activation: 'ready', grants: [{ id: 'input', granted: true }] });
+        expect(await run('driver_invoke', { token, type: 'browser', action: 'echo', args: { text: 'x' } })).toMatchObject({ success: true });
+        expect(await run('driver_grants_set', { type: 'browser', grants: { input: false } }, 'p2p')).toMatchObject({ success: true });
+        expect(await run('driver_invoke', { token, type: 'browser', action: 'echo', args: { text: 'x' } })).toMatchObject({ code: 'driver_grant_required' });
+    });
+    it('an untrusted driver gets a staged proposal id from set', async () => {
+        manifest._sourceTrust = 'community';
+        const res: any = await run('driver_grants_set', { type: 'browser', grants: { input: true } }, 'p2p');
+        expect(res).toMatchObject({ success: true, activation: 'needs_approval', stagedId: expect.stringMatching(/^driver-activation-/) });
+        expect(svc.driverActivations!.isReady('browser', computeDriverTreeDigest(packageDir))).toBe(false);
+    });
+});
 describe('real Worker → service → official SDK → stdio', () => {
     it('returns the tool result for an approved low-risk driver and a minted worker credential', async () => {
         expect(await run('driver_invoke', { token, type: 'browser', action: 'echo', args: { text: 'wire-result' } }))

@@ -182,7 +182,7 @@ describe('no-auth standalone — artifact read verbs', () => {
     const { http } = await startServer();
     const mk = (headers: Record<string, string> = {}): any => ({ headers: { host: '127.0.0.1:3847', ...headers }, socket: { remoteAddress: '127.0.0.1' }, url: '/ws' });
     const dash = { origin: 'http://127.0.0.1:3847' };
-    for (const verb of ['assistant_staged_resolve', 'driver_set_enabled']) {
+    for (const verb of ['assistant_staged_resolve', 'driver_set_enabled', 'driver_grants_get', 'driver_grants_set']) {
       const guard = http.captureUnauthenticatedArtifactReadGuard(mk(dash), verb);
       expect(guard && guard(), verb).toBe(true);
       // a bare local HTTP call (no browser Origin) cannot approve

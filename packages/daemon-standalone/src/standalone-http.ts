@@ -315,7 +315,7 @@ export class StandaloneHttpApi {
    * unverified `ipc` source — and `artifact_fetch` / `artifact_list` refuse that
    * ("downgraded unverified owner ingress"), which broke the viewer's "View
    * full". Owner decision: the same grant covers `assistant_staged_resolve` and
-   * `driver_set_enabled` (UNAUTHENTICATED_OWNER_APPROVAL_VERBS, standalone-auth.ts);
+   * `driver_set_enabled` / `driver_grants_get` / `driver_grants_set` (UNAUTHENTICATED_OWNER_APPROVAL_VERBS, standalone-auth.ts);
    * trade-off: a local process could approve over HTTP on a no-auth daemon, and
    * configuring a password restores the strict boundary. Never `artifact_register`,
    * never when any auth is configured, never when an MCP-scope credential header

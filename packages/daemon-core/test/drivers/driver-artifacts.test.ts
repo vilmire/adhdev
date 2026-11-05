@@ -45,10 +45,10 @@ afterEach(() => rmSync(ws, { recursive: true, force: true }));
 describe('image blocks', () => {
     it('registers a png as an artifact, replaces base64, keeps the checkout clean', async () => {
         const r = await capture([{ type: 'text', text: 'ok' }, image(PNG, 'image/png')]);
-        expect(r.artifacts).toEqual([{ type: 'image', artifactId: 'art_1', digest: `sha256:${'ab'.repeat(32)}` }]);
+        expect(r.artifacts).toEqual([{ type: 'image', artifactId: 'art_1', digest: `sha256:${'ab'.repeat(32)}`, relPath: '.adhdev/driver-results/inv-1/image-1.png' }]);
         expect(r.artifactError).toBeUndefined();
         expect(JSON.stringify(r.output)).not.toContain(PNG.toString('base64'));
-        expect((r.output as any).content[1]).toEqual({ type: 'image', artifactId: 'art_1', mime: 'image/png', sizeBytes: PNG.length, sha256: 'ab'.repeat(32) });
+        expect((r.output as any).content[1]).toEqual({ type: 'image', artifactId: 'art_1', relPath: '.adhdev/driver-results/inv-1/image-1.png', mime: 'image/png', sizeBytes: PNG.length, sha256: 'ab'.repeat(32) });
         expect(registered).toEqual([{ relPath: '.adhdev/driver-results/inv-1/image-1.png', kind: 'image', mime: 'image/png', title: 'browser.screenshot' }]);
         expect(readFileSync(join(ws, registered[0]!.relPath)).equals(PNG)).toBe(true);
         expect(git('status', '--porcelain')).toBe('');
@@ -114,8 +114,8 @@ describe('oversized text', () => {
     it('stores the full text as a text artifact and returns a preview plus id', async () => {
         const text = big(DRIVER_INLINE_CAP * 2);
         const r = await capture([{ type: 'text', text }]);
-        expect(r.artifacts).toEqual([{ type: 'text', artifactId: 'art_1', digest: expect.stringMatching(/^sha256:/) }]);
-        expect(r.output).toMatchObject({ truncated: true, artifactId: 'art_1' });
+        expect(r.artifacts).toEqual([{ type: 'text', artifactId: 'art_1', digest: expect.stringMatching(/^sha256:/), relPath: '.adhdev/driver-results/inv-1/result.txt' }]);
+        expect(r.output).toMatchObject({ truncated: true, artifactId: 'art_1', relPath: '.adhdev/driver-results/inv-1/result.txt' });
         expect((r.output as any).text.length).toBeLessThan(5000);
         expect(registered[0]).toMatchObject({ kind: 'text', mime: 'text/plain', relPath: '.adhdev/driver-results/inv-1/result.txt' });
         expect(readFileSync(join(ws, registered[0]!.relPath), 'utf8')).toBe(text);

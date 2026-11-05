@@ -16,6 +16,8 @@ export const KNOWN_PROVIDER_FIELDS = new Set<string>([
   // File-level editor hint carried by published manifests; the daemon ignores
   // it, but it must not trip the unknown-key warning (live: 9 warnings/boot).
   '$schema',
+  // Driver owner-permission checkboxes (computer-use driver).
+  'grants',
   'type',
   'name',
   'category',

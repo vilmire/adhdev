@@ -23,7 +23,8 @@ export const DRIVER_PREVIEW_CHARS = 4_000;
 /** One call can register at most this many artifacts; the rest are omitted with a code. */
 export const MAX_DRIVER_ARTIFACTS_PER_CALL = 8;
 
-export interface DriverArtifactRef { type: string; artifactId: string; digest: string }
+/** `relPath` is workspace-relative and daemon-generated, so a worker can open the file with its own file reader. */
+export interface DriverArtifactRef { type: string; artifactId: string; digest: string; relPath: string }
 export interface DriverArtifactError { code: string; message: string }
 export interface DriverArtifactRegistration { artifactId: string; sha256: string; sizeBytes: number }
 export interface DriverArtifactSink {
@@ -91,12 +92,13 @@ function prepareDir(workspaceRoot: string, invocationId: string): { abs: string;
 }
 
 async function writeAndRegister(sink: DriverArtifactSink, invocationId: string, file: string, bytes: Buffer,
-    spec: { kind: ArtifactKind; mime: string; title: string }): Promise<DriverArtifactRegistration> {
+    spec: { kind: ArtifactKind; mime: string; title: string }): Promise<DriverArtifactRegistration & { relPath: string }> {
     const dir = prepareDir(sink.workspaceRoot, invocationId);
     const abs = join(dir.abs, file);
     writeFileSync(abs, bytes, { flag: 'wx', mode: 0o600 });
     try {
-        return await sink.register({ relPath: `${dir.rel}/${file}`, ...spec });
+        const relPath = `${dir.rel}/${file}`;
+        return { ...await sink.register({ relPath, ...spec }), relPath };
     } catch (error) {
         try { unlinkSync(abs); } catch { /* best effort */ }
         throw error;
@@ -151,8 +153,8 @@ export async function captureDriverArtifacts(input: {
             if (!target) { omitted(artifactError ?? { code: 'artifact_unavailable', message: 'artifact registration unavailable' }); continue; }
             const registered = await writeAndRegister(target, invocationId, `image-${++seq}.${IMAGE_EXT[decoded.mime]}`, decoded.bytes,
                 { kind: 'image', mime: decoded.mime, title });
-            artifacts.push({ type: 'image', artifactId: registered.artifactId, digest: digestOf(registered.sha256) });
-            content.push({ type: 'image', artifactId: registered.artifactId, mime: decoded.mime, sizeBytes: registered.sizeBytes, sha256: registered.sha256 });
+            artifacts.push({ type: 'image', artifactId: registered.artifactId, digest: digestOf(registered.sha256), relPath: registered.relPath });
+            content.push({ type: 'image', artifactId: registered.artifactId, relPath: registered.relPath, mime: decoded.mime, sizeBytes: registered.sizeBytes, sha256: registered.sha256 });
         } catch (error) { omitted(errorOf(error)); }
     }
     let output: unknown = { ...result, content };
@@ -173,8 +175,8 @@ export async function captureDriverArtifacts(input: {
         const kind: ArtifactKind = textOnly ? 'text' : 'json';
         const registered = await writeAndRegister(target, invocationId, textOnly ? 'result.txt' : 'result.json', bytes,
             { kind, mime: textOnly ? 'text/plain' : 'application/json', title });
-        artifacts.push({ type: kind, artifactId: registered.artifactId, digest: digestOf(registered.sha256) });
-        output = stored({ artifactId: registered.artifactId, sizeBytes: registered.sizeBytes, sha256: registered.sha256 });
+        artifacts.push({ type: kind, artifactId: registered.artifactId, digest: digestOf(registered.sha256), relPath: registered.relPath });
+        output = stored({ artifactId: registered.artifactId, relPath: registered.relPath, sizeBytes: registered.sizeBytes, sha256: registered.sha256 });
     } catch (error) {
         const e = errorOf(error);
         note(e);
