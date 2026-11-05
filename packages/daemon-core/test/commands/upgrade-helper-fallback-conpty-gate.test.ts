@@ -187,6 +187,32 @@ describe('fallback in-place upgrade — conpty verification gate', () => {
     expect(log).not.toMatch(/Restarting daemon with args/)
   })
 
+  it('brings the daemon back when the npm install stalls', async () => {
+    const homeDir = makeTempHome()
+    const configDir = path.join(homeDir, '.adhdev')
+    fs.mkdirSync(configDir, { recursive: true })
+    process.env.HOME = homeDir
+    process.env.USERPROFILE = homeDir
+    const surface = stageInstallSurface(homeDir, { withConpty: true })
+    mocks.execFileSync.mockImplementation((_file: string, args: readonly string[]) => {
+      if (args.includes('install')) throw Object.assign(new Error('spawnSync npm ETIMEDOUT'), { code: 'ETIMEDOUT', status: null })
+      return ''
+    })
+
+    await runHelper({
+      packageName: 'adhdev',
+      targetVersion: '9.9.9',
+      parentPid: 0,
+      restartArgv: [surface.cliPath, 'daemon'],
+    }, configDir)
+
+    const install = mocks.execFileSync.mock.calls.find(([, args]) => (args as string[]).includes('install'))
+    expect(install?.[2]).toMatchObject({ timeout: 5 * 60_000, killSignal: 'SIGKILL' })
+    expect(mocks.spawn.mock.calls.length).toBeGreaterThan(0)
+    expect(exitCodes).toEqual([1])
+    expect(fs.readFileSync(path.join(configDir, 'daemon-upgrade.log'), 'utf8')).toMatch(/did not finish within 5 minutes/)
+  })
+
   it('restarts the daemon normally when the install kept conpty.node', async () => {
     const homeDir = makeTempHome()
     const configDir = path.join(homeDir, '.adhdev')

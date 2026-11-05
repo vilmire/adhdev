@@ -182967,10 +182967,10 @@ ${output}` : "";
     var fs82 = __toESM2(require("fs"));
     var os36 = __toESM2(require("os"));
     var path90 = __toESM2(require("path"));
-    var import_child_process10 = require("child_process");
-    var fs76 = __toESM2(require("fs"));
+    var import_child_process11 = require("child_process");
+    var fs78 = __toESM2(require("fs"));
     var http2 = __toESM2(require("http"));
-    var path84 = __toESM2(require("path"));
+    var path86 = __toESM2(require("path"));
     init_track_identity();
     var import_crypto31 = require("crypto");
     var path83 = __toESM2(require("path"));
@@ -183237,6 +183237,175 @@ ${output}` : "";
       }
       return { ...result, probeFailed: sweep.probeFailed, probeFailureReason: sweep.probeFailureReason };
     }
+    init_config();
+    var path85 = __toESM2(require("path"));
+    var fs77 = __toESM2(require("fs"));
+    init_config();
+    var path84 = __toESM2(require("path"));
+    var fs76 = __toESM2(require("fs"));
+    function resolveInstanceDir(configDir = getConfigDir2()) {
+      const base = path84.basename(configDir).trim();
+      return base || ".adhdev";
+    }
+    function getUpgradeLogPath(configDir = getConfigDir2()) {
+      fs76.mkdirSync(configDir, { recursive: true });
+      return path84.join(configDir, "daemon-upgrade.log");
+    }
+    function appendUpgradeLog(message, configDir = getConfigDir2()) {
+      const line = `[${(/* @__PURE__ */ new Date()).toISOString()}] ${message}
+`;
+      try {
+        fs76.appendFileSync(getUpgradeLogPath(configDir), line, "utf8");
+      } catch {
+      }
+    }
+    function isPidAlive2(pid) {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch (error) {
+        return error?.code === "EPERM";
+      }
+    }
+    var import_child_process10 = require("child_process");
+    var NPM_INSTALL_LIMITS = { timeout: 5 * 6e4, killSignal: "SIGKILL" };
+    function isSpawnTimeoutError(error) {
+      if (!error || typeof error !== "object") return false;
+      const candidate = error;
+      if (candidate.code === "ETIMEDOUT") return true;
+      return typeof candidate.signal === "string" && candidate.signal !== "" && candidate.status == null;
+    }
+    function classifySessionHostPid(pid) {
+      const commandLine = getProcessCommandLine(pid);
+      if (!commandLine) return "unknown";
+      return /session-host-daemon/i.test(commandLine) ? "managed" : "unrelated";
+    }
+    async function stopSessionHostProcesses(appName, configDir = getConfigDir2()) {
+      assertWorkerBridgeLifecycleAdmission("upgrade_process_stop", configDir);
+      const pidFile = path85.join(configDir, `${appName}-session-host.pid`);
+      const outcome = { pid: null, identity: null, stopped: false, survived: false };
+      let killedPid = null;
+      let keepPidFile = false;
+      try {
+        if (fs77.existsSync(pidFile)) {
+          const pid = Number.parseInt(fs77.readFileSync(pidFile, "utf8").trim(), 10);
+          if (Number.isFinite(pid) && pid !== process.pid) {
+            outcome.pid = pid;
+            const identity5 = classifySessionHostPid(pid);
+            outcome.identity = identity5;
+            if (identity5 === "unrelated") {
+              appendUpgradeLog(
+                `Session-host pidfile names pid ${pid}, which is positively identified as an unrelated process; treating the pidfile as stale and not killing it.`,
+                configDir
+              );
+            } else {
+              if (identity5 === "unknown") {
+                appendUpgradeLog(
+                  `Could not read the command line of session-host pid ${pid} (process-inspection unavailable). The pidfile is this daemon's own record, so the pid is treated as ours and stopped \u2014 a stale host surviving an upgrade breaks every create_session with a conpty.node load failure.`,
+                  configDir
+                );
+              }
+              assertWorkerBridgeLifecycleAdmission("upgrade_host_signal", configDir);
+              if (killProcess(pid)) killedPid = pid;
+            }
+          }
+        }
+      } catch {
+      }
+      if (killedPid !== null) {
+        outcome.stopped = await waitForPidExit(killedPid, 15e3);
+        if (!outcome.stopped) {
+          outcome.survived = true;
+          appendUpgradeLog(
+            `Session-host pid ${killedPid} did not exit within 15000ms of the stop request.`,
+            configDir
+          );
+        }
+      } else if (outcome.pid !== null && outcome.identity !== "unrelated") {
+        outcome.survived = isPidAlive2(outcome.pid);
+      }
+      assertWorkerBridgeLifecycleAdmission("upgrade_host_cleanup", configDir);
+      keepPidFile = outcome.survived;
+      if (!keepPidFile) {
+        try {
+          fs77.unlinkSync(pidFile);
+        } catch {
+        }
+      } else {
+        appendUpgradeLog(
+          `Keeping ${pidFile} so the remaining upgrade guards can still see the surviving host.`,
+          configDir
+        );
+      }
+      return outcome;
+    }
+    var LOCKED_NATIVE_ADDON_BASENAMES = ["conpty.node", "ghostty-vt.dll"];
+    function listForeignNativeAddonHolders(packageRoot) {
+      if (process.platform !== "win32" || !packageRoot) return [];
+      const rootLower = packageRoot.replace(/\//g, "\\").replace(/'/g, "''").toLowerCase();
+      const endsWithChecks = LOCKED_NATIVE_ADDON_BASENAMES.map((name) => `$lf.EndsWith('${name}')`).join(" -or ");
+      const script = [
+        `$root = '${rootLower}'`,
+        `Get-Process node -ErrorAction SilentlyContinue | ForEach-Object {`,
+        `  $p = $_`,
+        `  try {`,
+        `    foreach ($m in $p.Modules) {`,
+        `      $fn = $m.FileName`,
+        `      if ($fn) {`,
+        `        $lf = $fn.ToLower()`,
+        `        if ($lf.StartsWith($root) -and (${endsWithChecks})) { $p.Id; break }`,
+        `      }`,
+        `    }`,
+        `  } catch {}`,
+        `}`
+      ].join("\n");
+      let out = "";
+      try {
+        out = String((0, import_child_process10.execFileSync)("powershell.exe", [
+          "-NoProfile",
+          "-NonInteractive",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          script
+        ], { encoding: "utf8", timeout: 8e3, stdio: ["ignore", "pipe", "ignore"], windowsHide: true })).trim();
+      } catch {
+        return [];
+      }
+      const selfPid = process.pid;
+      const seen2 = /* @__PURE__ */ new Set();
+      const holders = [];
+      for (const line of out.split(/\r?\n/)) {
+        const pid = Number.parseInt(line.trim(), 10);
+        if (!Number.isFinite(pid) || pid <= 0 || pid === selfPid || seen2.has(pid)) continue;
+        seen2.add(pid);
+        holders.push({ pid, commandLine: getProcessCommandLine(pid) });
+      }
+      return holders;
+    }
+    async function stopForeignNativeAddonHolders(packageRoot, options = {}) {
+      assertWorkerBridgeLifecycleAdmission("upgrade_process_stop");
+      if (process.platform !== "win32" || !packageRoot) return [];
+      const parentPid = Number.isFinite(options.parentPid) ? Number(options.parentPid) : -1;
+      const holders = listForeignNativeAddonHolders(packageRoot);
+      const results = [];
+      for (const holder of holders) {
+        if (holder.pid === parentPid) continue;
+        appendUpgradeLog(
+          `Foreign native-addon holder found: pid ${holder.pid}${holder.commandLine ? ` \u2014 ${holder.commandLine}` : ""}`
+        );
+        assertWorkerBridgeLifecycleAdmission("upgrade_holder_signal");
+        const killed = killProcess(holder.pid);
+        if (killed) {
+          await waitForPidExit(holder.pid, 15e3);
+          appendUpgradeLog(`Terminated foreign native-addon holder pid ${holder.pid}`);
+        } else {
+          appendUpgradeLog(`Failed to terminate foreign native-addon holder pid ${holder.pid}`);
+        }
+        results.push({ ...holder, killed });
+      }
+      return results;
+    }
     var POINTER_NAME = ".adhdev-current";
     var STABLE_FILES = [POINTER_NAME, "adhdev.cmd", "adhdev.ps1", "adhdev"];
     var REAL_PLATFORM = process.platform;
@@ -183290,7 +183459,7 @@ ${output}` : "";
       "node_modules/@adhdev/daemon-standalone"
     ];
     function normalizeForCompare(value) {
-      return path84.resolve(value).replace(/[\\/]+$/, "").toLowerCase();
+      return path86.resolve(value).replace(/[\\/]+$/, "").toLowerCase();
     }
     var DEFAULT_INSTANCE_DIR = ".adhdev";
     function normalizeInstanceDir(instanceDir) {
@@ -183300,12 +183469,12 @@ ${output}` : "";
     function resolveWindowsInstallerLayout(options) {
       if ((options.platform || process.platform) !== "win32" || !options.installPrefix) return null;
       const instanceDir = normalizeInstanceDir(options.instanceDir);
-      const installRoot = path84.join(options.homeDir, instanceDir, "npm-installs");
-      const stablePrefix = path84.join(options.homeDir, instanceDir, "npm-global");
-      const pointerPath = path84.join(stablePrefix, POINTER_NAME);
-      const activeVersionName = path84.basename(options.installPrefix);
+      const installRoot = path86.join(options.homeDir, instanceDir, "npm-installs");
+      const stablePrefix = path86.join(options.homeDir, instanceDir, "npm-global");
+      const pointerPath = path86.join(stablePrefix, POINTER_NAME);
+      const activeVersionName = path86.basename(options.installPrefix);
       if (!activeVersionName.startsWith("version-")) return null;
-      if (normalizeForCompare(path84.dirname(options.installPrefix)) !== normalizeForCompare(installRoot)) return null;
+      if (normalizeForCompare(path86.dirname(options.installPrefix)) !== normalizeForCompare(installRoot)) return null;
       return {
         homeDir: options.homeDir,
         installRoot,
@@ -183317,7 +183486,7 @@ ${output}` : "";
     }
     function nodeMajor(nodeExecutable) {
       try {
-        const version2 = String((0, import_child_process10.execFileSync)(nodeExecutable, ["-p", "process.versions.node"], {
+        const version2 = String((0, import_child_process11.execFileSync)(nodeExecutable, ["-p", "process.versions.node"], {
           encoding: "utf8",
           timeout: 5e3,
           windowsHide: true,
@@ -183331,21 +183500,21 @@ ${output}` : "";
     }
     function findPortableNode22(homeDir2, currentNode = process.execPath, instanceDir = DEFAULT_INSTANCE_DIR) {
       const candidates = [currentNode];
-      const portableRoot = path84.join(homeDir2, normalizeInstanceDir(instanceDir), "tools", "node22");
+      const portableRoot = path86.join(homeDir2, normalizeInstanceDir(instanceDir), "tools", "node22");
       try {
-        const dirs = fs76.readdirSync(portableRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => path84.join(portableRoot, entry.name, "node.exe"));
+        const dirs = fs78.readdirSync(portableRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => path86.join(portableRoot, entry.name, "node.exe"));
         candidates.push(...dirs);
       } catch {
       }
       for (const candidate of candidates) {
-        if (candidate && fs76.existsSync(candidate) && nodeMajor(candidate) === 22) return candidate;
+        if (candidate && fs78.existsSync(candidate) && nodeMajor(candidate) === 22) return candidate;
       }
       return null;
     }
     function packageRootForPrefix(prefix, packageName) {
-      return path84.join(prefix, "node_modules", ...packageName.split("/"));
+      return path86.join(prefix, "node_modules", ...packageName.split("/"));
     }
-    var CONPTY_PREBUILD_NESTED_RELATIVE_PATH = path84.join(
+    var CONPTY_PREBUILD_NESTED_RELATIVE_PATH = path86.join(
       "node_modules",
       "adhdev",
       "node_modules",
@@ -183354,7 +183523,7 @@ ${output}` : "";
       "win32-x64",
       "conpty.node"
     );
-    var CONPTY_PREBUILD_HOISTED_RELATIVE_PATH = path84.join(
+    var CONPTY_PREBUILD_HOISTED_RELATIVE_PATH = path86.join(
       "node_modules",
       "node-pty",
       "prebuilds",
@@ -183363,13 +183532,13 @@ ${output}` : "";
     );
     function resolveConptyPrebuildCandidates(prefix) {
       return [
-        path84.join(prefix, CONPTY_PREBUILD_NESTED_RELATIVE_PATH),
-        path84.join(prefix, CONPTY_PREBUILD_HOISTED_RELATIVE_PATH)
+        path86.join(prefix, CONPTY_PREBUILD_NESTED_RELATIVE_PATH),
+        path86.join(prefix, CONPTY_PREBUILD_HOISTED_RELATIVE_PATH)
       ];
     }
     function verifyStagedConptyPrebuild(stagedPrefix, log) {
       const candidates = resolveConptyPrebuildCandidates(stagedPrefix);
-      const found = candidates.find((candidate) => fs76.existsSync(candidate));
+      const found = candidates.find((candidate) => fs78.existsSync(candidate));
       if (!found) {
         throw new Error(
           `Staged install is missing required native addon: node-pty's conpty.node prebuild (checked: ${candidates.join(", ")}). Aborting activation to prevent a daemon boot crash.`
@@ -183379,23 +183548,23 @@ ${output}` : "";
     }
     function readPackageCliEntry(prefix, packageName, targetVersion) {
       const packageRoot = packageRootForPrefix(prefix, packageName);
-      const packageJsonPath = path84.join(packageRoot, "package.json");
-      const pkg = JSON.parse(fs76.readFileSync(packageJsonPath, "utf8"));
+      const packageJsonPath = path86.join(packageRoot, "package.json");
+      const pkg = JSON.parse(fs78.readFileSync(packageJsonPath, "utf8"));
       if (pkg.name !== packageName) throw new Error(`staged package name mismatch: ${pkg.name || "missing"}`);
       if (pkg.version !== targetVersion) throw new Error(`staged package version mismatch: ${pkg.version || "missing"}`);
       const bin = typeof pkg.bin === "string" ? pkg.bin : pkg.bin?.adhdev || (pkg.bin ? Object.values(pkg.bin)[0] : void 0);
       if (!bin) throw new Error("staged package has no CLI entry");
-      const cliEntry = path84.resolve(packageRoot, bin);
-      if (!fs76.existsSync(cliEntry)) throw new Error(`staged CLI entry is missing: ${cliEntry}`);
+      const cliEntry = path86.resolve(packageRoot, bin);
+      if (!fs78.existsSync(cliEntry)) throw new Error(`staged CLI entry is missing: ${cliEntry}`);
       return cliEntry;
     }
     function quotePowerShellLiteral(value) {
       return `'${value.replace(/'/g, "''")}'`;
     }
     function pinStagedShims(prefix, portableNode, cliEntry) {
-      const cmdPath = path84.join(prefix, "adhdev.cmd");
-      const ps1Path = path84.join(prefix, "adhdev.ps1");
-      const noExtPath = path84.join(prefix, "adhdev");
+      const cmdPath = path86.join(prefix, "adhdev.cmd");
+      const ps1Path = path86.join(prefix, "adhdev.ps1");
+      const noExtPath = path86.join(prefix, "adhdev");
       const cmd = `@echo off\r
 "${portableNode}" "${cliEntry}" %*\r
 `;
@@ -183406,18 +183575,18 @@ exit $LASTEXITCODE\r
       const noExt = `#!/bin/sh
 exec "${portableNode}" "${cliEntry}" "$@"
 `;
-      fs76.writeFileSync(cmdPath, cmd, "ascii");
-      fs76.writeFileSync(ps1Path, ps1, "utf8");
-      fs76.writeFileSync(noExtPath, noExt, "ascii");
-      const cmdReadback = fs76.readFileSync(cmdPath, "utf8");
-      const ps1Readback = fs76.readFileSync(ps1Path, "utf8");
-      const noExtReadback = fs76.readFileSync(noExtPath, "utf8");
+      fs78.writeFileSync(cmdPath, cmd, "ascii");
+      fs78.writeFileSync(ps1Path, ps1, "utf8");
+      fs78.writeFileSync(noExtPath, noExt, "ascii");
+      const cmdReadback = fs78.readFileSync(cmdPath, "utf8");
+      const ps1Readback = fs78.readFileSync(ps1Path, "utf8");
+      const noExtReadback = fs78.readFileSync(noExtPath, "utf8");
       if (!cmdReadback.includes(portableNode) || !ps1Readback.includes(portableNode) || !noExtReadback.includes(portableNode) || /(^|\s)exec\s+node(\s|$)/m.test(noExtReadback)) {
         throw new Error("portable Node 22 pin validation failed");
       }
     }
     function validateStagedCli(portableNode, cliEntry, targetVersion) {
-      const output = String((0, import_child_process10.execFileSync)(portableNode, [cliEntry, "--version"], {
+      const output = String((0, import_child_process11.execFileSync)(portableNode, [cliEntry, "--version"], {
         encoding: "utf8",
         timeout: 15e3,
         windowsHide: true,
@@ -183428,7 +183597,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
       }
     }
     function atomicWrite(destination, content, encoding) {
-      fs76.mkdirSync(path84.dirname(destination), { recursive: true });
+      fs78.mkdirSync(path86.dirname(destination), { recursive: true });
       if (process.platform === "win32") {
         const bytes = Buffer.from(content, encoding);
         const payload = Buffer.from(JSON.stringify({ destination, bytes: bytes.toString("base64") }), "utf8").toString("base64");
@@ -183446,7 +183615,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
           `} finally { if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) } }`
         ].join("\n");
         const encoded = Buffer.from(script, "utf16le").toString("base64");
-        const result = (0, import_child_process10.spawnSync)("powershell.exe", [
+        const result = (0, import_child_process11.spawnSync)("powershell.exe", [
           "-NoLogo",
           "-NoProfile",
           "-NonInteractive",
@@ -183461,12 +183630,12 @@ exec "${portableNode}" "${cliEntry}" "$@"
         return;
       }
       const temporary = `${destination}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-      fs76.writeFileSync(temporary, content, encoding);
+      fs78.writeFileSync(temporary, content, encoding);
       try {
-        fs76.renameSync(temporary, destination);
+        fs78.renameSync(temporary, destination);
       } catch (error) {
         try {
-          fs76.unlinkSync(temporary);
+          fs78.unlinkSync(temporary);
         } catch {
         }
         throw error;
@@ -183491,9 +183660,9 @@ exec "${portableNode}" "${cliEntry}" "$@"
     function snapshotStableFiles(stablePrefix) {
       const snapshots2 = /* @__PURE__ */ new Map();
       for (const name of STABLE_FILES) {
-        const target2 = path84.join(stablePrefix, name);
+        const target2 = path86.join(stablePrefix, name);
         try {
-          snapshots2.set(target2, { exists: true, data: fs76.readFileSync(target2) });
+          snapshots2.set(target2, { exists: true, data: fs78.readFileSync(target2) });
         } catch {
           snapshots2.set(target2, { exists: false });
         }
@@ -183507,18 +183676,18 @@ exec "${portableNode}" "${cliEntry}" "$@"
           atomicWrite(target2, snapshot.data.toString("binary"), "binary");
           continue;
         }
-        const name = path84.basename(target2);
+        const name = path86.basename(target2);
         if (name === "adhdev.cmd" || name === "adhdev.ps1" || name === "adhdev") {
           atomicWrite(target2, shims[name].content, shims[name].encoding);
         } else if (name === POINTER_NAME) {
           if (layout.activeVersionName) writePointerVerified(target2, layout.activeVersionName);
           else try {
-            fs76.unlinkSync(target2);
+            fs78.unlinkSync(target2);
           } catch {
           }
         } else {
           try {
-            fs76.unlinkSync(target2);
+            fs78.unlinkSync(target2);
           } catch {
           }
         }
@@ -183532,7 +183701,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
       if (REAL_PLATFORM !== "win32") return;
       let readback = "";
       try {
-        readback = fs76.readFileSync(pointerPath, "utf8").trim();
+        readback = fs78.readFileSync(pointerPath, "utf8").trim();
       } catch (error) {
         throw new Error(`version pointer readback failed for ${pointerPath}: ${error?.message || String(error)}`);
       }
@@ -183545,7 +183714,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
     function publishStableShimsAndPointer(layout, versionName) {
       const shims = stableShimContents();
       for (const name of ["adhdev.cmd", "adhdev.ps1", "adhdev"]) {
-        atomicWrite(path84.join(layout.stablePrefix, name), shims[name].content, shims[name].encoding);
+        atomicWrite(path86.join(layout.stablePrefix, name), shims[name].content, shims[name].encoding);
       }
       writePointerVerified(layout.pointerPath, versionName);
     }
@@ -183557,13 +183726,13 @@ exec "${portableNode}" "${cliEntry}" "$@"
           log(`Refusing to clean up ${stagedPrefix}: it is the active/stable install, not a staged prefix`);
           return;
         }
-        if (normalizeForCompare(path84.dirname(stagedPrefix)) !== normalizeForCompare(layout.installRoot) || !path84.basename(stagedPrefix).startsWith("version-")) {
+        if (normalizeForCompare(path86.dirname(stagedPrefix)) !== normalizeForCompare(layout.installRoot) || !path86.basename(stagedPrefix).startsWith("version-")) {
           log(`Refusing to clean up ${stagedPrefix}: not a version-* prefix under ${layout.installRoot}`);
           return;
         }
-        if (!fs76.existsSync(stagedPrefix)) return;
+        if (!fs78.existsSync(stagedPrefix)) return;
         removeInactivePrefix(stagedPrefix, log);
-        if (fs76.existsSync(stagedPrefix)) {
+        if (fs78.existsSync(stagedPrefix)) {
           log(`Failed staged prefix ${stagedPrefix} could not be fully removed; a future update will retry`);
         } else {
           log(`Cleaned up failed staged prefix ${stagedPrefix}`);
@@ -183576,11 +183745,11 @@ exec "${portableNode}" "${cliEntry}" "$@"
       assertWorkerBridgeLifecycleAdmission("windows_upgrade_or_rollback");
       const { layout, packageName, targetVersion, portableNode, hooks } = options;
       const versionName = `version-${Date.now()}-${process.pid}-${Math.random().toString(16).slice(2)}`;
-      const stagedPrefix = path84.join(layout.installRoot, versionName);
+      const stagedPrefix = path86.join(layout.installRoot, versionName);
       const snapshots2 = snapshotStableFiles(layout.stablePrefix);
       let activated = false;
       let restarted = null;
-      fs76.mkdirSync(stagedPrefix, { recursive: false });
+      fs78.mkdirSync(stagedPrefix, { recursive: false });
       try {
         hooks.log(`Installing ${packageName}@${targetVersion} into inactive prefix ${stagedPrefix}`);
         await hooks.install(stagedPrefix, portableNode);
@@ -183660,8 +183829,8 @@ exec "${portableNode}" "${cliEntry}" "$@"
             "npm_config_build-from-source": "false"
           };
           const pathKey = Object.keys(env2).find((key7) => key7.toLowerCase() === "path") || "Path";
-          env2[pathKey] = `${path84.dirname(portableNode)};${env2[pathKey] || ""}`;
-          const installOutput = String((0, import_child_process10.execFileSync)(portableNode, [
+          env2[pathKey] = `${path86.dirname(portableNode)};${env2[pathKey] || ""}`;
+          const installOutput = String((0, import_child_process11.execFileSync)(portableNode, [
             options.npmCliPath,
             "install",
             "-g",
@@ -183671,6 +183840,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
             "--prefix",
             stagedPrefix
           ], {
+            ...NPM_INSTALL_LIMITS,
             encoding: "utf8",
             stdio: "pipe",
             maxBuffer: 20 * 1024 * 1024,
@@ -183685,7 +183855,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
             options.log("No restart arguments provided (daemon was not running); leaving the activated version in place without starting a daemon");
             return null;
           }
-          const child = (0, import_child_process10.spawn)(portableNode, restartArgv, {
+          const child = (0, import_child_process11.spawn)(portableNode, restartArgv, {
             detached: true,
             stdio: "ignore",
             windowsHide: true,
@@ -183697,7 +183867,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
         },
         restartOld: (portableNode) => {
           if (options.restartArgv.length === 0) return;
-          const child = (0, import_child_process10.spawn)(portableNode, options.restartArgv, {
+          const child = (0, import_child_process11.spawn)(portableNode, options.restartArgv, {
             detached: true,
             stdio: "ignore",
             windowsHide: true,
@@ -183737,7 +183907,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
         },
         stopProcess: (pid) => {
           try {
-            (0, import_child_process10.execFileSync)("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+            (0, import_child_process11.execFileSync)("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
           } catch {
           }
         },
@@ -183756,7 +183926,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
       const { layout, activePrefix, log } = options;
       let candidates = [];
       try {
-        candidates = fs76.readdirSync(layout.installRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory() && entry.name.startsWith("version-")).map((entry) => path84.join(layout.installRoot, entry.name)).filter((entry) => normalizeForCompare(entry) !== normalizeForCompare(activePrefix)).sort().slice(0, 8);
+        candidates = fs78.readdirSync(layout.installRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory() && entry.name.startsWith("version-")).map((entry) => path86.join(layout.installRoot, entry.name)).filter((entry) => normalizeForCompare(entry) !== normalizeForCompare(activePrefix)).sort().slice(0, 8);
       } catch {
         return;
       }
@@ -183784,7 +183954,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
     }
     function removeInactivePrefix(target2, log) {
       try {
-        fs76.rmSync(target2, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+        fs78.rmSync(target2, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
       } catch (error) {
         log?.(`Failed to remove inactive prefix ${target2}: ${error?.message || String(error)}`);
       }
@@ -183793,17 +183963,9 @@ exec "${portableNode}" "${cliEntry}" "$@"
     init_config();
     init_logger();
     init_track_identity();
-    var fs77 = __toESM2(require("fs"));
-    var path85 = __toESM2(require("path"));
+    var fs79 = __toESM2(require("fs"));
+    var path87 = __toESM2(require("path"));
     init_track_identity();
-    function isPidAlive2(pid) {
-      try {
-        process.kill(pid, 0);
-        return true;
-      } catch (error) {
-        return error?.code === "EPERM";
-      }
-    }
     var DEFAULT_POLL_INTERVAL_MS = 500;
     var ROLLBACK_RESTART_ATTEMPTS = 2;
     async function waitForDaemonHealth(hooks, options) {
@@ -183972,11 +184134,11 @@ exec "${portableNode}" "${cliEntry}" "$@"
     }
     var JOURNAL_OWNER_MAX_AGE_MS = 30 * 6e4;
     function getPosixUpgradeJournalPath(configDir) {
-      return path85.join(configDir, "daemon-upgrade-journal.json");
+      return path87.join(configDir, "daemon-upgrade-journal.json");
     }
     function readPosixUpgradeJournal(configDir) {
       try {
-        const parsed = JSON.parse(fs77.readFileSync(getPosixUpgradeJournalPath(configDir), "utf8"));
+        const parsed = JSON.parse(fs79.readFileSync(getPosixUpgradeJournalPath(configDir), "utf8"));
         return parsed && typeof parsed === "object" && Number.isFinite(parsed.helperPid) ? parsed : null;
       } catch {
         return null;
@@ -183987,13 +184149,13 @@ exec "${portableNode}" "${cliEntry}" "$@"
       const target2 = getPosixUpgradeJournalPath(configDir);
       const tmp = `${target2}.${process.pid}.tmp`;
       try {
-        fs77.mkdirSync(configDir, { recursive: true });
-        fs77.writeFileSync(tmp, `${JSON.stringify({ ...journal2, updatedAt: (/* @__PURE__ */ new Date()).toISOString() }, null, 2)}
+        fs79.mkdirSync(configDir, { recursive: true });
+        fs79.writeFileSync(tmp, `${JSON.stringify({ ...journal2, updatedAt: (/* @__PURE__ */ new Date()).toISOString() }, null, 2)}
 `, "utf8");
-        fs77.renameSync(tmp, target2);
+        fs79.renameSync(tmp, target2);
       } catch {
         try {
-          fs77.rmSync(tmp, { force: true });
+          fs79.rmSync(tmp, { force: true });
         } catch {
         }
       }
@@ -184003,7 +184165,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
       const current5 = readPosixUpgradeJournal(configDir);
       if (current5 && current5.helperPid !== ownerPid) return;
       try {
-        fs77.rmSync(getPosixUpgradeJournalPath(configDir), { force: true });
+        fs79.rmSync(getPosixUpgradeJournalPath(configDir), { force: true });
       } catch {
       }
     }
@@ -184021,166 +184183,6 @@ exec "${portableNode}" "${cliEntry}" "$@"
     var path88 = __toESM2(require("path"));
     var fs80 = __toESM2(require("fs"));
     var os35 = __toESM2(require("os"));
-    init_config();
-    var path86 = __toESM2(require("path"));
-    var fs78 = __toESM2(require("fs"));
-    function resolveInstanceDir(configDir = getConfigDir2()) {
-      const base = path86.basename(configDir).trim();
-      return base || ".adhdev";
-    }
-    function getUpgradeLogPath(configDir = getConfigDir2()) {
-      fs78.mkdirSync(configDir, { recursive: true });
-      return path86.join(configDir, "daemon-upgrade.log");
-    }
-    function appendUpgradeLog(message, configDir = getConfigDir2()) {
-      const line = `[${(/* @__PURE__ */ new Date()).toISOString()}] ${message}
-`;
-      try {
-        fs78.appendFileSync(getUpgradeLogPath(configDir), line, "utf8");
-      } catch {
-      }
-    }
-    init_config();
-    var path87 = __toESM2(require("path"));
-    var fs79 = __toESM2(require("fs"));
-    var import_child_process11 = require("child_process");
-    function isSpawnTimeoutError(error) {
-      if (!error || typeof error !== "object") return false;
-      const candidate = error;
-      if (candidate.code === "ETIMEDOUT") return true;
-      return typeof candidate.signal === "string" && candidate.signal !== "" && candidate.status == null;
-    }
-    function classifySessionHostPid(pid) {
-      const commandLine = getProcessCommandLine(pid);
-      if (!commandLine) return "unknown";
-      return /session-host-daemon/i.test(commandLine) ? "managed" : "unrelated";
-    }
-    async function stopSessionHostProcesses(appName, configDir = getConfigDir2()) {
-      assertWorkerBridgeLifecycleAdmission("upgrade_process_stop", configDir);
-      const pidFile = path87.join(configDir, `${appName}-session-host.pid`);
-      const outcome = { pid: null, identity: null, stopped: false, survived: false };
-      let killedPid = null;
-      let keepPidFile = false;
-      try {
-        if (fs79.existsSync(pidFile)) {
-          const pid = Number.parseInt(fs79.readFileSync(pidFile, "utf8").trim(), 10);
-          if (Number.isFinite(pid) && pid !== process.pid) {
-            outcome.pid = pid;
-            const identity5 = classifySessionHostPid(pid);
-            outcome.identity = identity5;
-            if (identity5 === "unrelated") {
-              appendUpgradeLog(
-                `Session-host pidfile names pid ${pid}, which is positively identified as an unrelated process; treating the pidfile as stale and not killing it.`,
-                configDir
-              );
-            } else {
-              if (identity5 === "unknown") {
-                appendUpgradeLog(
-                  `Could not read the command line of session-host pid ${pid} (process-inspection unavailable). The pidfile is this daemon's own record, so the pid is treated as ours and stopped \u2014 a stale host surviving an upgrade breaks every create_session with a conpty.node load failure.`,
-                  configDir
-                );
-              }
-              assertWorkerBridgeLifecycleAdmission("upgrade_host_signal", configDir);
-              if (killProcess(pid)) killedPid = pid;
-            }
-          }
-        }
-      } catch {
-      }
-      if (killedPid !== null) {
-        outcome.stopped = await waitForPidExit(killedPid, 15e3);
-        if (!outcome.stopped) {
-          outcome.survived = true;
-          appendUpgradeLog(
-            `Session-host pid ${killedPid} did not exit within 15000ms of the stop request.`,
-            configDir
-          );
-        }
-      } else if (outcome.pid !== null && outcome.identity !== "unrelated") {
-        outcome.survived = isPidAlive2(outcome.pid);
-      }
-      assertWorkerBridgeLifecycleAdmission("upgrade_host_cleanup", configDir);
-      keepPidFile = outcome.survived;
-      if (!keepPidFile) {
-        try {
-          fs79.unlinkSync(pidFile);
-        } catch {
-        }
-      } else {
-        appendUpgradeLog(
-          `Keeping ${pidFile} so the remaining upgrade guards can still see the surviving host.`,
-          configDir
-        );
-      }
-      return outcome;
-    }
-    var LOCKED_NATIVE_ADDON_BASENAMES = ["conpty.node", "ghostty-vt.dll"];
-    function listForeignNativeAddonHolders(packageRoot) {
-      if (process.platform !== "win32" || !packageRoot) return [];
-      const rootLower = packageRoot.replace(/\//g, "\\").replace(/'/g, "''").toLowerCase();
-      const endsWithChecks = LOCKED_NATIVE_ADDON_BASENAMES.map((name) => `$lf.EndsWith('${name}')`).join(" -or ");
-      const script = [
-        `$root = '${rootLower}'`,
-        `Get-Process node -ErrorAction SilentlyContinue | ForEach-Object {`,
-        `  $p = $_`,
-        `  try {`,
-        `    foreach ($m in $p.Modules) {`,
-        `      $fn = $m.FileName`,
-        `      if ($fn) {`,
-        `        $lf = $fn.ToLower()`,
-        `        if ($lf.StartsWith($root) -and (${endsWithChecks})) { $p.Id; break }`,
-        `      }`,
-        `    }`,
-        `  } catch {}`,
-        `}`
-      ].join("\n");
-      let out = "";
-      try {
-        out = String((0, import_child_process11.execFileSync)("powershell.exe", [
-          "-NoProfile",
-          "-NonInteractive",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-Command",
-          script
-        ], { encoding: "utf8", timeout: 8e3, stdio: ["ignore", "pipe", "ignore"], windowsHide: true })).trim();
-      } catch {
-        return [];
-      }
-      const selfPid = process.pid;
-      const seen2 = /* @__PURE__ */ new Set();
-      const holders = [];
-      for (const line of out.split(/\r?\n/)) {
-        const pid = Number.parseInt(line.trim(), 10);
-        if (!Number.isFinite(pid) || pid <= 0 || pid === selfPid || seen2.has(pid)) continue;
-        seen2.add(pid);
-        holders.push({ pid, commandLine: getProcessCommandLine(pid) });
-      }
-      return holders;
-    }
-    async function stopForeignNativeAddonHolders(packageRoot, options = {}) {
-      assertWorkerBridgeLifecycleAdmission("upgrade_process_stop");
-      if (process.platform !== "win32" || !packageRoot) return [];
-      const parentPid = Number.isFinite(options.parentPid) ? Number(options.parentPid) : -1;
-      const holders = listForeignNativeAddonHolders(packageRoot);
-      const results = [];
-      for (const holder of holders) {
-        if (holder.pid === parentPid) continue;
-        appendUpgradeLog(
-          `Foreign native-addon holder found: pid ${holder.pid}${holder.commandLine ? ` \u2014 ${holder.commandLine}` : ""}`
-        );
-        assertWorkerBridgeLifecycleAdmission("upgrade_holder_signal");
-        const killed = killProcess(holder.pid);
-        if (killed) {
-          await waitForPidExit(holder.pid, 15e3);
-          appendUpgradeLog(`Terminated foreign native-addon holder pid ${holder.pid}`);
-        } else {
-          appendUpgradeLog(`Failed to terminate foreign native-addon holder pid ${holder.pid}`);
-        }
-        results.push({ ...holder, killed });
-      }
-      return results;
-    }
     var import_child_process12 = require("child_process");
     function resolveSiblingNpmInvocation(nodeExecutable, platform10 = process.platform) {
       const binDir = path88.dirname(nodeExecutable);
@@ -184762,6 +184764,7 @@ ${marker2}`,
           const reinstall = retargetInstallCommand(installCommand, payload.packageName, payload.targetVersion, previousVersion);
           log(`Reinstalling previous version: ${buildManualRecoveryCommand(reinstall)}`);
           hiddenExecFileSync2(reinstall.command, reinstall.args, {
+            ...NPM_INSTALL_LIMITS,
             encoding: "utf8",
             stdio: "pipe",
             maxBuffer: 20 * 1024 * 1024,
@@ -184869,11 +184872,13 @@ ${marker2}`,
           fs82.mkdirSync(configDir, { recursive: true });
           return fs82.mkdtempSync(path90.join(configDir, "upgrade-preflight-"));
         })();
+        let preflightStep = "npm install";
         try {
           appendUpgradeLog(`Pre-flight: installing ${spec} into throwaway prefix ${preflightPrefix}`);
           execNpmCommandSync2(
             ["install", "-g", spec, "--prefix", preflightPrefix],
             {
+              ...NPM_INSTALL_LIMITS,
               encoding: "utf8",
               stdio: "pipe",
               maxBuffer: 20 * 1024 * 1024,
@@ -184881,16 +184886,19 @@ ${marker2}`,
             },
             installCommand.surface
           );
+          preflightStep = "the installed CLI check";
           smokeTestInstalledBins(preflightPrefix, payload.packageName);
           appendUpgradeLog(`Pre-flight smoke gate passed for ${spec}`);
         } catch (error) {
-          const detail = error?.message || String(error);
+          const timedOut = isSpawnTimeoutError(error);
+          const message = error?.message || String(error);
+          const detail = timedOut ? `${preflightStep} did not finish in time (${message})` : message;
           appendUpgradeLog(`Pre-flight smoke gate FAILED for ${spec}: ${detail} \u2014 existing install left untouched`);
           emitUpgradeFailureNotice([
-            `adhdev ${spec} was NOT installed: the package installs but its CLI does not run (\`--version\` failed).`,
+            timedOut ? `adhdev ${spec} was NOT installed: ${preflightStep} did not finish in time.` : `adhdev ${spec} was NOT installed: the package installs but its CLI does not run (\`--version\` failed).`,
             `Detail: ${detail}`,
             "Your previous version is untouched and the daemon was restarted on it.",
-            "This is a broken published package \u2014 retry once a fixed version is published."
+            timedOut ? "The network or the npm registry probably stalled \u2014 retry the update." : "This is a broken published package \u2014 retry once a fixed version is published."
           ], configDir, { targetVersion: payload.targetVersion });
           spawnDetachedDaemonRestart(restartArgv, payload.cwd);
           throw new Error(`Pre-flight smoke gate failed for ${spec}: ${detail}`);
@@ -184939,6 +184947,7 @@ ${marker2}`,
             installCommand.command,
             installCommand.args,
             {
+              ...NPM_INSTALL_LIMITS,
               encoding: "utf8",
               stdio: "pipe",
               maxBuffer: 20 * 1024 * 1024,
@@ -184947,7 +184956,7 @@ ${marker2}`,
             }
           ));
         } catch (error) {
-          rollbackAndRestart(`npm install exited non-zero: ${error?.message || String(error)}`);
+          rollbackAndRestart(isSpawnTimeoutError(error) ? `npm install did not finish within ${NPM_INSTALL_LIMITS.timeout / 6e4} minutes: ${error?.message || String(error)}` : `npm install exited non-zero: ${error?.message || String(error)}`);
           throw error;
         }
         if (installOutput.trim()) {
@@ -185173,6 +185182,7 @@ ${marker2}`,
             installCommand.command,
             installCommand.args,
             {
+              ...NPM_INSTALL_LIMITS,
               encoding: "utf8",
               stdio: "pipe",
               maxBuffer: 20 * 1024 * 1024,
@@ -185206,6 +185216,10 @@ ${marker2}`,
             }
             notice.push(`  ${buildManualRecoveryCommand(installCommand)}`);
             emitUpgradeFailureNotice(notice, getConfigDir2(), { targetVersion: payload.targetVersion });
+          }
+          if (isSpawnTimeoutError(error)) {
+            appendUpgradeLog(`npm install did not finish within ${NPM_INSTALL_LIMITS.timeout / 6e4} minutes; restarting the daemon`);
+            spawnDetachedDaemonRestart(restartArgv, payload.cwd);
           }
           throw error;
         }

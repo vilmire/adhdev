@@ -33,7 +33,7 @@ import {
   type SpawnedDaemonHandle,
 } from './posix-upgrade-health-gate.js';
 import { buildPinnedGlobalInstallCommand, buildInstallEnvWithNodeOnPath, execNpmCommandSync as nativeExecNpmCommandSync, type CurrentGlobalInstallSurface, type PinnedGlobalInstallCommand } from './upgrade-install-surface.js';
-import { stopSessionHostProcesses, listForeignNativeAddonHolders, stopForeignNativeAddonHolders } from './upgrade-process-stop.js';
+import { stopSessionHostProcesses, listForeignNativeAddonHolders, stopForeignNativeAddonHolders, isSpawnTimeoutError, NPM_INSTALL_LIMITS } from './upgrade-process-stop.js';
 import { buildManualRecoveryCommand, emitUpgradeFailureNotice, clearUpgradeFailureNotice } from './upgrade-failure-notice.js';
 import { resolveInstanceDir, getUpgradeLogPath, appendUpgradeLog } from './upgrade-log.js';
 
@@ -450,6 +450,7 @@ function buildPosixGateHooks(options: {
       const reinstall = retargetInstallCommand(installCommand, payload.packageName, payload.targetVersion, previousVersion);
       log(`Reinstalling previous version: ${buildManualRecoveryCommand(reinstall)}`);
       hiddenExecFileSync(reinstall.command, reinstall.args, {
+        ...NPM_INSTALL_LIMITS,
         encoding: 'utf8',
         stdio: 'pipe',
         maxBuffer: 20 * 1024 * 1024,
@@ -606,11 +607,13 @@ async function runPosixInPlaceUpgrade(options: {
       fs.mkdirSync(configDir, { recursive: true });
       return fs.mkdtempSync(path.join(configDir, 'upgrade-preflight-'));
     })();
+    let preflightStep = 'npm install';
     try {
       appendUpgradeLog(`Pre-flight: installing ${spec} into throwaway prefix ${preflightPrefix}`);
       execNpmCommandSync(
         ['install', '-g', spec, '--prefix', preflightPrefix],
         {
+          ...NPM_INSTALL_LIMITS,
           encoding: 'utf8',
           stdio: 'pipe',
           maxBuffer: 20 * 1024 * 1024,
@@ -618,16 +621,23 @@ async function runPosixInPlaceUpgrade(options: {
         },
         installCommand.surface,
       );
+      preflightStep = 'the installed CLI check';
       smokeTestInstalledBins(preflightPrefix, payload.packageName);
       appendUpgradeLog(`Pre-flight smoke gate passed for ${spec}`);
     } catch (error: any) {
-      const detail = error?.message || String(error);
+      const timedOut = isSpawnTimeoutError(error);
+      const message = error?.message || String(error);
+      const detail = timedOut ? `${preflightStep} did not finish in time (${message})` : message;
       appendUpgradeLog(`Pre-flight smoke gate FAILED for ${spec}: ${detail} — existing install left untouched`);
       emitUpgradeFailureNotice([
-        `adhdev ${spec} was NOT installed: the package installs but its CLI does not run (\`--version\` failed).`,
+        timedOut
+          ? `adhdev ${spec} was NOT installed: ${preflightStep} did not finish in time.`
+          : `adhdev ${spec} was NOT installed: the package installs but its CLI does not run (\`--version\` failed).`,
         `Detail: ${detail}`,
         'Your previous version is untouched and the daemon was restarted on it.',
-        'This is a broken published package — retry once a fixed version is published.',
+        timedOut
+          ? 'The network or the npm registry probably stalled — retry the update.'
+          : 'This is a broken published package — retry once a fixed version is published.',
       ], configDir, { targetVersion: payload.targetVersion });
       spawnDetachedDaemonRestart(restartArgv, payload.cwd);
       throw new Error(`Pre-flight smoke gate failed for ${spec}: ${detail}`);
@@ -684,6 +694,7 @@ async function runPosixInPlaceUpgrade(options: {
         installCommand.command,
         installCommand.args,
         {
+          ...NPM_INSTALL_LIMITS,
           encoding: 'utf8',
           stdio: 'pipe',
           maxBuffer: 20 * 1024 * 1024,
@@ -692,7 +703,9 @@ async function runPosixInPlaceUpgrade(options: {
         },
       ));
     } catch (error: any) {
-      rollbackAndRestart(`npm install exited non-zero: ${error?.message || String(error)}`);
+      rollbackAndRestart(isSpawnTimeoutError(error)
+        ? `npm install did not finish within ${NPM_INSTALL_LIMITS.timeout / 60_000} minutes: ${error?.message || String(error)}`
+        : `npm install exited non-zero: ${error?.message || String(error)}`);
       throw error;
     }
     if (installOutput.trim()) {
@@ -999,6 +1012,7 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
         installCommand.command,
         installCommand.args,
         {
+          ...NPM_INSTALL_LIMITS,
           encoding: 'utf8',
           stdio: 'pipe',
           maxBuffer: 20 * 1024 * 1024,
@@ -1037,6 +1051,12 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
         }
         notice.push(`  ${buildManualRecoveryCommand(installCommand)}`);
         emitUpgradeFailureNotice(notice, getConfigDir(), { targetVersion: payload.targetVersion });
+      }
+      // The daemon has already exited. A stalled install must not leave the machine
+      // offline: bring the daemon back on what is installed before reporting.
+      if (isSpawnTimeoutError(error)) {
+        appendUpgradeLog(`npm install did not finish within ${NPM_INSTALL_LIMITS.timeout / 60_000} minutes; restarting the daemon`);
+        spawnDetachedDaemonRestart(restartArgv, payload.cwd);
       }
       throw error;
     }

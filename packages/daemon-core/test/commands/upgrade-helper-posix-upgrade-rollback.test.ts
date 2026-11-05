@@ -236,6 +236,78 @@ describe('POSIX in-place upgrade — pre-flight gate + rollback', () => {
     expect(log).toMatch(/Pre-flight smoke gate FAILED/)
   })
 
+  it('restarts on the untouched install when the pre-flight npm install stalls', async () => {
+    const homeDir = makeTempHome()
+    const configDir = path.join(homeDir, '.adhdev')
+    fs.mkdirSync(configDir, { recursive: true })
+    process.env.HOME = homeDir
+    const live = stageLiveInstall(homeDir)
+    mocks.execFileSync.mockImplementation((file: string, args: readonly string[]) => {
+      const birth = psBirthLine(file, [...args])
+      if (birth !== undefined) return birth
+      if (args.includes('install')) throw Object.assign(new Error('spawnSync npm ETIMEDOUT'), { code: 'ETIMEDOUT', status: null })
+      return ''
+    })
+
+    await runHelper({
+      packageName: 'adhdev',
+      targetVersion: '2.0.0',
+      parentPid: 0,
+      restartArgv: [path.join(live.packageRoot, 'cli.js'), 'daemon'],
+      sessionHostAppName: 'adhdev',
+    }, configDir)
+
+    expect(installedVersion(live.packageRoot)).toBe('1.0.0')
+    expect(mocks.spawn.mock.calls.length).toBeGreaterThan(0)
+    expect(exitCodes).toEqual([1])
+    const log = fs.readFileSync(path.join(configDir, 'daemon-upgrade.log'), 'utf8')
+    expect(log).toMatch(/npm install did not finish in time/)
+    expect(log).not.toMatch(/broken published package/)
+    expect(fs.readFileSync(path.join(configDir, 'daemon-upgrade-last-error.txt'), 'utf8')).toMatch(/did not finish in time/)
+  })
+
+  it('rolls back when the in-place npm install stalls', async () => {
+    const homeDir = makeTempHome()
+    const configDir = path.join(homeDir, '.adhdev')
+    fs.mkdirSync(configDir, { recursive: true })
+    process.env.HOME = homeDir
+    const live = stageLiveInstall(homeDir)
+    mocks.execFileSync.mockImplementation((file: string, args: readonly string[]) => {
+      const argv = [...args]
+      const birth = psBirthLine(file, argv)
+      if (birth !== undefined) return birth
+      if (argv.includes('--version')) return '2.0.0\n'
+      if (argv.includes('install')) {
+        const prefix = argv[argv.indexOf('--prefix') + 1]
+        if (prefix === live.prefixRoot) {
+          fs.rmSync(path.join(prefix, 'node_modules', 'adhdev'), { recursive: true, force: true })
+          throw Object.assign(new Error('spawnSync npm ETIMEDOUT'), { code: 'ETIMEDOUT', status: null })
+        }
+        simulateNpmInstall(prefix, '2.0.0')
+      }
+      return ''
+    })
+
+    await runHelper({
+      packageName: 'adhdev',
+      targetVersion: '2.0.0',
+      parentPid: 0,
+      restartArgv: [path.join(live.packageRoot, 'cli.js'), 'daemon'],
+      sessionHostAppName: 'adhdev',
+    }, configDir)
+
+    expect(installedVersion(live.packageRoot)).toBe('1.0.0')
+    expect(mocks.spawn.mock.calls.length).toBeGreaterThan(0)
+    const log = fs.readFileSync(path.join(configDir, 'daemon-upgrade.log'), 'utf8')
+    expect(log).toMatch(/did not finish within 5 minutes/)
+    // Both installs carry the deadline: pre-flight and in place.
+    const installs = mocks.execFileSync.mock.calls.filter(([, args]) => (args as string[]).includes('install'))
+    expect(installs.length).toBe(2)
+    for (const [, , options] of installs) {
+      expect(options).toMatchObject({ timeout: 5 * 60_000, killSignal: 'SIGKILL' })
+    }
+  })
+
   it('rolls back and restarts the daemon when npm dies mid-swap, leaving the old CLI working', async () => {
     const homeDir = makeTempHome()
     const configDir = path.join(homeDir, '.adhdev')
