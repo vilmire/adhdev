@@ -3,7 +3,7 @@ import { realpathSync } from 'node:fs';
 import { noteReviewRefusal } from './stage-independence.js';
 import { preferEligible, pendingLaunchReservation, reviewRoutingRefusal, CAPACITY_OCCUPYING_STATUSES } from './mesh-task-routing-contract.js';
 import { getMachineId } from '../config/config.js';
-import { currentPhysicalScope } from './mesh-physical-ownership.js';
+import { plannedPhysicalScope } from './mesh-physical-ownership.js';
 import { recordQueueTaskHold } from './mesh-queue-hold-store.js';
 import { assertMaintenanceAdmission, assertMaintenanceNode, withMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
 import { isNewWorkHeld } from '../maintenance/new-work-hold.js';
@@ -458,7 +458,7 @@ function screenNodeForAutoLaunch(
     markSkip: AutoLaunchSkipMarker,
 ): ReturnType<typeof resolveAutoLaunchTarget> | null {
     if (task.ownershipScope) {
-        const proof = task.ownedPaths && currentPhysicalScope(task.ownershipScope, task.ownedPaths);
+        const proof = task.ownedPaths && plannedPhysicalScope(task.ownershipScope, task.ownedPaths);
         let same = false;
         try { same = !!proof && realpathSync.native(node.workspace) === proof.worktree && getMachineId() === proof.machineId; } catch { /* unresolved */ }
         if (!same) { markSkip(nodeId, 'physical_context_changed'); return null; }

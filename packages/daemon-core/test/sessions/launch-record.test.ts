@@ -255,14 +255,15 @@ describe('SessionRegistry launch record', () => {
 })
 
 describe('coordinatorMcpSessionArgs', () => {
-  it('names the session to a codex coordinator MCP server only', async () => {
+  it('forwards the session id and credential by name to a codex coordinator MCP server only', async () => {
     const { coordinatorMcpSessionArgs: args } = await import('../../src/commands/cli-manager-launch.js')
     const coordinator = { meshCoordinatorFor: 'm1' }
-    expect(args('codex-cli', 'adhdev-mesh', coordinator, 'k1', ['--x'])).toEqual(['--x', '-c', 'mcp_servers.adhdev-mesh.env.ADHDEV_COORDINATOR_SESSION_ID="k1"'])
-    expect(args('codex-cli', 'adhdev-mesh', coordinator, 'k1', undefined)).toEqual(['-c', 'mcp_servers.adhdev-mesh.env.ADHDEV_COORDINATOR_SESSION_ID="k1"'])
-    expect(args('claude-cli', 'adhdev-mesh', coordinator, 'k1', ['--x'])).toEqual(['--x'])
-    expect(args('codex-cli', 'adhdev-mesh', { meshNodeFor: 'm1' }, 'k1', ['--x'])).toEqual(['--x'])
-    expect(args('codex-cli', undefined, coordinator, 'k1', undefined)).toBeUndefined()
+    const forwarded = ['-c', 'mcp_servers.adhdev-mesh.env_vars=["ADHDEV_COORDINATOR_SESSION_ID","ADHDEV_MCP_SESSION_CREDENTIAL"]']
+    expect(args('codex-cli', 'adhdev-mesh', coordinator, ['--x'])).toEqual(['--x', ...forwarded])
+    expect(args('codex-cli', 'adhdev-mesh', coordinator, undefined)).toEqual(forwarded)
+    expect(args('claude-cli', 'adhdev-mesh', coordinator, ['--x'])).toEqual(['--x'])
+    expect(args('codex-cli', 'adhdev-mesh', { meshNodeFor: 'm1' }, ['--x'])).toEqual(['--x'])
+    expect(args('codex-cli', undefined, coordinator, undefined)).toBeUndefined()
   })
 })
 

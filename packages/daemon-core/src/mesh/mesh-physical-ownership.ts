@@ -147,6 +147,27 @@ export function currentPhysicalScope(scope: PhysicalOwnershipScope | undefined, 
     } catch { return undefined; }
 }
 
+const PLANNING_SCOPE_TTL_MS = 30_000;
+const PLANNING_SCOPE_MAX_ENTRIES = 64;
+const planningScopes = new Map<string, { at: number; scope: PhysicalOwnershipScope | undefined }>();
+
+/**
+ * For deciding whether a launch is worth attempting, never for admitting work: each attestation
+ * spawns several git processes on the daemon's event loop, and the queue tick asks for every
+ * pending task (profiled live, 2026-11-05: 47% of JS time, stalls up to 2.6 s). A stale answer
+ * only delays a launch or wastes one, because the claim itself re-attests with currentPhysicalScope.
+ */
+export function plannedPhysicalScope(scope: PhysicalOwnershipScope | undefined, paths: OwnedPathsDeclaration, now = Date.now()): PhysicalOwnershipScope | undefined {
+    const key = JSON.stringify([scope, paths.paths]);
+    const known = planningScopes.get(key);
+    if (known && now - known.at < PLANNING_SCOPE_TTL_MS) return known.scope;
+    const current = currentPhysicalScope(scope, paths);
+    planningScopes.delete(key);
+    if (planningScopes.size >= PLANNING_SCOPE_MAX_ENTRIES) planningScopes.delete(planningScopes.keys().next().value!);
+    planningScopes.set(key, { at: now, scope: current });
+    return current;
+}
+
 export type PhysicalOverlapExplanation =
     | { kind: 'missing_scope'; side: 'a' | 'b' }
     | { kind: 'worktree'; path: string }

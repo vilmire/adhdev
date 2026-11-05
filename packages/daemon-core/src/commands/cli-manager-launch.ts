@@ -149,20 +149,21 @@ function planSessionStart(host: CliLaunchHost, cliType: string, workingDir: stri
 }
 
 /**
- * Codex hands an MCP child only the env its config lists, so a coordinator's MCP server never
- * inherits `ADHDEV_COORDINATOR_SESSION_ID`: it could not name its own session, which refused its
- * artifact reads and dropped dispatches to daemon-level routing. The id is known only here.
+ * Codex hands an MCP child only the env its config lists, so a coordinator's MCP server inherited
+ * neither its session id nor its credential: it could not name its session, and the daemon refused
+ * its artifact calls. `env_vars` forwards by name, which keeps the credential out of the argv.
  */
 function withCoordinatorMcpSessionArgs(plan: SessionStartPlan, cliArgs: string[] | undefined): string[] | undefined {
     const settings = plan.options?.settingsOverride as Record<string, unknown> | undefined;
     const serverName = (plan.provider as { meshCoordinator?: { mcpConfig?: { serverName?: unknown } } } | undefined)?.meshCoordinator?.mcpConfig?.serverName;
-    return coordinatorMcpSessionArgs(plan.normalizedType, typeof serverName === 'string' ? serverName : undefined, settings, plan.key, cliArgs);
+    return coordinatorMcpSessionArgs(plan.normalizedType, typeof serverName === 'string' ? serverName : undefined, settings, cliArgs);
 }
 
-export function coordinatorMcpSessionArgs(providerType: string, serverName: string | undefined, settings: Record<string, unknown> | undefined, key: string, cliArgs: string[] | undefined): string[] | undefined {
+export function coordinatorMcpSessionArgs(providerType: string, serverName: string | undefined, settings: Record<string, unknown> | undefined, cliArgs: string[] | undefined): string[] | undefined {
     const coordinatorMeshId = settings?.meshCoordinatorFor;
     if (providerType !== 'codex-cli' || !serverName || typeof coordinatorMeshId !== 'string' || !coordinatorMeshId.trim()) return cliArgs;
-    return [...(cliArgs ?? []), '-c', `mcp_servers.${serverName}.env.ADHDEV_COORDINATOR_SESSION_ID=${JSON.stringify(key)}`];
+    const forwarded = JSON.stringify(['ADHDEV_COORDINATOR_SESSION_ID', ADHDEV_MCP_SESSION_CREDENTIAL_ENV]);
+    return [...(cliArgs ?? []), '-c', `mcp_servers.${serverName}.env_vars=${forwarded}`];
 }
 
 /** The HOME a non-delegated launch's trust store resolves against: the launch's own `HOME` override, else the daemon's. */

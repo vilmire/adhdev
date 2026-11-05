@@ -48417,6 +48417,16 @@ ${error.message || ""}`;
         return void 0;
       }
     }
+    function plannedPhysicalScope(scope2, paths, now = Date.now()) {
+      const key7 = JSON.stringify([scope2, paths.paths]);
+      const known = planningScopes.get(key7);
+      if (known && now - known.at < PLANNING_SCOPE_TTL_MS) return known.scope;
+      const current5 = currentPhysicalScope(scope2, paths);
+      planningScopes.delete(key7);
+      if (planningScopes.size >= PLANNING_SCOPE_MAX_ENTRIES) planningScopes.delete(planningScopes.keys().next().value);
+      planningScopes.set(key7, { at: now, scope: current5 });
+      return current5;
+    }
     function resourcesOverlap(x, y) {
       return x.path === y.path || !!x.identity && x.identity === y.identity || x.subtree && inside(x.path, y.path) || y.subtree && inside(y.path, x.path);
     }
@@ -48442,6 +48452,9 @@ ${error.message || ""}`;
     var import_node_fs7;
     var path28;
     var sourceForbidden;
+    var PLANNING_SCOPE_TTL_MS;
+    var PLANNING_SCOPE_MAX_ENTRIES;
+    var planningScopes;
     var init_mesh_physical_ownership = __esm2({
       "src/mesh/mesh-physical-ownership.ts"() {
         "use strict";
@@ -48450,6 +48463,9 @@ ${error.message || ""}`;
         path28 = __toESM2(require("path"));
         init_dist();
         sourceForbidden = (p) => p === "" || p === "oss" || /(^|\/)(\.git|vendor|dist|node_modules)(\/|$)/.test(p);
+        PLANNING_SCOPE_TTL_MS = 3e4;
+        PLANNING_SCOPE_MAX_ENTRIES = 64;
+        planningScopes = /* @__PURE__ */ new Map();
       }
     });
     function checkoutState(workspace, headSha, scope2) {
@@ -96418,7 +96434,7 @@ ${continuationNotice}` } : dispatchTask,
     }
     function screenNodeForAutoLaunch(components, meshId, task, node, nodeId, launchKey, freshnessGate, markSkip) {
       if (task.ownershipScope) {
-        const proof = task.ownedPaths && currentPhysicalScope(task.ownershipScope, task.ownedPaths);
+        const proof = task.ownedPaths && plannedPhysicalScope(task.ownershipScope, task.ownedPaths);
         let same = false;
         try {
           same = !!proof && import_node_fs21.realpathSync.native(node.workspace) === proof.worktree && getMachineId() === proof.machineId;
@@ -228345,12 +228361,13 @@ Enable and detect this provider from the Machine Providers page before starting 
     function withCoordinatorMcpSessionArgs(plan, cliArgs) {
       const settings2 = plan.options?.settingsOverride;
       const serverName = plan.provider?.meshCoordinator?.mcpConfig?.serverName;
-      return coordinatorMcpSessionArgs(plan.normalizedType, typeof serverName === "string" ? serverName : void 0, settings2, plan.key, cliArgs);
+      return coordinatorMcpSessionArgs(plan.normalizedType, typeof serverName === "string" ? serverName : void 0, settings2, cliArgs);
     }
-    function coordinatorMcpSessionArgs(providerType, serverName, settings2, key7, cliArgs) {
+    function coordinatorMcpSessionArgs(providerType, serverName, settings2, cliArgs) {
       const coordinatorMeshId = settings2?.meshCoordinatorFor;
       if (providerType !== "codex-cli" || !serverName || typeof coordinatorMeshId !== "string" || !coordinatorMeshId.trim()) return cliArgs;
-      return [...cliArgs ?? [], "-c", `mcp_servers.${serverName}.env.ADHDEV_COORDINATOR_SESSION_ID=${JSON.stringify(key7)}`];
+      const forwarded2 = JSON.stringify(["ADHDEV_COORDINATOR_SESSION_ID", ADHDEV_MCP_SESSION_CREDENTIAL_ENV3]);
+      return [...cliArgs ?? [], "-c", `mcp_servers.${serverName}.env_vars=${forwarded2}`];
     }
     function userLaunchTrustStoreHome(extraEnv) {
       const home = typeof extraEnv?.HOME === "string" ? extraEnv.HOME.trim() : "";
