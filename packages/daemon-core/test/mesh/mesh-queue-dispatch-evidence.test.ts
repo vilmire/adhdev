@@ -51,6 +51,38 @@ describe('openOrResumeQueueAttempt', () => {
         expect(host.calls).toContain('requeue:t1');
         const again = open(ledger, 's2');
         expect(again).toEqual({ ref: { attemptId: first.ref.attemptId, generation: 1 } });
+        // One open plus one R1r rebind to s2 (the attempt row itself is not re-opened).
+        expect((db.prepare(`SELECT COUNT(*) AS n FROM turn_events WHERE kind = 'dispatch_accepted'`).get() as { n: number }).n).toBe(2);
+        expect(ledger.getAttempt(first.ref.attemptId)?.sessionId).toBe('s2');
+    });
+
+    it('a resumed attempt re-dispatched to another provider takes its identity (R1r), so the writer stop can address it', async () => {
+        // Live 2026-11-06: attempt :1 opened for a cursor-cli session whose process was
+        // gone, then re-delivered to a fresh antigravity-cli session. The attempt kept
+        // cursor-cli + the old nonce and every exact stop came back foreign_or_unbound_writer.
+        const db = memDb();
+        const host = recordingHost();
+        const ledger = ledgerOn(db, { selfDaemonId: 'daemon_mach_c', host, ports: { cancelDispatch: confirmedStop } });
+        const first = open(ledger) as { ref: { attemptId: string; generation: number } };
+        ledger.observe(evd('dispatch_failed', { workerAbsent: false, reason: 'transport_error' }, {
+            source: 'dispatch', attemptRef: first.ref, sessionId: 's1', observedBy: 'daemon_mach_c',
+        }));
+        await drainStop();
+        const again = openOrResumeQueueAttempt(ledger, {
+            meshId: MESH, task: { ...TASK, dispatchNonce: 6 }, nodeId: 'n2', sessionId: 's2', providerType: 'antigravity-cli',
+            consumeProfile: 'default', maxTaskRetries: 1, coordinatorDaemonId: 'daemon_mach_c', now: T0 + 10,
+        }) as { ref: { attemptId: string; generation: number } };
+        expect(again.ref).toEqual({ attemptId: first.ref.attemptId, generation: 1 });
+        expect(ledger.getAttempt(first.ref.attemptId)).toMatchObject({
+            state: 'accepted', sessionId: 's2', nodeId: 'n2', providerType: 'antigravity-cli', dispatchNonce: 6, messageId: 'task:t1:n6',
+        });
+    });
+
+    it('a resume to the same writer records nothing new', async () => {
+        const db = memDb();
+        const ledger = ledgerOn(db, { selfDaemonId: 'daemon_mach_c', host: recordingHost(), ports: { cancelDispatch: confirmedStop } });
+        const first = open(ledger) as { ref: { attemptId: string; generation: number } };
+        expect(open(ledger)).toEqual({ ref: first.ref });
         expect((db.prepare(`SELECT COUNT(*) AS n FROM turn_events WHERE kind = 'dispatch_accepted'`).get() as { n: number }).n).toBe(1);
     });
 

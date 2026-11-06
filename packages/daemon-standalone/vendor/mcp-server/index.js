@@ -52270,6 +52270,14 @@ ${rendered.join("\n\n")}`,
             { e: "hold", reason: "await_delivery", until: "await_delivery", onExpire: "reclaim", meshOnly: true },
             { e: "hold", reason: "hard_ceiling", until: "hard_ceiling", onExpire: "escalate", meshOnly: true, generationAgnostic: true }
           ] },
+          // A resumed attempt (back at `accepted` after a reclaim) re-dispatched to another
+          // session or provider takes that dispatch's identity: the exact writer stop
+          // proves a writer by provider + nonce, and a stale pair can never match it
+          // (live 2026-11-06: a cursor-cli attempt redelivered to antigravity-cli refused
+          // every stop as foreign_or_unbound_writer).
+          { id: "R1r", lane: "current", from: [A2], on: ["dispatch_accepted"], to: "same", verdict: "applied", effects: [
+            { e: "act", act: "rebind_dispatch" }
+          ] },
           { id: "R0a", lane: "none", from: "none", on: ["turn_started"], guard: "unbound", to: G, verdict: "applied", effects: [
             { e: "act", act: "open_plain" },
             { e: "act", act: "consume" },
@@ -52688,6 +52696,55 @@ ${rendered.join("\n\n")}`,
       "src/mesh/turn-ledger/types.ts"() {
         "use strict";
         TERMINAL_TURN_STATES = ["completed", "blocked", "failed", "cancelled"];
+      }
+    });
+    function newAttempt(ev, fields) {
+      return {
+        meshId: null,
+        taskId: ev.taskId ?? null,
+        attemptNo: 0,
+        sessionId: ev.sessionId,
+        nodeId: null,
+        providerType: null,
+        ownerDaemonId: ev.observedBy,
+        generation: ev.attemptRef?.generation ?? 0,
+        prevGeneration: null,
+        dispatchNonce: null,
+        messageId: null,
+        consumeProfile: "default",
+        maxTaskRetries: DEFAULT_MAX_TASK_RETRIES,
+        state: "accepted",
+        suspension: null,
+        redriveCount: 0,
+        reclaimCount: 0,
+        hollowCount: 0,
+        livenessFailStreak: 0,
+        lastLiveness: null,
+        coordinator: { daemonId: null, sessionId: null },
+        acceptedAt: ev.at,
+        deliveredAt: null,
+        consumedAt: null,
+        lastActivityAt: null,
+        weakSince: null,
+        candidateNotifiedGeneration: null,
+        lastNoProgressNoticeAt: null,
+        notifiedAt: null,
+        terminal: null,
+        data: {},
+        ...fields
+      };
+    }
+    function adoptedTerminal(ev) {
+      if (ev.kind === "worker_report") {
+        return { outcome: ev.outcome, strength: "tool_report", reason: "worker_reported" };
+      }
+      if (ev.kind === "transcript_final") return { outcome: "completed", strength: "genuine", reason: "transcript_final" };
+      return { outcome: "completed", strength: "genuine", reason: "turn_end" };
+    }
+    var init_reducer_attempt = __esm2({
+      "src/mesh/turn-ledger/reducer-attempt.ts"() {
+        "use strict";
+        init_policy();
       }
     });
     function isReclaimTurnReason(reason) {
@@ -53160,49 +53217,6 @@ ${rendered.join("\n\n")}`,
       else draft.effects.push({ kind: "record", note: "writer_stop_checkpoint_pending" });
       return { attempt: a, holds: [...draft.holds.values()], effects: draft.effects, verdict: "applied", rule: input.stopConfirmed ? "writer_settled" : input.writerUnreachable && a.data.writerStop?.confirmed ? "writer_unreachable_settled" : "WR" };
     }
-    function newAttempt(ev, fields) {
-      return {
-        meshId: null,
-        taskId: ev.taskId ?? null,
-        attemptNo: 0,
-        sessionId: ev.sessionId,
-        nodeId: null,
-        providerType: null,
-        ownerDaemonId: ev.observedBy,
-        generation: ev.attemptRef?.generation ?? 0,
-        prevGeneration: null,
-        dispatchNonce: null,
-        messageId: null,
-        consumeProfile: "default",
-        maxTaskRetries: DEFAULT_MAX_TASK_RETRIES,
-        state: "accepted",
-        suspension: null,
-        redriveCount: 0,
-        reclaimCount: 0,
-        hollowCount: 0,
-        livenessFailStreak: 0,
-        lastLiveness: null,
-        coordinator: { daemonId: null, sessionId: null },
-        acceptedAt: ev.at,
-        deliveredAt: null,
-        consumedAt: null,
-        lastActivityAt: null,
-        weakSince: null,
-        candidateNotifiedGeneration: null,
-        lastNoProgressNoticeAt: null,
-        notifiedAt: null,
-        terminal: null,
-        data: {},
-        ...fields
-      };
-    }
-    function adoptedTerminal(ev) {
-      if (ev.kind === "worker_report") {
-        return { outcome: ev.outcome, strength: "tool_report", reason: "worker_reported" };
-      }
-      if (ev.kind === "transcript_final") return { outcome: "completed", strength: "genuine", reason: "transcript_final" };
-      return { outcome: "completed", strength: "genuine", reason: "turn_end" };
-    }
     function bindLivenessSession(draft, sessionId, rebound = false) {
       const a = draft.attempt;
       if (rebound || !sessionIdsEquivalent(a.sessionId, sessionId)) {
@@ -53496,6 +53510,7 @@ ${rendered.join("\n\n")}`,
         init_policy();
         init_transitions();
         init_types3();
+        init_reducer_attempt();
         init_reclaim_reasons();
         SESSION_PRODUCED_KINDS = /* @__PURE__ */ new Set([
           "turn_started",
@@ -53632,6 +53647,15 @@ ${rendered.join("\n\n")}`,
               maxTaskRetries: ev.maxTaskRetries ?? DEFAULT_MAX_TASK_RETRIES,
               coordinator: { daemonId: ev.coordinator?.daemonId ?? null, sessionId: ev.coordinator?.sessionId ?? null }
             });
+          },
+          rebind_dispatch: (draft) => {
+            const ev = draft.ctx.evidence;
+            const attempt = draft.attempt;
+            bindLivenessSession(draft, ev.sessionId);
+            if (ev.nodeId) attempt.nodeId = ev.nodeId;
+            if (ev.providerType) attempt.providerType = ev.providerType;
+            if (ev.dispatchNonce !== void 0) attempt.dispatchNonce = ev.dispatchNonce;
+            attempt.messageId = ev.messageId;
           },
           open_plain: (draft) => {
             const ev = draft.ctx.evidence;
@@ -65627,7 +65651,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const latest = ledger.store.findLatestAttemptForTask(args.meshId, args.task.id);
       if (latest && !latest.terminal) {
         if (INJECTION_CLOSED_STATES.has(latest.state)) return { refused: latest };
-        return { ref: { attemptId: latest.attemptId, generation: latest.generation } };
+        const ref3 = { attemptId: latest.attemptId, generation: latest.generation };
+        rebindResumedAttempt(ledger, latest, ref3, args);
+        return { ref: ref3 };
       }
       const attemptNo = latest ? latest.attemptNo + 1 : 0;
       const attemptId = queueAttemptId(args.meshId, args.task.id, attemptNo);
@@ -65672,10 +65698,36 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       if (result.verdict !== "applied") throw new Error(`dispatch_accepted not applied (${result.verdict})`);
       return { ref: ref2 };
     }
+    function rebindResumedAttempt(ledger, latest, ref2, args) {
+      if (latest.state !== "accepted") return;
+      const nonce = typeof args.task.dispatchNonce === "number" ? args.task.dispatchNonce : null;
+      if (sessionIdsEquivalent(latest.sessionId, args.sessionId) && latest.providerType === args.providerType && meshNodeIdMatches7({ id: latest.nodeId ?? void 0 }, args.nodeId) && (nonce === null || latest.dispatchNonce === nonce)) return;
+      const baseEventId = `dispatch:${ref2.attemptId}:g${ref2.generation}:n${nonce ?? "x"}:${args.sessionId}`;
+      let eventId = baseEventId;
+      for (let retry = 1; ledger.store.hasEvent(eventId); retry++) eventId = `${baseEventId}:retry${retry}`;
+      const result = ledger.observe({
+        eventId,
+        at: args.now ?? Date.now(),
+        source: "dispatch",
+        sessionId: args.sessionId,
+        attemptRef: ref2,
+        taskId: args.task.id,
+        observedBy: args.coordinatorDaemonId || "local",
+        kind: "dispatch_accepted",
+        scope: "mesh_queue",
+        messageId: dispatchMessageId(args.task),
+        meshId: args.meshId,
+        nodeId: args.nodeId,
+        providerType: args.providerType,
+        ...nonce !== null ? { dispatchNonce: nonce } : {}
+      });
+      if (result.verdict !== "applied") throw new Error(`resumed dispatch rebind not applied (${result.rejection ?? result.verdict})`);
+    }
     var INJECTION_CLOSED_STATES;
     var init_mesh_queue_dispatch_evidence = __esm2({
       "src/mesh/mesh-queue-dispatch-evidence.ts"() {
         "use strict";
+        init_dist();
         INJECTION_CLOSED_STATES = /* @__PURE__ */ new Set(["consumed", "generating", "suspended", "finalizing", "stopping"]);
       }
     });

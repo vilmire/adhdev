@@ -12,7 +12,7 @@
 // without loading the claim path's import graph.
 // ---------------------------------------------------------------------------
 
-import type { ConsumeProfile, TurnAttemptRef } from '@adhdev/mesh-shared';
+import { meshNodeIdMatches, sessionIdsEquivalent, type ConsumeProfile, type TurnAttemptRef } from '@adhdev/mesh-shared';
 import type { TurnLedger } from './turn-ledger/ledger.js';
 import type { TurnAttempt } from './turn-ledger/types.js';
 
@@ -57,7 +57,9 @@ export function openOrResumeQueueAttempt(ledger: Pick<TurnLedger, 'store' | 'obs
     const latest = ledger.store.findLatestAttemptForTask(args.meshId, args.task.id);
     if (latest && !latest.terminal) {
         if (INJECTION_CLOSED_STATES.has(latest.state)) return { refused: latest };
-        return { ref: { attemptId: latest.attemptId, generation: latest.generation } };
+        const ref = { attemptId: latest.attemptId, generation: latest.generation };
+        rebindResumedAttempt(ledger, latest, ref, args);
+        return { ref };
     }
     const attemptNo = latest ? latest.attemptNo + 1 : 0;
     const attemptId = queueAttemptId(args.meshId, args.task.id, attemptNo);
@@ -107,4 +109,40 @@ export function openOrResumeQueueAttempt(ledger: Pick<TurnLedger, 'store' | 'obs
     // attempt behind `ref`, and a dispatch without one can never be closed.
     if (result.verdict !== 'applied') throw new Error(`dispatch_accepted not applied (${result.verdict})`);
     return { ref };
+}
+
+/**
+ * A resumed attempt keeps the identity of the dispatch that opened it unless the
+ * re-dispatch says otherwise. When this claim names another session, provider,
+ * node or nonce, record it (R1r) so the writer stop and revoke address the
+ * writer that actually holds the task now.
+ */
+function rebindResumedAttempt(ledger: Pick<TurnLedger, 'store' | 'observe'>, latest: TurnAttempt, ref: TurnAttemptRef, args: {
+    meshId: string; task: QueueDispatchTask; nodeId: string; sessionId: string; providerType: string;
+    coordinatorDaemonId?: string; now?: number;
+}): void {
+    if (latest.state !== 'accepted') return;
+    const nonce = typeof args.task.dispatchNonce === 'number' ? args.task.dispatchNonce : null;
+    if (sessionIdsEquivalent(latest.sessionId, args.sessionId) && latest.providerType === args.providerType
+        && meshNodeIdMatches({ id: latest.nodeId ?? undefined }, args.nodeId) && (nonce === null || latest.dispatchNonce === nonce)) return;
+    const baseEventId = `dispatch:${ref.attemptId}:g${ref.generation}:n${nonce ?? 'x'}:${args.sessionId}`;
+    let eventId = baseEventId;
+    for (let retry = 1; ledger.store.hasEvent(eventId); retry++) eventId = `${baseEventId}:retry${retry}`;
+    const result = ledger.observe({
+        eventId,
+        at: args.now ?? Date.now(),
+        source: 'dispatch',
+        sessionId: args.sessionId,
+        attemptRef: ref,
+        taskId: args.task.id,
+        observedBy: args.coordinatorDaemonId || 'local',
+        kind: 'dispatch_accepted',
+        scope: 'mesh_queue',
+        messageId: dispatchMessageId(args.task),
+        meshId: args.meshId,
+        nodeId: args.nodeId,
+        providerType: args.providerType,
+        ...(nonce !== null ? { dispatchNonce: nonce } : {}),
+    });
+    if (result.verdict !== 'applied') throw new Error(`resumed dispatch rebind not applied (${result.rejection ?? result.verdict})`);
 }

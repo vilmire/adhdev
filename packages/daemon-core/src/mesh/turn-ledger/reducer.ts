@@ -22,7 +22,6 @@ import {
     type HoldReason,
     type NotifyKind,
     type SummaryRef,
-    type CommitStrength as TurnCommitStrength,
     type TurnEvidence,
     type TurnEvidenceKind,
     type TurnEvidenceOf,
@@ -68,6 +67,7 @@ import {
     type TurnEffect,
     type TurnHold,
 } from './types.js';
+import { adoptedTerminal, newAttempt } from './reducer-attempt.js';
 
 export interface ReduceInput {
     /** Local executor capability, never derived from received evidence fields. */
@@ -789,32 +789,9 @@ function reduceStopping(input: ReduceInput): ReduceResult {
     return { attempt: a, holds: [...draft.holds.values()], effects: draft.effects, verdict: 'applied', rule: input.stopConfirmed ? 'writer_settled' : input.writerUnreachable && a.data.writerStop?.confirmed ? 'writer_unreachable_settled' : 'WR' };
 }
 
-function newAttempt(ev: TurnEvidence, fields: Partial<TurnAttempt> & Pick<TurnAttempt, 'attemptId' | 'scope'>): TurnAttempt {
-    return {
-        meshId: null, taskId: ev.taskId ?? null, attemptNo: 0,
-        sessionId: ev.sessionId, nodeId: null, providerType: null, ownerDaemonId: ev.observedBy,
-        generation: ev.attemptRef?.generation ?? 0, prevGeneration: null, dispatchNonce: null, messageId: null,
-        consumeProfile: 'default', maxTaskRetries: DEFAULT_MAX_TASK_RETRIES,
-        state: 'accepted', suspension: null, redriveCount: 0, reclaimCount: 0, hollowCount: 0, livenessFailStreak: 0, lastLiveness: null,
-        coordinator: { daemonId: null, sessionId: null },
-        acceptedAt: ev.at, deliveredAt: null, consumedAt: null, lastActivityAt: null, weakSince: null,
-        candidateNotifiedGeneration: null, lastNoProgressNoticeAt: null, notifiedAt: null, terminal: null, data: {},
-        ...fields,
-    };
-}
-
 /** A provider still showing one of these is working or waiting on a human: its silence is not a stall to page about. */
 const STALL_BUSY_STATUSES: ReadonlySet<string> = new Set(['generating', 'starting', 'waiting_approval', 'waiting_choice']);
 const TERMINAL_NOTIFY_KINDS: readonly NotifyKind[] = ['completed', 'blocked', 'failed', 'cancelled', 'stopped'];
-
-/** The terminal a genuine g−1 completion commits when R27a adopts it. */
-function adoptedTerminal(ev: TurnEvidence): { outcome: TurnOutcome; strength: TurnCommitStrength; reason: TurnReason } {
-    if (ev.kind === 'worker_report') {
-        return { outcome: ev.outcome, strength: 'tool_report', reason: 'worker_reported' };
-    }
-    if (ev.kind === 'transcript_final') return { outcome: 'completed', strength: 'genuine', reason: 'transcript_final' };
-    return { outcome: 'completed', strength: 'genuine', reason: 'turn_end' };
-}
 
 /** Keep report evidence/deadlines intact; only the session's liveness is cut. */
 function bindLivenessSession(draft: Draft, sessionId: string, rebound = false): void {
@@ -847,6 +824,15 @@ const ACTIONS: Record<ActionId, (draft: Draft) => void> = {
             maxTaskRetries: ev.maxTaskRetries ?? DEFAULT_MAX_TASK_RETRIES,
             coordinator: { daemonId: ev.coordinator?.daemonId ?? null, sessionId: ev.coordinator?.sessionId ?? null },
         });
+    },
+    rebind_dispatch: (draft) => {
+        const ev = draft.ctx.evidence as TurnEvidenceOf<'dispatch_accepted'>;
+        const attempt = draft.attempt!;
+        bindLivenessSession(draft, ev.sessionId);
+        if (ev.nodeId) attempt.nodeId = ev.nodeId;
+        if (ev.providerType) attempt.providerType = ev.providerType;
+        if (ev.dispatchNonce !== undefined) attempt.dispatchNonce = ev.dispatchNonce;
+        attempt.messageId = ev.messageId;
     },
     open_plain: (draft) => {
         const ev = draft.ctx.evidence;

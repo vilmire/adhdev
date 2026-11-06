@@ -28,7 +28,7 @@ const TERMINAL_ILLEGAL: TurnEvidenceKind[] = [
 /** Explicitly enumerated illegal (state, kind) pairs in the current lane. */
 const ILLEGAL: Record<TurnState, TurnEvidenceKind[]> = {
     stopping: [],
-    accepted: PRE_TURN_ILLEGAL,
+    accepted: PRE_TURN_ILLEGAL.filter((k) => k !== 'dispatch_accepted'),
     delivered: PRE_TURN_ILLEGAL,
     consumed: IN_TURN_ILLEGAL,
     generating: IN_TURN_ILLEGAL,
@@ -64,6 +64,7 @@ const FIRES: Record<string, Fixture> = {
     R27: { attempt: G(), evidence: ev('worker_report', { outcome: 'completed', summary: REF, hasHandoffNotes: false }, { sessionId: 's0', attemptRef: { attemptId: 'a1', generation: 0 } }), state: 'generating', effects: ['record', 'notify_coordinator'] },
     R28a: { attempt: G(), evidence: ev('turn_started', { retro: false }, { sessionId: 's0', attemptRef: { attemptId: 'a1', generation: 0 } }), state: 'generating', effects: ['record', 'cancel_dispatch'] },
     R28: { attempt: G(), evidence: ev('liveness', { result: 'dead' }, { attemptRef: { attemptId: 'a1', generation: 0 } }), state: 'generating', effects: ['record'] },
+    R1r: { attempt: makeAttempt('accepted'), evidence: ev('dispatch_accepted', { scope: 'mesh_queue', messageId: 'task:t1:n6', meshId: 'm1', nodeId: 'n2', providerType: 'antigravity-cli', dispatchNonce: 6 }, { sessionId: 's2', taskId: 't1', source: 'dispatch' }), state: 'accepted' },
     R2s: { attempt: makeAttempt('accepted', { data: { providerSuspension: { generation: 1, modalKey: 'modal:setup', providerSetup: true, at: NOW, resolvedAt: null } } }), holds: [makeHold('suspension_before_consumed')], evidence: ev('delivered', { messageId: 'msg1', outcome: 'delivered', via: 'local' }), state: 'delivered' },
     R2: { attempt: makeAttempt('accepted'), holds: [makeHold('await_delivery')], evidence: ev('delivered', { messageId: 'msg1', outcome: 'delivered', via: 'p2p' }), state: 'delivered', effects: ['release_hold', 'hold', 'hold'] },
     R2a: { attempt: G(), evidence: ev('delivered', { messageId: 'msg1', outcome: 'delivered', via: 'p2p' }), state: 'generating', effects: ['record'] },

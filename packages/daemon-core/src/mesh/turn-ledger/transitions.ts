@@ -71,7 +71,7 @@ export type GuardId =
 
 /** Named attempt mutations (reducer.ts ACTIONS). */
 export type ActionId =
-    | 'open_dispatch' | 'open_plain'
+    | 'open_dispatch' | 'open_plain' | 'rebind_dispatch'
     | 'mark_delivered' | 'consume' | 'apply_held_suspension'
     | 'suspend' | 'resume' | 'resume_by_activity'
     | 'weak_candidate' | 'clear_weak' | 'await_report' | 'false_idle'
@@ -155,6 +155,14 @@ export const TRANSITIONS: readonly TransitionRule[] = [
         { e: 'act', act: 'open_dispatch' },
         { e: 'hold', reason: 'await_delivery', until: 'await_delivery', onExpire: 'reclaim', meshOnly: true },
         { e: 'hold', reason: 'hard_ceiling', until: 'hard_ceiling', onExpire: 'escalate', meshOnly: true, generationAgnostic: true },
+    ] },
+    // A resumed attempt (back at `accepted` after a reclaim) re-dispatched to another
+    // session or provider takes that dispatch's identity: the exact writer stop
+    // proves a writer by provider + nonce, and a stale pair can never match it
+    // (live 2026-11-06: a cursor-cli attempt redelivered to antigravity-cli refused
+    // every stop as foreign_or_unbound_writer).
+    { id: 'R1r', lane: 'current', from: [A], on: ['dispatch_accepted'], to: 'same', verdict: 'applied', effects: [
+        { e: 'act', act: 'rebind_dispatch' },
     ] },
     { id: 'R0a', lane: 'none', from: 'none', on: ['turn_started'], guard: 'unbound', to: G, verdict: 'applied', effects: [
         { e: 'act', act: 'open_plain' },
