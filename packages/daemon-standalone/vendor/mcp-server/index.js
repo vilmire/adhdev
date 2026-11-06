@@ -80588,8 +80588,10 @@ ${asText(streams.stderr)}
       let text10;
       try {
         text10 = fs25.readFileSync(file, "utf8");
-      } catch {
-        return { ok: false, reason: "missing", message: `${LIGHT_WORKSPACE_CONFIG_REL} not found`, path: file };
+      } catch (e) {
+        if (e?.code !== "ENOENT") return { ok: false, reason: "invalid", message: `unreadable: ${e?.message || e}`, path: file };
+        const derived = validateLightWorkspaceConfig(defaultLightWorkspaceConfig(repoRoot));
+        return derived.ok ? { ok: true, config: derived.config, path: file, source: "default" } : { ok: false, reason: "missing", message: `${LIGHT_WORKSPACE_CONFIG_REL} not found and no default could be derived (${derived.message})`, path: file };
       }
       let parsed;
       try {
@@ -80598,7 +80600,30 @@ ${asText(streams.stderr)}
         return { ok: false, reason: "invalid", message: `invalid JSON: ${e?.message || e}`, path: file };
       }
       const res = validateLightWorkspaceConfig(parsed);
-      return res.ok ? { ok: true, config: res.config, path: file } : { ok: false, reason: "invalid", message: res.message, path: file };
+      return res.ok ? { ok: true, config: res.config, path: file, source: "file" } : { ok: false, reason: "invalid", message: res.message, path: file };
+    }
+    function defaultLightWorkspaceConfig(repoRoot) {
+      const link2 = [];
+      try {
+        if (fs25.statSync(path39.join(repoRoot, "node_modules")).isDirectory()) link2.push("node_modules");
+      } catch {
+      }
+      let workspaces;
+      try {
+        workspaces = JSON.parse(fs25.readFileSync(path39.join(repoRoot, "package.json"), "utf8"))?.workspaces;
+      } catch {
+      }
+      const patterns = Array.isArray(workspaces) ? workspaces : workspaces && typeof workspaces === "object" && Array.isArray(workspaces.packages) ? workspaces.packages : [];
+      for (const raw of patterns) {
+        if (typeof raw !== "string") continue;
+        const pattern = raw.trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+        if (!pattern || pattern.startsWith("!") || pattern.includes("**")) continue;
+        const candidate = `${pattern}/node_modules`;
+        const check = [];
+        relPatternList([candidate], "linkNodeModules", check);
+        if (!check.length && !link2.includes(candidate)) link2.push(candidate);
+      }
+      return { version: 1, linkNodeModules: link2 };
     }
     function expandRepoPattern(root, pattern) {
       const segs = pattern.split("/");
@@ -94957,7 +94982,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const checkoutRoot = node.workspace.trim();
       const cfg = loadLightWorkspaceConfig(checkoutRoot);
       if (!cfg.ok) {
-        throw new Error(`${LIGHT_REJECT.NOT_CONFIGURED}: ${cfg.message} at ${cfg.path}. Run mesh_init to scaffold .adhdev/light-workspace.json, or use a worktree node.`);
+        throw new Error(`${LIGHT_REJECT.NOT_CONFIGURED}: ${cfg.message} at ${cfg.path}. Fix or delete that file (without it the repository's own node_modules layout is used), or use a worktree node.`);
       }
       return { lightBaseNodeId: String(node.id ?? node.nodeId ?? node.node_id), checkoutRoot, config: cfg.config };
     }
@@ -102308,12 +102333,15 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
             // A dirty source is advisory (the worktree is built from HEAD), so the
             // plan never requires a clean tree.
             requiresClean: false,
-            approvalRequired: true,
+            // A worktree clone is the coordinator's own isolation step: it adds a
+            // branch, a worktree and a node (all removable) and re-runs this preflight.
+            // Only the .adhdev config step below still waits for the owner.
+            approvalRequired: false,
             steps: [{
               command: "clone_mesh_node",
-              description: "Explicitly create the branch/worktree and register the resulting node.",
+              description: "Create the branch/worktree and register the resulting node.",
               writes: true,
-              approvalRequired: true,
+              approvalRequired: false,
               args: {
                 meshId: compatibleMesh.id,
                 sourceNodeId: sourceNode.id,
@@ -156932,7 +156960,7 @@ ${section3}` : DIGEST_INPUT_TEXT, messageId, forSessionId: sid });
       const blocking = open.filter((w) => w.d.urgency === "blocking").length;
       const due = open.filter((w) => pastDue(w.d, now)).length;
       const detail = [blocking ? `${blocking} blocking` : "", due ? `${due} past due` : ""].filter(Boolean).join(", ");
-      return `[ADHDev decisions] ${open.length} decision${open.length === 1 ? "" : "s"} waiting${detail ? ` (${detail})` : ""}. Read project_status for the questions and options, and put them to the user.`;
+      return `[ADHDev decisions] ${open.length} decision${open.length === 1 ? "" : "s"} waiting${detail ? ` (${detail})` : ""}. Read project_status for the questions and options, and put them to the user. If none are open any more, they were already answered: say nothing about them.`;
     }
     function q(s2) {
       const t = s2.replace(/\s+/g, " ").trim();
@@ -248835,7 +248863,7 @@ var MESH_ADD_NODE_TOOL = {
 };
 var MESH_CLONE_NODE_TOOL = {
   name: "mesh_clone_node",
-  description: 'Create a new worktree-based node from an existing node for isolated parallel work. Creates a git worktree on a new branch so multiple tasks can run on separate branches simultaneously. This writes a branch, worktree and mesh node: call mesh_create with mode="plan", operation=clone_worktree and obtain explicit user approval first; the implementation re-runs the clean/source preflight. Then pin the tasks that should run there with target_node_id (the new node id in the response).',
+  description: "Create a new worktree-based node from an existing node for isolated parallel work. Creates a git worktree on a new branch so multiple tasks can run on separate branches simultaneously. No approval is needed: it only adds a branch, a worktree and a node, all removable with mesh_remove_node, and it runs its own clean/source preflight (refused when the source is unfit). Then pin the tasks that should run there with target_node_id (the new node id in the response).",
   inputSchema: {
     type: "object",
     properties: {

@@ -305,6 +305,9 @@ describe('planMeshOnboarding', () => {
         expect(result.success).toBe(true);
         if (!result.success) return;
         expect(result.plan.kind).toBe('clone_new_worktree');
+        // A worktree clone needs no owner approval (only a .adhdev config write would).
+        expect(result.plan.approvalRequired).toBe(false);
+        expect(result.plan.steps.find(step => step.command === 'clone_mesh_node')?.approvalRequired).toBe(false);
         // The operator must be told the uncommitted work does not travel.
         expect(result.warnings?.length).toBeGreaterThan(0);
         expect(result.warnings?.join(' ')).toMatch(/created from HEAD/i);

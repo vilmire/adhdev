@@ -153,7 +153,9 @@ export function buildDecisionNudge(open: readonly WatchedDecision[], now: number
     const due = open.filter(w => pastDue(w.d, now)).length;
     const detail = [blocking ? `${blocking} blocking` : '', due ? `${due} past due` : ''].filter(Boolean).join(', ');
     return `[ADHDev decisions] ${open.length} decision${open.length === 1 ? '' : 's'} waiting${detail ? ` (${detail})` : ''}. `
-        + 'Read project_status for the questions and options, and put them to the user.';
+        + 'Read project_status for the questions and options, and put them to the user. '
+        // Delivered when the assistant is next free; the owner may have answered meanwhile.
+        + 'If none are open any more, they were already answered: say nothing about them.';
 }
 
 export class DecisionNudge {
