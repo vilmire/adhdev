@@ -78693,6 +78693,7 @@ Owner-authorized input recovery: review ${r.expectedHeadSha} in the authenticate
         case "decide_revise_once": {
           if (state2.phase !== "done" || !state2.blockedReason) return noop;
           state2.extraRevisions = (state2.extraRevisions ?? 0) + 1;
+          state2.startedAt = event.at;
           delete state2.blockedReason;
           delete state2.blockedDetail;
           state2.released = false;
@@ -78701,6 +78702,7 @@ Owner-authorized input recovery: review ${r.expectedHeadSha} in the authenticate
         }
         case "decide_rereview": {
           if (state2.phase !== "done" || !state2.blockedReason) return noop;
+          state2.startedAt = event.at;
           delete state2.blockedReason;
           delete state2.blockedDetail;
           delete state2.reviewerSessionId;

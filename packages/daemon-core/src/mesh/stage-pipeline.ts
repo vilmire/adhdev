@@ -168,6 +168,9 @@ export function reduceStage(plan: MeshTaskStagePlan, prev: MeshTaskStageState, e
         case 'decide_revise_once': {
             if (state.phase !== 'done' || !state.blockedReason) return noop;
             state.extraRevisions = (state.extraRevisions ?? 0) + 1;
+            // An explicit decision opens a fresh ceiling window: measured from the original
+            // start, a task the ceiling blocked re-blocks on the next sweep (live 2026-11-06, c1cdb3f7).
+            state.startedAt = event.at;
             delete state.blockedReason;
             delete state.blockedDetail;
             state.released = false;
@@ -176,6 +179,7 @@ export function reduceStage(plan: MeshTaskStagePlan, prev: MeshTaskStageState, e
         }
         case 'decide_rereview': {
             if (state.phase !== 'done' || !state.blockedReason) return noop;
+            state.startedAt = event.at;
             delete state.blockedReason;
             delete state.blockedDetail;
             delete state.reviewerSessionId;

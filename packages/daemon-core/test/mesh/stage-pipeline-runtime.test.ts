@@ -371,6 +371,23 @@ describe('stage pipeline runtime', () => {
         expect(child.status).toBe('cancelled');
     });
 
+    it('a decision after a ceiling block opens a fresh window instead of re-blocking on the next sweep', async () => {
+        // Live 2026-11-06 (c1cdb3f7): revise_once reopened the task and the next tick
+        // re-blocked it at once, because the ceiling still counted from the original start.
+        for (const action of ['revise_once', 'rereview'] as const) {
+            const h = harness();
+            await h.implDone('a1');
+            h.advance(5 * 3600_000);
+            await h.rt.tick(); await h.rt.idle();
+            expect(h.parent().stageState!.blockedReason).toBe('stage_pipeline_ceiling');
+            expect((await h.rt.decide(MESH, PARENT, action)).ok).toBe(true);
+            await h.rt.idle();
+            await h.rt.tick(); await h.rt.idle();
+            expect(h.parent().stageState!.blockedReason).not.toBe('stage_pipeline_ceiling');
+            expect(h.parent().status).toBe('assigned');
+        }
+    });
+
     it('independence fallback only after 10 minutes of independence-only refusals', async () => {
         const h = harness();
         await h.implDone('a1');
