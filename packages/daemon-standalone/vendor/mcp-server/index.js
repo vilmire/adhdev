@@ -48358,9 +48358,9 @@ ${error.message || ""}`;
         }
       };
       for (const entry of input.paths.paths) {
-        if (input.phase === "source" && sourceForbidden(entry.path)) throw new Error(`source_phase_path_forbidden: ${entry.path}`);
+        if (input.phase === "source" && sourceForbidden(entry.path)) throw new Error(`source_phase_path_forbidden: ${entry.path || "**"}`);
         const resolved = canonical(path28.resolve(worktree, entry.path));
-        if (!inside(worktree, resolved) || input.phase === "source" && sourceForbidden(path28.relative(worktree, resolved).split(path28.sep).join("/"))) throw new Error(`ownership_symlink_escape: ${entry.path}`);
+        if (!inside(worktree, resolved) || input.phase === "source" && sourceForbidden(path28.relative(worktree, resolved).split(path28.sep).join("/"))) throw new Error(`ownership_symlink_escape: ${entry.path || "**"}`);
         if (entry.subtree) inspectSubtree(resolved);
         resources.push({ path: resolved, identity: identity(resolved), subtree: entry.subtree });
         recordNestedGitStores(worktree, entry.path, resources);
@@ -48959,6 +48959,9 @@ ${error.message || ""}`;
         return `${message} - the machine that holds this checkout could not attest it (offline, older daemon, or not a git worktree root there). It is asked again automatically; update that machine if it keeps failing.`;
       }
       return `${message} - the host could not attest the node checkout this task would write in; check the node workspace is a git worktree root on this machine.`;
+    }
+    function isUnclaimableAsDeclared(hold) {
+      return hold?.reason === "ownership_unproven" && /source_phase_path_forbidden|ownership_symlink_escape/.test(String(hold.detail?.resolution ?? ""));
     }
     function setQueueTaskHold(task, reason, context2, now = Date.now()) {
       if (task.status !== "pending") return;
@@ -87510,14 +87513,15 @@ ${includeRefs[0]}`;
       const queue = store5.getQueueEntries(meshId, ["pending", "assigned"]);
       for (const snapshot of queue) {
         const view2 = queueTaskHoldView(snapshot, queue, now);
-        if (!view2 || view2.ageMs < QUEUE_HOLD_NOTICE_AFTER_MS || snapshot.holdNoticeId) continue;
+        const unclaimable = isUnclaimableAsDeclared(view2);
+        if (!view2 || !unclaimable && view2.ageMs < QUEUE_HOLD_NOTICE_AFTER_MS || snapshot.holdNoticeId) continue;
         if (isDifficultyFloorWaitReason(view2.reason) && !isQuotaGateHoldReason(view2.reason) || view2.reason === "difficulty_floor_unmet") continue;
         store5.transaction(() => {
           const task = store5.findQueueEntryById(meshId, snapshot.id);
           if (!task || task.status !== "pending" || task.holdNoticeId || JSON.stringify(task.hold) !== JSON.stringify(snapshot.hold)) return;
           const eventId = `queue-hold:${meshId}:${task.id}:${view2.since}:${holdReasonIdPart(view2.reason)}:${blockerDigest(view2.blockingTaskIds)}`;
           const blockers = view2.blockingTasks.map((b) => `${b.taskId} (${b.title})`).join(", ");
-          const coordinatorMessage = isQuotaGateHoldReason(view2.reason) ? quotaHoldCoordinatorMessage(task, view2.reason, view2.ageMs, readQuotaGateEvidence(meshId, task.id)) : `[System] Queue task ${task.id} has been held for ${Math.floor(view2.ageMs / 6e4)} min: ${view2.reason}${blockers ? ` by ${blockers}` : ""}. ${JSON.stringify(view2.detail)}`;
+          const coordinatorMessage = isQuotaGateHoldReason(view2.reason) ? quotaHoldCoordinatorMessage(task, view2.reason, view2.ageMs, readQuotaGateEvidence(meshId, task.id)) : unclaimable ? `[System] Queue task ${task.id} cannot be claimed as declared: ${view2.reason}. Waiting will not clear it; revise its owned_paths (mesh_queue_revise). ${JSON.stringify(view2.detail)}` : `[System] Queue task ${task.id} has been held for ${Math.floor(view2.ageMs / 6e4)} min: ${view2.reason}${blockers ? ` by ${blockers}` : ""}. ${JSON.stringify(view2.detail)}`;
           if (notifyMeshCoordinator({
             event: "mesh:queue_held",
             meshId,

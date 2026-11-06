@@ -1,7 +1,7 @@
 import { createHash } from 'crypto';
 import type { MeshWorkQueueEntry } from './mesh-work-queue-types.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { queueHoldContext, queueTaskHoldView, setQueueTaskHold, QUEUE_HOLD_NOTICE_AFTER_MS } from './mesh-queue-hold.js';
+import { isUnclaimableAsDeclared, queueHoldContext, queueTaskHoldView, setQueueTaskHold, QUEUE_HOLD_NOTICE_AFTER_MS } from './mesh-queue-hold.js';
 import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 import { isDifficultyFloorWaitReason } from './mesh-difficulty-floor.js';
 import { getMachineId } from '../config/config.js';
@@ -59,7 +59,8 @@ export function notifyHeldQueueTasks(meshId: string, now = Date.now()): void {
     const queue = store.getQueueEntries(meshId, ['pending', 'assigned']);
     for (const snapshot of queue) {
         const view = queueTaskHoldView(snapshot, queue, now);
-        if (!view || view.ageMs < QUEUE_HOLD_NOTICE_AFTER_MS || snapshot.holdNoticeId) continue;
+        const unclaimable = isUnclaimableAsDeclared(view);
+        if (!view || (!unclaimable && view.ageMs < QUEUE_HOLD_NOTICE_AFTER_MS) || snapshot.holdNoticeId) continue;
         // Floor-wait holds already have their own bounded-wait pager with a double
         // debounce (handleDifficultyFloorSkip, 10 min); paging them again here after
         // 3 min would duplicate that notice for the same stuck task. The hold itself
@@ -75,7 +76,9 @@ export function notifyHeldQueueTasks(meshId: string, now = Date.now()): void {
             const blockers = view.blockingTasks.map(b => `${b.taskId} (${b.title})`).join(', ');
             const coordinatorMessage = isQuotaGateHoldReason(view.reason)
                 ? quotaHoldCoordinatorMessage(task, view.reason, view.ageMs, readQuotaGateEvidence(meshId, task.id))
-                : `[System] Queue task ${task.id} has been held for ${Math.floor(view.ageMs / 60_000)} min: ${view.reason}${blockers ? ` by ${blockers}` : ''}. ${JSON.stringify(view.detail)}`;
+                : unclaimable
+                    ? `[System] Queue task ${task.id} cannot be claimed as declared: ${view.reason}. Waiting will not clear it; revise its owned_paths (mesh_queue_revise). ${JSON.stringify(view.detail)}`
+                    : `[System] Queue task ${task.id} has been held for ${Math.floor(view.ageMs / 60_000)} min: ${view.reason}${blockers ? ` by ${blockers}` : ''}. ${JSON.stringify(view.detail)}`;
             if (notifyMeshCoordinator({
                 event: 'mesh:queue_held', meshId, eventId, nodeLabel: meshId,
                 coordinatorMessage, queuedAt: now,

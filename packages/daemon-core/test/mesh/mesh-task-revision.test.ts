@@ -295,6 +295,8 @@ it('source phase rejects oss gitlink but accepts a narrow nested source file', (
     writeFileSync(join(worktree, 'oss', 'src', 'repair.ts'), 'export {};');
     const original = task();
     expect(() => revisePendingTask(meshId, original.id, 0, { ownedPaths: ['oss'], phase: 'source' }, context())).toThrow(/source_phase_path_forbidden: oss/);
+    // The whole-repository declaration is named, not left as an empty path after the colon.
+    expect(() => revisePendingTask(meshId, original.id, 0, { ownedPaths: ['**'], phase: 'source' }, context())).toThrow(/source_phase_path_forbidden: \*\*$/);
     expect(revisePendingTask(meshId, original.id, 0, { ownedPaths: ['oss/src/repair.ts'], phase: 'source' }, context()).ownedPaths?.paths).toEqual([{ path: 'oss/src/repair.ts', subtree: false }]);
 });
 

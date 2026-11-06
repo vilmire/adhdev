@@ -135,6 +135,16 @@ export function ownershipUnprovenResolution(message: string): string {
     return `${message} - the host could not attest the node checkout this task would write in; check the node workspace is a git worktree root on this machine.`;
 }
 
+/**
+ * A hold that no amount of waiting clears: the task's own owned_paths can never be attested in
+ * its phase (whole repository, `oss`, vendor/dist/node_modules/.git, or a link out of the checkout).
+ * Only a revision fixes it, so the coordinator is told at once instead of after the usual wait.
+ */
+export function isUnclaimableAsDeclared(hold: Pick<MeshQueueHold, 'reason' | 'detail'> | undefined): boolean {
+    return hold?.reason === 'ownership_unproven'
+        && /source_phase_path_forbidden|ownership_symlink_escape/.test(String(hold.detail?.resolution ?? ''));
+}
+
 /** Mutate only the diagnostic payload; never bump updatedAt (pin/reclaim clocks use it). */
 export function setQueueTaskHold(task: MeshWorkQueueEntry, reason: string, context: Pick<MeshQueueHold, 'blockingTaskIds' | 'detail'>, now = Date.now()): void {
     if (task.status !== 'pending') return;

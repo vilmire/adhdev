@@ -113,9 +113,10 @@ export function attestLocalOwnership(input: {
         }
     };
     for (const entry of input.paths.paths) {
-        if (input.phase === 'source' && sourceForbidden(entry.path)) throw new Error(`source_phase_path_forbidden: ${entry.path}`);
+        // An empty path is the whole-repository declaration (`**`); name it so the refusal reads.
+        if (input.phase === 'source' && sourceForbidden(entry.path)) throw new Error(`source_phase_path_forbidden: ${entry.path || '**'}`);
         const resolved = canonical(path.resolve(worktree, entry.path));
-        if (!inside(worktree, resolved) || (input.phase === 'source' && sourceForbidden(path.relative(worktree, resolved).split(path.sep).join('/')))) throw new Error(`ownership_symlink_escape: ${entry.path}`);
+        if (!inside(worktree, resolved) || (input.phase === 'source' && sourceForbidden(path.relative(worktree, resolved).split(path.sep).join('/')))) throw new Error(`ownership_symlink_escape: ${entry.path || '**'}`);
         if (entry.subtree) inspectSubtree(resolved);
         resources.push({ path: resolved, identity: identity(resolved), subtree: entry.subtree });
         recordNestedGitStores(worktree, entry.path, resources);
