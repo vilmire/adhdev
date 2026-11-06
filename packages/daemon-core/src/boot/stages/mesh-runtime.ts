@@ -860,8 +860,15 @@ function releaseLocalAttemptRef(components: DaemonComponents, attemptId: string)
  * remote session, and `terminated` already handles a locally-exited one via
  * `subscribeWorkerBindRevocation`.
  */
-export function detachLocalMeshTaskStamp(components: DaemonComponents, request: { sessionId: string; taskId: string | null }): void {
+export function detachLocalMeshTaskStamp(components: DaemonComponents, request: { sessionId: string; taskId: string | null; stopRequestId?: string }): void {
     if (!request.taskId) return;
+    // A cut that also sends an exact writer stop keeps the stamp: the stop proves the
+    // session is this attempt's writer by that stamp, and without it the session reads
+    // as an unbound worker that is never stopped while busy (`unbound_writer_busy`).
+    // Live 2026-11-06: a worker cut at the 90-min ceiling while parked on an approval
+    // prompt was refused every retry for hours. The stopped writer exits, and
+    // `terminated` clears what is left.
+    if (request.stopRequestId) return;
     const instance = components.instanceManager.getInstance(request.sessionId) as unknown as {
         getState?: () => { settings?: Record<string, unknown> };
         detachMeshAssignment?: () => void;

@@ -133987,7 +133987,8 @@ ${detail.join("\n")}` : stripped;
         }
         if (effectiveCursorRow < interactiveStartRow || effectiveCursorRow > modalEndRow + 1) {
           const detached = effectiveCursorRow < interactiveStartRow && lastChoiceBlock !== void 0 && choiceEndRow === lastChoiceBlock.endRow && DETACHED_CURSOR_FOOTER_RE.test(lines[lastNonBlankRow]) && DETACHED_CURSOR_ACTIVITY_ROW_RE.test(lines[effectiveCursorRow] ?? "") && lines.slice(effectiveCursorRow + 1, lastNonBlankRow).every((row2) => DETACHED_CURSOR_GAP_ROW_RE.test(row2));
-          if (!detached) return empty;
+          const parkedBelow = effectiveCursorRow > lastNonBlankRow && modalEndRow === lastNonBlankRow && PARKED_BELOW_SWITCHER_RE.test(lines[lastNonBlankRow]) && lines.slice(lastNonBlankRow + 1, effectiveCursorRow + 1).every((row2) => !row2.trim()) && lines.slice(Math.max(interactiveStartRow, lastNonBlankRow - 4), lastNonBlankRow).some((row2) => PARKED_BELOW_KEY_HINT_RE.test(row2));
+          if (!detached && !parkedBelow) return empty;
         }
       }
       const sliceLines = lines.slice(minStartRow, modalEndRow + 1);
@@ -134110,6 +134111,8 @@ ${detail.join("\n")}` : stripped;
     var DETACHED_CURSOR_FOOTER_RE;
     var DETACHED_CURSOR_ACTIVITY_ROW_RE;
     var DETACHED_CURSOR_GAP_ROW_RE;
+    var PARKED_BELOW_SWITCHER_RE;
+    var PARKED_BELOW_KEY_HINT_RE;
     var init_fsm_driver_modal = __esm2({
       "src/providers/spec/fsm-driver-modal.ts"() {
         "use strict";
@@ -134124,6 +134127,8 @@ ${detail.join("\n")}` : stripped;
         DETACHED_CURSOR_FOOTER_RE = /^\s*\d+\/\d+:select\b/;
         DETACHED_CURSOR_ACTIVITY_ROW_RE = /^\s*◆\s+\S|\[stop\]\s*$/;
         DETACHED_CURSOR_GAP_ROW_RE = /^\s*(?:┃.*)?$/;
+        PARKED_BELOW_SWITCHER_RE = /^\s*←\/→ to switch approval\s*$/;
+        PARKED_BELOW_KEY_HINT_RE = /\((?:y|n|p|tab|shift\+tab|esc(?:\s+or\s+n)?)\)\s*$/i;
       }
     });
     function unavailableSignalSnapshot(now, reason, profile) {
@@ -163843,6 +163848,7 @@ ${defangRelayBody(text10)}`;
     }
     function detachLocalMeshTaskStamp(components, request) {
       if (!request.taskId) return;
+      if (request.stopRequestId) return;
       const instance = components.instanceManager.getInstance(request.sessionId);
       if (!instance || typeof instance.detachMeshAssignment !== "function") return;
       try {
