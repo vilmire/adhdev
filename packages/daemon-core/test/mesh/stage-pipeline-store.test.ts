@@ -26,7 +26,7 @@ import { commitTaskTerminal, applyTaskTerminalInTxn } from '../../src/mesh/mesh-
 import { bindMeshNoticeRuntime } from '../../src/mesh/turn-ledger/deliver.js';
 import { setStageHookTarget } from '../../src/mesh/stage-hooks.js';
 import { setStageNoticeLookup, isStageInternalNotice } from '../../src/mesh/stage-notice-silence.js';
-import { isStagePipelineParked } from '../../src/mesh/stage-state.js';
+import { isStageBlockLocked, isStagePipelineParked } from '../../src/mesh/stage-state.js';
 import { assertNotStageChild } from '../../src/mesh/stage-guards.js';
 import { sweepOrphanedUncorrelatedDispatches } from '../../src/mesh/mesh-orphaned-dispatch-sweep.js';
 import { collectSessionIdsWithActiveWork } from '../../src/mesh/mesh-idle-session-reaper.js';
@@ -140,6 +140,26 @@ describe('terminal choke point hold', () => {
         // The pipeline itself (a decide: accept) still completes it.
         expect(commitTaskTerminal({ meshId: mesh, taskId: parent.id, status: 'completed', source: 'queue_policy' }).committed).toBe(true);
         expect(getQueueEntryById(mesh, parent.id)!.status).toBe('completed');
+    });
+
+    it('a review-blocked parent stays blocked against the ledger settling its stopped writer as failed', () => {
+        // Live 2026-11-06 (c1cdb3f7): blocked at stage_pipeline_ceiling while the writer still ran;
+        // once the writer was stopped its attempt committed `failed` over the block and the
+        // coordinator's rereview was refused with stage_task_not_blocked.
+        const mesh = newMesh();
+        setStageHookTarget({ onImplCompleted: async () => undefined, onChildTerminal: async () => undefined, onChildClaimed: async () => undefined });
+        const parent = enqueueTask(mesh, 'fix', stagey);
+        assigned(mesh, parent.id);
+        const cur = getQueueEntryById(mesh, parent.id)!;
+        cur.stageState!.released = true; cur.stageState!.phase = 'done'; cur.stageState!.blockedReason = 'stage_pipeline_ceiling';
+        store().updateQueueEntry(cur);
+        commitTaskTerminal({ meshId: mesh, taskId: parent.id, status: 'blocked', source: 'queue_policy' });
+        store().transaction(() => applyTaskTerminalInTxn({ meshId: mesh, taskId: parent.id, status: 'failed', attemptId: 'att1', occurredAtMs: Date.now() }));
+        expect(getQueueEntryById(mesh, parent.id)!.status).toBe('blocked');
+        expect(commitTaskTerminal({ meshId: mesh, taskId: parent.id, status: 'failed', attemptId: 'att1', source: 'worker_tool_report' })).toMatchObject({ committed: false });
+        expect(getQueueEntryById(mesh, parent.id)!.status).toBe('blocked');
+        // abandon (cancelled) stays the coordinator's to write.
+        expect(isStageBlockLocked(getQueueEntryById(mesh, parent.id), 'cancelled')).toBe(false);
     });
 
     it('a non-stage task is never held; a child terminal fires the child hook', async () => {

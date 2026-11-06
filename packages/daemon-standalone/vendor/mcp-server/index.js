@@ -48764,12 +48764,12 @@ ${error.message || ""}`;
       return !s2.released && s2.phase !== "done";
     }
     function isStageBlockLocked(entry, status) {
-      if (!entry || status !== "completed" || !isStageParent(entry)) return false;
+      if (!entry || !STAGE_BLOCK_OVERWRITING_STATUSES.has(status) || !isStageParent(entry)) return false;
       const s2 = entry.stageState;
       return entry.status === "blocked" && !!s2.released && !!s2.blockedReason;
     }
     function isStageBlockOverwritten(entry) {
-      if (!entry || entry.status !== "completed" || !isStageParent(entry)) return false;
+      if (!entry || !STAGE_BLOCK_OVERWRITING_STATUSES.has(entry.status) || !isStageParent(entry)) return false;
       const s2 = entry.stageState;
       return !!s2.released && !!s2.blockedReason;
     }
@@ -48795,10 +48795,12 @@ ${error.message || ""}`;
         ...(st.workerArtifactIds ?? []).slice(-8)
       ])];
     }
+    var STAGE_BLOCK_OVERWRITING_STATUSES;
     var init_stage_state = __esm2({
       "src/mesh/stage-state.ts"() {
         "use strict";
         init_dist();
+        STAGE_BLOCK_OVERWRITING_STATUSES = /* @__PURE__ */ new Set(["completed", "failed"]);
       }
     });
     function preferEligible2(eligible, preferences, key7) {
@@ -79024,37 +79026,41 @@ ${body.replace(/<\/?\s*(untrusted_[a-z_]+)\b[^>]*>/gi, "[tag removed]")}
           decide(meshId, parentId, action2, note2) {
             let result = { ok: true };
             return this.serial(meshId, parentId, async () => {
-              let parent = this.ports.queue.get(meshId, parentId);
-              if (!parent || !isStageParent(parent)) {
-                result = { ok: false, error: "not_a_stage_task" };
-                return;
-              }
-              if (isStageBlockOverwritten(parent)) {
-                parent = this.ports.queue.mutate(meshId, parentId, (e) => {
-                  e.status = "blocked";
-                }) ?? parent;
-                this.ports.events.progress(meshId, parentId, "restored the review block a late completion had overwritten");
-              }
-              if (parent.status !== "blocked" || !parent.stageState.blockedReason) {
-                result = { ok: false, error: "stage_task_not_blocked" };
-                return;
-              }
-              if (action2 === "accept" || action2 === "abandon") {
-                if (action2 === "accept") {
-                  parent = this.ports.queue.mutate(meshId, parentId, (e) => {
-                    delete e.stageState.blockedReason;
-                    delete e.stageState.blockedDetail;
-                  }) ?? parent;
-                  this.ports.queue.commitParent(parent, "completed", { finalSummary: `Accepted by coordinator${note2 ? `: ${note2}` : ""}` }, "stage_decide:accept");
-                } else {
-                  this.ports.queue.cancel(meshId, parentId, `stage_decide:abandon${note2 ? `: ${note2}` : ""}`);
+              try {
+                let parent = this.ports.queue.get(meshId, parentId);
+                if (!parent || !isStageParent(parent)) {
+                  result = { ok: false, error: "not_a_stage_task" };
+                  return;
                 }
-                return;
+                if (isStageBlockOverwritten(parent)) {
+                  parent = this.ports.queue.mutate(meshId, parentId, (e) => {
+                    e.status = "blocked";
+                  }) ?? parent;
+                  this.ports.events.progress(meshId, parentId, "restored the review block a late completion had overwritten");
+                }
+                if (parent.status !== "blocked" || !parent.stageState.blockedReason) {
+                  result = { ok: false, error: "stage_task_not_blocked" };
+                  return;
+                }
+                if (action2 === "accept" || action2 === "abandon") {
+                  if (action2 === "accept") {
+                    parent = this.ports.queue.mutate(meshId, parentId, (e) => {
+                      delete e.stageState.blockedReason;
+                      delete e.stageState.blockedDetail;
+                    }) ?? parent;
+                    this.ports.queue.commitParent(parent, "completed", { finalSummary: `Accepted by coordinator${note2 ? `: ${note2}` : ""}` }, "stage_decide:accept");
+                  } else {
+                    this.ports.queue.cancel(meshId, parentId, `stage_decide:abandon${note2 ? `: ${note2}` : ""}`);
+                  }
+                  return;
+                }
+                this.ports.queue.mutate(meshId, parentId, (e) => {
+                  e.status = "assigned";
+                });
+                await this.apply(meshId, parentId, { kind: action2 === "revise_once" ? "decide_revise_once" : "decide_rereview", at: this.iso() });
+              } catch (e) {
+                result = { ok: false, error: String(e?.message || e) };
               }
-              this.ports.queue.mutate(meshId, parentId, (e) => {
-                e.status = "assigned";
-              });
-              await this.apply(meshId, parentId, { kind: action2 === "revise_once" ? "decide_revise_once" : "decide_rereview", at: this.iso() });
             }).then(() => result);
           }
           // ── reducer driver ──────────────────────────────────────────────

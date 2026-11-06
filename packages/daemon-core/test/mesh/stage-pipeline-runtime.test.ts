@@ -415,6 +415,24 @@ describe('stage pipeline runtime', () => {
         expect((await g.rt.decide(MESH, PARENT, 'accept')).error).toBe('stage_task_not_blocked');
     });
 
+    it('decide reports a refused write instead of a silent success', async () => {
+        // Live 2026-11-06 (c1cdb3f7): the store refused blocked → assigned while the attempt was
+        // still stopping, serial() swallowed the throw, and the coordinator was told rereview worked.
+        const h = harness({ maxRevisions: 0 });
+        await h.implDone('a1');
+        await h.review({ verdict: 'changes_requested', findings: [h.f('f1')] });
+        expect(h.parent().status).toBe('blocked');
+        const mutate = h.ports.queue.mutate;
+        h.ports.queue.mutate = (m, id, fn) => mutate(m, id, e => {
+            const probe = { ...e }; fn(probe as typeof e);
+            if (probe.status !== e.status) throw new Error('writer_checkpoint_pending: the physical writer claim cannot be released or rebound');
+            fn(e);
+        });
+        const r = await h.rt.decide(MESH, PARENT, 'rereview');
+        expect(r).toEqual({ ok: false, error: 'writer_checkpoint_pending: the physical writer claim cannot be released or rebound' });
+        expect(h.parent().status).toBe('blocked');
+    });
+
     it('decide recovers a review block a late completion overwrote, and an accepted one stays decided', async () => {
         const h = harness({ maxRevisions: 0 });
         await h.implDone('a1');
@@ -423,6 +441,13 @@ describe('stage pipeline runtime', () => {
         h.parent().status = 'completed'; // what the old daemon let the worker's late report do
         expect((await h.rt.decide(MESH, PARENT, 'rereview')).ok).toBe(true);
         expect(h.parent().status).toBe('assigned');
+        // The same recovery for a late ledger `failed` (a writer settled after the block).
+        const f = harness({ maxRevisions: 0 });
+        await f.implDone('a1');
+        await f.review({ verdict: 'changes_requested', findings: [f.f('f1')] });
+        f.parent().status = 'failed';
+        expect((await f.rt.decide(MESH, PARENT, 'rereview')).ok).toBe(true);
+        expect(f.parent().status).toBe('assigned');
         expect(h.log.progress.some(p => /restored the review block/.test(p))).toBe(true);
 
         const g = harness({ maxRevisions: 0 });

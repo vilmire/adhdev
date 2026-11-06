@@ -47,6 +47,14 @@ export function shouldHoldStageTerminal(entry: StageRow | null | undefined, stat
 }
 
 /**
+ * Terminals that must not replace a released stage block. `failed` too: a writer the
+ * ledger could only settle after the block (live 2026-11-06, c1cdb3f7: the stopped
+ * worker's attempt committed `failed` over `stage_pipeline_ceiling`). `cancelled` stays
+ * open — `abandon` is the coordinator's own decision and writes it.
+ */
+const STAGE_BLOCK_OVERWRITING_STATUSES: ReadonlySet<string> = new Set(['completed', 'failed']);
+
+/**
  * The review stage released this row as `blocked`: from here only the pipeline or the
  * coordinator's `mesh_task_stage_decide` moves it. A later `completed` from the worker's
  * report or the turn ledger's idle-edge re-commit of the same attempt must not turn an
@@ -54,7 +62,7 @@ export function shouldHoldStageTerminal(entry: StageRow | null | undefined, stat
  * stage_task_not_blocked).
  */
 export function isStageBlockLocked(entry: StageRow | null | undefined, status: string): boolean {
-    if (!entry || status !== 'completed' || !isStageParent(entry)) return false;
+    if (!entry || !STAGE_BLOCK_OVERWRITING_STATUSES.has(status) || !isStageParent(entry)) return false;
     const s = entry.stageState!;
     return entry.status === 'blocked' && !!s.released && !!s.blockedReason;
 }
@@ -65,7 +73,7 @@ export function isStageBlockLocked(entry: StageRow | null | undefined, status: s
  * `accept` clears `blockedReason`, so an accepted row never qualifies.
  */
 export function isStageBlockOverwritten(entry: StageRow | null | undefined): boolean {
-    if (!entry || entry.status !== 'completed' || !isStageParent(entry)) return false;
+    if (!entry || !STAGE_BLOCK_OVERWRITING_STATUSES.has(entry.status) || !isStageParent(entry)) return false;
     const s = entry.stageState!;
     return !!s.released && !!s.blockedReason;
 }
