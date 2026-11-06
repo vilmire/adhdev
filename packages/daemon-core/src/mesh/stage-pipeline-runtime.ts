@@ -9,7 +9,7 @@ import { FINGERPRINT_V2, type StageRuntimePorts } from './stage-ports.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue-types.js';
 import { dropStageReport, peekStageReport } from './stage-report-stash.js';
 import { buildFinalReport, buildReviewerMessage, buildRevisionMemo } from './stage-synthesis.js';
-import { isStageChild, isStageParent, selectStageInputArtifacts } from './stage-state.js';
+import { isStageBlockOverwritten, isStageChild, isStageParent, selectStageInputArtifacts } from './stage-state.js';
 import { independenceRefusalExceeded } from './stage-independence.js';
 
 const STAGE_PARENT_ENDED = new Set(['completed', 'failed', 'blocked', 'cancelled']);
@@ -199,11 +199,19 @@ export class StagePipelineRuntime {
     decide(meshId: string, parentId: string, action: 'accept' | 'revise_once' | 'rereview' | 'abandon', note?: string): Promise<{ ok: boolean; error?: string }> {
         let result: { ok: boolean; error?: string } = { ok: true };
         return this.serial(meshId, parentId, async () => {
-            const parent = this.ports.queue.get(meshId, parentId);
+            let parent = this.ports.queue.get(meshId, parentId);
             if (!parent || !isStageParent(parent)) { result = { ok: false, error: 'not_a_stage_task' }; return; }
+            // A late `completed` overwrote the review's `blocked` (before isStageBlockLocked):
+            // restore the review's verdict so the decision runs exactly as on a blocked row.
+            if (isStageBlockOverwritten(parent)) {
+                parent = this.ports.queue.mutate(meshId, parentId, e => { e.status = 'blocked'; }) ?? parent;
+                this.ports.events.progress(meshId, parentId, 'restored the review block a late completion had overwritten');
+            }
             if (parent.status !== 'blocked' || !parent.stageState!.blockedReason) { result = { ok: false, error: 'stage_task_not_blocked' }; return; }
             if (action === 'accept' || action === 'abandon') {
                 if (action === 'accept') {
+                    // Clearing the reason marks the block decided, so it can never be reopened as overwritten.
+                    parent = this.ports.queue.mutate(meshId, parentId, e => { delete e.stageState!.blockedReason; }) ?? parent;
                     this.ports.queue.commitParent(parent, 'completed', { finalSummary: `Accepted by coordinator${note ? `: ${note}` : ''}` }, 'stage_decide:accept');
                 } else {
                     this.ports.queue.cancel(meshId, parentId, `stage_decide:abandon${note ? `: ${note}` : ''}`);

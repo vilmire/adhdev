@@ -376,6 +376,26 @@ describe('stage pipeline runtime', () => {
         expect(g.parent().status).toBe('completed');
         expect((await g.rt.decide(MESH, PARENT, 'accept')).error).toBe('stage_task_not_blocked');
     });
+
+    it('decide recovers a review block a late completion overwrote, and an accepted one stays decided', async () => {
+        const h = harness({ maxRevisions: 0 });
+        await h.implDone('a1');
+        await h.review({ verdict: 'changes_requested', findings: [h.f('f1')] });
+        expect(h.parent().status).toBe('blocked');
+        h.parent().status = 'completed'; // what the old daemon let the worker's late report do
+        expect((await h.rt.decide(MESH, PARENT, 'rereview')).ok).toBe(true);
+        expect(h.parent().status).toBe('assigned');
+        expect(h.log.progress.some(p => /restored the review block/.test(p))).toBe(true);
+
+        const g = harness({ maxRevisions: 0 });
+        await g.implDone('a1');
+        await g.review({ verdict: 'changes_requested', findings: [g.f('f1')] });
+        g.parent().status = 'completed';
+        expect((await g.rt.decide(MESH, PARENT, 'accept')).ok).toBe(true);
+        expect(g.parent().status).toBe('completed');
+        expect(g.parent().stageState!.blockedReason).toBeUndefined();
+        expect((await g.rt.decide(MESH, PARENT, 'rereview')).error).toBe('stage_task_not_blocked');
+    });
 });
 
 import { stageFooterInput } from '../../src/mesh/stage-state.js';

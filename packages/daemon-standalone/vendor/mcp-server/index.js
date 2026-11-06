@@ -48747,6 +48747,16 @@ ${error.message || ""}`;
       const s2 = entry.stageState;
       return !s2.released && s2.phase !== "done";
     }
+    function isStageBlockLocked(entry, status) {
+      if (!entry || status !== "completed" || !isStageParent(entry)) return false;
+      const s2 = entry.stageState;
+      return entry.status === "blocked" && !!s2.released && !!s2.blockedReason;
+    }
+    function isStageBlockOverwritten(entry) {
+      if (!entry || entry.status !== "completed" || !isStageParent(entry)) return false;
+      const s2 = entry.stageState;
+      return !!s2.released && !!s2.blockedReason;
+    }
     function isStageImplReport(entry) {
       if (!entry || !isStageParent(entry)) return false;
       const s2 = entry.stageState;
@@ -51604,6 +51614,7 @@ ${rendered.join("\n\n")}`,
           return { entry, committed: false, duplicate: false };
         }
         if (entry.status === terminal.status) return { entry, committed: true, duplicate: true };
+        if (terminal.source !== "queue_policy" && isStageBlockLocked(entry, terminal.status)) return { entry, committed: false, duplicate: false };
         if (shouldHoldStageTerminal(entry, terminal.status)) {
           implReport = isStageImplReport(entry);
           return { entry, committed: true, duplicate: false, held: true };
@@ -51644,6 +51655,7 @@ ${rendered.join("\n\n")}`,
         const entry = store5.findQueueEntryById(input.meshId, input.taskId);
         if (!entry) return { entry: null, transitioned: false };
         if (entry.status === input.status) return { entry, transitioned: false };
+        if (isStageBlockLocked(entry, input.status)) return { entry, transitioned: false };
         if (shouldHoldStageTerminal(entry, input.status)) {
           if (isStageImplReport(entry)) afterBridgeCommit(store5.db, () => notifyStageImplCompleted(input.meshId, input.taskId, input.attemptId));
           return { entry, transitioned: false };
@@ -78909,10 +78921,16 @@ ${body.replace(/<\/?\s*(untrusted_[a-z_]+)\b[^>]*>/gi, "[tag removed]")}
           decide(meshId, parentId, action2, note2) {
             let result = { ok: true };
             return this.serial(meshId, parentId, async () => {
-              const parent = this.ports.queue.get(meshId, parentId);
+              let parent = this.ports.queue.get(meshId, parentId);
               if (!parent || !isStageParent(parent)) {
                 result = { ok: false, error: "not_a_stage_task" };
                 return;
+              }
+              if (isStageBlockOverwritten(parent)) {
+                parent = this.ports.queue.mutate(meshId, parentId, (e) => {
+                  e.status = "blocked";
+                }) ?? parent;
+                this.ports.events.progress(meshId, parentId, "restored the review block a late completion had overwritten");
               }
               if (parent.status !== "blocked" || !parent.stageState.blockedReason) {
                 result = { ok: false, error: "stage_task_not_blocked" };
@@ -78920,6 +78938,9 @@ ${body.replace(/<\/?\s*(untrusted_[a-z_]+)\b[^>]*>/gi, "[tag removed]")}
               }
               if (action2 === "accept" || action2 === "abandon") {
                 if (action2 === "accept") {
+                  parent = this.ports.queue.mutate(meshId, parentId, (e) => {
+                    delete e.stageState.blockedReason;
+                  }) ?? parent;
                   this.ports.queue.commitParent(parent, "completed", { finalSummary: `Accepted by coordinator${note2 ? `: ${note2}` : ""}` }, "stage_decide:accept");
                 } else {
                   this.ports.queue.cancel(meshId, parentId, `stage_decide:abandon${note2 ? `: ${note2}` : ""}`);

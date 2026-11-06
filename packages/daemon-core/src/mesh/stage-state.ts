@@ -46,6 +46,30 @@ export function shouldHoldStageTerminal(entry: StageRow | null | undefined, stat
     return !s.released && s.phase !== 'done';
 }
 
+/**
+ * The review stage released this row as `blocked`: from here only the pipeline or the
+ * coordinator's `mesh_task_stage_decide` moves it. A later `completed` from the worker's
+ * report or the turn ledger's idle-edge re-commit of the same attempt must not turn an
+ * unapproved review into a finished task (live 2026-11-06: re-review then refused with
+ * stage_task_not_blocked).
+ */
+export function isStageBlockLocked(entry: StageRow | null | undefined, status: string): boolean {
+    if (!entry || status !== 'completed' || !isStageParent(entry)) return false;
+    const s = entry.stageState!;
+    return entry.status === 'blocked' && !!s.released && !!s.blockedReason;
+}
+
+/**
+ * A row the review released as blocked that a late `completed` overwrote before
+ * `isStageBlockLocked` existed: still undecided, so the coordinator may decide it.
+ * `accept` clears `blockedReason`, so an accepted row never qualifies.
+ */
+export function isStageBlockOverwritten(entry: StageRow | null | undefined): boolean {
+    if (!entry || entry.status !== 'completed' || !isStageParent(entry)) return false;
+    const s = entry.stageState!;
+    return !!s.released && !!s.blockedReason;
+}
+
 /** A held `completed` that is the implementer's stage report (hand it to the pipeline), not a repeat commit. */
 export function isStageImplReport(entry: StageRow | null | undefined): boolean {
     if (!entry || !isStageParent(entry)) return false;

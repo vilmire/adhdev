@@ -122,6 +122,26 @@ describe('terminal choke point hold', () => {
         expect(calls).toEqual([`impl:${parent.id}:att1`]);
     });
 
+    it('a review-blocked parent stays blocked against a late worker or ledger completed', () => {
+        // Live 2026-11-06: the review blocked the task (reviewer_integrity_unverifiable), then the
+        // worker's own completion turned it `completed` and the coordinator's rereview was refused.
+        const mesh = newMesh();
+        setStageHookTarget({ onImplCompleted: async () => undefined, onChildTerminal: async () => undefined, onChildClaimed: async () => undefined });
+        const parent = enqueueTask(mesh, 'fix', stagey);
+        assigned(mesh, parent.id);
+        const cur = getQueueEntryById(mesh, parent.id)!;
+        cur.stageState!.released = true; cur.stageState!.phase = 'done'; cur.stageState!.blockedReason = 'reviewer_integrity_unverifiable';
+        store().updateQueueEntry(cur);
+        commitTaskTerminal({ meshId: mesh, taskId: parent.id, status: 'blocked', source: 'queue_policy' });
+        expect(getQueueEntryById(mesh, parent.id)!.status).toBe('blocked');
+        expect(commitTaskTerminal({ meshId: mesh, taskId: parent.id, status: 'completed', attemptId: 'att1', source: 'worker_tool_report' })).toMatchObject({ committed: false });
+        store().transaction(() => applyTaskTerminalInTxn({ meshId: mesh, taskId: parent.id, status: 'completed', attemptId: 'att1', occurredAtMs: Date.now() }));
+        expect(getQueueEntryById(mesh, parent.id)!.status).toBe('blocked');
+        // The pipeline itself (a decide: accept) still completes it.
+        expect(commitTaskTerminal({ meshId: mesh, taskId: parent.id, status: 'completed', source: 'queue_policy' }).committed).toBe(true);
+        expect(getQueueEntryById(mesh, parent.id)!.status).toBe('completed');
+    });
+
     it('a non-stage task is never held; a child terminal fires the child hook', async () => {
         const mesh = newMesh();
         const calls: string[] = [];
