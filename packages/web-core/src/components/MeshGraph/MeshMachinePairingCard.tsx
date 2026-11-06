@@ -71,13 +71,6 @@ export const MESH_PAIRING_COPY = {
     peerDisconnected: '끊김',
     peerLastConnected: '마지막 연결 {{time}}',
     peerFailure: '실패 코드: {{code}}',
-    tabPin: '키 등록',
-    pinIntro: '이미 프로젝트에 연결된 머신이 호스트의 아티팩트 서명 키를 갖지 못하면 원격 아티팩트가 거부됩니다. 호스트 탭에서 만든 코드를 입력해 그 머신에 키를 등록하세요.',
-    pinMachine: '머신',
-    pinSelect: '머신 선택',
-    pinNoMachines: '호스트 외에 연결된 머신이 없습니다. 먼저 프로젝트에 머신을 연결하세요.',
-    pinAction: '키 등록',
-    pinning: '등록 중…',
     pinned: '키 등록 완료: {{machine}}',
 } as const
 
@@ -163,7 +156,7 @@ export function MeshNodePeerLinkBadge({ meshTheme, node }: { meshTheme: MeshGrap
 
 type SendDaemonCommand = (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
 
-type PairingTab = 'host' | 'member' | 'pin'
+type PairingTab = 'host' | 'member'
 
 interface PairingInfo {
     role?: string
@@ -254,19 +247,12 @@ export default function MeshMachinePairingCard({
     daemonId,
     meshId,
     sendDaemonCommand,
-    mode = 'standalone',
 }: {
     meshTheme: MeshGraphTheme
     status: RepoMeshStatus
     daemonId: string | null
     meshId: string | null
     sendDaemonCommand: SendDaemonCommand | null
-    /**
-     * `standalone`: host/member pairing by address + code. `cloud`: machines already
-     * belong to the account, so the member side is replaced by "pin the host's key on
-     * a machine" (pin_mesh_host_key, sent to that machine over P2P — no address).
-     */
-    mode?: 'standalone' | 'cloud'
 }) {
     const { t } = useTranslation('common')
     const [tab, setTab] = useState<PairingTab>('host')
@@ -282,9 +268,6 @@ export default function MeshMachinePairingCard({
     const [revokeTarget, setRevokeTarget] = useState<string | null>(null)
     const [revokeError, setRevokeError] = useState<string | null>(null)
 
-    const [pinTarget, setPinTarget] = useState('')
-    const [pinCode, setPinCode] = useState('')
-    const [pinResult, setPinResult] = useState<{ ok: boolean; machine?: string; error?: string } | null>(null)
 
     const run = useCallback(async (type: string, payload: Record<string, unknown>, targetDaemonId?: string) => {
         const target = targetDaemonId || daemonId
@@ -375,28 +358,6 @@ export default function MeshMachinePairingCard({
         }
     }, [addressInput, codeInput, meshId, run, t, loadInfo])
 
-    const pinMachines = useMemo(() => (status.nodes ?? []).filter((node, index, all) => {
-        if (!node.daemonId || (daemonId && sameDaemon(node.daemonId, daemonId))) return false
-        return all.findIndex(other => sameDaemon(other.daemonId, node.daemonId)) === index
-    }), [status, daemonId])
-
-    const pinKey = useCallback(async () => {
-        const token = pinCode.trim()
-        const target = pinMachines.find(node => node.daemonId === pinTarget)
-        if (!meshId || !daemonId || !target || !token) return
-        setBusy('join')
-        setPinResult(null)
-        try {
-            const body = await run('pin_mesh_host_key', { meshId, token, hostDaemonId: daemonId }, target.daemonId)
-            if (!body || body.success === false) setPinResult({ ok: false, error: errorText(body, pairingText(t, 'requestFailed')) })
-            else { setPinResult({ ok: true, machine: nodeDisplayName(target) }); setPinCode('') }
-        } catch (err) {
-            setPinResult({ ok: false, error: err instanceof Error ? err.message : pairingText(t, 'requestFailed') })
-        } finally {
-            setBusy(null)
-        }
-    }, [pinCode, pinMachines, pinTarget, meshId, daemonId, run, t])
-
     const revoke = useCallback(async (peerDaemonId: string) => {
         if (!meshId) return
         setRevokeError(null)
@@ -430,12 +391,10 @@ export default function MeshMachinePairingCard({
                 <SettingsTabBar
                     tabs={[
                         { key: 'host', label: pairingText(t, 'tabHost') },
-                        mode === 'cloud'
-                            ? { key: 'pin', label: pairingText(t, 'tabPin') }
-                            : { key: 'member', label: pairingText(t, 'tabMember') },
+                        { key: 'member', label: pairingText(t, 'tabMember') },
                     ]}
-                    activeKey={tab === 'member' && mode === 'cloud' ? 'pin' : tab}
-                    onSelect={key => setTab(key === 'member' || key === 'pin' ? (mode === 'cloud' ? 'pin' : 'member') : 'host')}
+                    activeKey={tab}
+                    onSelect={key => setTab(key === 'member' ? 'member' : 'host')}
                     tabIdPrefix="mesh-pairing-tab"
                     className="mb-0"
                 />
@@ -444,10 +403,10 @@ export default function MeshMachinePairingCard({
                 {tab === 'host' ? (
                     <div className="flex flex-col gap-3" data-testid="mesh-pairing-host">
                         <EmptyHint meshTheme={meshTheme}>{pairingText(t, 'hostIntro')}</EmptyHint>
-                        {mode === 'standalone' && info?.loopbackOnly && (
+                        {info?.loopbackOnly && (
                             <div className="text-2xs text-status-warning" data-testid="mesh-pairing-loopback-warning">{pairingText(t, 'loopbackWarning')}</div>
                         )}
-                        {mode === 'standalone' && info && info.addressCandidates.length > 0 && !created && (
+                        {info && info.addressCandidates.length > 0 && !created && (
                             <div className="flex flex-wrap items-baseline gap-2 text-xs" data-testid="mesh-pairing-address-candidates">
                                 <span className={meshTheme.textMuted}>{pairingText(t, 'address')}</span>
                                 <span className={`font-mono ${meshTheme.textPrimary}`}>{info.addressCandidates.join(' · ')}</span>
@@ -461,14 +420,14 @@ export default function MeshMachinePairingCard({
                         {createError && <div className="text-2xs text-status-error" data-testid="mesh-pairing-create-error">{createError}</div>}
                         {created && (
                             <div className="flex flex-col gap-1.5 rounded-lg border border-border-subtle bg-bg-glass px-3 py-2 text-xs" data-testid="mesh-pairing-code-box">
-                                {mode === 'standalone' && <div className="flex flex-wrap items-baseline gap-2">
+                                <div className="flex flex-wrap items-baseline gap-2">
                                     <span className={meshTheme.textMuted}>{pairingText(t, 'address')}</span>
                                     {info && info.addressCandidates.length > 0 ? (
                                         <span className={`font-mono ${meshTheme.textPrimary}`} data-testid="mesh-pairing-address">{info.addressCandidates.join(' · ')}</span>
                                     ) : (
                                         <span className={meshTheme.textSecondary} data-testid="mesh-pairing-address-hint">{pairingText(t, 'addressHint', { port })}</span>
                                     )}
-                                </div>}
+                                </div>
                                 <div className="flex flex-wrap items-center gap-2">
                                     <span className={meshTheme.textMuted}>{pairingText(t, 'code')}</span>
                                     <code className={`select-all break-all font-mono text-sm ${meshTheme.textPrimary}`} data-testid="mesh-pairing-code">{created.token}</code>
@@ -508,51 +467,6 @@ export default function MeshMachinePairingCard({
                             )}
                             {revokeError && <div className="mt-1 text-2xs text-status-error">{revokeError}</div>}
                         </div>
-                    </div>
-                ) : tab === 'pin' && mode === 'cloud' ? (
-                    <div className="flex flex-col gap-2" data-testid="mesh-pairing-pin-tab">
-                        <EmptyHint meshTheme={meshTheme}>{pairingText(t, 'pinIntro')}</EmptyHint>
-                        {pinMachines.length === 0 ? (
-                            <EmptyHint meshTheme={meshTheme}>{pairingText(t, 'pinNoMachines')}</EmptyHint>
-                        ) : (
-                            <>
-                                <select
-                                    className="rounded-lg border border-border-subtle bg-bg-glass px-3 py-2 text-xs"
-                                    value={pinTarget}
-                                    onChange={event => setPinTarget(event.target.value)}
-                                    aria-label={pairingText(t, 'pinMachine')}
-                                    data-testid="mesh-pairing-pin-machine"
-                                >
-                                    <option value="">{pairingText(t, 'pinSelect')}</option>
-                                    {pinMachines.map(node => (
-                                        <option key={node.daemonId} value={node.daemonId}>{nodeDisplayName(node)}</option>
-                                    ))}
-                                </select>
-                                <Input
-                                    className={INPUT_CLASS}
-                                    value={pinCode}
-                                    onChange={event => setPinCode(event.target.value)}
-                                    placeholder={pairingText(t, 'codePlaceholder')}
-                                    aria-label={pairingText(t, 'code')}
-                                    autoComplete="off"
-                                    data-testid="mesh-pairing-pin-code"
-                                />
-                                <div>
-                                    <Button
-                                        variant="primary"
-                                        size="sm"
-                                        onClick={() => { void pinKey() }}
-                                        disabled={busy === 'join' || !pinTarget || !pinCode.trim()}
-                                        data-testid="mesh-pairing-pin"
-                                    >
-                                        {busy === 'join' ? pairingText(t, 'pinning') : pairingText(t, 'pinAction')}
-                                    </Button>
-                                </div>
-                            </>
-                        )}
-                        {pinResult && (pinResult.ok
-                            ? <div className={`text-xs ${meshTheme.textPrimary}`} data-testid="mesh-pairing-pin-success">{pairingText(t, 'pinned', { machine: pinResult.machine })}</div>
-                            : <div className="text-xs text-status-error" data-testid="mesh-pairing-pin-error">{pinResult.error}</div>)}
                     </div>
                 ) : (
                     <div className="flex flex-col gap-2" data-testid="mesh-pairing-member-tab">

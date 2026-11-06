@@ -223,14 +223,16 @@ export default function MeshOverviewCards({
 
             <NodesCard meshTheme={meshTheme} nodes={canonicalStatus.nodes} showPeerLink={usesP2P === false} />
 
-            <MeshMachinePairingCard
-                meshTheme={meshTheme}
-                status={canonicalStatus}
-                daemonId={daemonId}
-                meshId={meshId ?? canonicalStatus.meshId ?? null}
-                sendDaemonCommand={sendDaemonCommand}
-                mode={usesP2P === false ? 'standalone' : 'cloud'}
-            />
+            {/* Cloud machines already belong to the account and exchange keys on their own. */}
+            {usesP2P === false && (
+                <MeshMachinePairingCard
+                    meshTheme={meshTheme}
+                    status={canonicalStatus}
+                    daemonId={daemonId}
+                    meshId={meshId ?? canonicalStatus.meshId ?? null}
+                    sendDaemonCommand={sendDaemonCommand}
+                />
+            )}
 
             <div className="grid gap-3 sm:grid-cols-2">
                 <SessionsCard

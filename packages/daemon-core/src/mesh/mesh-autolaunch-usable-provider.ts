@@ -7,7 +7,7 @@ import { isLocalAutoLaunchNode } from './mesh-candidacy-predicates.js';
 import { isLocalNodeProviderFallbackInstalled, resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON, type ProviderQuotaGateBlock } from './mesh-quota-routing.js';
 import { recordLastQuotaRanking, quotaSpreadBonusByProvider, quotaTargetsFromSlots } from './mesh-quota-ranking-records.js';
-import type { QuotaFactsContext } from './mesh-quota-sources.js';
+import { classifyAbsentQuotaReason, quotaEntryFor, quotaStillWarmingUp, type QuotaFactsContext } from './mesh-quota-sources.js';
 import type { QuotaFallbackCandidate } from './mesh-quota-fallback.js';
 import { nodeSatisfiesRequiredTags, buildMeshNodeCapabilityTags, getQueueEntryById } from './mesh-work-queue.js';
 import { hasQuotaOverride, noteQuotaGateEvidence, clearQuotaGateEvidence } from './mesh-quota-override.js';
@@ -159,6 +159,9 @@ export async function resolveUsableProvider(
     // less selectable. ALL-gated is reported under its own
     // reason so a quota WAIT is never conflated with a slot config error.
     const overrideQuotaGate = !!(meshId && taskId) && hasQuotaOverride(getQueueEntryById(meshId, taskId));
+    if (!overrideQuotaGate && quotaStillWarmingUp(usableSlots.map(({ providerType }) => (
+        quotaEntryFor(node, providerType, quotaFactsContext, Date.now()) ? 'measured' : classifyAbsentQuotaReason(node, providerType, quotaFactsContext)
+    )))) return { reason: 'quota_not_measured_after_restart', preScoreExclusions };
     const selection = selectProviderWithDiagnostics({
         overrideQuotaGate,
         node, nodeId, meshId, task: task!, taskId, quotaRouting, quotaFactsContext,

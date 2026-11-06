@@ -412,6 +412,7 @@ describe('Windows installer-managed atomic upgrade', () => {
       log: () => {},
     })
     atomicHooks.install('/staged/prefix', '/tools/node22/node.exe')
+    expect(execMock.mock.calls.at(-1)?.[2]).toMatchObject({ timeout: 5 * 60_000, killSignal: 'SIGKILL' })
     expect(execMock).toHaveBeenCalledTimes(1)
     const passedEnv = execMock.mock.calls[0][2]?.env as NodeJS.ProcessEnv
     expect(passedEnv['npm_config_build_from_source']).toBe('false')

@@ -33,6 +33,26 @@ function deepFreeze<T>(value: T): T {
     return value;
 }
 
+describe('R20r — a clean exit after a recorded report commits the report (live rc.73, light task 3d89e9d3)', () => {
+    const reported = makeAttempt('generating', { data: { report: { generation: 1, outcome: 'completed', eventId: 'ev-report', at: NOW - 1_000, summary: REF } } });
+    it('once the stop is confirmed the attempt is completed from the report, never reclaimed', () => {
+        const result = step(reported, ev('process_exit', { exitCode: 129 }), [makeHold('await_end')]);
+        expect(result.rule).toBe('R20r');
+        expect(result.attempt).toMatchObject({ state: 'completed', reclaimCount: 0, generation: 1 });
+        expect(result.attempt?.terminal).toMatchObject({ outcome: 'completed', strength: 'tool_report', reason: 'worker_reported', summary: REF });
+        expect(result.effects.filter((e) => e.kind === 'notify_coordinator')).toMatchObject([{ notify: 'completed' }]);
+    });
+    it('a reported blocked outcome stays blocked', () => {
+        const blocked = makeAttempt('generating', { data: { report: { generation: 1, outcome: 'blocked', eventId: 'ev-report', at: NOW - 1_000, summary: REF } } });
+        expect(step(blocked, ev('process_exit', { exitCode: 0 }), [makeHold('await_end')]).attempt?.terminal).toMatchObject({ outcome: 'blocked' });
+    });
+    it('a provider-failure exit is still a failure, and a report of an older generation still reclaims', () => {
+        expect(step(reported, ev('process_exit', { exitCode: 1, providerFailure: 'billing_failed' }), [makeHold('await_end')]).rule).toBe('R20f');
+        const old = makeAttempt('generating', { data: { report: { generation: 0, outcome: 'completed', eventId: 'ev-report', at: NOW - 1_000, summary: REF } } });
+        expect(step(old, ev('process_exit', { exitCode: 129 }), [makeHold('await_end')]).rule).toBe('R20');
+    });
+});
+
 describe('generation rule — older/other-generation evidence is recorded, never applied', () => {
     const attempt = makeAttempt('delivered', { generation: 1, prevGeneration: { sessionId: 's0', consumed: false }, consumedAt: null });
 

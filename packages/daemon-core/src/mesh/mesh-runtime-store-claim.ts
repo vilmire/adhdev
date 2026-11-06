@@ -11,7 +11,7 @@ function noteStageReviewRefusal(candidate: MeshWorkQueueEntry, refusal: string |
     if (candidate.origin === 'stage') noteReviewRefusal(candidate.id, refusal);
     return refusal;
 }
-import { attestLocalOwnership, comparePhysicalOwnership, currentPhysicalScope, explainPhysicalOverlap } from './mesh-physical-ownership.js';
+import { attestLocalOwnership, comparePhysicalOwnership, currentPhysicalScope, explainPhysicalOverlap, isForeignPhysicalScope } from './mesh-physical-ownership.js';
 import type { PhysicalOwnershipScope } from '@adhdev/mesh-shared';
 import { ownershipUnprovenResolution, queueHoldContext, setQueueTaskHold } from './mesh-queue-hold.js';
 /**
@@ -368,6 +368,8 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
                 const current = currentPhysicalScope(candidate.ownershipScope, candidate.ownedPaths);
                 if (current) result = { scope: current };
                 else if (candidate.ownershipScope) result = { error: 'ownership_unproven: unproven_active_physical_resource' };
+                // The checkout is on another machine: only that machine can attest it.
+                else if (ctx.remoteOwnership) result = ctx.remoteOwnership(candidate);
                 else {
                     try {
                         const phase = candidate.phase === 'integration' ? 'integration' : 'source';
@@ -467,7 +469,10 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
             if (candidate.ownershipScope) {
                 if (!meshNodeIdMatches({ id: candidate.ownershipScope.nodeId }, nodeId) || !candidate.ownedPaths || !opts?.physicalContext) return false;
                 const proof = currentPhysicalScope(candidate.ownershipScope, candidate.ownedPaths);
-                try { if (!proof || opts.physicalContext.machineId !== proof.machineId || realpathSync.native(opts.physicalContext.workspace) !== proof.worktree) return false; } catch { return false; }
+                if (!proof) return false;
+                // A remote node's scope was attested there; this host cannot resolve its path.
+                if (opts.physicalContext.remoteOwnership) return isForeignPhysicalScope(proof);
+                try { if (opts.physicalContext.machineId !== proof.machineId || realpathSync.native(opts.physicalContext.workspace) !== proof.worktree) return false; } catch { return false; }
             }
             return true;
         };

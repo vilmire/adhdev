@@ -142,6 +142,8 @@ export interface RelayEnvelopeInput {
     preservePageWhitespace?: boolean;
     /** Content-free `[Mesh]` status line (`mesh-notification-status-line.ts`). */
     statusLine?: string | null;
+    /** Artifacts the project registered since its last relay (`buildNewArtifactsLine`). */
+    artifactsLine?: string | null;
     /** The thread closed with this relay (no work left in flight). */
     idle: boolean;
 }
@@ -164,11 +166,34 @@ export function buildRelayEnvelope(input: RelayEnvelopeInput): string {
         lines.push(defangRelayBody(compactRelayBody(body, RELAY_BODY_MAX_CHARS, input.preservePageWhitespace)));
     });
     lines.push('');
+    const artifacts = typeof input.artifactsLine === 'string' ? input.artifactsLine.trim() : '';
+    if (artifacts) lines.push(artifacts);
     const status = typeof input.statusLine === 'string' ? input.statusLine.replace(/[\r\n]+/g, ' ').trim() : '';
     if (status) lines.push(defangRelayBody(status));
     if (input.idle) lines.push('[idle]');
     lines.push(RELAY_CLOSE);
     return lines.join('\n');
+}
+
+/** Most artifacts one relay names; the rest are counted. */
+export const RELAY_ARTIFACTS_MAX = 8;
+
+export interface RelayArtifactRef { artifactId: string; name: string; title?: string | null }
+
+/**
+ * `New artifacts: <name> (art_…) "<title>" · … (+N more: artifact_list)` — names and
+ * titles are agent-authored, so each is one line, capped and defanged. The id is what
+ * the assistant cites: the dashboard turns `art_…` into a link that opens the artifact.
+ */
+export function buildNewArtifactsLine(artifacts: readonly RelayArtifactRef[], more = 0): string {
+    const items = artifacts.slice(0, RELAY_ARTIFACTS_MAX).filter(a => /^art_[A-Za-z0-9]+$/.test(a.artifactId)).map(a => {
+        const name = oneLine(a.name, 80) || a.artifactId;
+        const title = oneLine(a.title ?? '', 80);
+        return `${name} (${a.artifactId})${title && title !== name ? ` "${title}"` : ''}`;
+    });
+    if (!items.length) return '';
+    const extra = more + Math.max(0, artifacts.length - RELAY_ARTIFACTS_MAX);
+    return defangRelayBody(`New artifacts: ${items.join(' · ')}${extra > 0 ? ` (+${extra} more: artifact_list)` : ''}`);
 }
 
 /**

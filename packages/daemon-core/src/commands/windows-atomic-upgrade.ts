@@ -5,6 +5,7 @@ import * as http from 'http';
 import * as path from 'path';
 import { getTrackIdentity, resolveBuildTrack } from '../track-identity.js';
 import { stopOwnedProcessesForPrefixes } from './process-lifecycle.js';
+import { NPM_INSTALL_LIMITS } from './upgrade-process-stop.js';
 
 const POINTER_NAME = '.adhdev-current';
 const STABLE_FILES = [POINTER_NAME, 'adhdev.cmd', 'adhdev.ps1', 'adhdev'] as const;
@@ -662,6 +663,7 @@ export function createDefaultWindowsAtomicHooks(options: {
         options.npmCliPath,
         'install', '-g', `${options.packageName}@${options.targetVersion}`, '--force', '--prefer-online', '--prefix', stagedPrefix,
       ], {
+        ...NPM_INSTALL_LIMITS,
         encoding: 'utf8',
         stdio: 'pipe',
         maxBuffer: 20 * 1024 * 1024,

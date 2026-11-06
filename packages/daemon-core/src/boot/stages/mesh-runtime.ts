@@ -5,6 +5,7 @@ import {createNoticeSubmitInventory} from '../../mesh/turn-ledger/notice-submit-
 import { registerSessionArtifact } from '../../artifacts/artifact-store.js';
 import { setStageArtifactRegistrar } from '../../mesh/stage-ports-default.js';
 import { setLightSessionStopper } from '../../mesh/light-task-result.js';
+import { armQuotaRestartWarmup } from '../../mesh/mesh-quota-sources.js';
 import { maintenanceHeld, withMaintenanceAdmission } from '../../maintenance/cooperative-gate.js';
 /**
  * S7 bootMeshRuntime — assemble `DaemonComponents`, attach the mesh bus
@@ -388,7 +389,7 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
         readNotices: (meshId, readOpts) => readCoordinatorNotices({ ...deliverDeps, waiter }, meshId, readOpts),
         controlNotices: (meshId, event) => listControlNotices({ ledger, selfDaemonIds, resolveHandoff }, meshId, event),
         retract: (meshId, match) => retractCoordinatorNotices({ ledger, selfDaemonIds }, meshId, match),
-        hasUndelivered: (meshId) => ledger.store.listUndeliveredNotifies(meshId, { sinceMs: Date.now() - 24 * 60 * 60 * 1000, limit: 1 }).length > 0,
+        hasUndelivered: (meshId) => ledger.store.hasUndeliveredNotify(meshId, Date.now() - 24 * 60 * 60 * 1000),
         hasLiveCliCoordinator: (meshId) => listLocalCoordinatorSessions(components, meshId).length > 0,
         recentDeliveredNotices: (sinceMs) => listRecentDeliveredNotices({ ledger, resolveHandoff }, sinceMs),
         releaseDelivery: (claimEventId) => {
@@ -859,8 +860,15 @@ function releaseLocalAttemptRef(components: DaemonComponents, attemptId: string)
  * remote session, and `terminated` already handles a locally-exited one via
  * `subscribeWorkerBindRevocation`.
  */
-export function detachLocalMeshTaskStamp(components: DaemonComponents, request: { sessionId: string; taskId: string | null }): void {
+export function detachLocalMeshTaskStamp(components: DaemonComponents, request: { sessionId: string; taskId: string | null; stopRequestId?: string }): void {
     if (!request.taskId) return;
+    // A cut that also sends an exact writer stop keeps the stamp: the stop proves the
+    // session is this attempt's writer by that stamp, and without it the session reads
+    // as an unbound worker that is never stopped while busy (`unbound_writer_busy`).
+    // Live 2026-11-06: a worker cut at the 90-min ceiling while parked on an approval
+    // prompt was refused every retry for hours. The stopped writer exits, and
+    // `terminated` clears what is left.
+    if (request.stopRequestId) return;
     const instance = components.instanceManager.getInstance(request.sessionId) as unknown as {
         getState?: () => { settings?: Record<string, unknown> };
         detachMeshAssignment?: () => void;
@@ -898,6 +906,7 @@ function installWorkerSessionBindPersistence(components: DaemonComponents): () =
 }
 
 export function bootMeshRuntime(s6: ProjectionsStage): MeshRuntimeStage {
+    armQuotaRestartWarmup();
     const components = assembleDaemonComponents(s6);
     const { bus } = s6;
     const offBindPersistence = installWorkerSessionBindPersistence(components);

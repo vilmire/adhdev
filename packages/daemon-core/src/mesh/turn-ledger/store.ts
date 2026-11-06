@@ -662,8 +662,18 @@ export class TurnStore {
      * coordinator read). Own-writer by construction: a notify row is only ever
      * written by this daemon's ledger. Read-only (check:turn-single-emitter rule 1).
      */
+    /** Whether any notice is undelivered: stops at the first one, with no sort or row decode. */
+    hasUndeliveredNotify(meshId: string, sinceMs = 0): boolean {
+        return this.stmt(`SELECT 1 FROM turn_events n INDEXED BY ix_turn_events_recent_notify
+            WHERE n.kind = 'notify' AND n.mesh_id = ? AND n.publish_state = 'published' AND n.recorded_at >= ?
+              AND NOT EXISTS (SELECT 1 FROM turn_events d WHERE d.kind = 'delivered' AND (
+                    d.event_id = 'delivered:' || n.mesh_id || ':' || n.src_writer || ':' || n.published_seq
+                 OR (d.event_id = 'delivered:' || n.src_writer || ':' || n.published_seq AND d.mesh_id = n.mesh_id)))
+            LIMIT 1`).get(meshId, sinceMs) !== undefined;
+    }
+
     listUndeliveredNotifies(meshId: string, opts: { sinceMs?: number; limit?: number } = {}): TurnEventRow[] {
-        const rows = this.stmt(`SELECT n.* FROM turn_events n
+        const rows = this.stmt(`SELECT n.* FROM turn_events n INDEXED BY ix_turn_events_recent_notify
             WHERE n.kind = 'notify' AND n.mesh_id = ? AND n.publish_state = 'published' AND n.recorded_at >= ?
               AND NOT EXISTS (SELECT 1 FROM turn_events d WHERE d.kind = 'delivered' AND (
                     d.event_id = 'delivered:' || n.mesh_id || ':' || n.src_writer || ':' || n.published_seq

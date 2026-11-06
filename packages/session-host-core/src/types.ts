@@ -357,6 +357,8 @@ export interface SessionHostRuntimeTransition {
 export interface SessionHostDiagnostics {
   hostStartedAt: number;
   endpoint: string;
+  /** Descriptors this host holds open; undefined where it cannot be counted. A count far above the live runtimes means a leak. */
+  openFdCount?: number;
   /**
    * Absolute path of the script this host process is running (its own
    * `__filename`), self-reported.

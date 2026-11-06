@@ -38,6 +38,10 @@ const DETACHED_CURSOR_FOOTER_RE = /^\s*\d+\/\d+:select\b/;
 const DETACHED_CURSOR_ACTIVITY_ROW_RE = /^\s*◆\s+\S|\[stop\]\s*$/;
 /** Between that row and the footer only blank rows and the prompt's gutter (`┃ …`) are allowed. */
 const DETACHED_CURSOR_GAP_ROW_RE = /^\s*(?:┃.*)?$/;
+/** cursor-agent's queued-approval switcher, the bottom row of its multi-approval prompt. */
+const PARKED_BELOW_SWITCHER_RE = /^\s*←\/→ to switch approval\s*$/;
+/** A key-hinted option row (`→ Run (once) (y)`, `Skip (esc or n)`). */
+const PARKED_BELOW_KEY_HINT_RE = /\((?:y|n|p|tab|shift\+tab|esc(?:\s+or\s+n)?)\)\s*$/i;
 
 function matchNumberedChoiceIndex(line: string): number | null {
     const m = NUMBERED_CHOICE_LINE_RE.exec(line);
@@ -272,7 +276,19 @@ export function resolveLiveModalSlice(
                 && DETACHED_CURSOR_FOOTER_RE.test(lines[lastNonBlankRow])
                 && DETACHED_CURSOR_ACTIVITY_ROW_RE.test(lines[effectiveCursorRow] ?? '')
                 && lines.slice(effectiveCursorRow + 1, lastNonBlankRow).every(row => DETACHED_CURSOR_GAP_ROW_RE.test(row));
-            if (!detached) return empty;
+            // PARKED BELOW: cursor-agent parks the cursor past the last row while a queued
+            // approval ("Approval 1 of 3", `←/→ to switch approval`) is up (live 2026-11-06:
+            // row 33 on a 32-row screen; the worker sat 90 min reported as `generating`).
+            // Narrow on purpose: a far cursor below a short Codex/Claude snapshot is still
+            // rejected (nested-approval-false-positive). Only that switcher on the bottom row,
+            // key-hinted option rows just above it and blank rows down to the cursor qualify.
+            const parkedBelow = effectiveCursorRow > lastNonBlankRow
+                && modalEndRow === lastNonBlankRow
+                && PARKED_BELOW_SWITCHER_RE.test(lines[lastNonBlankRow])
+                && lines.slice(lastNonBlankRow + 1, effectiveCursorRow + 1).every(row => !row.trim())
+                && lines.slice(Math.max(interactiveStartRow, lastNonBlankRow - 4), lastNonBlankRow)
+                    .some(row => PARKED_BELOW_KEY_HINT_RE.test(row));
+            if (!detached && !parkedBelow) return empty;
         }
     }
 

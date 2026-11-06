@@ -10,7 +10,7 @@ interface StageRow {
     stageRole?: string;
     stageRound?: number;
     stagePlan?: { maxRevisions?: number; independence?: string };
-    stageState?: { phase?: string; round?: number; lastVerdict?: string; blockedReason?: string; reviewTaskIds?: string[]; openFindingIds?: string[]; selfCheck?: string };
+    stageState?: { phase?: string; round?: number; lastVerdict?: string; blockedReason?: string; blockedDetail?: string; reviewTaskIds?: string[]; openFindingIds?: string[]; selfCheck?: string };
 }
 
 export interface StageSummary {
@@ -19,6 +19,7 @@ export interface StageSummary {
     maxRevisions?: number;
     lastVerdict?: string;
     blockedReason?: string;
+    blockedDetail?: string;
     selfCheck?: string;
     openFindings: number;
     reviewTaskIds: string[];
@@ -38,6 +39,7 @@ export function foldStageChildren<T extends StageRow>(rows: readonly T[], includ
                     ...(row.stagePlan.maxRevisions !== undefined ? { maxRevisions: row.stagePlan.maxRevisions } : {}),
                     ...(s.lastVerdict ? { lastVerdict: s.lastVerdict } : {}),
                     ...(s.blockedReason ? { blockedReason: s.blockedReason } : {}),
+                    ...(s.blockedReason && s.blockedDetail ? { blockedDetail: s.blockedDetail } : {}),
                     ...(s.selfCheck ? { selfCheck: s.selfCheck } : {}),
                     openFindings: s.openFindingIds?.length ?? 0,
                     reviewTaskIds: s.reviewTaskIds ?? [],

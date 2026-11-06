@@ -36,9 +36,11 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../../src/commands/upgrade-install-surface.js', () => ({
   execNpmCommandSync: mocks.execNpmCommandSync,
+  execNpmCommandAsync: async (args: string[], options?: Record<string, unknown>, surface?: Record<string, unknown>) =>
+    String(mocks.execNpmCommandSync(args, options, surface)),
   // Mirrors the real helper's argv/options assembly on top of the
   // execNpmCommandSync mock (see daemon-upgrade-runtime-version.test.ts).
-  resolveNpmPublishedVersion: (
+  resolveNpmPublishedVersionAsync: async (
     packageName: string,
     tagOrVersion: string,
     surface?: Record<string, unknown>,

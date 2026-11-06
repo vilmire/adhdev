@@ -11,6 +11,7 @@ import { notificationHandlers } from '../../src/commands/low-family/notification
 import { daemonLifecycleHandlers } from '../../src/commands/low-family/daemon-lifecycle.js'
 import { meshLedgerHandlers } from '../../src/commands/low-family/mesh-ledger.js'
 import { meshNodeLogsHandlers } from '../../src/commands/low-family/mesh-node-logs.js'
+import { meshOwnershipAttestHandlers } from '../../src/commands/low-family/mesh-ownership-attest.js'
 import { workerBridgeHandlers } from '../../src/commands/low-family/worker-bridge.js'
 import { workerReportHandlers } from '../../src/commands/low-family/worker-report.js'
 import { workerMailboxHandlers } from '../../src/commands/low-family/worker-mailbox.js'
@@ -87,6 +88,7 @@ const DAEMON_LIFECYCLE_CMDS = [
 // are read from the peer, never copied into this daemon's local store).
 const MESH_LEDGER_CMDS = ['get_mesh_ledger', 'get_mesh_ledger_slice', 'list_mesh_notes', 'record_mesh_note', 'forget_mesh_note']
 const MESH_NODE_LOGS_CMDS = ['get_daemon_cpu_profile', 'get_mesh_node_logs']
+const MESH_OWNERSHIP_ATTEST_CMDS = ['mesh_attest_node_ownership', 'mesh_attest_remote_ownership']
 // WORKER-MCP Phase B: the worker's own reporting surface (design §4/§5).
 // + worker_report_forwarded (F7, 2026-09-25): a remote worker daemon relays its report to the attempt owner.
 // + worker_progress_forwarded (F7 progress axis, 2026-09-25): same relay for progress notes.
@@ -153,11 +155,11 @@ const NEW_WORK_HOLD_CMDS = [
 ]
 
 describe('low-family registry', () => {
-  it('registers all 134 LOW family commands once, no overlap', () => {
+  it('registers all 136 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,
-      ...NOTIFICATION_CMDS, ...DAEMON_LIFECYCLE_CMDS, ...MESH_LEDGER_CMDS, ...MESH_NODE_LOGS_CMDS,
+      ...NOTIFICATION_CMDS, ...DAEMON_LIFECYCLE_CMDS, ...MESH_LEDGER_CMDS, ...MESH_NODE_LOGS_CMDS, ...MESH_OWNERSHIP_ATTEST_CMDS,
       ...WORKER_REPORT_CMDS, ...WORKER_BRIDGE_CMDS, ...WORKER_MAILBOX_CMDS, ...WORKER_PEER_CONTEXT_CMDS,
       ...TRANSCRIPT_REPLICA_CMDS, ...TURN_LEDGER_IPC_CMDS, ...COOPERATIVE_MAINTENANCE_CMDS, ...NEW_WORK_HOLD_CMDS,
       ...CONTRACT_CMDS, ...PROJECT_TRANSFER_CMDS, ...QUOTA_RESERVE_CMDS,
@@ -180,8 +182,9 @@ describe('low-family registry', () => {
     // rc.37: + mesh_direct_cancel = 125; + 2 machine quota reserve commands
     // (quota_reserve_get/set, 2026-11-01) = 127; + light_land/light_discard
     // (same-machine light tasks, 2026-11-01) = 129, +1 project_transfer_set_relay (2026-11-02) = 130,
-    // + project_transfer_set_agent_auto_approve / _revert / _agent (agent transfers + overwrite revert, 2026-11-02) = 133, + get_daemon_cpu_profile (2026-11-04) = 134.
-    expect(all).toHaveLength(134)
+    // + project_transfer_set_agent_auto_approve / _revert / _agent (agent transfers + overwrite revert, 2026-11-02) = 133, + get_daemon_cpu_profile (2026-11-04) = 134,
+    // + mesh_attest_node_ownership / mesh_attest_remote_ownership (remote writers, 2026-11-05) = 136.
+    expect(all).toHaveLength(136)
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
     expect(lowFamilyNames()).toHaveLength(all.length)
@@ -197,6 +200,7 @@ describe('low-family registry', () => {
     expect(Object.keys(daemonLifecycleHandlers)).toEqual(DAEMON_LIFECYCLE_CMDS)
     expect(Object.keys(meshLedgerHandlers)).toEqual(MESH_LEDGER_CMDS)
     expect(Object.keys(meshNodeLogsHandlers)).toEqual(MESH_NODE_LOGS_CMDS)
+    expect(Object.keys(meshOwnershipAttestHandlers)).toEqual(MESH_OWNERSHIP_ATTEST_CMDS)
     expect(Object.keys(workerReportHandlers)).toEqual(WORKER_REPORT_CMDS)
     expect(Object.keys(workerBridgeHandlers)).toEqual(WORKER_BRIDGE_CMDS)
     expect(Object.keys(workerMailboxHandlers)).toEqual(WORKER_MAILBOX_CMDS)
@@ -224,7 +228,7 @@ describe('low-family registry', () => {
       sessionHostHandlers, specProviderDevHandlers, refineConfigHandlers,
       diagnosticsHandlers, statusMetaHandlers, coordinatorPromptHandlers,
       notificationHandlers, daemonLifecycleHandlers, meshLedgerHandlers,
-      meshNodeLogsHandlers, workerReportHandlers, workerBridgeHandlers, workerMailboxHandlers,
+      meshNodeLogsHandlers, meshOwnershipAttestHandlers, workerReportHandlers, workerBridgeHandlers, workerMailboxHandlers,
       workerPeerContextHandlers, transcriptReplicaHandlers,
       turnLedgerIpcHandlers, contractCommandHandlers,
     ].flatMap((handlers) => Object.keys(handlers))

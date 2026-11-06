@@ -161,6 +161,7 @@ export const MESH_READ_NODE_LOGS_TOOL = {
             since_ms: { type: 'number', description: 'Optional epoch-ms floor — only log lines at/after this time are returned (lines without a parseable timestamp are kept).' },
             tail_bytes: { type: 'number', description: 'Max bytes of log tail to read (default 65536, capped at 131072). Larger files are truncated to the newest tail_bytes.' },
             date: { type: 'string', description: 'Optional YYYY-MM-DD log date (defaults to today). Falls back to the size-rotation backup when the active file is absent.' },
+            source: { type: 'string', enum: ['daemon', 'upgrade'], description: 'Which log to read. "daemon" (default) is the daemon log. "upgrade" is the upgrade helper trace (pre-flight, install, session-host stop, health gate), written while the daemon is down. date is ignored for it.' },
         },
         required: ['node_id'],
     },

@@ -1466,6 +1466,7 @@ function readVerifiedReplacementProvenance(options) {
 }
 
 // src/session-diagnostics.ts
+var import_node_fs = require("fs");
 var path7 = __toESM(require("path"));
 var import_session_host_core6 = require("@adhdev/session-host-core");
 var MAX_RECENT_DIAGNOSTICS = 200;
@@ -1517,6 +1518,17 @@ function sanitizeDiagnosticsRecord(record) {
     }
   };
 }
+function countOpenFds() {
+  try {
+    return (0, import_node_fs.readdirSync)("/dev/fd").length;
+  } catch {
+    return void 0;
+  }
+}
+function describeHostResources(runtimeCount) {
+  const fds = countOpenFds();
+  return `fds=${fds ?? "unknown"} runtimes=${runtimeCount} rssMb=${Math.round(process.memoryUsage().rss / 1048576)}`;
+}
 function buildHostDiagnostics(params) {
   const limit = Math.max(1, Math.min(200, Number(params.payload?.limit) || 50));
   const allSessions = params.payload?.includeSessions === false ? void 0 : params.sessions.map((record) => annotateSessionSurface(record)).map((record) => sanitizeDiagnosticsRecord(record));
@@ -1528,6 +1540,7 @@ function buildHostDiagnostics(params) {
     ...recoverySnapshots || [],
     ...inactiveRecords || []
   ] : void 0;
+  const openFdCount = countOpenFds();
   return {
     hostStartedAt: params.hostStartedAt,
     endpoint: params.endpointPath,
@@ -1536,6 +1549,7 @@ function buildHostDiagnostics(params) {
     hostEntryPath: resolveHostEntryPath(),
     ...params.hostBootId ? { hostBootId: params.hostBootId } : {},
     runtimeCount: params.runtimeCount,
+    ...openFdCount !== void 0 ? { openFdCount } : {},
     supportedRequestTypes: [...import_session_host_core6.SESSION_HOST_SUPPORTED_REQUEST_TYPES],
     sessions,
     liveRuntimes,
@@ -1726,6 +1740,7 @@ function withReplayResyncPreamble(text, sinceSeq) {
 }
 
 // src/server.ts
+var OPEN_FD_WARN_THRESHOLD = 1024;
 var SessionHostServer = class extends import_events.EventEmitter {
   endpoint;
   registry = new import_session_host_core8.SessionHostRegistry();
@@ -2038,6 +2053,10 @@ var SessionHostServer = class extends import_events.EventEmitter {
           if (!this.upgradeLease) throw new Error("native_host_upgrade_binding_unavailable");
           return { success: true, result: this.upgradeLease.release(request.payload) };
         case "create_session": {
+          const openFds = countOpenFds();
+          if (openFds !== void 0 && openFds >= OPEN_FD_WARN_THRESHOLD) {
+            this.recordHostLog("warn", `Host holds ${openFds} open descriptors with ${this.runtimes.size} live runtimes; a restart of the host clears a leak`);
+          }
           const record = this.registry.createSession(request.payload);
           if (sourceSocket) {
             this.subscribeSocketToSession(sourceSocket, record.sessionId);
@@ -2413,6 +2432,9 @@ var SessionHostServer = class extends import_events.EventEmitter {
   /** Single SoT for cleanup inventory + stop_session_if_expected host boot CAS. */
   currentHostBootId() {
     return (0, import_session_host_core3.resolveHostBootId)({ upgradeBootId: this.upgradeLease?.bootId, hostStartedAt: this.startedAt });
+  }
+  runtimeCountForDiagnostics() {
+    return this.runtimes.size;
   }
   getHostDiagnostics(payload) {
     return buildHostDiagnostics({
@@ -2880,6 +2902,7 @@ async function runServer(instanceKeyArgs = []) {
       writeStderrLineSync(
         `[session-host] libuv thread pool made no progress for ${Math.round(stalledForMs / 1e3)}s (PTY writes cannot complete); exiting so the daemon respawns the host.`
       );
+      writeStderrLineSync(`[session-host] at stall: ${describeHostResources(server.runtimeCountForDiagnostics())}`);
       try {
         server.flushAllPersistence();
       } catch {

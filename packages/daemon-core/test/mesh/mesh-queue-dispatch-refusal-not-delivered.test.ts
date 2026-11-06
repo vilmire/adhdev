@@ -36,6 +36,8 @@ const testTmpDir = path.join(tmpdir(), `adhdev-refusal-not-delivered-test-${rand
 const testConfigDir = path.join(testTmpDir, '.adhdev')
 
 const LOCAL_MACHINE_ID = 'mach_1111111111111111111111111111aaaa'
+// A remote node's ownership scope is attested by that machine (REMOTE-OWNERSHIP).
+const REMOTE_MACHINE_ID = 'mach_2222222222222222222222222222bbbb'
 const REMOTE_DAEMON_ID = 'daemon_mach_2222222222222222222222222222bbbb'
 
 vi.mock('../../src/config/config.js', () => ({
@@ -172,7 +174,7 @@ describe('REFUSAL-BOOKED-AS-DELIVERED — a resolved {success:false} answer is a
         detail: 'sender is not the coordinator session for this task',
       }), { remote: true })
       const task = enqueueTask(meshId, 'DELTA-REMOTE-BUSY', { targetNodeId: REMOTE_NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
-      physicalWriterFixture(WS, REMOTE_NODE_ID, LOCAL_MACHINE_ID).bind(task)
+      physicalWriterFixture(WS, REMOTE_NODE_ID, REMOTE_MACHINE_ID).bind(task)
 
       expect(tryAssignQueueTask(components, meshId, REMOTE_NODE_ID, 'sess-remote-busy', 'claude-cli')).toBe(true)
       await settle()
@@ -211,7 +213,7 @@ describe('REFUSAL-BOOKED-AS-DELIVERED — a resolved {success:false} answer is a
         result: { success: false, code: 'mesh_node_bootstrap_pending', reason: 'bootstrap_still_running' },
       }), { remote: true })
       const task = enqueueTask(meshId, 'DELTA-REMOTE-NESTED', { targetNodeId: REMOTE_NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
-      physicalWriterFixture(WS, REMOTE_NODE_ID, LOCAL_MACHINE_ID).bind(task)
+      physicalWriterFixture(WS, REMOTE_NODE_ID, REMOTE_MACHINE_ID).bind(task)
 
       expect(tryAssignQueueTask(components, meshId, REMOTE_NODE_ID, 'sess-remote-nested', 'claude-cli')).toBe(true)
       await settle()
@@ -233,7 +235,7 @@ describe('REFUSAL-BOOKED-AS-DELIVERED — a resolved {success:false} answer is a
       setMesh(meshId, REMOTE_NODE_ID, { remote: true })
       const components = createComponents(meshId, REMOTE_NODE_ID, 'sess-remote-ok', async () => ({ success: true }), { remote: true })
       const task = enqueueTask(meshId, 'DELTA-REMOTE-OK', { targetNodeId: REMOTE_NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
-      physicalWriterFixture(WS, REMOTE_NODE_ID, LOCAL_MACHINE_ID).bind(task)
+      physicalWriterFixture(WS, REMOTE_NODE_ID, REMOTE_MACHINE_ID).bind(task)
 
       expect(tryAssignQueueTask(components, meshId, REMOTE_NODE_ID, 'sess-remote-ok', 'claude-cli')).toBe(true)
       await settle()
@@ -256,7 +258,7 @@ describe('REFUSAL-BOOKED-AS-DELIVERED — a resolved {success:false} answer is a
         throw new Error('adapter busy, try again')
       }, { remote: true })
       const task = enqueueTask(meshId, 'DELTA-REMOTE-THROW', { targetNodeId: REMOTE_NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
-      physicalWriterFixture(WS, REMOTE_NODE_ID, LOCAL_MACHINE_ID).bind(task)
+      physicalWriterFixture(WS, REMOTE_NODE_ID, REMOTE_MACHINE_ID).bind(task)
 
       expect(tryAssignQueueTask(components, meshId, REMOTE_NODE_ID, 'sess-remote-throw', 'claude-cli')).toBe(true)
       await settle()

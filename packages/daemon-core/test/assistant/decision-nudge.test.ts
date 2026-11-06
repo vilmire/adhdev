@@ -55,6 +55,8 @@ describe('DecisionNudge', () => {
         expect(f.enqueue).toHaveBeenCalledTimes(1);
         expect(f.enqueue.mock.calls[0][0]).toMatchObject({ source: 'digest', forSessionId: 'asst-1' });
         expect(f.enqueue.mock.calls[0][0].text).toContain('2 decisions waiting (1 blocking)');
+        // Delivered later: an answer given meanwhile must not become a confused report.
+        expect(f.enqueue.mock.calls[0][0].text).toContain('If none are open any more, they were already answered: say nothing');
         // the same decisions again, many ticks later: silence
         for (let i = 0; i < 5; i++) { f.advance(DECISION_NUDGE_MIN_GAP_MS + 1); await f.watch.refresh(); expect(f.nudge.evaluate(f.now())).toMatchObject({ fired: false, reason: 'nothing_new' }); }
         expect(f.enqueue).toHaveBeenCalledTimes(1);

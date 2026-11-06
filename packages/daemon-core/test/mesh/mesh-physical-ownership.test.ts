@@ -1,10 +1,12 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+// Local attestations carry this machine's id; a different id is another machine's scope.
+vi.mock('../../src/config/config.js', async importOriginal => ({ ...await importOriginal<any>(), getMachineId: () => 'host-machine' }));
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, linkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { normalizeOwnedPaths } from '@adhdev/mesh-shared';
-import { attestLocalOwnership, comparePhysicalOwnership, explainPhysicalOverlap } from '../../src/mesh/mesh-physical-ownership.js';
+import { attestLocalOwnership, comparePhysicalOwnership, currentPhysicalScope, explainPhysicalOverlap, plannedPhysicalScope } from '../../src/mesh/mesh-physical-ownership.js';
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 function fixture() {
@@ -19,6 +21,22 @@ function fixture() {
     return { dir, a, b, paths, attest };
 }
 describe('authenticated physical ownership', () => {
+    it('planning reuses an attestation for 30 s while admission always re-attests', () => {
+        const { a, paths, attest } = fixture();
+        const scope = attest(a);
+        const now = 1_000_000;
+        expect(plannedPhysicalScope(scope, paths, now)?.worktree).toBe(scope.worktree);
+        rmSync(a, { recursive: true, force: true });
+        expect(plannedPhysicalScope(scope, paths, now + 29_999)?.worktree).toBe(scope.worktree);
+        expect(currentPhysicalScope(scope, paths)).toBeUndefined();
+        expect(plannedPhysicalScope(scope, paths, now + 30_000)).toBeUndefined();
+    });
+    it('planning does not share an answer between declarations', () => {
+        const { a, paths, attest } = fixture();
+        const scope = attest(a);
+        expect(plannedPhysicalScope(scope, paths, 5)?.worktree).toBe(scope.worktree);
+        expect(plannedPhysicalScope(scope, normalizeOwnedPaths(['other.ts']).declaration, 5)).toBeUndefined();
+    });
     it('allows separate real worktrees while warning about their future logical merge', () => {
         const { a, b, paths, attest } = fixture();
         expect(attest(a).gitResources.index).not.toBe(attest(b).gitResources.index);

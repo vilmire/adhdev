@@ -117,6 +117,8 @@ export interface MeshTaskStageState {
     extraRevisions?: number
     /** Why the parent is blocked, once it is. */
     blockedReason?: MeshStageBlockedReason
+    /** The underlying error text when the reason alone does not say it (e.g. why no reviewer could be created). */
+    blockedDetail?: string
     /** Unresolved findings snapshot kept for the final report (id + severity + claim). */
     openFindings?: Array<{ id: string; severity: MeshFindingSeverity; claim: string }>
     /** Nits/minors from the approving verdict, delivered in the final report. */

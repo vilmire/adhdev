@@ -32,7 +32,7 @@ import { loadConfig, updateConfig, setQuotaShowAccountEmail } from '../../config
 import { installClaudeStatusline } from '../../quota/statusline/install.js';
 import { spawnDetachedDaemonUpgradeHelper } from '../upgrade-helper.js';
 import { getUpgradeLogPath } from '../upgrade-log.js';
-import { execNpmCommandSync, resolveCurrentGlobalInstallSurface, resolveNpmPublishedVersion } from '../upgrade-install-surface.js';
+import { execNpmCommandAsync, resolveCurrentGlobalInstallSurface, resolveNpmPublishedVersionAsync } from '../upgrade-install-surface.js';
 import { LOG } from '../../logging/logger.js';
 import { compareSemver } from '../../version-compare.js';
 import { IDENTITY, TRACK } from '../../track-identity.js';
@@ -61,9 +61,20 @@ function isStandaloneArgv(argv1: string | undefined): boolean {
  */
 export type DepsOnlyLowFamilyContext = Pick<LowFamilyContext, 'deps'>;
 
+/**
+ * True while daemon_upgrade is waiting on npm. The lookups no longer block the event
+ * loop, so a caller retrying after its own timeout can land mid-lookup and must not
+ * schedule a second helper.
+ */
+let upgradeLookupInFlight = false;
+
 export const daemonLifecycleHandlers: Record<string, (ctx: DepsOnlyLowFamilyContext, args: any) => Promise<CommandRouterResult>> = {
     daemon_upgrade: async (ctx: DepsOnlyLowFamilyContext, args: any) => {
         LOG.info('Upgrade', 'Remote upgrade requested from dashboard');
+        if (upgradeLookupInFlight) {
+            return { success: false, code: 'upgrade_in_progress', error: 'An upgrade request is already resolving its target version on this daemon.' };
+        }
+        upgradeLookupInFlight = true;
         try {
             assertWorkerBridgeLifecycleAdmission('daemon_upgrade', undefined, MeshRuntimeStore.getInstance().db);
             // Detect package name for upgrade
@@ -120,24 +131,22 @@ export const daemonLifecycleHandlers: Record<string, (ctx: DepsOnlyLowFamilyCont
             // A first-run timeout here is the expected cost of on-access AV scanning the
             // bundled node/npm binaries, not a fault — say so, so a slow upgrade reads as
             // "warming up" in the log rather than as an unexplained stall.
-            const latest = resolveNpmPublishedVersion(pkgName, npmTag, npmSurface, {
-                onRetry: ({ attempt, attempts, timeoutMs }) => {
-                    LOG.info('Upgrade', `Version lookup timed out after ${timeoutMs}ms (attempt ${attempt}/${attempts}); retrying — first-run antivirus scanning of the bundled node/npm binaries is the usual cause.`);
-                },
-            });
+            // Both run off the event loop and side by side: at most 2 × 10s, inside the
+            // 30s command deadline of every caller, and the daemon keeps serving meanwhile.
+            const [latest, currentInstalled] = await Promise.all([
+                resolveNpmPublishedVersionAsync(pkgName, npmTag, npmSurface, {
+                    onRetry: ({ attempt, attempts, timeoutMs }) => {
+                        LOG.info('Upgrade', `Version lookup timed out after ${timeoutMs}ms (attempt ${attempt}/${attempts}); retrying — first-run antivirus scanning of the bundled node/npm binaries is the usual cause.`);
+                    },
+                }),
+                // ls failures are ignored; the upgrade can still proceed.
+                execNpmCommandAsync(['ls', '-g', pkgName, '--depth=0', '--json'], { timeout: 10_000 }, npmSurface)
+                    .then((stdout): string | null => JSON.parse(stdout.trim())?.dependencies?.[pkgName]?.version || null)
+                    .catch((): string | null => null),
+            ]);
             LOG.info('Upgrade', `Latest ${pkgName}@${npmTag}: v${latest}`);
-            let currentInstalled: string | null = null;
-            try {
-                const currentJson = String(execNpmCommandSync(['ls', '-g', pkgName, '--depth=0', '--json'], {
-                    encoding: 'utf-8',
-                    timeout: 10000,
-                    stdio: ['pipe', 'pipe', 'pipe'],
-                }, npmSurface)).trim();
-                const parsed = JSON.parse(currentJson);
-                currentInstalled = parsed?.dependencies?.[pkgName]?.version || null;
-            } catch {
-                // ignore ls failures; upgrade can still proceed
-            }
+            // The lookups yielded the event loop, so the admission checked above may be stale.
+            assertWorkerBridgeLifecycleAdmission('daemon_upgrade', undefined, MeshRuntimeStore.getInstance().db);
 
             const runningVersion = typeof ctx.deps.statusVersion === 'string'
                 ? ctx.deps.statusVersion.trim().replace(/^v/, '')
@@ -260,6 +269,8 @@ export const daemonLifecycleHandlers: Record<string, (ctx: DepsOnlyLowFamilyCont
         } catch (e: any) {
             LOG.error('Upgrade', `Failed: ${e.message}`);
             return { success: false, error: e.message };
+        } finally {
+            upgradeLookupInFlight = false;
         }
     },
 

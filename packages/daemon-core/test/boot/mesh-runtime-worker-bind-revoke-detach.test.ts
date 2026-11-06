@@ -61,6 +61,15 @@ describe('detachLocalMeshTaskStamp', () => {
         expect(() => detachLocalMeshTaskStamp(components, { sessionId: 'sess-remote', taskId: 'task-A' })).not.toThrow()
     })
 
+    it('keeps the stamp when the cut also sends an exact writer stop (the stop matches the writer by it)', () => {
+        const inst = fakeInstance({ meshNodeFor: 'mesh-1', meshActiveTaskId: 'task-A', meshActiveAttemptId: 'att-1' })
+        const components = componentsWith({ 'sess-1': inst })
+
+        detachLocalMeshTaskStamp(components, { sessionId: 'sess-1', taskId: 'task-A', stopRequestId: 'stop-1' })
+
+        expect(inst.detach).not.toHaveBeenCalled()
+    })
+
     it('is a silent no-op when the request carries no taskId (nothing to detach)', () => {
         const inst = fakeInstance({ meshNodeFor: 'mesh-1', meshActiveTaskId: 'task-A' })
         const components = componentsWith({ 'sess-1': inst })

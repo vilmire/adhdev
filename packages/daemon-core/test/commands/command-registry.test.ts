@@ -204,6 +204,8 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     'set_machine_nickname', 'get_quota_account_label', 'set_quota_account_label', 'get_quota_provider_enabled',
     'set_quota_provider_enabled', 'quota_reserve_get', 'quota_reserve_set', 'get_mesh_ledger', 'get_mesh_ledger_slice', 'list_mesh_notes',
     'record_mesh_note', 'forget_mesh_note', 'get_mesh_node_logs', 'get_daemon_cpu_profile',
+    // NOT a legacy-table migration: remote writer ownership attestation (2026-11-05).
+    'mesh_attest_node_ownership', 'mesh_attest_remote_ownership',
     'worker_bridge_prepare', 'worker_bridge_capabilities', 'worker_bridge_delivery', 'worker_bridge_control', 'worker_bridge_status', 'worker_bridge_verify',
     'worker_resolve_task', 'worker_report_completion',
     // NOT a legacy-table migration: F7 (2026-09-25) — a remote worker daemon
@@ -301,7 +303,7 @@ const LEGACY_MED_FAMILY_COMMANDS = [
     'delete_mesh',
     'difficulty_brains_get', 'difficulty_brains_set', 'mesh_quota_routing_get', 'mesh_quota_routing_set',
     'add_mesh_node', 'update_mesh_node', 'cleanup_mesh_sessions', 'remove_mesh_node', 'clone_mesh_node',
-    'retry_mesh_node_bootstrap', 'get_mesh_host_pairing', 'configure_mesh_host_pairing',
+    'retry_mesh_node_bootstrap', 'get_mesh_host_pairing', 'get_mesh_host_grant_key', 'configure_mesh_host_pairing',
     // Explicit repairs; added after the legacy migration.
     'reattach_mesh_source_parent', 'recover_mesh_node_identity', 'stage_recover_mesh_review', 'pin_mesh_host_key',
     'create_mesh_host_pairing_token', 'apply_mesh_host_join', 'join_mesh_host_pairing', 'revoke_mesh_peer', 'get_mesh_queue',

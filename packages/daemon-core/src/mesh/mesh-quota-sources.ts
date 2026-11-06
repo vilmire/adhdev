@@ -295,7 +295,7 @@ export function logStaleQuotaFailOpen(
  *  send them) and that this daemon cannot read the config of either. A remote
  *  node that DOES ship MeshNodeFacts.providerEnablement gets a real
  *  classification from its own report. */
-type AbsentQuotaReason = 'not_measured' | 'probe_disabled' | 'provider_disabled' | 'unclassified_remote';
+export type AbsentQuotaReason = 'not_measured' | 'probe_disabled' | 'provider_disabled' | 'unclassified_remote';
 
 /** Classify why a provider has no quota entry, from two sources in priority
  *  order:
@@ -376,6 +376,26 @@ const absentFailOpenLoggedAt = new Map<string, number>();
  *  an explicit note that this is an intended opt-out, not a fault. Uses the
  *  policy's staleAfterMs as the throttle window, the same cadence the stale
  *  branch throttles on, so neither branch floods a reconcile-tick loop. */
+/** Long enough for a restarted daemon's first quota probes to land. */
+export const QUOTA_RESTART_WARMUP_SECONDS = 120;
+
+/**
+ * Unknown quota passes the gate by design, but right after a restart "unknown" only means nothing
+ * has been measured yet, and a launch then ignores a limit that was known a minute ago. Bounded by
+ * the uptime, so a provider that never reports still launches.
+ */
+export function quotaStillWarmingUp(providerStates: ReadonlyArray<'measured' | AbsentQuotaReason>, now = Date.now()): boolean {
+    return quotaWarmupArmedAt !== null && now - quotaWarmupArmedAt < QUOTA_RESTART_WARMUP_SECONDS * 1000
+        && providerStates.length > 0 && providerStates.every(state => state === 'not_measured');
+}
+
+let quotaWarmupArmedAt: number | null = null;
+
+/** Called once by a booting daemon. Disarmed by default, so nothing else ever waits. */
+export function armQuotaRestartWarmup(now: number | null = Date.now()): void {
+    quotaWarmupArmedAt = now;
+}
+
 export function logAbsentQuotaFailOpen(
     node: any,
     providerType: string,

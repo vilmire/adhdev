@@ -28,6 +28,8 @@ export type StageEvent =
     | { kind: 'reviewer_mutated_source'; childTaskId: string; at: string }
     /** Fail closed: the checkout fingerprint could not be taken, so the read-lease review cannot be verified. */
     | { kind: 'reviewer_integrity_unverifiable'; childTaskId: string; at: string }
+    /** The review child could not be created for a lasting reason (e.g. its input evidence is invalid). */
+    | { kind: 'review_input_failed'; detail: string; at: string }
     | { kind: 'ceiling'; at: string }
     | { kind: 'decide_revise_once'; at: string }
     | { kind: 'decide_rereview'; at: string };
@@ -154,6 +156,12 @@ export function reduceStage(plan: MeshTaskStagePlan, prev: MeshTaskStageState, e
             if (state.phase !== 'reviewing' && state.phase !== 'awaiting_review') return noop;
             return block(state, 'reviewer_integrity_unverifiable', event.at);
         }
+        case 'review_input_failed': {
+            if (state.phase !== 'reviewing' && state.phase !== 'awaiting_review') return noop;
+            const r = block(state, 'review_unavailable', event.at);
+            r.state.blockedDetail = event.detail.slice(0, 300);
+            return r;
+        }
         case 'ceiling': {
             return block(state, 'stage_pipeline_ceiling', event.at);
         }
@@ -161,6 +169,7 @@ export function reduceStage(plan: MeshTaskStagePlan, prev: MeshTaskStageState, e
             if (state.phase !== 'done' || !state.blockedReason) return noop;
             state.extraRevisions = (state.extraRevisions ?? 0) + 1;
             delete state.blockedReason;
+            delete state.blockedDetail;
             state.released = false;
             enter(state, 'revising', event.at);
             return { state, effects: [{ kind: 'send_revision', reason: 'review', round: state.round }] };
@@ -168,6 +177,7 @@ export function reduceStage(plan: MeshTaskStagePlan, prev: MeshTaskStageState, e
         case 'decide_rereview': {
             if (state.phase !== 'done' || !state.blockedReason) return noop;
             delete state.blockedReason;
+            delete state.blockedDetail;
             delete state.reviewerSessionId;
             state.released = false;
             state.reviewerFailures = 0;

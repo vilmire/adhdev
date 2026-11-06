@@ -7,6 +7,7 @@ import {
     readAuthenticatedPeerOriginGrantPublicKey,
 } from '../../mesh/mesh-host-memory.js';
 import { readMeshNodeDaemonId } from '../../mesh/mesh-node-identity.js';
+import { loadMeshConfig } from '../../config/mesh-config-store.js';
 import {
     __resetOriginGrantKeyPairCacheForTest,
     MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH,
@@ -384,18 +385,32 @@ export function resolveTrustedHostOriginGrantPublicKey(params: {
         return trimStr(fromPeerSecret);
     }
 
-    return '';
+    return readLocalMemberHostPublicKey(meshId, hostDaemonId);
 }
 
 /**
- * The exact next step when this machine holds no pinned artifact-signing key
- * for the project host. Names no key material; only ids and the supported path.
+ * The key a member keeps in its own mesh config after a verified host transfer. A
+ * machine that took part in a host move holds the new host's key only here. Read
+ * from this daemon's config, never from `meshObj`: an inline mesh is peer supplied
+ * and its cache strips this field for that reason.
  */
+function readLocalMemberHostPublicKey(meshId: string, hostDaemonId: string): string {
+    let meshHost: { role?: string; hostDaemonId?: string; originGrantPublicKey?: string } | undefined;
+    try {
+        meshHost = (loadMeshConfig().meshes as Array<{ id?: string; meshHost?: typeof meshHost }> | undefined)
+            ?.find((mesh) => mesh?.id === meshId)?.meshHost;
+    } catch {
+        return '';
+    }
+    const key = trimStr(meshHost?.originGrantPublicKey);
+    if (meshHost?.role !== 'member' || !key || !isValidOriginGrantPublicKey(key)) return '';
+    return daemonIdsEquivalent(trimStr(meshHost.hostDaemonId), hostDaemonId) ? key : '';
+}
+
+/** Names no key material. The machine asks the host for the key on its own and retries. */
 export function hostPinMissingMessage(meshId: string, hostDaemonId: string): string {
-    return `This machine has not pinned the project host's artifact signing key (host ${hostDaemonId}, mesh ${meshId}), so it cannot verify the host's artifact access grant (host_pin_missing). `
-        + 'Next step: on the host machine create a pairing code (dashboard Mesh > Connect another machine > Host > Create code, or the MCP tool mesh_host_pairing action=create_token); '
-        + 'then on THIS machine enter that code (dashboard Mesh > Connect another machine > Member, or the MCP tool mesh_host_pairing action=pin with token and hostDaemonId). '
-        + 'The code is single-use and expires in 10 minutes.';
+    return `This machine could not get the project host's artifact signing key (host ${hostDaemonId}, mesh ${meshId}), so it cannot verify the host's artifact access grant (host_pin_missing). `
+        + 'It asks the host again on the next read. Check that the host machine is online and try again.';
 }
 
 export function verifyArtifactOriginFetchGrant(
@@ -1193,7 +1208,6 @@ export function authorizeWorkerOriginFetch(params: {
     }
     if (!sessionIdsEquivalent(record.sessionId, workerOwner.sessionId)) {
         const queuePayload = (queueEntry.payload ?? {}) as Record<string, unknown>;
-        const workerMissionId = trimStr(queueEntry.missionId) || trimStr(queuePayload.missionId) || '';
         const rawInputIds = Array.isArray(queueEntry.inputArtifactIds)
             ? queueEntry.inputArtifactIds
             : Array.isArray(queuePayload.inputArtifactIds)
@@ -1202,23 +1216,11 @@ export function authorizeWorkerOriginFetch(params: {
         const allowedSet = new Set(
             rawInputIds.map((id: unknown) => trimStr(id)).filter((id: string) => id.length > 0),
         );
-        let recMissionId = trimStr(record.missionId);
-        if (!recMissionId && record.taskId) {
-            try {
-                const pe = meshStore.findQueueEntryById(
-                    record.meshId || meshIdToVerify,
-                    record.taskId,
-                ) as Record<string, unknown> | null;
-                recMissionId =
-                    trimStr(pe?.missionId) ||
-                    trimStr((pe?.payload as Record<string, unknown> | undefined)?.missionId);
-            } catch {
-                recMissionId = '';
-            }
-        }
-        const sameMission = Boolean(workerMissionId && recMissionId && workerMissionId === recMissionId);
-        const sameMesh = !record.meshId || record.meshId === meshIdToVerify;
-        if (!sameMission || !sameMesh || !allowedSet.has(record.artifactId)) {
+        // OD-4 (artifact-sharing.ts isSameBoundMesh): the coordinator naming the artifact
+        // in this task's inputArtifactIds IS the grant; no mission match. The record must
+        // be positively bound to this mesh — an unbound record is never reachable here.
+        const sameBoundMesh = trimStr(record.meshId).length > 0 && trimStr(record.meshId) === meshIdToVerify;
+        if (!sameBoundMesh || !allowedSet.has(record.artifactId)) {
             return {
                 success: false,
                 code: 'artifact_access_denied',

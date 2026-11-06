@@ -37,7 +37,7 @@ export function admitLightBaseNode(
     const checkoutRoot = node.workspace!.trim();
     const cfg = loadLightWorkspaceConfig(checkoutRoot);
     if (!cfg.ok) {
-        throw new Error(`${LIGHT_REJECT.NOT_CONFIGURED}: ${cfg.message} at ${cfg.path}. Run mesh_init to scaffold .adhdev/light-workspace.json, or use a worktree node.`);
+        throw new Error(`${LIGHT_REJECT.NOT_CONFIGURED}: ${cfg.message} at ${cfg.path}. Fix or delete that file (without it the repository's own node_modules layout is used), or use a worktree node.`);
     }
     return { lightBaseNodeId: String(node.id ?? node.nodeId ?? node.node_id), checkoutRoot, config: cfg.config };
 }

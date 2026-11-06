@@ -46,6 +46,7 @@ export {
 export type { SessionHostReplacementProvenance } from './prior-host-identity.js';
 import {
   buildHostDiagnostics,
+  countOpenFds,
   resolveHostEntryPath,
   pushRecent,
 } from './session-diagnostics.js';
@@ -65,6 +66,9 @@ export const DEFAULT_EVICT_SIGKILL_GRACE_MS = 4_000;
 
 import type { SessionHostServerOptions } from './server-options.js';
 export type { SessionHostServerOptions } from './server-options.js';
+
+/** node-pty leaks a descriptor per spawn on macOS; this is far past normal use and well under the system limit. */
+const OPEN_FD_WARN_THRESHOLD = 1024;
 
 export class SessionHostServer extends EventEmitter {
   readonly endpoint: SessionHostEndpoint;
@@ -410,6 +414,10 @@ export class SessionHostServer extends EventEmitter {
           if (!this.upgradeLease) throw new Error('native_host_upgrade_binding_unavailable');
           return { success: true, result: this.upgradeLease.release(request.payload) };
         case 'create_session': {
+          const openFds = countOpenFds();
+          if (openFds !== undefined && openFds >= OPEN_FD_WARN_THRESHOLD) {
+            this.recordHostLog('warn', `Host holds ${openFds} open descriptors with ${this.runtimes.size} live runtimes; a restart of the host clears a leak`);
+          }
           const record = this.registry.createSession(request.payload);
           if (sourceSocket) {
             this.subscribeSocketToSession(sourceSocket, record.sessionId);
@@ -834,6 +842,10 @@ export class SessionHostServer extends EventEmitter {
   /** Single SoT for cleanup inventory + stop_session_if_expected host boot CAS. */
   private currentHostBootId(): string | null {
     return resolveHostBootId({ upgradeBootId: this.upgradeLease?.bootId, hostStartedAt: this.startedAt });
+  }
+
+  runtimeCountForDiagnostics(): number {
+    return this.runtimes.size;
   }
 
   private getHostDiagnostics(payload?: { includeSessions?: boolean; limit?: number }): SessionHostDiagnostics {

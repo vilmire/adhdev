@@ -105,7 +105,8 @@ export interface MeshOnboardingPlanSuccess {
         kind: 'create_mesh_and_onboard' | 'add_existing_workspace' | 'clone_new_worktree';
         summary: string;
         requiresClean: boolean;
-        approvalRequired: true;
+        /** False only for a worktree clone: a branch + worktree + node, removable, self-checked. */
+        approvalRequired: boolean;
         steps: MeshOnboardingPlanStep[];
         alternatives: Array<{
             kind: 'add_existing_workspace' | 'clone_new_worktree';
@@ -672,12 +673,15 @@ export async function planMeshOnboarding(options: PlanMeshOnboardingOptions): Pr
                 // A dirty source is advisory (the worktree is built from HEAD), so the
                 // plan never requires a clean tree.
                 requiresClean: false,
-                approvalRequired: true,
+                // A worktree clone is the coordinator's own isolation step: it adds a
+                // branch, a worktree and a node (all removable) and re-runs this preflight.
+                // Only the .adhdev config step below still waits for the owner.
+                approvalRequired: false,
                 steps: [{
                     command: 'clone_mesh_node',
-                    description: 'Explicitly create the branch/worktree and register the resulting node.',
+                    description: 'Create the branch/worktree and register the resulting node.',
                     writes: true,
-                    approvalRequired: true,
+                    approvalRequired: false,
                     args: {
                         meshId: compatibleMesh.id,
                         sourceNodeId: sourceNode.id,

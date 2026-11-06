@@ -517,6 +517,17 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
      * host returns for this exact code, and a host that returns no key leaves
      * the member exactly as it was.
      */
+    get_mesh_host_grant_key: async (ctx: MedFamilyContext, args: any) => {
+        const meshId = readTrimmed(args?.meshId);
+        const selfDaemonId = readTrimmed(ctx.deps.statusInstanceId);
+        const mesh = meshId ? (await ctx.getMeshForCommand?.(meshId, undefined, { preferInline: false }))?.mesh : null;
+        if (!mesh || !selfDaemonId) return { success: false, code: 'mesh_not_found', meshId };
+        const status = resolveMeshHostStatus(mesh);
+        if (status.role !== 'host' || (status.hostDaemonId && !daemonIdsEquivalent(status.hostDaemonId, selfDaemonId))) {
+            return { success: false, code: 'mesh_host_key_not_host', meshId };
+        }
+        return { success: true, meshId, hostDaemonId: selfDaemonId, originGrantPublicKey: getHostOriginGrantPublicKey(selfDaemonId) };
+    },
     pin_mesh_host_key: async (ctx: MedFamilyContext, args: any) => {
         const meshId = readTrimmed(args?.meshId);
         const token = readTrimmed(args?.token);
@@ -670,4 +681,7 @@ export const meshHostPairingSpecs = defineCommandSpecs('med', meshHostPairingHan
     revoke_mesh_peer: { sources: LOCAL_OPERATOR_SOURCES, meshSender: undefined },
     // 'mesh' is allowed only for the recorded host (checked in the handler); the cloud dashboard uses 'p2p'.
     pin_mesh_host_key: { sources: [...LOCAL_OPERATOR_SOURCES, 'mesh'], meshSender: 'authenticated_peer' },
+    // A member with no copy of the mesh cannot be judged by a roster on its own side; the
+    // host checks its roster here, and the answer is a public key.
+    get_mesh_host_grant_key: { sources: ['mesh'], meshSender: 'roster' },
 }, { meshSender: 'authenticated_peer' });

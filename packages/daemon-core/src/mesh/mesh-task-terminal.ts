@@ -30,7 +30,7 @@ import { expireWorkerTaskTokensForAttempt, expireWorkerTaskTokensForTask } from 
 import { discardWorkerMailboxForTask } from './worker-mailbox.js';
 import { canonicalJson } from './mesh-untrusted-evidence.js';
 import { sha256Hex } from '../system/hash.js';
-import { isStageImplReport, shouldHoldStageTerminal } from './stage-state.js';
+import { isStageBlockLocked, isStageImplReport, shouldHoldStageTerminal } from './stage-state.js';
 import { stopLightWorkerSession } from './light-session-stop.js';
 import { notifyStageChildTerminal, notifyStageImplCompleted } from './stage-hooks.js';
 
@@ -97,6 +97,8 @@ export function commitTaskTerminal(terminal: MeshTerminalCommitInput): MeshTermi
             return { entry, committed: false, duplicate: false };
         }
         if (entry.status === terminal.status) return { entry, committed: true, duplicate: true };
+        // Review-in-task: a review-blocked row moves only by the pipeline (queue_policy) or a decide.
+        if (terminal.source !== 'queue_policy' && isStageBlockLocked(entry, terminal.status)) return { entry, committed: false, duplicate: false };
         // Review-in-task: an intermediate stage report is not the task's end — hand it to the pipeline.
         if (shouldHoldStageTerminal(entry, terminal.status)) {
             implReport = isStageImplReport(entry);
@@ -186,6 +188,7 @@ export function applyTaskTerminalInTxn(input: MeshLedgerTerminalInput): { entry:
         const entry = store.findQueueEntryById(input.meshId, input.taskId);
         if (!entry) return { entry: null, transitioned: false };
         if (entry.status === input.status) return { entry, transitioned: false };
+        if (isStageBlockLocked(entry, input.status)) return { entry, transitioned: false };
         if (shouldHoldStageTerminal(entry, input.status)) {
             if (isStageImplReport(entry)) afterBridgeCommit(store.db, () => notifyStageImplCompleted(input.meshId, input.taskId, input.attemptId));
             return { entry, transitioned: false };

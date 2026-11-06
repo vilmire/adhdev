@@ -9,6 +9,7 @@ import type { AssistantRelayStore } from './assistant-relay-store.js';
 import type { AuditedCoordinatorReply } from './assistant-native-window.js';
 import type { RenderedAttemptCoverage } from './assistant-relay-store.js';
 import type { AssistantInputSource } from './store-guards.js';
+import type { RelayArtifactRef } from './assistant-relay-format.js';
 
 export interface RelayClock {
     now(): number;
@@ -103,6 +104,8 @@ export interface AssistantRelayPorts {
     onRelayGap?(klass: 'no_attempt' | 'inside_attempt' | 'restart_closed', at: number): void;
     /** Content-free `[Mesh]` line (`buildMeshStatusLineForNotification`). */
     meshStatusLine?(meshId: string): string | null;
+    /** Artifacts registered in a local project after `sinceMs`, oldest first, at most `limit`. */
+    newArtifacts?(meshId: string, sinceMs: number, limit: number): { artifacts: Array<RelayArtifactRef & { createdAt: number }>; more: number } | null;
     meshWork(meshId: string): MeshWorkCounts | null;
     /** Registry: does an assistant entry exist at all (trigger condition 3)? */
     hasAssistant(): boolean;

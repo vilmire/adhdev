@@ -36,6 +36,7 @@ import { isAdapterEvidenceRef, verifiedNativeReportParts } from './attempt-repor
 import { listCoordinatorsForMesh } from '../mesh/coordinator-registry.js';
 import { createSessionControlRuntime, disposeSessionControlRuntime } from './session-control-runtime.js';
 import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
+import { ArtifactStore } from '../artifacts/index.js';
 import { getMeshQueueStats } from '../mesh/mesh-work-queue.js';
 import { getMeshMissions } from '../mesh/mesh-missions.js';
 import { buildMeshStatusLineForNotification } from '../mesh/mesh-notification-status-line.js';
@@ -280,6 +281,18 @@ export function buildAssistantRelayPorts(
             return null;
         },
         meshStatusLine: (meshId) => buildMeshStatusLineForNotification(meshId),
+        newArtifacts: (meshId, sinceMs, limit) => {
+            // Workers on other machines index their artifacts on this host, so the
+            // local store covers the whole project.
+            const fresh = new ArtifactStore(MeshRuntimeStore.getInstance().db).listByMesh(meshId, { limit: 200 })
+                .filter(r => typeof r.createdAt === 'number' && r.createdAt > sinceMs)
+                .sort((a, b) => a.createdAt - b.createdAt);
+            const shown = fresh.slice(-limit);
+            return {
+                artifacts: shown.map(r => ({ artifactId: r.artifactId, name: r.relPath.split('/').pop() || r.relPath, title: r.title ?? null, createdAt: r.createdAt })),
+                more: fresh.length - shown.length,
+            };
+        },
         meshWork: (meshId): MeshWorkCounts | null => {
             try {
                 const q = getMeshQueueStats(meshId);

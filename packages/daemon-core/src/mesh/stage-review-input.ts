@@ -63,23 +63,48 @@ function hashMatches(a: StageReviewInput['artifacts'][number]): boolean {
 
 /** Named parent evidence only; unrelated same-mission artifacts never become grants. */
 export function stageReviewArtifactGrants(store: Pick<MeshRuntimeStore, 'db'>, parent: MeshWorkQueueEntry, ids: string[]): StageReviewInput['artifacts'] {
+    return stageReviewArtifactGrantsWithheld(store, parent, ids).grants;
+}
+
+/**
+ * Like {@link stageReviewArtifactGrants}, but an artifact in `optional` (one the implementer only cited)
+ * that is gone, moved or changed since it was registered is withheld instead of failing the whole review:
+ * the reviewer still gets the pipeline's own diff/self-check/verdict evidence and reads the code itself.
+ * Unauthorized ids and every required artifact still fail closed.
+ */
+export function stageReviewArtifactGrantsWithheld(
+    store: Pick<MeshRuntimeStore, 'db'>, parent: MeshWorkQueueEntry, ids: string[], optional: ReadonlySet<string> = new Set(),
+): { grants: StageReviewInput['artifacts']; withheld: string[] } {
     if (!ids.length) throw new Error('review_input_artifacts_missing');
-    return [...new Set(ids)].map(id => {
-        const row = store.db.prepare('SELECT * FROM session_artifacts WHERE artifact_id = ?').get(id) as {
-            mesh_id: string; task_id: string; session_id: string; producer_role: string;
-            workspace_root: string; rel_path: string; sha256: string; size_bytes: number;
-        } | undefined;
-        if (!row || row.mesh_id !== parent.meshId || !row.session_id
-            || (row.task_id !== parent.id && !parent.inputArtifactIds?.includes(id))
-            || (row.task_id === parent.id && !['worker', 'pipeline'].includes(row.producer_role))) throw new Error(`review_input_artifact_unauthorized: ${id}`);
-        const root = realpathSync.native(row.workspace_root);
-        const file = realpathSync.native(path.resolve(root, row.rel_path));
-        const relative = path.relative(root, file);
-        if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error(`review_input_artifact_path: ${id}`);
-        const grant = { id, file, sha256: row.sha256, size: row.size_bytes };
-        if (!hashMatches(grant)) throw new Error(`review_input_artifact_hash: ${id}`);
-        return grant;
-    });
+    const grants: StageReviewInput['artifacts'] = [];
+    const withheld: string[] = [];
+    for (const id of new Set(ids)) {
+        try { grants.push(stageReviewArtifactGrant(store, parent, id)); }
+        catch (e: any) {
+            const msg = String(e?.message || e);
+            if (!optional.has(id) || msg.startsWith('review_input_artifact_unauthorized')) throw e;
+            withheld.push(id);
+        }
+    }
+    if (!grants.length) throw new Error('review_input_artifacts_missing');
+    return { grants, withheld };
+}
+
+function stageReviewArtifactGrant(store: Pick<MeshRuntimeStore, 'db'>, parent: MeshWorkQueueEntry, id: string): StageReviewInput['artifacts'][number] {
+    const row = store.db.prepare('SELECT * FROM session_artifacts WHERE artifact_id = ?').get(id) as {
+        mesh_id: string; task_id: string; session_id: string; producer_role: string;
+        workspace_root: string; rel_path: string; sha256: string; size_bytes: number;
+    } | undefined;
+    if (!row || row.mesh_id !== parent.meshId || !row.session_id
+        || (row.task_id !== parent.id && !parent.inputArtifactIds?.includes(id))
+        || (row.task_id === parent.id && !['worker', 'pipeline'].includes(row.producer_role))) throw new Error(`review_input_artifact_unauthorized: ${id}`);
+    const root = realpathSync.native(row.workspace_root);
+    const file = realpathSync.native(path.resolve(root, row.rel_path));
+    const relative = path.relative(root, file);
+    if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error(`review_input_artifact_path: ${id}`);
+    const grant = { id, file, sha256: row.sha256, size: row.size_bytes };
+    if (!hashMatches(grant)) throw new Error(`review_input_artifact_hash: ${id}`);
+    return grant;
 }
 
 export function attestStageReviewInput(parent: MeshWorkQueueEntry, input: {

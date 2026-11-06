@@ -49,7 +49,9 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../../src/commands/upgrade-install-surface.js', () => ({
   execNpmCommandSync: mocks.execNpmCommandSync,
-  resolveNpmPublishedVersion: (packageName: string, tagOrVersion: string, surface?: Record<string, unknown>) =>
+  execNpmCommandAsync: async (args: string[], options?: Record<string, unknown>, surface?: Record<string, unknown>) =>
+    String(mocks.execNpmCommandSync(args, options, surface)),
+  resolveNpmPublishedVersionAsync: async (packageName: string, tagOrVersion: string, surface?: Record<string, unknown>) =>
     String(mocks.execNpmCommandSync(['view', `${packageName}@${tagOrVersion}`, 'version'], { encoding: 'utf-8', timeout: 10_000 }, surface)).trim(),
   resolveCurrentGlobalInstallSurface: mocks.resolveCurrentGlobalInstallSurface,
 }))

@@ -24,6 +24,15 @@ import { execFileSync } from 'child_process';
  * documented contract while the signal is the observable mechanism, and a
  * caller may override `killSignal`.
  */
+/**
+ * Upper bound for one `npm install` during an upgrade. The daemon is already down
+ * while the helper installs, and npm has no overall deadline of its own: on
+ * 2026-11-05 three machines sat in the pre-flight install for 37 minutes (it normally
+ * takes seconds). Past this limit the helper gives up and restarts the previous
+ * version. SIGKILL because a stalled npm is not guaranteed to act on SIGTERM.
+ */
+export const NPM_INSTALL_LIMITS = { timeout: 5 * 60_000, killSignal: 'SIGKILL' } as const;
+
 export function isSpawnTimeoutError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const candidate = error as { code?: unknown; signal?: unknown; status?: unknown };

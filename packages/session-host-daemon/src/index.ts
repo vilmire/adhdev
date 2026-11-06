@@ -20,6 +20,7 @@ import {
   isManagedSessionHostCommandLine,
   sessionHostInstanceArg,
 } from './server.js';
+import { describeHostResources } from './session-diagnostics.js';
 import { exitWithoutThreadpoolJoin, startThreadpoolWatchdog, THREADPOOL_WATCHDOG_INTERVAL_MS, type ThreadpoolWatchdog, writeStderrLineSync } from './threadpool-watchdog.js';
 
 export {
@@ -189,6 +190,7 @@ async function runServer(instanceKeyArgs: string[] = []): Promise<void> {
         `[session-host] libuv thread pool made no progress for ${Math.round(stalledForMs / 1000)}s ` +
           '(PTY writes cannot complete); exiting so the daemon respawns the host.',
       );
+      writeStderrLineSync(`[session-host] at stall: ${describeHostResources(server.runtimeCountForDiagnostics())}`);
       try {
         server.flushAllPersistence();
       } catch {

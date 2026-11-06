@@ -356,7 +356,8 @@ type HandoffTickerComponents = { router: { deps: unknown; execute(cmd: string, a
 /** The engines keep the first context they get, so the ticker's must be the router's own deps: components have no session host control. */
 export function handoffTickerContext(components: HandoffTickerComponents): HighFamilyContext {
     return {
-        deps: components.router.deps, components: () => components,
+        // Read on use: the ticker starts during boot, before anything addresses the router.
+        get deps() { return components.router.deps; }, components: () => components,
         execute: (cmd: string, args: any, source: any, opts?: any) => components.router.execute(cmd, args, source, opts),
     } as unknown as HighFamilyContext;
 }

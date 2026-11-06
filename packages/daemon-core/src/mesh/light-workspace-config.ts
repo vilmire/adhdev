@@ -2,8 +2,11 @@
  * LIGHT-TASK: `.adhdev/light-workspace.json` loader + validator.
  *
  * Strict by design: unknown keys are rejected so a typo never silently disables a
- * safety setting (config-driven, no heuristics — absence of the file means light
- * tasks are refused, see LIGHT_REJECT.NOT_CONFIGURED).
+ * safety setting, and an invalid file refuses light tasks (LIGHT_REJECT.NOT_CONFIGURED).
+ * A MISSING file is not a refusal (owner 2026-11-05: coordinators should not stop on
+ * setup nobody performs): the repository's own declarations give the default — its
+ * root `node_modules` and each `package.json` workspace's `node_modules` are linked,
+ * nothing is copied. A repo that needs more writes the file.
  */
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -28,7 +31,7 @@ export interface LightWorkspaceConfig {
 }
 
 export type LightWorkspaceConfigResult =
-    | { ok: true; config: LightWorkspaceConfig; path: string }
+    | { ok: true; config: LightWorkspaceConfig; path: string; source: 'file' | 'default' }
     | { ok: false; reason: 'missing' | 'invalid'; message: string; path: string };
 
 const KNOWN_KEYS = new Set(['version', 'baseDir', 'linkNodeModules', 'copyDirs', 'copyExclude', 'freshDirs', 'minFreeBytes']);
@@ -90,11 +93,42 @@ export function validateLightWorkspaceConfig(raw: unknown): { ok: true; config: 
 export function loadLightWorkspaceConfig(repoRoot: string): LightWorkspaceConfigResult {
     const file = path.join(repoRoot, LIGHT_WORKSPACE_CONFIG_REL);
     let text: string;
-    try { text = fs.readFileSync(file, 'utf8'); } catch { return { ok: false, reason: 'missing', message: `${LIGHT_WORKSPACE_CONFIG_REL} not found`, path: file }; }
+    try { text = fs.readFileSync(file, 'utf8'); } catch (e: any) {
+        if (e?.code !== 'ENOENT') return { ok: false, reason: 'invalid', message: `unreadable: ${e?.message || e}`, path: file };
+        const derived = validateLightWorkspaceConfig(defaultLightWorkspaceConfig(repoRoot));
+        return derived.ok
+            ? { ok: true, config: derived.config, path: file, source: 'default' }
+            : { ok: false, reason: 'missing', message: `${LIGHT_WORKSPACE_CONFIG_REL} not found and no default could be derived (${derived.message})`, path: file };
+    }
     let parsed: unknown;
     try { parsed = JSON.parse(text); } catch (e: any) { return { ok: false, reason: 'invalid', message: `invalid JSON: ${e?.message || e}`, path: file }; }
     const res = validateLightWorkspaceConfig(parsed);
-    return res.ok ? { ok: true, config: res.config, path: file } : { ok: false, reason: 'invalid', message: res.message, path: file };
+    return res.ok ? { ok: true, config: res.config, path: file, source: 'file' } : { ok: false, reason: 'invalid', message: res.message, path: file };
+}
+
+/**
+ * The config a repository without `.adhdev/light-workspace.json` gets: link the root
+ * `node_modules` and `<workspace>/node_modules` for every `package.json` workspace
+ * pattern that the loader accepts (repo-relative, at most one whole `*` segment).
+ * Only what the repository itself declares; no guessing at build outputs.
+ */
+export function defaultLightWorkspaceConfig(repoRoot: string): Record<string, unknown> {
+    const link: string[] = [];
+    try { if (fs.statSync(path.join(repoRoot, 'node_modules')).isDirectory()) link.push('node_modules'); } catch { /* none */ }
+    let workspaces: unknown;
+    try { workspaces = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'))?.workspaces; } catch { /* no manifest */ }
+    const patterns = Array.isArray(workspaces) ? workspaces
+        : workspaces && typeof workspaces === 'object' && Array.isArray((workspaces as { packages?: unknown }).packages) ? (workspaces as { packages: unknown[] }).packages : [];
+    for (const raw of patterns) {
+        if (typeof raw !== 'string') continue;
+        const pattern = raw.trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+        if (!pattern || pattern.startsWith('!') || pattern.includes('**')) continue;
+        const candidate = `${pattern}/node_modules`;
+        const check: string[] = [];
+        relPatternList([candidate], 'linkNodeModules', check);
+        if (!check.length && !link.includes(candidate)) link.push(candidate);
+    }
+    return { version: 1, linkNodeModules: link };
 }
 
 /** Expand a repo-relative pattern with at most one `*` segment against the filesystem (directories only). */

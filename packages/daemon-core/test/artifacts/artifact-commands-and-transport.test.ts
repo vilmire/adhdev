@@ -35,7 +35,7 @@ import {
     setArtifactCommandRuntimeForDeps,
     type ArtifactCommandContext,
 } from '../../src/commands/med-family/artifacts.js';
-import { getHostOriginGrantPublicKey } from '../../src/commands/med-family/artifact-origin-grant.js';
+import { getHostOriginGrantPublicKey, mintArtifactOriginFetchGrant } from '../../src/commands/med-family/artifact-origin-grant.js';
 import { writeMeshHostRecord } from '../../src/mesh/mesh-host-memory.js';
 import { buildTranscriptObservationFromReadChat } from '../../src/commands/transcript-observation-builder.js';
 import { SessionRegistry } from '../../src/sessions/registry.js';
@@ -2780,6 +2780,71 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
                 // Verify the response was split into multiple 16 KB mesh_chunk frames over MeshRpcEndpoint
                 expect(chunkFramesObserved.length).toBeGreaterThanOrEqual(2);
 
+                // A member holding no copy of the mesh (normal after a host move) still serves
+                // the host on the strength of the persisted host record, and nobody else.
+                const memberWithoutMesh: ArtifactCommandContext = {
+                    deps: remoteDeps,
+                    getMeshForCommand: async () => null,
+                    getCachedInlineMesh: () => null,
+                };
+                const originRead = (sender: string) => (artifactHandlers as any).artifact_fetch_origin(memberWithoutMesh, {
+                    meshId: 'mesh-p2p-1',
+                    artifactId: remoteReg.artifactId,
+                    requesterRole: 'coordinator',
+                    mode: 'read',
+                    asChunks: true,
+                    [MESH_SENDER_DAEMON_ID_ARG]: sender,
+                });
+                expect(await originRead('daemon_host_1')).toMatchObject({ success: false, code: 'unauthenticated' });
+                writeMeshHostRecord('mesh-p2p-1', 'daemon_host_1', 'pairing');
+                expect(await originRead('daemon_host_1')).toMatchObject({ success: true });
+                expect(await originRead('daemon_someone_else')).toMatchObject({ success: false, code: 'unauthenticated' });
+
+                // A worker on another machine: the host's signed grant is the authority, and the
+                // machine takes the host's key from the host itself the first time.
+                const askedHostKey = vi.fn(async (target: string, command: string) => {
+                    expect(target).toBe('daemon_host_1');
+                    expect(command).toBe('get_mesh_host_grant_key');
+                    return { success: true, originGrantPublicKey: getHostOriginGrantPublicKey('daemon_host_1') };
+                });
+                const workerOrigin: ArtifactCommandContext = {
+                    ...memberWithoutMesh,
+                    deps: { ...remoteDeps, dispatchMeshCommand: askedHostKey as any },
+                };
+                setArtifactCommandRuntimeForDeps(workerOrigin.deps, { artifactStore: remoteArtifactStore, meshRuntimeStore: remoteMeshStore });
+                const workerRead = (originFetchGrant: unknown) => (artifactHandlers as any).artifact_fetch_origin(workerOrigin, {
+                    meshId: 'mesh-p2p-1',
+                    artifactId: remoteReg.artifactId,
+                    requesterRole: 'worker',
+                    requesterSessionId: 'sess-other-worker',
+                    requesterTaskId: 'task-other',
+                    requesterAttemptId: 'attempt-other',
+                    originFetchGrant,
+                    mode: 'read',
+                    asChunks: true,
+                    [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_other_member',
+                });
+                const mintGrant = () => mintArtifactOriginFetchGrant({
+                    meshId: 'mesh-p2p-1',
+                    hostDaemonId: 'daemon_host_1',
+                    originDaemonId: 'daemon_remote_worker_2',
+                    artifactId: remoteReg.artifactId,
+                    requesterSessionId: 'sess-other-worker',
+                    requesterTaskId: 'task-other',
+                    requesterAttemptId: 'attempt-other',
+                });
+                expect(await workerRead(mintGrant())).toMatchObject({ success: true });
+                expect(askedHostKey).toHaveBeenCalledTimes(1);
+                expect(await workerRead({ ...mintGrant(), signature: 'forged' })).toMatchObject({ success: false, code: 'artifact_access_denied' });
+                expect(await (artifactHandlers as any).artifact_fetch_origin(workerOrigin, {
+                    meshId: 'mesh-p2p-1',
+                    artifactId: remoteReg.artifactId,
+                    requesterRole: 'worker',
+                    requesterSessionId: 'sess-other-worker',
+                    mode: 'read',
+                    [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_other_member',
+                })).toMatchObject({ success: false, code: 'unauthenticated' });
+
                 // 3) Finding 2: Remote-machine worker OD-4 list and read of allowed inputArtifactIds vs refused unlisted artifact
                 sessionRegistry.register({
                     sessionId: 'sess-host-producer',
@@ -3201,6 +3266,29 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
                 expect(missionAFetchMissionB.code).toBe('artifact_access_denied');
                 expect(missionAFetchMissionB.chunks).toBeUndefined();
                 expect(missionAFetchMissionB.content).toBeUndefined();
+
+                // OD-4 on the origin path too: once the coordinator names the artifact in this
+                // task's inputArtifactIds it is granted, whatever mission it belongs to
+                // (live 2026-11-05: a remote-project worker was refused its listed input).
+                meshStore.db
+                    .prepare("UPDATE mesh_queue SET payload = json_set(payload, '$.inputArtifactIds', json(?)) WHERE mesh_id = ? AND id = ?")
+                    .run(JSON.stringify([missionBArt.artifactId]), 'mesh-r3-p2p', 'task-remote-a');
+                const listedOtherMission = await artifactHandlers.artifact_fetch_origin(hostCtx, {
+                    meshId: 'mesh-r3-p2p',
+                    artifactId: missionBArt.artifactId,
+                    requesterSessionId: 'sess-remote-a',
+                    requesterTaskId: 'task-remote-a',
+                    requesterAttemptId: 'att-remote-a',
+                    requesterRole: 'worker',
+                    mode: 'read',
+                    asChunks: true,
+                    [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_remote_r3',
+                });
+                expect(listedOtherMission.success, JSON.stringify(listedOtherMission)).toBe(true);
+                expect(Array.isArray(listedOtherMission.chunks)).toBe(true);
+                meshStore.db
+                    .prepare("UPDATE mesh_queue SET payload = json_set(payload, '$.inputArtifactIds', json(?)) WHERE mesh_id = ? AND id = ?")
+                    .run(JSON.stringify([]), 'mesh-r3-p2p', 'task-remote-a');
 
                 // Finding 5: resolveScopeOnly with unauthorized artifactId returns access denial with NO record fields at all
                 const scopeLeakProbe = await artifactHandlers.artifact_index_forwarded(

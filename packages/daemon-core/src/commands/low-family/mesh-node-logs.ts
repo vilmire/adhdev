@@ -11,6 +11,7 @@
 import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { readDaemonLogTail, MAX_TAIL_BYTES, MAX_GREP_PATTERN_LENGTH } from '../../logging/log-tail-reader.js';
 import { redactLogLines } from '../../logging/log-redactor.js';
+import { getUpgradeLogPath } from '../upgrade-log.js';
 import { captureDaemonCpuProfile } from '../../process/daemon-cpu-profile.js';
 import type { CommandRouterResult } from '../router.js';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
@@ -93,6 +94,12 @@ export const meshNodeLogsHandlers: Record<string, LowFamilyHandler> = {
                 nodeId,
             } as CommandRouterResult;
         }
+        // 'upgrade' is the detached upgrade helper's own trace. It lands in a separate
+        // file because the daemon is down while the helper runs.
+        const source = args?.source === undefined ? 'daemon' : args.source;
+        if (source !== 'daemon' && source !== 'upgrade') {
+            return { success: false, error: `unknown log source: ${String(source).slice(0, 40)} (expected daemon or upgrade)`, nodeId } as CommandRouterResult;
+        }
         const rawTailBytes = Number(args?.tailBytes);
         const tailBytes = Number.isFinite(rawTailBytes) && rawTailBytes > 0
             ? Math.min(rawTailBytes, MAX_TAIL_BYTES)
@@ -102,6 +109,7 @@ export const meshNodeLogsHandlers: Record<string, LowFamilyHandler> = {
             tailBytes,
             grep: rawGrep,
             sinceMs: Number.isFinite(Number(args?.sinceMs)) ? Number(args?.sinceMs) : undefined,
+            ...(source === 'upgrade' ? { filePath: getUpgradeLogPath() } : {}),
         });
         if (!tail.success) {
             return {

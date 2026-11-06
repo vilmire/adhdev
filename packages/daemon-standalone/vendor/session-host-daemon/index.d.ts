@@ -134,6 +134,7 @@ declare class SessionHostServer extends EventEmitter {
     private persistNow;
     /** Single SoT for cleanup inventory + stop_session_if_expected host boot CAS. */
     private currentHostBootId;
+    runtimeCountForDiagnostics(): number;
     private getHostDiagnostics;
     private recordHostLog;
     private recordRequestTrace;

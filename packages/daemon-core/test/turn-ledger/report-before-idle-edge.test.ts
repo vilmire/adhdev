@@ -113,6 +113,33 @@ describe('rc.44 run 12 — a report recorded before the idle edge commits on it,
             expect(completionNotices(r)).toHaveLength(1);
         });
 
+        it(`${scope}: the session exits a second after its report (no idle edge) → the report commits, no reclaim`, () => {
+            // Live rc.73 (2026-11-06, light task 3d89e9d3): report accepted while generating,
+            // the host stopped the session 1 s later, R20 reclaimed it and the finished task
+            // was re-run until reclaim_budget_exhausted.
+            const r = rig();
+            toResumed(r, scope);
+            expect(report(r, 344).rule).toBe('R17g');
+            r.at(345 * S);
+            const exit = r.ledger.observe(evd('process_exit', { exitCode: 129 }, { at: T0 + 345 * S }));
+            expect(exit.rule).toBe('R20r');
+            // The exit still proves the writer gone first; what waits on that stop is now the
+            // report's completion with the report's own text, not a reclaim.
+            const attempt = r.ledger.getAttempt('a1')!;
+            expect(attempt.state).toBe('stopping');
+            expect(attempt.reclaimCount).toBe(0);
+            expect(attempt.data.writerStop?.terminal).toMatchObject({ outcome: 'completed', strength: 'tool_report',
+                textEventId: attempt.data.report!.eventId });
+        });
+
+        it(`${scope}: an exit without a recorded report still reclaims (R20)`, () => {
+            const r = rig();
+            toResumed(r, scope);
+            r.at(345 * S);
+            expect(r.ledger.observe(evd('process_exit', { exitCode: 129 }, { at: T0 + 345 * S })).rule).toBe('R20');
+            expect(r.ledger.getAttempt('a1')!.terminal).toBeNull();
+        });
+
         it(`${scope}: no idle end after the report → the await_end expiry commits genuine (tool_report), one notice`, async () => {
             const r = rig();
             toResumed(r, scope);

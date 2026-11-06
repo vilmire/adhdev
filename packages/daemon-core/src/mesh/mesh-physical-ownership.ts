@@ -1,5 +1,10 @@
-/** Host-local attestation only. Missing physical proof never establishes writer isolation. */
+/**
+ * Physical ownership attestation. Each machine attests only its own disk; a scope from
+ * another machine is that machine's answer (see isForeignPhysicalScope). Missing
+ * physical proof never establishes writer isolation.
+ */
 import { execFileSync } from 'node:child_process';
+import { getMachineId } from '../config/config.js';
 import { lstatSync, realpathSync, statSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 import { findOwnershipConflicts, type OwnedPathsDeclaration, type PhysicalOwnershipScope, type MeshTaskPhase } from '@adhdev/mesh-shared';
@@ -108,9 +113,10 @@ export function attestLocalOwnership(input: {
         }
     };
     for (const entry of input.paths.paths) {
-        if (input.phase === 'source' && sourceForbidden(entry.path)) throw new Error(`source_phase_path_forbidden: ${entry.path}`);
+        // An empty path is the whole-repository declaration (`**`); name it so the refusal reads.
+        if (input.phase === 'source' && sourceForbidden(entry.path)) throw new Error(`source_phase_path_forbidden: ${entry.path || '**'}`);
         const resolved = canonical(path.resolve(worktree, entry.path));
-        if (!inside(worktree, resolved) || (input.phase === 'source' && sourceForbidden(path.relative(worktree, resolved).split(path.sep).join('/')))) throw new Error(`ownership_symlink_escape: ${entry.path}`);
+        if (!inside(worktree, resolved) || (input.phase === 'source' && sourceForbidden(path.relative(worktree, resolved).split(path.sep).join('/')))) throw new Error(`ownership_symlink_escape: ${entry.path || '**'}`);
         if (entry.subtree) inspectSubtree(resolved);
         resources.push({ path: resolved, identity: identity(resolved), subtree: entry.subtree });
         recordNestedGitStores(worktree, entry.path, resources);
@@ -139,12 +145,43 @@ export function attestLocalOwnership(input: {
 }
 
 /** Re-attest on admission: changing a symlink/worktree after revision never weakens H1. */
+/**
+ * A scope attested by another machine. This machine cannot see that disk, so it cannot
+ * re-check the scope; the attesting machine answered for its own checkout and is the
+ * only one that can. Unknown local identity is never "foreign" (fails closed).
+ */
+export function isForeignPhysicalScope(scope: Pick<PhysicalOwnershipScope, 'machineId'> | undefined, localMachineId: string | undefined = getMachineId()): boolean {
+    return !!scope && !!localMachineId && typeof scope.machineId === 'string' && !!scope.machineId && scope.machineId !== localMachineId;
+}
+
 export function currentPhysicalScope(scope: PhysicalOwnershipScope | undefined, paths: OwnedPathsDeclaration): PhysicalOwnershipScope | undefined {
     if (!scope || scope.version !== 1 || JSON.stringify(paths.paths) !== JSON.stringify(scope.declaration)) return undefined;
+    if (isForeignPhysicalScope(scope)) return scope;
     try {
         const current = attestLocalOwnership({ ...scope, workspace: scope.worktree, paths });
         return current.worktreeIdentity === scope.worktreeIdentity && current.gitDir === scope.gitDir && current.commonGitDir === scope.commonGitDir ? current : undefined;
     } catch { return undefined; }
+}
+
+const PLANNING_SCOPE_TTL_MS = 30_000;
+const PLANNING_SCOPE_MAX_ENTRIES = 64;
+const planningScopes = new Map<string, { at: number; scope: PhysicalOwnershipScope | undefined }>();
+
+/**
+ * For deciding whether a launch is worth attempting, never for admitting work: each attestation
+ * spawns several git processes on the daemon's event loop, and the queue tick asks for every
+ * pending task (profiled live, 2026-11-05: 47% of JS time, stalls up to 2.6 s). A stale answer
+ * only delays a launch or wastes one, because the claim itself re-attests with currentPhysicalScope.
+ */
+export function plannedPhysicalScope(scope: PhysicalOwnershipScope | undefined, paths: OwnedPathsDeclaration, now = Date.now()): PhysicalOwnershipScope | undefined {
+    const key = JSON.stringify([scope, paths.paths]);
+    const known = planningScopes.get(key);
+    if (known && now - known.at < PLANNING_SCOPE_TTL_MS) return known.scope;
+    const current = currentPhysicalScope(scope, paths);
+    planningScopes.delete(key);
+    if (planningScopes.size >= PLANNING_SCOPE_MAX_ENTRIES) planningScopes.delete(planningScopes.keys().next().value!);
+    planningScopes.set(key, { at: now, scope: current });
+    return current;
 }
 
 export type PhysicalOverlapExplanation =

@@ -21,11 +21,13 @@ vi.mock('child_process', async (importOriginal) => {
 
 vi.mock('../../src/commands/upgrade-install-surface.js', () => ({
   execNpmCommandSync: mocks.execNpmCommandSync,
+  execNpmCommandAsync: async (args: string[], options?: Record<string, unknown>, surface?: Record<string, unknown>) =>
+    String(mocks.execNpmCommandSync(args, options, surface)),
   // The published-version lookup is shared with the CLI + mandatory-update
   // paths. Mirror the real helper's argv/options assembly on top of the
   // execNpmCommandSync mock, so the `npm view` argv assertions below keep
   // exercising the actual contract rather than the mock's own shape.
-  resolveNpmPublishedVersion: (
+  resolveNpmPublishedVersionAsync: async (
     packageName: string,
     tagOrVersion: string,
     surface?: Record<string, unknown>,
@@ -121,7 +123,7 @@ describe('daemon_upgrade runtime version handling', () => {
     )
     expect(mocks.execNpmCommandSync).toHaveBeenCalledWith(
       ['ls', '-g', 'adhdev', '--depth=0', '--json'],
-      expect.objectContaining({ encoding: 'utf-8', timeout: 10000 }),
+      expect.objectContaining({ timeout: 10000 }),
       expect.objectContaining({ npmExecutable: 'npm' }),
     )
     expect(mocks.spawnDetachedDaemonUpgradeHelper).toHaveBeenCalledTimes(1)

@@ -22,6 +22,8 @@ import {
     type ArtifactRecord,
 } from '../../artifacts/index.js';
 import { readMeshNodeDaemonId } from '../../mesh/mesh-node-identity.js';
+import { readMeshHostRecord } from '../../mesh/mesh-host-memory.js';
+import { ensureHostGrantKeyKept } from './artifact-host-key-autopin.js';
 import { verifyWorkerSessionBind, verifyWorkerTaskToken } from '../../mesh/worker-mcp-isolation.js';
 import {
     resolveForwardedWorkerIdentity,
@@ -1105,6 +1107,11 @@ export const handleArtifactIndexForwarded: MedFamilyHandler = async (ctx, args) 
     }
 };
 
+function meshFromHostRecord(meshId: string): { meshHost: { hostDaemonId: string }; nodes: never[] } | null {
+    const hostDaemonId = trimString(readMeshHostRecord(meshId)?.hostDaemonId);
+    return hostDaemonId ? { meshHost: { hostDaemonId }, nodes: [] } : null;
+}
+
 export const handleArtifactFetchOrigin: MedFamilyHandler = async (ctx, args) => {
     const senderDaemonId = readMeshSender(args);
     if (!senderDaemonId) {
@@ -1136,13 +1143,21 @@ export const handleArtifactFetchOrigin: MedFamilyHandler = async (ctx, args) => 
             return { success: false, code: 'unauthenticated', error: `Artifact "${artifactId}" has no mesh binding for cross-daemon origin fetch (unauthenticated)` };
         }
         const cmdRes: any = await ctx.getMeshForCommand?.(meshIdToVerify, undefined, { preferInline: true });
-        const meshObj = cmdRes?.mesh ?? cmdRes ?? ctx.getCachedInlineMesh?.(meshIdToVerify);
+        // A member usually holds no copy of a mesh hosted elsewhere, so authorization must
+        // not depend on one. The persisted host record names the host and survives restarts.
+        const meshObj = cmdRes?.mesh ?? cmdRes ?? ctx.getCachedInlineMesh?.(meshIdToVerify)
+            ?? meshFromHostRecord(meshIdToVerify);
         if (!meshObj) {
             return { success: false, code: 'unauthenticated', error: `Mesh "${meshIdToVerify}" is not available to authorize origin fetch (unauthenticated)` };
         }
         const hostDaemonId = trimString(meshObj?.meshHost?.hostDaemonId) || trimString(meshObj?.hostDaemonId);
         const nodes: any[] = Array.isArray(meshObj?.nodes) ? meshObj.nodes : [];
+        const requesterRole = trimString(args?.requesterRole);
+        // A worker on another machine proves itself with the host's signed grant, verified
+        // below. This machine may hold no roster to find that machine in.
+        const presentsHostGrant = requesterRole === 'worker' && Boolean(args?.originFetchGrant);
         const isKnownPeer =
+            presentsHostGrant ||
             (hostDaemonId && daemonIdsEquivalent(hostDaemonId, senderDaemonId)) ||
             nodes.some((n: any) => {
                 const nd = readMeshNodeDaemonId(n) || trimString(n?.daemonId);
@@ -1154,7 +1169,9 @@ export const handleArtifactFetchOrigin: MedFamilyHandler = async (ctx, args) => 
         const selfDaemonId = trimString(ctx.deps?.statusInstanceId);
         const isSelfHost = Boolean(hostDaemonId && selfDaemonId && daemonIdsEquivalent(hostDaemonId, selfDaemonId));
         const isSenderHost = Boolean(hostDaemonId && daemonIdsEquivalent(hostDaemonId, senderDaemonId));
-        const requesterRole = trimString(args?.requesterRole);
+        if (!isSelfHost && presentsHostGrant && hostDaemonId) {
+            await ensureHostGrantKeyKept(ctx, meshIdToVerify, hostDaemonId);
+        }
         if (isSelfHost || !isSenderHost || requesterRole === 'worker') {
             const denial = authorizeWorkerOriginFetch({
                 args,

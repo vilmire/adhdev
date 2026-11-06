@@ -268,7 +268,7 @@ export const MESH_ADD_NODE_TOOL = {
 export const MESH_CLONE_NODE_TOOL = {
     name: 'mesh_clone_node',
     description: 'Create a new worktree-based node from an existing node for isolated parallel work. '
-        + 'Creates a git worktree on a new branch so multiple tasks can run on separate branches simultaneously. This writes a branch, worktree and mesh node: call mesh_create with mode="plan", operation=clone_worktree and obtain explicit user approval first; the implementation re-runs the clean/source preflight. '
+        + 'Creates a git worktree on a new branch so multiple tasks can run on separate branches simultaneously. No approval is needed: it only adds a branch, a worktree and a node, all removable with mesh_remove_node, and it runs its own clean/source preflight (refused when the source is unfit). '
         + 'Then pin the tasks that should run there with target_node_id (the new node id in the response).',
     inputSchema: {
         type: 'object' as const,

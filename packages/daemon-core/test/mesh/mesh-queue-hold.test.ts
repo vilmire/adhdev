@@ -62,6 +62,34 @@ describe('durable queue holds', () => {
         expect(state.notify).toHaveBeenCalledTimes(2);
         expect(getQueueEntryById(mesh, task.id)?.updatedAt).toBe(updatedAt);
     });
+    it('pages a task whose own owned_paths can never be attested at once, naming the whole-repo path', () => {
+        const store = MeshRuntimeStore.getInstance();
+        const task = enqueueTask(mesh, 'Open the app window', { difficulty: 'medium', taskMode: 'code_change', ownedPaths: ['**'] });
+        const physicalContext = {
+            workspace: '/remote/checkout', machineId: 'host-machine', repoIdentity: 'fixture/repo',
+            remoteOwnership: () => ({ error: 'ownership_unproven: remote_attestation_refused: source_phase_path_forbidden: **' }),
+        };
+        expect(store.claimNextQueueTask(mesh, 'air-node', 'air-session', [], { ...opts, physicalContext } as any)).toBeNull();
+        expect(getQueueEntryById(mesh, task.id)?.hold).toMatchObject({ reason: 'ownership_unproven', detail: { unknownField: '**' } });
+        notifyHeldQueueTasks(mesh); // no 3-minute wait: waiting never clears this hold
+        expect(state.notify).toHaveBeenCalledTimes(1);
+        expect(state.notify.mock.calls[0][0].coordinatorMessage).toContain(`Queue task ${task.id} cannot be claimed as declared`);
+        notifyHeldQueueTasks(mesh);
+        expect(state.notify).toHaveBeenCalledTimes(1);
+    });
+    it('still waits the usual threshold before paging a transient ownership hold', () => {
+        const store = MeshRuntimeStore.getInstance();
+        enqueueTask(mesh, 'Open the app window', { difficulty: 'medium', taskMode: 'code_change', ownedPaths: ['.gui-check/**'] });
+        const physicalContext = {
+            workspace: '/remote/checkout', machineId: 'host-machine', repoIdentity: 'fixture/repo',
+            remoteOwnership: () => ({ error: 'ownership_unproven: remote_attestation_pending' }),
+        };
+        expect(store.claimNextQueueTask(mesh, 'air-node', 'air-session', [], { ...opts, physicalContext } as any)).toBeNull();
+        notifyHeldQueueTasks(mesh);
+        expect(state.notify).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(QUEUE_HOLD_NOTICE_AFTER_MS); notifyHeldQueueTasks(mesh);
+        expect(state.notify).toHaveBeenCalledTimes(1);
+    });
     it('auto-launch skip records the same structured blocker', () => {
         const { holder, task } = conflict();
         __markAutoLaunchForTests(mesh, task.id, { status: 'skipped', reason: 'owned_paths_conflict' });

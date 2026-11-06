@@ -145,6 +145,23 @@ describe('stage readonly input attestation', () => {
         expect(() => ports.queue.enqueueReviewChild(live, spec)).toThrow('artifact_hash');
         expect(source().stageState!.reviewTaskIds).toEqual([]);
     });
+    it('withholds an implementer-cited artifact that changed after registration instead of refusing the review', () => {
+        const { ws, ports, store, source, file } = setup();
+        const diff = path.join(ws, 'diff.patch'); fs.writeFileSync(diff, 'pipeline diff');
+        store.db.prepare(`INSERT INTO session_artifacts (artifact_id,session_id,task_id,mesh_id,producer_role,workspace_root,rel_path,kind,mime,title,size_bytes,sha256,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run('art_diff', 'stage:p', source().id, currentMesh, 'pipeline', ws, 'diff.patch', 'text', 'text/plain', 'Diff', fs.statSync(diff).size, createHash('sha256').update(fs.readFileSync(diff)).digest('hex'), 1, 1);
+        const parent = source(); parent.stageState!.workerArtifactIds = ['art_evidence']; store.updateQueueEntry(parent);
+        fs.writeFileSync(file, 'edited after registration');
+        const child = ports.queue.enqueueReviewChild(source(), { ...spec, inputArtifactIds: ['art_diff', 'art_evidence'] });
+        expect(child.inputArtifactIds).toEqual(['art_diff']);
+        expect(child.message).toMatch(/art_evidence changed or disappeared/);
+        expect(currentStageReviewScope(source(), store.findQueueEntryById(currentMesh!, child.id)!)).toBeTruthy();
+    });
+    it('still refuses when the changed artifact is not one the implementer only cited', () => {
+        const { live, ports, file } = setup();
+        fs.writeFileSync(file, 'edited after registration');
+        expect(() => ports.queue.enqueueReviewChild(live, spec)).toThrow('artifact_hash');
+    });
     it('refuses changed HEAD before creation and after enqueue', () => {
         const { live, ports, source, ws, g, store } = setup();
         g('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'changed');

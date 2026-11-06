@@ -314,8 +314,26 @@ async function directSendOwnershipRefusal(ctx: MeshContext, node: LocalMeshNodeE
     });
     if (declared.declaration.paths.length === 0) return refuse('ownedPaths', 'ownership_unproven: ownedPaths');
     const localDaemonId = ctx.localDaemonId || '';
-    if (route !== 'local' || !node.daemonId || !localDaemonId || !daemonIdsEquivalent(node.daemonId, localDaemonId)) {
-        return refuse('workspace', 'remote target has not attested a workspace on this host');
+    if (!node.daemonId || !localDaemonId) return refuse('workspace', 'node machine identity is unknown, so its checkout cannot be attested');
+    if (route !== 'local' || !daemonIdsEquivalent(node.daemonId, localDaemonId)) {
+        if (daemonIdsEquivalent(node.daemonId, localDaemonId)) return refuse('workspace', 'local node reached through a remote route cannot be attested');
+        // REMOTE-OWNERSHIP: the machine that holds the checkout attests it (via this daemon).
+        let answer: any;
+        try {
+            answer = await ctx.transport.command('mesh_attest_remote_ownership', {
+                meshId: ctx.mesh.id, nodeId: node.id, ownedPaths: declared.declaration.paths, phase: 'source',
+                ...(target.sessionId ? { sessionId: target.sessionId } : {}),
+            });
+        } catch (e: any) {
+            return refuse('workspace', `remote checkout attestation failed: ${typeof e?.message === 'string' ? e.message : String(e)}`);
+        }
+        const body = answer && typeof answer === 'object' && answer.result && typeof answer.result === 'object' && !('scope' in answer) ? answer.result : answer;
+        if (!body?.success || !body.scope) return refuse('workspace', typeof body?.error === 'string' ? body.error : 'remote target has not attested its workspace');
+        const remoteAdmission = admitOwnedPathsForMesh(ctx.mesh.id, { id: 'direct-send', ownedPaths: declared.declaration, ownershipScope: body.scope, taskMode: req.taskMode, readonly: req.readonly });
+        if (!remoteAdmission.allowed) {
+            return refuse('ownershipScope', remoteAdmission.detail || 'an assigned writer has no attested ownershipScope or shares this resource');
+        }
+        return null;
     }
     const workspace = typeof node.workspace === 'string' ? node.workspace : '';
     const machineId = ctx.localMachineId || '';

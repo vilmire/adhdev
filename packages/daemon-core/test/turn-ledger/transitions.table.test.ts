@@ -120,6 +120,7 @@ const FIRES: Record<string, Fixture> = {
     R18: { attempt: makeAttempt('completed', { terminal: { outcome: 'completed', reason: 'worker_reported', source: 'worker_tool', strength: 'tool_report', at: NOW - 5 } }), evidence: ev('transcript_final', { selfAttributing: false, nativeRead: false, live: LIVE_IDLE, summary: REF }), state: 'completed', effects: ['record'] },
     R19: { attempt: makeAttempt('completed'), evidence: ev('turn_end', { strength: 'genuine' }), state: 'completed', effects: ['record'] },
     R34: { attempt: makeAttempt('completed'), evidence: ev('coordinator_ack', { notify: 'completed', outcome: 'delivered' }), state: 'completed' },
+    R20r: { attempt: G(REPORTED), holds: [makeHold('await_end')], evidence: ev('process_exit', { exitCode: 129 }), state: 'stopping', effects: ['cancel_dispatch', 'hold'] },
     R20: { attempt: G(), evidence: ev('process_exit', { exitCode: 137 }), state: 'stopping', generation: 1, effects: ['cancel_dispatch', 'hold'] },
     R20f: { attempt: G(), evidence: ev('process_exit', { exitCode: 1, providerFailure: 'billing_failed' }), state: 'stopping', effects: ['cancel_dispatch', 'hold'] },
     R21: { attempt: G(), evidence: ev('session_error', { reason: 'adapter_error' }), state: 'stopping', effects: ['cancel_dispatch', 'hold'] },

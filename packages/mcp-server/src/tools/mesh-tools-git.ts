@@ -70,7 +70,7 @@ export async function meshGitStatus(
 
 export async function meshReadNodeLogs(
     ctx: MeshContext,
-    args: { node_id: string; grep?: string; since_ms?: number; tail_bytes?: number; date?: string },
+    args: { node_id: string; grep?: string; since_ms?: number; tail_bytes?: number; date?: string; source?: 'daemon' | 'upgrade' },
 ): Promise<string> {
     const node = await findNodeWithRefresh(ctx, args.node_id);
     try {
@@ -85,6 +85,7 @@ export async function meshReadNodeLogs(
             ...(Number.isFinite(args.since_ms) ? { sinceMs: args.since_ms } : {}),
             ...(Number.isFinite(args.tail_bytes) ? { tailBytes: args.tail_bytes } : {}),
             ...(typeof args.date === 'string' && args.date.trim() ? { date: args.date.trim() } : {}),
+            ...(args.source ? { source: args.source } : {}),
         });
         const payload = unwrapCommandPayload(result);
         return JSON.stringify(payload, null, 2);
