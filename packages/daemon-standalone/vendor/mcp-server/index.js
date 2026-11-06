@@ -52690,6 +52690,31 @@ ${rendered.join("\n\n")}`,
         TERMINAL_TURN_STATES = ["completed", "blocked", "failed", "cancelled"];
       }
     });
+    function isReclaimTurnReason(reason) {
+      return !!reason && RECLAIM_TURN_REASONS.includes(reason);
+    }
+    function isUnredeliveredDirectFailure(attempt) {
+      return !!attempt && attempt.scope === "mesh_direct" && attempt.terminal?.outcome === "failed" && isReclaimTurnReason(attempt.terminal.reason);
+    }
+    var RECLAIM_TURN_REASONS;
+    var init_reclaim_reasons = __esm2({
+      "src/mesh/turn-ledger/reclaim-reasons.ts"() {
+        "use strict";
+        RECLAIM_TURN_REASONS = [
+          "dispatch_refused_session_exited",
+          "dispatch_refused_no_target",
+          "dispatch_refused_unsupported_input",
+          "dispatch_failed",
+          "session_exit",
+          "session_exit_before_turn",
+          "session_dead",
+          "hollow_completion",
+          "assigned_stranded_dispatch_unconfirmed",
+          "delivered_not_consumed_redrive",
+          "delivered_no_turn_deadline"
+        ];
+      }
+    });
     function classifyLane(attempt, evidence, holds = []) {
       if (!attempt) return { lane: "none", effectiveGeneration: null };
       if (evidence.kind === "hold_expired") {
@@ -52970,12 +52995,6 @@ ${rendered.join("\n\n")}`,
       if (!attemptOnly) notify(draft, outcome, { ...summary ? { summary } : {}, ...held.textEventId ? { textEventId: held.textEventId } : {} });
       draft.effects.push({ kind: "release_attempt_ref", attemptId: attempt.attemptId, sessionId: attempt.sessionId });
       draft.committed = true;
-    }
-    function isReclaimTurnReason(reason) {
-      return !!reason && RECLAIM_TURN_REASONS.includes(reason);
-    }
-    function isUnredeliveredDirectFailure(attempt) {
-      return !!attempt && attempt.scope === "mesh_direct" && attempt.terminal?.outcome === "failed" && isReclaimTurnReason(attempt.terminal.reason);
     }
     function reclaim(draft, reason) {
       const attempt = draft.attempt;
@@ -53464,7 +53483,6 @@ ${rendered.join("\n\n")}`,
     var OWNER_SCRAPE_SOURCES;
     var GUARDS;
     var TEXT_CARRYING_HOLDS;
-    var RECLAIM_TURN_REASONS;
     var WRITER_STOP_RETRY_MS;
     var WRITER_STOP_MAX_TRIES;
     var STALL_BUSY_STATUSES;
@@ -53478,6 +53496,7 @@ ${rendered.join("\n\n")}`,
         init_policy();
         init_transitions();
         init_types3();
+        init_reclaim_reasons();
         SESSION_PRODUCED_KINDS = /* @__PURE__ */ new Set([
           "turn_started",
           "suspension",
@@ -53593,19 +53612,6 @@ ${rendered.join("\n\n")}`,
           hold_await_end: (ctx) => holdIs(ctx, "await_end") && reportedThisGeneration(ctx)
         };
         TEXT_CARRYING_HOLDS = ["weak_candidate", "await_report", "await_end"];
-        RECLAIM_TURN_REASONS = [
-          "dispatch_refused_session_exited",
-          "dispatch_refused_no_target",
-          "dispatch_refused_unsupported_input",
-          "dispatch_failed",
-          "session_exit",
-          "session_exit_before_turn",
-          "session_dead",
-          "hollow_completion",
-          "assigned_stranded_dispatch_unconfirmed",
-          "delivered_not_consumed_redrive",
-          "delivered_no_turn_deadline"
-        ];
         WRITER_STOP_RETRY_MS = 3e4;
         WRITER_STOP_MAX_TRIES = 3;
         STALL_BUSY_STATUSES = /* @__PURE__ */ new Set(["generating", "starting", "waiting_approval", "waiting_choice"]);
