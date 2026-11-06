@@ -34,7 +34,7 @@ import { FINGERPRINT_V2, type StageGitPort, type StageRuntimePorts, type SelfChe
 import { runMeshRefineValidationProfile } from './refine-profile-run.js';
 import { prepareLightWorkspace, removeLightWorkspace } from './light-workspace.js';
 import { loadLightWorkspaceConfig } from './light-workspace-config.js';
-import { attestStageReviewInput, stageReviewArtifactGrants, currentStageReviewScope } from './stage-review-input.js';
+import { attestStageReviewInput, stageReviewArtifactGrantsWithheld, currentStageReviewScope } from './stage-review-input.js';
 import { reviewInputBusy } from './mesh-task-routing-contract.js';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 
@@ -272,6 +272,8 @@ export function createProductionStagePorts(components: Pick<DaemonComponents, 's
                     if (existing && (existing.status === 'assigned' || existing.assignedSessionId || existing.attemptId || existing.autoLaunch?.sessionId)) throw new Error('stage_review_already_started');
                     if (existing) return existing;
                     let proof;
+                    let inputArtifactIds = spec.inputArtifactIds;
+                    let message = spec.message;
                     // The read-lease reviewer must run in the PARENT's checkout. Without a node target the
                     // queue could hand the child to any idle session, and a claim from another checkout is
                     // then refused review_input_unavailable (a generic hold) instead of being routed here.
@@ -283,15 +285,23 @@ export function createProductionStagePorts(components: Pick<DaemonComponents, 's
                         const machineId = getMachineId();
                         if (!nodeId || !node?.workspace || !mesh?.repoIdentity || !machineId
                             || !components.statusInstanceId || !daemonIdsEquivalent(node.daemonId, components.statusInstanceId)) throw new Error('review_input_local_context_required');
-                        proof = attestStageReviewInput(current, { repoIdentity: mesh.repoIdentity, machineId, nodeId, workspace: node.workspace },
-                            stageReviewArtifactGrants(store(), current, spec.inputArtifactIds));
+                        // An artifact the implementer only cited may have changed after it was registered: withhold
+                        // it (and say so) rather than failing the review; the pipeline's own evidence stays required.
+                        const { grants, withheld } = stageReviewArtifactGrantsWithheld(store(), current, spec.inputArtifactIds,
+                            new Set(current.stageState.workerArtifactIds ?? []));
+                        proof = attestStageReviewInput(current, { repoIdentity: mesh.repoIdentity, machineId, nodeId, workspace: node.workspace }, grants);
+                        if (withheld.length) {
+                            inputArtifactIds = grants.map(g => g.id);
+                            message = `${message}\n\nNote: implementer artifact(s) ${withheld.join(', ')} changed or disappeared after they were registered, so they are withheld. Do not rely on them; read the code and the diff instead.`;
+                            LOG.warn('StagePipeline', `review child for ${parent.id}: withheld changed implementer artifact(s) ${withheld.join(', ')}`);
+                        }
                         if (reviewInputBusy(current, proof.checkout, store().getQueueEntries(current.meshId, ['assigned', 'pending']), true)) throw new Error('review_input_busy');
                     }
-                    const child = enqueueTask(parent.meshId, spec.message, {
+                    const child = enqueueTask(parent.meshId, message, {
                         stageChild: { parentTaskId: parent.id, round: spec.round, review: { sourceTaskId: parent.id, independence: spec.independence }, ...(spec.reviewerWorkspace ? { reviewerWorkspace: spec.reviewerWorkspace } : {}) },
                         difficulty: parent.difficulty === 'difficult' ? 'difficult' : 'medium',
                         ...(parent.missionId ? { missionId: parent.missionId } : {}),
-                        inputArtifactIds: spec.inputArtifactIds, inheritArtifacts: false,
+                        inputArtifactIds, inheritArtifacts: false,
                         ...(spec.targetSessionId ? { targetSessionId: spec.targetSessionId } : {}),
                         ...(!spec.reviewerWorkspace && reviewNodeId ? { targetNodeId: reviewNodeId } : {}),
                         ...(parent.sourceCoordinatorSessionId ? { sourceCoordinatorSessionId: parent.sourceCoordinatorSessionId } : {}),

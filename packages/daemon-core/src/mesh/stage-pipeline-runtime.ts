@@ -17,6 +17,12 @@ const STAGE_PARENT_ENDED = new Set(['completed', 'failed', 'blocked', 'cancelled
 const SELF_CHECK_LOG_MAX = 60_000;
 const DIFF_MAX = 1_500_000;
 
+/**
+ * create_review_child failures that retrying cannot fix: the required input evidence is unauthorized, gone or
+ * changed. Everything else (busy checkout, missing local context, a raced parent) is retried on the next tick.
+ */
+const isLastingReviewInputError = (detail: string): boolean => /^review_input_artifact(s_missing|_unauthorized|_path|_hash)\b/.test(detail);
+
 export class StagePipelineRuntime {
     /** Parents with an effect chain in flight (serializes per parent; events arriving meanwhile queue behind it). */
     private readonly chains = new Map<string, Promise<void>>();
@@ -94,6 +100,9 @@ export class StagePipelineRuntime {
             if (st.phase !== 'reviewing' && st.phase !== 'awaiting_review') return;
             if (!st.reviewTaskIds.includes(childId) || st.reviewTaskIds[st.reviewTaskIds.length - 1] !== childId) return; // a superseded child
             const fresh = this.ports.queue.get(meshId, childId)!;
+            // A child from an earlier round already delivered its outcome; after a rereview/revision whose
+            // new child could not be created it is still the last id, and must never judge the new round.
+            if (typeof fresh.stageRound === 'number' && fresh.stageRound !== st.round) return;
             const report = peekStageReport(meshId, childId);
             const independenceUsed = reviewIndependenceOf(fresh.review ?? {}) === 'fresh_session' ? 'fresh_session_fallback' as const : 'different_provider' as const;
             // §11 (fail closed): a read-lease reviewer must leave the checkout exactly as it found it. No baseline, an
@@ -188,7 +197,10 @@ export class StagePipelineRuntime {
         else if (st.phase === 'awaiting_review' || st.phase === 'reviewing') {
             const last = st.reviewTaskIds[st.reviewTaskIds.length - 1];
             const child = last ? this.ports.queue.get(meshId, last) : null;
-            if (!child) await this.runEffects(meshId, parentId, [{ kind: 'create_review_child', round: st.round }]);
+            if (!child || (typeof child.stageRound === 'number' && child.stageRound !== st.round)) {
+                // No child for THIS round yet (none at all, or only an earlier round's): create it.
+                await this.runEffects(meshId, parentId, [{ kind: 'create_review_child', round: st.round }]);
+            }
             else if (child.status === 'completed' || child.status === 'failed' || child.status === 'blocked' || child.status === 'cancelled') {
                 void this.onChildTerminal(meshId, child.id);
             }
@@ -211,7 +223,7 @@ export class StagePipelineRuntime {
             if (action === 'accept' || action === 'abandon') {
                 if (action === 'accept') {
                     // Clearing the reason marks the block decided, so it can never be reopened as overwritten.
-                    parent = this.ports.queue.mutate(meshId, parentId, e => { delete e.stageState!.blockedReason; }) ?? parent;
+                    parent = this.ports.queue.mutate(meshId, parentId, e => { delete e.stageState!.blockedReason; delete e.stageState!.blockedDetail; }) ?? parent;
                     this.ports.queue.commitParent(parent, 'completed', { finalSummary: `Accepted by coordinator${note ? `: ${note}` : ''}` }, 'stage_decide:accept');
                 } else {
                     this.ports.queue.cancel(meshId, parentId, `stage_decide:abandon${note ? `: ${note}` : ''}`);
@@ -245,7 +257,15 @@ export class StagePipelineRuntime {
             const parent = this.ports.queue.get(meshId, parentId);
             if (!parent || !isStageParent(parent)) return;
             try { await this.runEffect(parent, effect); }
-            catch (e: any) { this.ports.events.progress(meshId, parentId, `stage effect ${effect.kind} failed: ${e?.message || e}`); }
+            catch (e: any) {
+                const detail = String(e?.message || e);
+                this.ports.events.progress(meshId, parentId, `stage effect ${effect.kind} failed: ${detail}`);
+                // A reviewer whose required evidence is invalid would otherwise retry silently forever (and an
+                // earlier round's child would look like this round's): block with the real reason instead.
+                if (effect.kind === 'create_review_child' && isLastingReviewInputError(detail)) {
+                    await this.apply(meshId, parentId, { kind: 'review_input_failed', detail, at: this.iso() });
+                }
+            }
         }
     }
 

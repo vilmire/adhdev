@@ -48513,18 +48513,34 @@ ${error.message || ""}`;
       }
     }
     function stageReviewArtifactGrants(store5, parent, ids) {
+      return stageReviewArtifactGrantsWithheld(store5, parent, ids).grants;
+    }
+    function stageReviewArtifactGrantsWithheld(store5, parent, ids, optional = /* @__PURE__ */ new Set()) {
       if (!ids.length) throw new Error("review_input_artifacts_missing");
-      return [...new Set(ids)].map((id4) => {
-        const row2 = store5.db.prepare("SELECT * FROM session_artifacts WHERE artifact_id = ?").get(id4);
-        if (!row2 || row2.mesh_id !== parent.meshId || !row2.session_id || row2.task_id !== parent.id && !parent.inputArtifactIds?.includes(id4) || row2.task_id === parent.id && !["worker", "pipeline"].includes(row2.producer_role)) throw new Error(`review_input_artifact_unauthorized: ${id4}`);
-        const root = import_node_fs8.realpathSync.native(row2.workspace_root);
-        const file = import_node_fs8.realpathSync.native(path29.resolve(root, row2.rel_path));
-        const relative30 = path29.relative(root, file);
-        if (!relative30 || relative30 === ".." || relative30.startsWith(`..${path29.sep}`) || path29.isAbsolute(relative30)) throw new Error(`review_input_artifact_path: ${id4}`);
-        const grant = { id: id4, file, sha256: row2.sha256, size: row2.size_bytes };
-        if (!hashMatches(grant)) throw new Error(`review_input_artifact_hash: ${id4}`);
-        return grant;
-      });
+      const grants = [];
+      const withheld = [];
+      for (const id4 of new Set(ids)) {
+        try {
+          grants.push(stageReviewArtifactGrant(store5, parent, id4));
+        } catch (e) {
+          const msg = String(e?.message || e);
+          if (!optional.has(id4) || msg.startsWith("review_input_artifact_unauthorized")) throw e;
+          withheld.push(id4);
+        }
+      }
+      if (!grants.length) throw new Error("review_input_artifacts_missing");
+      return { grants, withheld };
+    }
+    function stageReviewArtifactGrant(store5, parent, id4) {
+      const row2 = store5.db.prepare("SELECT * FROM session_artifacts WHERE artifact_id = ?").get(id4);
+      if (!row2 || row2.mesh_id !== parent.meshId || !row2.session_id || row2.task_id !== parent.id && !parent.inputArtifactIds?.includes(id4) || row2.task_id === parent.id && !["worker", "pipeline"].includes(row2.producer_role)) throw new Error(`review_input_artifact_unauthorized: ${id4}`);
+      const root = import_node_fs8.realpathSync.native(row2.workspace_root);
+      const file = import_node_fs8.realpathSync.native(path29.resolve(root, row2.rel_path));
+      const relative30 = path29.relative(root, file);
+      if (!relative30 || relative30 === ".." || relative30.startsWith(`..${path29.sep}`) || path29.isAbsolute(relative30)) throw new Error(`review_input_artifact_path: ${id4}`);
+      const grant = { id: id4, file, sha256: row2.sha256, size: row2.size_bytes };
+      if (!hashMatches(grant)) throw new Error(`review_input_artifact_hash: ${id4}`);
+      return grant;
     }
     function attestStageReviewInput(parent, input, artifacts) {
       const state2 = parent.stageState;
@@ -78588,6 +78604,12 @@ Owner-authorized input recovery: review ${r.expectedHeadSha} in the authenticate
           if (state2.phase !== "reviewing" && state2.phase !== "awaiting_review") return noop;
           return block(state2, "reviewer_integrity_unverifiable", event.at);
         }
+        case "review_input_failed": {
+          if (state2.phase !== "reviewing" && state2.phase !== "awaiting_review") return noop;
+          const r = block(state2, "review_unavailable", event.at);
+          r.state.blockedDetail = event.detail.slice(0, 300);
+          return r;
+        }
         case "ceiling": {
           return block(state2, "stage_pipeline_ceiling", event.at);
         }
@@ -78595,6 +78617,7 @@ Owner-authorized input recovery: review ${r.expectedHeadSha} in the authenticate
           if (state2.phase !== "done" || !state2.blockedReason) return noop;
           state2.extraRevisions = (state2.extraRevisions ?? 0) + 1;
           delete state2.blockedReason;
+          delete state2.blockedDetail;
           state2.released = false;
           enter(state2, "revising", event.at);
           return { state: state2, effects: [{ kind: "send_revision", reason: "review", round: state2.round }] };
@@ -78602,6 +78625,7 @@ Owner-authorized input recovery: review ${r.expectedHeadSha} in the authenticate
         case "decide_rereview": {
           if (state2.phase !== "done" || !state2.blockedReason) return noop;
           delete state2.blockedReason;
+          delete state2.blockedDetail;
           delete state2.reviewerSessionId;
           state2.released = false;
           state2.reviewerFailures = 0;
@@ -78714,6 +78738,7 @@ ${body.replace(/<\/?\s*(untrusted_[a-z_]+)\b[^>]*>/gi, "[tag removed]")}
     var STAGE_PARENT_ENDED;
     var SELF_CHECK_LOG_MAX;
     var DIFF_MAX;
+    var isLastingReviewInputError;
     var StagePipelineRuntime;
     var init_stage_pipeline_runtime = __esm2({
       "src/mesh/stage-pipeline-runtime.ts"() {
@@ -78730,6 +78755,7 @@ ${body.replace(/<\/?\s*(untrusted_[a-z_]+)\b[^>]*>/gi, "[tag removed]")}
         STAGE_PARENT_ENDED = /* @__PURE__ */ new Set(["completed", "failed", "blocked", "cancelled"]);
         SELF_CHECK_LOG_MAX = 6e4;
         DIFF_MAX = 15e5;
+        isLastingReviewInputError = (detail) => /^review_input_artifact(s_missing|_unauthorized|_path|_hash)\b/.test(detail);
         StagePipelineRuntime = class {
           constructor(ports) {
             this.ports = ports;
@@ -78812,6 +78838,7 @@ ${body.replace(/<\/?\s*(untrusted_[a-z_]+)\b[^>]*>/gi, "[tag removed]")}
               if (st.phase !== "reviewing" && st.phase !== "awaiting_review") return;
               if (!st.reviewTaskIds.includes(childId) || st.reviewTaskIds[st.reviewTaskIds.length - 1] !== childId) return;
               const fresh = this.ports.queue.get(meshId, childId);
+              if (typeof fresh.stageRound === "number" && fresh.stageRound !== st.round) return;
               const report = peekStageReport(meshId, childId);
               const independenceUsed = reviewIndependenceOf(fresh.review ?? {}) === "fresh_session" ? "fresh_session_fallback" : "different_provider";
               if (!fresh.reviewerWorkspace && fresh.status === "completed") {
@@ -78911,8 +78938,9 @@ ${body.replace(/<\/?\s*(untrusted_[a-z_]+)\b[^>]*>/gi, "[tag removed]")}
             else if (st.phase === "awaiting_review" || st.phase === "reviewing") {
               const last = st.reviewTaskIds[st.reviewTaskIds.length - 1];
               const child = last ? this.ports.queue.get(meshId, last) : null;
-              if (!child) await this.runEffects(meshId, parentId, [{ kind: "create_review_child", round: st.round }]);
-              else if (child.status === "completed" || child.status === "failed" || child.status === "blocked" || child.status === "cancelled") {
+              if (!child || typeof child.stageRound === "number" && child.stageRound !== st.round) {
+                await this.runEffects(meshId, parentId, [{ kind: "create_review_child", round: st.round }]);
+              } else if (child.status === "completed" || child.status === "failed" || child.status === "blocked" || child.status === "cancelled") {
                 void this.onChildTerminal(meshId, child.id);
               }
             }
@@ -78940,6 +78968,7 @@ ${body.replace(/<\/?\s*(untrusted_[a-z_]+)\b[^>]*>/gi, "[tag removed]")}
                 if (action2 === "accept") {
                   parent = this.ports.queue.mutate(meshId, parentId, (e) => {
                     delete e.stageState.blockedReason;
+                    delete e.stageState.blockedDetail;
                   }) ?? parent;
                   this.ports.queue.commitParent(parent, "completed", { finalSummary: `Accepted by coordinator${note2 ? `: ${note2}` : ""}` }, "stage_decide:accept");
                 } else {
@@ -78975,7 +79004,11 @@ ${body.replace(/<\/?\s*(untrusted_[a-z_]+)\b[^>]*>/gi, "[tag removed]")}
               try {
                 await this.runEffect(parent, effect);
               } catch (e) {
-                this.ports.events.progress(meshId, parentId, `stage effect ${effect.kind} failed: ${e?.message || e}`);
+                const detail = String(e?.message || e);
+                this.ports.events.progress(meshId, parentId, `stage effect ${effect.kind} failed: ${detail}`);
+                if (effect.kind === "create_review_child" && isLastingReviewInputError(detail)) {
+                  await this.apply(meshId, parentId, { kind: "review_input_failed", detail, at: this.iso() });
+                }
               }
             }
           }
@@ -81262,6 +81295,8 @@ ${asText(streams.stderr)}
               if (existing && (existing.status === "assigned" || existing.assignedSessionId || existing.attemptId || existing.autoLaunch?.sessionId)) throw new Error("stage_review_already_started");
               if (existing) return existing;
               let proof;
+              let inputArtifactIds = spec.inputArtifactIds;
+              let message = spec.message;
               const reviewNodeId = current5.assignedNodeId ?? current5.targetNodeId;
               if (!spec.reviewerWorkspace) {
                 const nodeId = reviewNodeId;
@@ -81269,18 +81304,27 @@ ${asText(streams.stderr)}
                 const node = mesh?.nodes?.find((n) => n.id === nodeId);
                 const machineId = getMachineId();
                 if (!nodeId || !node?.workspace || !mesh?.repoIdentity || !machineId || !components.statusInstanceId || !daemonIdsEquivalent5(node.daemonId, components.statusInstanceId)) throw new Error("review_input_local_context_required");
-                proof = attestStageReviewInput(
+                const { grants, withheld } = stageReviewArtifactGrantsWithheld(
+                  store5(),
                   current5,
-                  { repoIdentity: mesh.repoIdentity, machineId, nodeId, workspace: node.workspace },
-                  stageReviewArtifactGrants(store5(), current5, spec.inputArtifactIds)
+                  spec.inputArtifactIds,
+                  new Set(current5.stageState.workerArtifactIds ?? [])
                 );
+                proof = attestStageReviewInput(current5, { repoIdentity: mesh.repoIdentity, machineId, nodeId, workspace: node.workspace }, grants);
+                if (withheld.length) {
+                  inputArtifactIds = grants.map((g3) => g3.id);
+                  message = `${message}
+
+Note: implementer artifact(s) ${withheld.join(", ")} changed or disappeared after they were registered, so they are withheld. Do not rely on them; read the code and the diff instead.`;
+                  LOG.warn("StagePipeline", `review child for ${parent.id}: withheld changed implementer artifact(s) ${withheld.join(", ")}`);
+                }
                 if (reviewInputBusy(current5, proof.checkout, store5().getQueueEntries(current5.meshId, ["assigned", "pending"]), true)) throw new Error("review_input_busy");
               }
-              const child = enqueueTask(parent.meshId, spec.message, {
+              const child = enqueueTask(parent.meshId, message, {
                 stageChild: { parentTaskId: parent.id, round: spec.round, review: { sourceTaskId: parent.id, independence: spec.independence }, ...spec.reviewerWorkspace ? { reviewerWorkspace: spec.reviewerWorkspace } : {} },
                 difficulty: parent.difficulty === "difficult" ? "difficult" : "medium",
                 ...parent.missionId ? { missionId: parent.missionId } : {},
-                inputArtifactIds: spec.inputArtifactIds,
+                inputArtifactIds,
                 inheritArtifacts: false,
                 ...spec.targetSessionId ? { targetSessionId: spec.targetSessionId } : {},
                 ...!spec.reviewerWorkspace && reviewNodeId ? { targetNodeId: reviewNodeId } : {},
@@ -252056,6 +252100,7 @@ function foldStageChildren(rows, includeChildren = false) {
           ...row.stagePlan.maxRevisions !== void 0 ? { maxRevisions: row.stagePlan.maxRevisions } : {},
           ...s.lastVerdict ? { lastVerdict: s.lastVerdict } : {},
           ...s.blockedReason ? { blockedReason: s.blockedReason } : {},
+          ...s.blockedReason && s.blockedDetail ? { blockedDetail: s.blockedDetail } : {},
           ...s.selfCheck ? { selfCheck: s.selfCheck } : {},
           openFindings: s.openFindingIds?.length ?? 0,
           reviewTaskIds: s.reviewTaskIds ?? []

@@ -103,6 +103,44 @@ describe('stage pipeline runtime', () => {
         await h.rt.tick(); await h.rt.idle();
         expect(h.parent().stageState!.reviewTaskIds).toHaveLength(1);
     });
+    it('a reviewer that cannot be created for invalid evidence blocks with the real reason, never by an earlier round\'s child', async () => {
+        const h = harness();
+        await h.implDone('a1');
+        await h.review({ verdict: 'changes_requested', findings: [h.f('F1')] });
+        expect(h.parent().stageState!.phase).toBe('revising');
+        const enqueue = h.ports.queue.enqueueReviewChild;
+        let fail = true;
+        h.ports.queue.enqueueReviewChild = (p, spec) => { if (fail) throw new Error('review_input_artifact_hash: art_x'); return enqueue(p, spec); };
+        await h.implDone('a2');
+        expect(h.parent().status).toBe('blocked');
+        expect(h.parent().stageState!.blockedReason).toBe('review_unavailable');
+        expect(h.parent().stageState!.blockedDetail).toBe('review_input_artifact_hash: art_x');
+        // The round-1 child stays the last id: a sweep must not re-judge it as this round's reviewer.
+        await h.rt.tick(); await h.rt.idle();
+        expect(h.parent().stageState!.blockedReason).toBe('review_unavailable');
+        fail = false;
+        expect((await h.rt.decide(MESH, PARENT, 'rereview')).ok).toBe(true);
+        expect(h.parent().stageState!.blockedDetail).toBeUndefined();
+        expect(h.lastChild().stageRound).toBe(h.parent().stageState!.round);
+        expect(h.parent().stageState!.reviewTaskIds).toHaveLength(2);
+    });
+    it('a sweep with only an earlier round\'s finished child creates this round\'s reviewer instead of judging the old one', async () => {
+        const h = harness();
+        await h.implDone('a1');
+        await h.review({ verdict: 'changes_requested', findings: [h.f('F1')] });
+        const enqueue = h.ports.queue.enqueueReviewChild;
+        let fail = true;
+        h.ports.queue.enqueueReviewChild = (p, spec) => { if (fail) throw new Error('review_input_busy'); return enqueue(p, spec); };
+        await h.implDone('a2');
+        expect(h.parent().stageState!.phase).toBe('awaiting_review');
+        await h.rt.tick(); await h.rt.idle();
+        expect(h.parent().status).toBe('assigned');
+        expect(h.parent().stageState!.blockedReason).toBeUndefined();
+        fail = false;
+        await h.rt.tick(); await h.rt.idle();
+        expect(h.parent().stageState!.reviewTaskIds).toHaveLength(2);
+        expect(h.lastChild().stageRound).toBe(2);
+    });
     it('a review child ending after its parent already ended starts no new round', async () => {
         const h = harness();
         await h.implDone('a1');
