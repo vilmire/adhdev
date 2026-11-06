@@ -44,7 +44,7 @@ import { countTerminalSubmits, TERMINAL_SUBMITS_PER_WRITE_CAP } from './assistan
 import {
     RELAY_BACKLOG_FOLD_AFTER_MS, RELAY_BODY_MAX_CHARS, RELAY_DELIVERY_MAX_CHARS, RELAY_IDLE_CLOSE_GRACE_MS, RELAY_MAX_WAIT_MS, RELAY_NATIVE_RETRY_MS, RELAY_NATIVE_WAIT_MS, RELAY_CAPTURE_PROBE_MS, RELAY_MAX_AUTO_PAGES, RELAY_PROGRESS_AFTER_MS, RELAY_QUIET_MS,
     RELAY_STALL_AFTER_MS, RELAY_INLINE_MAX_CHARS, RELAY_QUIET_LINE_TTL_MS, buildApprovalSignal, extractAttentionDetail, buildCoordinatorEndedSignal, buildFoldedBacklogLine, buildProgressSignal,
-    buildMissedReportsLine, buildRelayEnvelope, buildRestartNote, buildStallSignal, buildUnreachableRelay, codePoints, relayMessageId,
+    buildMissedReportsLine, buildNewArtifactsLine, RELAY_ARTIFACTS_MAX, buildRelayEnvelope, buildRestartNote, buildStallSignal, buildUnreachableRelay, codePoints, relayMessageId,
     shouldAddRestartNote,
     type RestartContext,
 } from './assistant-relay-format.js';
@@ -55,6 +55,8 @@ export type AssistantRelayBusEvent = EventOf<typeof ASSISTANT_RELAY_BUS_KINDS[nu
 
 /** A human input parked in the driver FIFO is attributed when the next turn starts; give up after this. */
 export const PENDING_HUMAN_MAX_AGE_MS = 5 * 60_000;
+/** First relay of a project after a fresh store: announce artifacts this recent only. */
+export const NEW_ARTIFACTS_FIRST_WINDOW_MS = 2 * 60 * 60_000;
 const COVERAGE_TTL_MS = RELAY_COVERAGE_TTL_MS;
 const COVERAGE_MAX_ENTRIES = RELAY_COVERAGE_MAX_REPLIES;
 const replyHash = (text: string) => createHash('sha256').update(text.replace(/\r\n?/g, '\n').trim()).digest('hex');
@@ -1213,6 +1215,24 @@ export class AssistantRelay {
             text: `[ADHDev capture status] ${JSON.stringify(item.attemptIds.map(id => ({ attemptId: id, sourceComplete: false, reason: captureFailureReason(this.attemptMeta.get(id)?.reason) })))}\n` + unavailableReportNotice(item.attemptIds.length, this.ports.projectSlug(item.meshId) ?? item.meshId, cursor, { attemptId, coordinatorSessionId: session }) };
     }
 
+    /**
+     * Artifacts the project registered since the last relay that named any, so the
+     * assistant can tell the user about them (and cite their ids) without being asked.
+     * The cursor is a receipt: a restart does not announce the same artifacts again.
+     */
+    private newArtifactsLine(meshId: string): string | null {
+        if (!this.ports.newArtifacts) return null;
+        const now = this.clock.now();
+        const key = receiptKey('artifact-cursor', meshId);
+        const since = Number(this.ports.store.readReceipt(key, now)) || now - NEW_ARTIFACTS_FIRST_WINDOW_MS;
+        let found: ReturnType<NonNullable<AssistantRelayPorts['newArtifacts']>> = null;
+        try { found = this.ports.newArtifacts(meshId, since, RELAY_ARTIFACTS_MAX); } catch { return null; }
+        if (!found?.artifacts.length) return null;
+        const newest = Math.max(...found.artifacts.map(a => a.createdAt));
+        this.ports.store.writeReceipt(key, String(newest), now, 'counter');
+        return buildNewArtifactsLine(found.artifacts, found.more) || null;
+    }
+
     private async renderRelay(item: Item & { kind: 'relay' }): Promise<Part> {
         const remote = this.remote.get(item.meshId);
         const bodies = await this.bodiesFor(item);
@@ -1232,6 +1252,7 @@ export class AssistantRelay {
         const envelope = buildRelayEnvelope({
             slug: this.ports.projectSlug(item.meshId) ?? item.meshId,
             outcome: item.outcome,
+            artifactsLine: remote ? null : this.newArtifactsLine(item.meshId),
             preservePageWhitespace: true,
             bodies: bodies.map((body, index) => body ? Array.from(body).slice(this.pageOffset(item.attemptIds[index]!, body), this.pageOffset(item.attemptIds[index]!, body) + RELAY_BODY_MAX_CHARS).join('') : body),
             statusLine: remote ? remote.statusLine : this.ports.meshStatusLine?.(item.meshId) ?? null,
