@@ -67,7 +67,7 @@ export type GuardId =
     | 'hold_await_report'
     | 'hold_native_probe_report_only' | 'hold_direct_report_missing' | 'hold_queue_report_missing'
     | 'hold_end_unconfirmed_defer' | 'hold_end_unconfirmed_exhausted' | 'hold_end_probe_missing' | 'hold_report_correction'
-    | 'finished_after_report' | 'hold_await_end';
+    | 'finished_after_report' | 'hold_await_end' | 'exit_after_report';
 
 /** Named attempt mutations (reducer.ts ACTIONS). */
 export type ActionId =
@@ -446,6 +446,14 @@ export const TRANSITIONS: readonly TransitionRule[] = [
     ] },
 
     // ── session end / errors / operator ─────────────────────────────────
+    // A worker that reported, then exited before the idle edge (the host stopped it a second
+    // after its report; live rc.73, 2026-11-06, light task 3d89e9d3): the exit is a stronger
+    // end than the idle edge the await_end hold was waiting for, so the recorded report
+    // commits now — the hold's own expiry (R13t) would have committed it, but the reclaim
+    // below used to discard it and re-run finished work until reclaim_budget_exhausted.
+    { id: 'R20r', lane: 'current', from: [C, G, S, F], on: ['process_exit'], guard: 'exit_after_report', to: 'outcome', verdict: 'applied', effects: [
+        { e: 'commit', outcome: 'from_recorded_report', strength: 'tool_report', reason: 'worker_reported', text: 'recorded_report' },
+    ] },
     { id: 'R20', lane: 'current', from: 'nonterminal', on: ['process_exit'], guard: 'no_provider_failure', to: A, verdict: 'applied', effects: [
         { e: 'reclaim', reason: 'from_exit_state' },
     ] },

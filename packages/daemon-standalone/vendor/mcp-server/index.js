@@ -52553,6 +52553,14 @@ ${rendered.join("\n\n")}`,
             { e: "act", act: "mark_notified" }
           ] },
           // ── session end / errors / operator ─────────────────────────────────
+          // A worker that reported, then exited before the idle edge (the host stopped it a second
+          // after its report; live rc.73, 2026-11-06, light task 3d89e9d3): the exit is a stronger
+          // end than the idle edge the await_end hold was waiting for, so the recorded report
+          // commits now — the hold's own expiry (R13t) would have committed it, but the reclaim
+          // below used to discard it and re-run finished work until reclaim_budget_exhausted.
+          { id: "R20r", lane: "current", from: [C, G, S, F], on: ["process_exit"], guard: "exit_after_report", to: "outcome", verdict: "applied", effects: [
+            { e: "commit", outcome: "from_recorded_report", strength: "tool_report", reason: "worker_reported", text: "recorded_report" }
+          ] },
           { id: "R20", lane: "current", from: "nonterminal", on: ["process_exit"], guard: "no_provider_failure", to: A2, verdict: "applied", effects: [
             { e: "reclaim", reason: "from_exit_state" }
           ] },
@@ -52752,6 +52760,10 @@ ${rendered.join("\n\n")}`,
       const attempt = ctx.attempt;
       return !!attempt && attempt.data.report?.generation === attempt.generation;
     }
+    function exitAfterReport(ctx) {
+      const attempt = ctx.attempt;
+      return ctx.evidence.kind === "process_exit" && !ctx.evidence.providerFailure && reportedThisGeneration(ctx) && ctx.holds.some((h) => h.reason === "await_end" && (!attempt || h.attemptId === attempt.attemptId));
+    }
     function finishedAfterReport(ctx) {
       if (!reportedThisGeneration(ctx)) return false;
       const ev = ctx.evidence;
@@ -52918,12 +52930,13 @@ ${rendered.join("\n\n")}`,
       const attempt = draft.attempt;
       if (isMeshScope(attempt) && !attempt.data.writerStop?.confirmed && (reason === "hard_ceiling" || draft.ctx.evidence.kind === "cancel" || draft.ctx.evidence.kind === "operator_status" || draft.ctx.evidence.kind === "session_error" || draft.ctx.evidence.kind === "process_exit")) {
         beginWriterStop(draft, reason);
+        const stopSummary = text10 ? text10.summary : summaryOf(draft.ctx.evidence);
         attempt.data.writerStop.terminal = {
           outcome,
           strength,
           source: draft.ctx.evidence.source,
-          ...summaryOf(draft.ctx.evidence) ? { summary: summaryOf(draft.ctx.evidence) } : {},
-          textEventId: draft.ctx.evidence.eventId
+          ...stopSummary ? { summary: stopSummary } : {},
+          textEventId: text10?.textEventId ?? draft.ctx.evidence.eventId
         };
         return;
       }
@@ -53556,7 +53569,8 @@ ${rendered.join("\n\n")}`,
           liveness_failed_nonfatal: (ctx) => ctx.evidence.kind === "liveness" && ctx.evidence.result === "read_failed" && ctx.attempt.livenessFailStreak + 1 < LIVENESS_FAIL_STREAK_LIMIT,
           reported_terminal: (ctx) => ctx.attempt?.terminal?.strength === "tool_report",
           provider_failure: (ctx) => ctx.evidence.kind === "process_exit" && !!ctx.evidence.providerFailure,
-          no_provider_failure: (ctx) => ctx.evidence.kind === "process_exit" && !ctx.evidence.providerFailure,
+          no_provider_failure: (ctx) => ctx.evidence.kind === "process_exit" && !ctx.evidence.providerFailure && !exitAfterReport(ctx),
+          exit_after_report: (ctx) => exitAfterReport(ctx),
           holder_is_this_attempt: (ctx) => ctx.evidence.kind === "duplicate_dispatch_refusal" && ctx.evidence.holderAttemptId === ctx.attempt?.attemptId,
           final_present: (ctx) => ctx.evidence.kind === "no_progress" && ctx.evidence.finalAssistantPresent && !reportedThisGeneration(ctx),
           hold_await_delivery: (ctx) => holdIs(ctx, "await_delivery"),

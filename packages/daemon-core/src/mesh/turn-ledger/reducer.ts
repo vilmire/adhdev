@@ -219,6 +219,16 @@ function reportedThisGeneration(ctx: GuardCtx): boolean {
 }
 
 /**
+ * A clean process exit while a report recorded for this generation still waits
+ * on its `await_end` hold (R20r): the exit ends the turn, so the report commits.
+ */
+function exitAfterReport(ctx: GuardCtx): boolean {
+    const attempt = ctx.attempt;
+    return ctx.evidence.kind === 'process_exit' && !ctx.evidence.providerFailure && reportedThisGeneration(ctx)
+        && ctx.holds.some((h) => h.reason === 'await_end' && (!attempt || h.attemptId === attempt.attemptId));
+}
+
+/**
  * An idle signal after a recorded report (R9t): any admitted turn_end (strong
  * or weak, hollow or not — the report is the verdict), a transcript_final that
  * is either admitted OR declined on content grounds (native_marker_absent /
@@ -374,7 +384,8 @@ const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> 
         && ctx.attempt!.livenessFailStreak + 1 < LIVENESS_FAIL_STREAK_LIMIT,
     reported_terminal: (ctx) => ctx.attempt?.terminal?.strength === 'tool_report',
     provider_failure: (ctx) => ctx.evidence.kind === 'process_exit' && !!ctx.evidence.providerFailure,
-    no_provider_failure: (ctx) => ctx.evidence.kind === 'process_exit' && !ctx.evidence.providerFailure,
+    no_provider_failure: (ctx) => ctx.evidence.kind === 'process_exit' && !ctx.evidence.providerFailure && !exitAfterReport(ctx),
+    exit_after_report: (ctx) => exitAfterReport(ctx),
     holder_is_this_attempt: (ctx) => ctx.evidence.kind === 'duplicate_dispatch_refusal' && ctx.evidence.holderAttemptId === ctx.attempt?.attemptId,
     final_present: (ctx) => ctx.evidence.kind === 'no_progress' && ctx.evidence.finalAssistantPresent && !reportedThisGeneration(ctx),
     hold_await_delivery: (ctx) => holdIs(ctx, 'await_delivery'),
@@ -562,8 +573,10 @@ function commit(
         || draft.ctx.evidence.kind === 'cancel' || draft.ctx.evidence.kind === 'operator_status'
         || draft.ctx.evidence.kind === 'session_error' || draft.ctx.evidence.kind === 'process_exit')) {
         beginWriterStop(draft, reason);
+        // A commit carrying its own text (a recorded report, R20r) keeps it across the stop.
+        const stopSummary = text ? text.summary : summaryOf(draft.ctx.evidence);
         attempt.data.writerStop!.terminal = { outcome, strength, source: draft.ctx.evidence.source,
-            ...(summaryOf(draft.ctx.evidence) ? { summary: summaryOf(draft.ctx.evidence) } : {}), textEventId: draft.ctx.evidence.eventId };
+            ...(stopSummary ? { summary: stopSummary } : {}), textEventId: text?.textEventId ?? draft.ctx.evidence.eventId };
         return;
     }
     const ev = draft.ctx.evidence;
