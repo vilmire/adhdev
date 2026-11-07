@@ -27,6 +27,7 @@ import { beginTaskDispatchInFlight } from './mesh-task-inflight.js';
 import { isModelAllowedBySlot } from './slot-model-enforcement.js';
 import { dispatchMessageId, openOrResumeQueueAttempt } from './mesh-queue-dispatch-evidence.js';
 import { rebindRefusedClaimToOpenAttempt } from './mesh-queue-attempt-guard.js';
+import { supersedeAwaitingReportForPinnedFollowup } from './mesh-pinned-followup-supersede.js';
 import { withMeshDirectDispatch } from '../commands/command-args.js';
 import type { TurnAttemptRef } from '@adhdev/mesh-shared';
 import type { TurnLedger } from './turn-ledger/ledger.js';
@@ -622,6 +623,12 @@ export function tryAssignQueueTask(
         }
     }
     assertMaintenanceNode(meshId, nodeId, readMeshNodeDaemonId(node ?? {}));
+    // A follow-up pinned to THIS idle session whose previous attempt only awaits its report
+    // would be refused `session_already_assigned` until the hold expires (live deadlock
+    // 2026-11-07, bcde60ec/6237d42f): retire that attempt first (mesh-pinned-followup-supersede.ts).
+    try {
+        supersedeAwaitingReportForPinnedFollowup(meshId, sessionId, { sessionIdle: readText(claiming.claimState?.status).toLowerCase() === 'idle' });
+    } catch (e: any) { LOG.warn('MeshQueue', `pinned follow-up supersede check failed for ${sessionId}: ${e?.message || e}`); }
     const claim = buildClaimOptions({ components, meshId, nodeId, sessionId, providerType, node, mesh, claimState: claiming.claimState, routingDecision });
     // A6-SILENT-REFUSAL: collect WHICH gate refused so the `!task` exit below stops being
     // the silent funnel that made a permanently-stuck task look like an idle queue.

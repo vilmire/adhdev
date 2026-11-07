@@ -67,7 +67,7 @@ export type GuardId =
     | 'hold_await_report'
     | 'hold_native_probe_report_only' | 'hold_direct_report_missing' | 'hold_queue_report_missing'
     | 'hold_end_unconfirmed_defer' | 'hold_end_unconfirmed_exhausted' | 'hold_end_probe_missing' | 'hold_report_correction'
-    | 'finished_after_report' | 'hold_await_end' | 'exit_after_report';
+    | 'finished_after_report' | 'hold_await_end' | 'exit_after_report' | 'settle_idle_report_owed';
 
 /** Named attempt mutations (reducer.ts ACTIONS). */
 export type ActionId =
@@ -475,7 +475,14 @@ export const TRANSITIONS: readonly TransitionRule[] = [
         { e: 'cancel_dispatch', target: 'current', when: 'not_intentional_cleanup' },
         { e: 'commit', outcome: 'cancelled', strength: 'operator', reason: 'from_cancel' },
     ] },
-    { id: 'R23', lane: 'current', from: 'nonterminal', on: ['operator_status'], to: 'outcome', verdict: 'applied', effects: [
+    // A session-pinned follow-up needs the IDLE session whose queue attempt only owes its
+    // report (R9r/R13q retain such an attempt indefinitely; the one-open-attempt-per-session
+    // index then blocks the follow-up — live 2026-11-07). The scheduler settles it WITHOUT
+    // stopping the writer (R23 would): the worker session is the one the follow-up targets.
+    { id: 'R23s', lane: 'current', from: [F], on: ['operator_status'], guard: 'settle_idle_report_owed', to: 'failed', verdict: 'applied', effects: [
+        { e: 'commit', outcome: 'failed', strength: 'operator', reason: 'from_operator' },
+    ] },
+    { id: 'R23', lane: 'current', from: 'nonterminal', on: ['operator_status'], guard: 'otherwise', to: 'outcome', verdict: 'applied', effects: [
         { e: 'commit', outcome: 'from_operator', strength: 'operator', reason: 'from_operator' },
     ] },
 

@@ -52606,7 +52606,14 @@ ${rendered.join("\n\n")}`,
             { e: "cancel_dispatch", target: "current", when: "not_intentional_cleanup" },
             { e: "commit", outcome: "cancelled", strength: "operator", reason: "from_cancel" }
           ] },
-          { id: "R23", lane: "current", from: "nonterminal", on: ["operator_status"], to: "outcome", verdict: "applied", effects: [
+          // A session-pinned follow-up needs the IDLE session whose queue attempt only owes its
+          // report (R9r/R13q retain such an attempt indefinitely; the one-open-attempt-per-session
+          // index then blocks the follow-up — live 2026-11-07). The scheduler settles it WITHOUT
+          // stopping the writer (R23 would): the worker session is the one the follow-up targets.
+          { id: "R23s", lane: "current", from: [F], on: ["operator_status"], guard: "settle_idle_report_owed", to: "failed", verdict: "applied", effects: [
+            { e: "commit", outcome: "failed", strength: "operator", reason: "from_operator" }
+          ] },
+          { id: "R23", lane: "current", from: "nonterminal", on: ["operator_status"], guard: "otherwise", to: "outcome", verdict: "applied", effects: [
             { e: "commit", outcome: "from_operator", strength: "operator", reason: "from_operator" }
           ] },
           { id: "R17c", lane: "current", from: "nonterminal", on: ["worker_report_correction_requested"], to: "same", verdict: "applied", effects: [
@@ -52911,6 +52918,10 @@ ${rendered.join("\n\n")}`,
       const r = ctx.attempt?.data.reportCorrection;
       return r?.generation === ctx.attempt?.generation && !reportedThisGeneration(ctx);
     }
+    function settleIdleReportOwed(ctx) {
+      const e = ctx.evidence;
+      return e.kind === "operator_status" && e.source === "scheduler" && e.eventId.startsWith(PINNED_FOLLOWUP_SETTLE_EVENT_PREFIX) && ctx.attempt?.scope === "mesh_queue" && ctx.attempt.state === "finalizing" && !ctx.attempt.data.writerStop && !reportedThisGeneration(ctx);
+    }
     function queueReportMissing(ctx) {
       return ctx.attempt?.scope === "mesh_queue" && holdIs(ctx, "await_report") && !reportedThisGeneration(ctx);
     }
@@ -53039,7 +53050,7 @@ ${rendered.join("\n\n")}`,
     }
     function commit(draft, outcome, strength, reason, text10) {
       const attempt = draft.attempt;
-      if (isMeshScope(attempt) && !attempt.data.writerStop?.confirmed && (reason === "hard_ceiling" || draft.ctx.evidence.kind === "cancel" || draft.ctx.evidence.kind === "operator_status" || draft.ctx.evidence.kind === "session_error" || draft.ctx.evidence.kind === "process_exit")) {
+      if (isMeshScope(attempt) && !attempt.data.writerStop?.confirmed && !settleIdleReportOwed(draft.ctx) && (reason === "hard_ceiling" || draft.ctx.evidence.kind === "cancel" || draft.ctx.evidence.kind === "operator_status" || draft.ctx.evidence.kind === "session_error" || draft.ctx.evidence.kind === "process_exit")) {
         beginWriterStop(draft, reason);
         const stopSummary = text10 ? text10.summary : summaryOf(draft.ctx.evidence);
         attempt.data.writerStop.terminal = {
@@ -53536,6 +53547,7 @@ ${rendered.join("\n\n")}`,
     }
     var SESSION_PRODUCED_KINDS;
     var OWNER_SCRAPE_SOURCES;
+    var PINNED_FOLLOWUP_SETTLE_EVENT_PREFIX;
     var GUARDS;
     var TEXT_CARRYING_HOLDS;
     var WRITER_STOP_RETRY_MS;
@@ -53568,6 +53580,7 @@ ${rendered.join("\n\n")}`,
           "liveness"
         ]);
         OWNER_SCRAPE_SOURCES = /* @__PURE__ */ new Set(["coordinator_probe", "mcp_probe"]);
+        PINNED_FOLLOWUP_SETTLE_EVENT_PREFIX = "pinned_followup_supersede:";
         GUARDS = {
           unbound: (ctx) => !ctx.evidence.attemptRef && !ctx.evidence.taskId,
           bound: (ctx) => !!ctx.evidence.attemptRef || !!ctx.evidence.taskId,
@@ -53659,6 +53672,7 @@ ${rendered.join("\n\n")}`,
           hold_direct_report_missing: (ctx) => ctx.attempt?.scope === "mesh_direct" && holdIs(ctx, "weak_candidate", "await_report") && !correctionPending(ctx) && !reportedThisGeneration(ctx),
           hold_weak_candidate: (ctx) => holdIs(ctx, "weak_candidate") && ctx.attempt?.scope !== "mesh_direct" && !correctionPending(ctx) && freshAlive(ctx),
           hold_admission: (ctx) => holdIs(ctx, "live_pending", "transcript_quiet"),
+          settle_idle_report_owed: settleIdleReportOwed,
           hold_queue_report_missing: (ctx) => queueReportMissing(ctx) && expiredHold(ctx)?.data.nativeProbeReportOnly !== true && !correctionPending(ctx),
           hold_await_report: (ctx) => holdIs(ctx, "await_report") && ctx.attempt?.scope !== "mesh_direct" && expiredHold(ctx)?.data.nativeProbeReportOnly !== true && !correctionPending(ctx) && !queueReportMissing(ctx) && freshAlive(ctx),
           hold_native_probe_report_only: (ctx) => holdIs(ctx, "await_report") && ctx.attempt?.scope !== "mesh_direct" && expiredHold(ctx)?.data.nativeProbeReportOnly === true && !correctionPending(ctx) && !reportedThisGeneration(ctx),
@@ -92232,6 +92246,73 @@ ${includeRefs[0]}`;
         preparing = /* @__PURE__ */ new Map();
       }
     });
+    function supersedeAwaitingReportForPinnedFollowup(meshId, sessionId, opts) {
+      if (!opts.sessionIdle) return { superseded: [], skipped: "session_busy" };
+      const store5 = MeshRuntimeStore.getInstance();
+      const nowMs2 = opts.nowMs ?? Date.now();
+      const pinned = store5.db.prepare(
+        `SELECT payload FROM mesh_queue WHERE mesh_id = ? AND status = 'pending' AND target_session_id = ?`
+      ).all(meshId, sessionId).map((r) => JSON.parse(r.payload)).filter((t) => !t.parked && !(t.notBefore && Date.parse(t.notBefore) > nowMs2));
+      if (pinned.length === 0) return { superseded: [], skipped: "no_pinned_followup" };
+      const assigned = store5.db.prepare(
+        `SELECT payload FROM mesh_queue WHERE mesh_id = ? AND status = 'assigned' AND assigned_session_id = ?`
+      ).all(meshId, sessionId).map((r) => JSON.parse(r.payload));
+      if (assigned.length === 0) return { superseded: [], skipped: "no_assignment" };
+      const assignedIds = new Set(assigned.map((r) => r.id));
+      const dependents = store5.db.prepare(
+        `SELECT payload FROM mesh_queue WHERE mesh_id = ? AND status IN ('pending', 'assigned')`
+      ).all(meshId).some((r) => {
+        const deps = JSON.parse(r.payload).dependsOn ?? [];
+        return Array.isArray(deps) && deps.some((d) => assignedIds.has(d));
+      });
+      if (dependents) return { superseded: [], skipped: "has_dependents" };
+      const turns = store5.turnStore();
+      const ledger = getActiveTurnLedger();
+      const awaiting = [];
+      for (const row2 of assigned) {
+        const attempt = turns.findLatestAttemptForTask(meshId, row2.id);
+        const ok = !!attempt && !attempt.terminal && attempt.scope === "mesh_queue" && attempt.state === "finalizing" && attempt.sessionId === sessionId && !attempt.data.writerStop && attempt.data.report?.generation !== attempt.generation;
+        if (!ok || !attempt) return { superseded: [], skipped: "not_awaiting_report" };
+        if (!ledger) return { superseded: [], skipped: "no_ledger" };
+        if (attempt.ownerDaemonId && !daemonIdsEquivalent5(attempt.ownerDaemonId, ledger.selfDaemonId)) {
+          return { superseded: [], skipped: "not_awaiting_report" };
+        }
+        awaiting.push({ row: row2, attemptId: attempt.attemptId, generation: attempt.generation });
+      }
+      const superseded = [];
+      for (const { row: row2, attemptId, generation } of awaiting) {
+        const result = ledger.observe({
+          eventId: `${PINNED_FOLLOWUP_SETTLE_EVENT_PREFIX}${attemptId}:g${generation}:${pinned[0].id}`,
+          at: nowMs2,
+          source: "scheduler",
+          sessionId,
+          observedBy: ledger.selfDaemonId,
+          attemptRef: { attemptId, generation },
+          kind: "operator_status",
+          status: "failed",
+          reason: "operator_update"
+        });
+        if (result.verdict !== "applied" || !result.attempt?.terminal) {
+          LOG.warn("MeshQueue", `Pinned follow-up ${pinned[0].id} cannot take session ${sessionId}: settling awaiting-report task ${row2.id} was not applied (${result.verdict}${result.rejection ? ` ${result.rejection}` : ""})`);
+          return { superseded, skipped: "settle_refused" };
+        }
+        superseded.push(row2.id);
+      }
+      LOG.info("MeshQueue", `Pinned follow-up ${pinned[0].id} \u2192 idle session ${sessionId}: settled awaiting-report attempt(s) of ${superseded.join(", ")} as failed/${PINNED_FOLLOWUP_SUPERSEDE_REASON} (writer kept alive; coordinator notified, can requeue)`);
+      return { superseded };
+    }
+    var PINNED_FOLLOWUP_SUPERSEDE_REASON;
+    var init_mesh_pinned_followup_supersede = __esm2({
+      "src/mesh/mesh-pinned-followup-supersede.ts"() {
+        "use strict";
+        init_logger();
+        init_mesh_runtime_store();
+        init_reducer();
+        init_active_ledger();
+        init_dist();
+        PINNED_FOLLOWUP_SUPERSEDE_REASON = "superseded_by_pinned_followup";
+      }
+    });
     function isDirtyNode(node) {
       return node?.health === "dirty" || node?.git?.dirty === true;
     }
@@ -96054,6 +96135,11 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
             }
           }
           assertMaintenanceNode(meshId, nodeId, readMeshNodeDaemonId(node ?? {}));
+          try {
+            supersedeAwaitingReportForPinnedFollowup(meshId, sessionId, { sessionIdle: readText(claiming.claimState?.status).toLowerCase() === "idle" });
+          } catch (e) {
+            LOG.warn("MeshQueue", `pinned follow-up supersede check failed for ${sessionId}: ${e?.message || e}`);
+          }
           const claim = buildClaimOptions({ components, meshId, nodeId, sessionId, providerType, node, mesh, claimState: claiming.claimState, routingDecision });
           const claimRefusal = {};
           const task = claimNextTask(meshId, nodeId, sessionId, claim.capabilityTags, { ...claim.options, ...quotaOverrideOnly.on ? { onlyQuotaOverridden: true } : {}, outRefusal: claimRefusal });
@@ -96241,6 +96327,7 @@ ${continuationNotice}` } : dispatchTask,
         init_slot_model_enforcement();
         init_mesh_queue_dispatch_evidence();
         init_mesh_queue_attempt_guard();
+        init_mesh_pinned_followup_supersede();
         init_command_args();
         init_mesh_auto_fast_forward();
         init_mesh_dirty_write_verdict();

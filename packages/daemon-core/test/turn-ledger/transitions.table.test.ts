@@ -127,6 +127,7 @@ const FIRES: Record<string, Fixture> = {
     R21: { attempt: G(), evidence: ev('session_error', { reason: 'adapter_error' }), state: 'stopping', effects: ['cancel_dispatch', 'hold'] },
     R22: { attempt: G(), evidence: ev('cancel', { reason: 'operator_cancel' }, { source: 'operator' }), state: 'stopping', effects: ['cancel_dispatch', 'hold'] },
     R23: { attempt: G(), evidence: ev('operator_status', { status: 'failed', reason: 'refine_terminal' }, { source: 'operator' }), state: 'stopping', effects: ['cancel_dispatch', 'hold'] },
+    R23s: { attempt: makeAttempt('finalizing'), evidence: ev('operator_status', { status: 'failed', reason: 'operator_update' }, { source: 'scheduler', eventId: 'pinned_followup_supersede:a1:g1:t2' }), state: 'failed', effects: ['commit'] },
     R29: { attempt: G(), evidence: ev('no_progress', { stalledMs: 200_000, observedStatus: 'idle', finalAssistantPresent: true }), state: 'finalizing', effects: ['hold'] },
     R30p: { attempt: makeAttempt('suspended', { suspension: 'approval', data: { providerSuspension: { generation: 1, modalKey: 'modal:a', at: NOW - 600_000, resolvedAt: null } } }), evidence: ev('no_progress', { stalledMs: 300_000, observedStatus: 'waiting_approval', finalAssistantPresent: false }), state: 'suspended', effects: ['notify_coordinator'] },
     R30: { attempt: G(), evidence: ev('no_progress', { stalledMs: 900_000, observedStatus: 'idle', finalAssistantPresent: false }), state: 'generating', effects: ['notify_coordinator'] },

@@ -303,6 +303,15 @@ function correctionPending(ctx: GuardCtx): boolean {
     const r = ctx.attempt?.data.reportCorrection;
     return r?.generation === ctx.attempt?.generation && !reportedThisGeneration(ctx);
 }
+/** Event-id prefix of the scheduler's idle-settle (mesh-pinned-followup-supersede.ts). */
+export const PINNED_FOLLOWUP_SETTLE_EVENT_PREFIX = 'pinned_followup_supersede:';
+/** R23s: the scheduler settles a queue attempt that is finalizing and still owes its report, writer kept alive. */
+function settleIdleReportOwed(ctx: GuardCtx): boolean {
+    const e = ctx.evidence;
+    return e.kind === 'operator_status' && e.source === 'scheduler' && e.eventId.startsWith(PINNED_FOLLOWUP_SETTLE_EVENT_PREFIX)
+        && ctx.attempt?.scope === 'mesh_queue' && ctx.attempt.state === 'finalizing'
+        && !ctx.attempt.data.writerStop && !reportedThisGeneration(ctx);
+}
 function queueReportMissing(ctx: GuardCtx): boolean {
     return ctx.attempt?.scope === 'mesh_queue' && holdIs(ctx, 'await_report')
         && !reportedThisGeneration(ctx);
@@ -404,6 +413,7 @@ const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> 
     hold_weak_candidate: (ctx) => holdIs(ctx, 'weak_candidate') && ctx.attempt?.scope !== 'mesh_direct'
         && !correctionPending(ctx) && freshAlive(ctx),
     hold_admission: (ctx) => holdIs(ctx, 'live_pending', 'transcript_quiet'),
+    settle_idle_report_owed: settleIdleReportOwed,
     hold_queue_report_missing: (ctx) => queueReportMissing(ctx)
         && expiredHold(ctx)?.data.nativeProbeReportOnly !== true && !correctionPending(ctx),
     hold_await_report: (ctx) => holdIs(ctx, 'await_report') && ctx.attempt?.scope !== 'mesh_direct'
@@ -573,7 +583,7 @@ function commit(
     text?: { summary?: SummaryRef; textEventId?: string },
 ): void {
     const attempt = draft.attempt!;
-    if (isMeshScope(attempt) && !attempt.data.writerStop?.confirmed && (reason === 'hard_ceiling'
+    if (isMeshScope(attempt) && !attempt.data.writerStop?.confirmed && !settleIdleReportOwed(draft.ctx) && (reason === 'hard_ceiling'
         || draft.ctx.evidence.kind === 'cancel' || draft.ctx.evidence.kind === 'operator_status'
         || draft.ctx.evidence.kind === 'session_error' || draft.ctx.evidence.kind === 'process_exit')) {
         beginWriterStop(draft, reason);
