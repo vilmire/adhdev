@@ -256,10 +256,18 @@ describe('worker footer — literal shell paths rule', () => {
 })
 
 describe('reviewer footer — where a review report goes', () => {
-    it('tells the reviewer not to write inside the checkout and to register the report instead', () => {
+    it('tells the reviewer to write no files and keep the whole review in report_completion', () => {
         const text = renderWorkerProtocolFooter({ stage: { role: 'review', round: 1, maxRevisions: 2 } })
-        expect(text).toMatch(/Never write files inside the reviewed checkout/)
+        expect(text).toMatch(/Do not write any file for the review/)
         expect(text).toMatch(/reviewer_mutated_source/)
-        expect(text).toMatch(/artifact_register/)
+        expect(text).toMatch(/`review` field of `report_completion`/)
+    })
+})
+
+describe('implementer stage footer — completed, not blocked, when the code is committed', () => {
+    it('tells the implementer the review starts only after a completed report', () => {
+        const text = renderWorkerProtocolFooter({ stage: { role: 'implement', round: 1, maxRevisions: 2 } })
+        expect(text).toMatch(/report outcome `completed`/)
+        expect(text).toMatch(/never report `blocked` because the review has not run yet/)
     })
 })
