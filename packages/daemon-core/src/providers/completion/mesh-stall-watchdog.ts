@@ -52,7 +52,12 @@ export interface MeshStallHost {
         getLastApprovalResolvedAt(): number;
         /** REDRAW-NUDGE: false-busy resize wiggles the spec driver already tried (0/absent for non-spec adapters). */
         getRedrawNudgeCount?: () => number;
+        /** Visible terminal text, for the frozen-screen check (absent → that check is skipped). */
+        getTerminalScreenSnapshot?: () => { text?: string } | null | undefined;
     };
+    /** FROZEN-SCREEN: normalized screen of the last tick and when it last changed. */
+    meshStallScreenKey?: string;
+    meshStallScreenChangedAt?: number;
     meshStallAnchorAt: number;
     meshStallEmittedForAnchor: boolean;
     meshStallTurnActiveLast: boolean | undefined;
@@ -105,6 +110,41 @@ export function resetMeshStallEpisode(host: MeshStallHost): void {
     host.meshStallTranscriptPendingSince = undefined;
 }
 
+/**
+ * FROZEN-SCREEN (live 2026-11-07): a cursor worker sat 44 min on a "Composing" spinner with no
+ * output and no tool call. The raw-output anchor kept re-arming on every spinner frame, so the
+ * stall never fired and the coordinator was never told. Mid-turn, a screen whose content (spinner
+ * glyphs, digits and rotating tip lines removed) has not changed for this long counts as no
+ * progress even though bytes keep arriving. Long on purpose: a quiet build behind a spinner is
+ * normal for minutes, not for twenty.
+ */
+export const MESH_WORKER_FROZEN_SCREEN_MS = 20 * 60_000;
+
+/** Screen text with animation removed: spinner glyphs, digits (timers, token counts), tip lines. */
+export function normalizeScreenForFrozenCheck(text: string): string {
+    return text
+        .split('\n')
+        .filter(line => !/^\s*Tip:/i.test(line))
+        .join('\n')
+        .replace(/[\u2800-\u28FF◐◓◑◒◴◷◶◵⣾⣽⣻⢿⡿⣟⣯⣷·•✻✶✳✢✽*|/\\-]/g, '')
+        .replace(/[0-9]+/g, '#')
+        .replace(/[ \t]+/g, ' ')
+        .trim();
+}
+
+/** When the normalized screen last changed, or null when the adapter cannot show its screen. */
+function observeScreenChange(host: MeshStallHost, now: number): number | null {
+    let text: string | undefined;
+    try { text = host.adapter.getTerminalScreenSnapshot?.()?.text; } catch { text = undefined; }
+    if (typeof text !== 'string' || !text.trim()) return null;
+    const key = normalizeScreenForFrozenCheck(text);
+    if (key !== host.meshStallScreenKey || typeof host.meshStallScreenChangedAt !== 'number') {
+        host.meshStallScreenKey = key;
+        host.meshStallScreenChangedAt = now;
+    }
+    return host.meshStallScreenChangedAt;
+}
+
 /** One watchdog tick. Semantics are a verbatim move from CliProviderInstance. */
 export function runMeshStallTick(host: MeshStallHost, now: number): void {
     if (!host.isMeshWorkerSession()) {
@@ -140,7 +180,13 @@ export function runMeshStallTick(host: MeshStallHost, now: number): void {
     host.meshStallTurnActiveLast = turnActive;
 
     // Anchor: last raw output, or spawn time before any output (silent spawn is caught).
-    const anchor = lastOutputAt > 0 ? lastOutputAt : host.startedAt;
+    let anchor = lastOutputAt > 0 ? lastOutputAt : host.startedAt;
+    // FROZEN-SCREEN: mid-turn, spinner-only output does not count as progress past the long limit.
+    const screenChangedAt = observeScreenChange(host, now);
+    if (turnActive && screenChangedAt !== null && now - screenChangedAt >= MESH_WORKER_FROZEN_SCREEN_MS && anchor > screenChangedAt) {
+        anchor = screenChangedAt;
+        if (host.meshStallAnchorAt > screenChangedAt) host.meshStallAnchorAt = screenChangedAt;
+    }
 
     // (fix B) Turn just ended — start the idle valley on a fresh clock.
     if (turnEnded && host.meshStallAnchorAt !== -1) {

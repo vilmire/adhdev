@@ -227559,6 +227559,25 @@ ${buttons.join("\n")}`;
       host.meshStallTranscriptSignalSampled = false;
       host.meshStallTranscriptPendingSince = void 0;
     }
+    var MESH_WORKER_FROZEN_SCREEN_MS = 20 * 6e4;
+    function normalizeScreenForFrozenCheck(text10) {
+      return text10.split("\n").filter((line) => !/^\s*Tip:/i.test(line)).join("\n").replace(/[\u2800-\u28FF◐◓◑◒◴◷◶◵⣾⣽⣻⢿⡿⣟⣯⣷·•✻✶✳✢✽*|/\\-]/g, "").replace(/[0-9]+/g, "#").replace(/[ \t]+/g, " ").trim();
+    }
+    function observeScreenChange(host, now) {
+      let text10;
+      try {
+        text10 = host.adapter.getTerminalScreenSnapshot?.()?.text;
+      } catch {
+        text10 = void 0;
+      }
+      if (typeof text10 !== "string" || !text10.trim()) return null;
+      const key7 = normalizeScreenForFrozenCheck(text10);
+      if (key7 !== host.meshStallScreenKey || typeof host.meshStallScreenChangedAt !== "number") {
+        host.meshStallScreenKey = key7;
+        host.meshStallScreenChangedAt = now;
+      }
+      return host.meshStallScreenChangedAt;
+    }
     function runMeshStallTick(host, now) {
       if (!host.isMeshWorkerSession()) {
         resetMeshStallEpisode(host);
@@ -227584,7 +227603,12 @@ ${buttons.join("\n")}`;
       }
       const turnEnded = host.meshStallTurnActiveLast === true && !turnActive;
       host.meshStallTurnActiveLast = turnActive;
-      const anchor = lastOutputAt > 0 ? lastOutputAt : host.startedAt;
+      let anchor = lastOutputAt > 0 ? lastOutputAt : host.startedAt;
+      const screenChangedAt = observeScreenChange(host, now);
+      if (turnActive && screenChangedAt !== null && now - screenChangedAt >= MESH_WORKER_FROZEN_SCREEN_MS && anchor > screenChangedAt) {
+        anchor = screenChangedAt;
+        if (host.meshStallAnchorAt > screenChangedAt) host.meshStallAnchorAt = screenChangedAt;
+      }
       if (turnEnded && host.meshStallAnchorAt !== -1) {
         host.meshStallAnchorAt = Math.max(anchor, now);
         host.meshStallEmittedForAnchor = false;
