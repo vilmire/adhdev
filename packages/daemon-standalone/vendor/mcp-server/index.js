@@ -202341,7 +202341,9 @@ ${marker2}`,
           const cachedParent = cached5?.nodes?.find((n) => meshNodeIdMatches7(n, parent.id));
           requireProof(!cached5 || cachedParent && cachedParent.workspace === parent.workspace && (cachedParent.repoRoot || cachedParent.workspace) === (parent.repoRoot || parent.workspace) && daemonIdsEquivalent5(cachedParent.daemonId, parent.daemonId) && cachedParent.isLocalWorktree === parent.isLocalWorktree && cachedParent.clonedFromNodeId === parent.clonedFromNodeId, "source_parent_cache_conflict");
           validateLink(mesh, node, parent, ctx.deps.statusInstanceId || "");
-          requireProof(alreadyAttached || !mesh.nodes.some((n) => n.id === current5), "source_parent_existing_binding");
+          const currentParent = mesh.nodes.find((n) => n.id === current5);
+          const currentParentIsWorktree = !!currentParent && (currentParent.isLocalWorktree === true || !!currentParent.clonedFromNodeId);
+          requireProof(alreadyAttached || !currentParent || currentParentIsWorktree, "source_parent_existing_binding");
           requireProof(!router.runningRefineBatchJobs.has(meshId) && ![...router.runningRefineJobs.keys()].some((k) => k.startsWith(`${meshId}:`)) && router.refineBaseLeases.size === 0, "source_parent_refinery_active");
           const rows = store5.assignedRowsMeshWide(meshId).map((row2) => JSON.parse(row2.payload));
           rows.push(...store5.getQueueEntries(meshId, ["pending"]).filter((t) => pendingLaunchReservation(t)));

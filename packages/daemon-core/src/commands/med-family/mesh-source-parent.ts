@@ -86,8 +86,13 @@ export async function reattachMeshSourceParent(ctx: MedFamilyContext, args: any)
                 && cachedParent.isLocalWorktree === parent.isLocalWorktree
                 && cachedParent.clonedFromNodeId === parent.clonedFromNodeId), 'source_parent_cache_conflict');
             validateLink(mesh, node, parent, ctx.deps.statusInstanceId || '');
-            // A valid explicit existing parent is not a dangling-parent repair.
-            requireProof(alreadyAttached || !mesh.nodes.some(n => n.id === current), 'source_parent_existing_binding');
+            // A valid explicit existing parent is not a dangling-parent repair. A current parent that is
+            // itself a worktree is not valid either (validateLink requires a base parent), so re-pointing
+            // such a node at the base is a repair, not an override (live 2026-11-07: a fix worktree bound
+            // to another fix worktree could not be re-pointed to the base and stayed unlandable).
+            const currentParent = mesh.nodes.find(n => n.id === current);
+            const currentParentIsWorktree = !!currentParent && (currentParent.isLocalWorktree === true || !!currentParent.clonedFromNodeId);
+            requireProof(alreadyAttached || !currentParent || currentParentIsWorktree, 'source_parent_existing_binding');
             requireProof(!router.runningRefineBatchJobs.has(meshId)
                 && ![...router.runningRefineJobs.keys()].some(k => k.startsWith(`${meshId}:`))
                 && router.refineBaseLeases.size === 0, 'source_parent_refinery_active');

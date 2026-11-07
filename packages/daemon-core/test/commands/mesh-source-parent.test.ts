@@ -100,6 +100,11 @@ describe('source parent owner repair', () => {
         expect(await run(label === 'self' ? { parentNodeId: args.nodeId } : {})).toMatchObject({ success: false, code });
         expect(binding()).toBe('node_missing');
     });
+    it('repairs a binding whose current parent is itself a worktree', async () => {
+        mesh.nodes.push({ id: 'node_missing', isLocalWorktree: true, clonedFromNodeId: 'node_main', workspace: join(sandbox, 'other-wt') } as any);
+        persist(); router.inlineMeshCache.set(mesh.id, structuredClone(mesh));
+        expect(await run({ write: false })).toMatchObject({ success: true, dryRun: true, expectedOldParentId: 'node_missing', parentNodeId: 'node_main' });
+    });
     it('rejects a different Git common-dir with the same repository identity', async () => {
         const other = join(sandbox, 'other'); mkdirSync(other, { recursive: true }); git(other, 'init', '-q', '-b', 'main');
         mesh.nodes[0].workspace = other; persist(); router.inlineMeshCache.get(mesh.id).nodes[0].workspace = other;
