@@ -24003,6 +24003,7 @@ var require_dist3 = __commonJS({
       WORKER_PROTOCOL_FOOTER_MARKER: () => WORKER_PROTOCOL_FOOTER_MARKER2,
       WORKER_REPORT_OUTCOMES: () => WORKER_REPORT_OUTCOMES2,
       WORKER_REPORT_SUMMARY_MAX_CHARS: () => WORKER_REPORT_SUMMARY_MAX_CHARS2,
+      WORKER_SHELL_LITERAL_PATHS_RULE: () => WORKER_SHELL_LITERAL_PATHS_RULE2,
       WORKER_TOOLS: () => WORKER_TOOLS2,
       aggregateMissionGitState: () => aggregateMissionGitState,
       appendWorkerProtocolFooter: () => appendWorkerProtocolFooter2,
@@ -25412,6 +25413,7 @@ ${line}` : line;
       else lines.push("You are a delegated worker.");
       if (input.light) lines.push(...renderLightWorkspaceRules2(input.light));
       else if (input.commitOnCurrentBranch && input.stage?.role !== "review") lines.push(WORKER_CURRENT_BRANCH_RULE2);
+      lines.push(WORKER_SHELL_LITERAL_PATHS_RULE2);
       if (input.workerMcp === false) {
         lines.push(
           "This session has NO adhdev worker tools (`report_completion`, `progress_update`, `peer_context_pull`, `git_*`) \u2014 do not look for them. When your work is finished, blocked, or has failed, end your turn with a plain final summary: what you did, what you found, which files you changed, and where you left the branch. That final message is what the coordinator receives.",
@@ -27611,6 +27613,7 @@ ${renderWorkerProtocolFooter2(input)}`;
     var WORKER_TOOL_SET2;
     var WORKER_PROTOCOL_FOOTER_MARKER2;
     var WORKER_CURRENT_BRANCH_RULE2;
+    var WORKER_SHELL_LITERAL_PATHS_RULE2;
     var ASSISTANT_TOOLS2;
     var ASSISTANT_TOOL_SET2;
     var ASSISTANT_VERB2;
@@ -28356,6 +28359,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         WORKER_TOOL_SET2 = new Set(WORKER_TOOLS2);
         WORKER_PROTOCOL_FOOTER_MARKER2 = "--- adhdev worker protocol ---";
         WORKER_CURRENT_BRANCH_RULE2 = "Commit your change on the branch that is currently checked out in this workspace. Do not create or switch branches (no `git checkout -b` / `git switch`) unless the task explicitly says to; report the branch you committed on.";
+        WORKER_SHELL_LITERAL_PATHS_RULE2 = "In shell commands, write file and directory paths literally (absolute, or relative to your workspace) instead of through shell variables (`N=dir; cat $N/x`) or `$(...)` substitutions, and keep to one simple command per call, so the command can be checked before it runs. This does not change what you are allowed to run or read.";
         ASSISTANT_TOOLS2 = [
           "projects",
           "environment",
@@ -244751,6 +244755,7 @@ function renderLightWorkspaceRules(light) {
   ];
 }
 var WORKER_CURRENT_BRANCH_RULE = "Commit your change on the branch that is currently checked out in this workspace. Do not create or switch branches (no `git checkout -b` / `git switch`) unless the task explicitly says to; report the branch you committed on.";
+var WORKER_SHELL_LITERAL_PATHS_RULE = "In shell commands, write file and directory paths literally (absolute, or relative to your workspace) instead of through shell variables (`N=dir; cat $N/x`) or `$(...)` substitutions, and keep to one simple command per call, so the command can be checked before it runs. This does not change what you are allowed to run or read.";
 function hasWorkerProtocolFooter(body) {
   return typeof body === "string" && body.includes(WORKER_PROTOCOL_FOOTER_MARKER);
 }
@@ -244774,6 +244779,7 @@ function renderWorkerProtocolFooter(input = {}) {
   else lines.push("You are a delegated worker.");
   if (input.light) lines.push(...renderLightWorkspaceRules(input.light));
   else if (input.commitOnCurrentBranch && input.stage?.role !== "review") lines.push(WORKER_CURRENT_BRANCH_RULE);
+  lines.push(WORKER_SHELL_LITERAL_PATHS_RULE);
   if (input.workerMcp === false) {
     lines.push(
       "This session has NO adhdev worker tools (`report_completion`, `progress_update`, `peer_context_pull`, `git_*`) \u2014 do not look for them. When your work is finished, blocked, or has failed, end your turn with a plain final summary: what you did, what you found, which files you changed, and where you left the branch. That final message is what the coordinator receives.",

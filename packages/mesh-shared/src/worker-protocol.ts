@@ -125,6 +125,18 @@ export const WORKER_CURRENT_BRANCH_RULE =
     'Commit your change on the branch that is currently checked out in this workspace. Do not create or switch '
     + 'branches (no `git checkout -b` / `git switch`) unless the task explicitly says to; report the branch you committed on.'
 
+/**
+ * Shell-command style rule (every worker). Agent CLIs that pre-check shell commands before running them
+ * (for example a permission classifier that must prove every path a command reads) cannot analyse a path
+ * held in a shell variable, so such a command stops and asks the person — measured as a stream of
+ * approval prompts on delegated workers whose analysis scripts did `N=dir; cat $N/file`. Literal paths
+ * cost the worker nothing and keep each command checkable; the rule never widens what a worker may run.
+ */
+export const WORKER_SHELL_LITERAL_PATHS_RULE =
+    'In shell commands, write file and directory paths literally (absolute, or relative to your workspace) instead of '
+    + 'through shell variables (`N=dir; cat $N/x`) or `$(...)` substitutions, and keep to one simple command per call, '
+    + 'so the command can be checked before it runs. This does not change what you are allowed to run or read.'
+
 export function hasWorkerProtocolFooter(body: string): boolean {
     return typeof body === 'string' && body.includes(WORKER_PROTOCOL_FOOTER_MARKER)
 }
@@ -162,6 +174,7 @@ export function renderWorkerProtocolFooter(input: WorkerProtocolFooterInput = {}
     else lines.push('You are a delegated worker.')
     if (input.light) lines.push(...renderLightWorkspaceRules(input.light))
     else if (input.commitOnCurrentBranch && input.stage?.role !== 'review') lines.push(WORKER_CURRENT_BRANCH_RULE)
+    lines.push(WORKER_SHELL_LITERAL_PATHS_RULE)
     if (input.workerMcp === false) {
         lines.push(
             'This session has NO adhdev worker tools (`report_completion`, `progress_update`, `peer_context_pull`, '

@@ -243,3 +243,14 @@ describe('footer: commit on the current branch', () => {
         expect(renderWorkerProtocolFooter({ light, commitOnCurrentBranch: true })).not.toContain(RULE)
     })
 })
+
+describe('worker footer — literal shell paths rule', () => {
+    it('is rendered for tool, no-tool, light and review footers', async () => {
+        const { WORKER_SHELL_LITERAL_PATHS_RULE: RULE } = await import('../src/worker-protocol')
+        expect(renderWorkerProtocolFooter()).toContain(RULE)
+        expect(renderWorkerProtocolFooter({ workerMcp: false })).toContain(RULE)
+        expect(renderWorkerProtocolFooter({ light: { workspace: '/w', baseSha: 'abc', ownedPaths: [] } })).toContain(RULE)
+        expect(renderWorkerProtocolFooter({ stage: { role: 'review', round: 1, maxRevisions: 2 } })).toContain(RULE)
+        expect(RULE).toMatch(/shell variables/)
+    })
+})
