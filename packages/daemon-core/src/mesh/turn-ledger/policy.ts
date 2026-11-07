@@ -116,6 +116,13 @@ export const DEFAULT_TURN_POLICY: Readonly<TurnPolicy> = Object.freeze({
 export const RECLAIM_BUDGET = 3;                 // was MAX_STRANDED_RECLAIMS
 export const MAX_REDRIVES_PER_GENERATION = 1;    // was MAX_REDRIVES_PER_ATTEMPT
 export const LIVENESS_FAIL_STREAK_LIMIT = 3;     // was ACKED_DEATH_CONSECUTIVE_READ_FAILURES
+/**
+ * A coordinator-delegated worker parked on an approval/choice re-notifies the coordinator this
+ * often (since the previous approval notice of the same suspension), at most this many times per
+ * suspension (live 2026-11-07: the one notice was lost and the worker sat 35 min unattended).
+ */
+export const SUSPENSION_REMINDER_MS = 300_000;
+export const MAX_SUSPENSION_REMINDERS = 3;
 export const DEFAULT_MAX_TASK_RETRIES = 1;       // mesh policy maxTaskRetries default
 /**
  * R13u: how many times a weak_candidate / await_report expiry that finds the last

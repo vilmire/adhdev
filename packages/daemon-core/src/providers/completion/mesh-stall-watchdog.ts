@@ -229,6 +229,20 @@ export function runMeshStallTick(host: MeshStallHost, now: number): void {
         host.meshStallAnchorAt = now;
         host.meshStallEmittedForAnchor = false;
         host.meshStallTranscriptPendingSince = undefined;
+        // A parked approval/choice must not go unattended if its one notice was lost (live 2026-11-07,
+        // 35 min). Report the observation as turn evidence; the reducer (R30p) decides whether a
+        // bounded reminder notice is due — this watchdog only observes.
+        if (host.turnEvidencePort && host.currentAttemptRef?.()) {
+            emitNoProgress(host.turnEvidencePort, {
+                sessionId: host.instanceId,
+                observedBy: 'mesh_stall_watchdog',
+                source: 'mesh_stall_watchdog',
+                attemptRef: host.currentAttemptRef() ?? undefined,
+                stalledMs,
+                observedStatus: toNoProgressObservedStatus(observedStatus),
+                finalAssistantPresent: false,
+            });
+        }
         return;
     }
 

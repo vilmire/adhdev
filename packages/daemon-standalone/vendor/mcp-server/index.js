@@ -44290,6 +44290,8 @@ ${error.message || ""}`;
     var RECLAIM_BUDGET;
     var MAX_REDRIVES_PER_GENERATION;
     var LIVENESS_FAIL_STREAK_LIMIT;
+    var SUSPENSION_REMINDER_MS;
+    var MAX_SUSPENSION_REMINDERS;
     var DEFAULT_MAX_TASK_RETRIES;
     var MAX_UNCONFIRMED_END_DEFERRALS;
     var HOUR;
@@ -44317,6 +44319,8 @@ ${error.message || ""}`;
         RECLAIM_BUDGET = 3;
         MAX_REDRIVES_PER_GENERATION = 1;
         LIVENESS_FAIL_STREAK_LIMIT = 3;
+        SUSPENSION_REMINDER_MS = 3e5;
+        MAX_SUSPENSION_REMINDERS = 3;
         DEFAULT_MAX_TASK_RETRIES = 1;
         MAX_UNCONFIRMED_END_DEFERRALS = 1;
         HOUR = 60 * 6e4;
@@ -52610,6 +52614,11 @@ ${rendered.join("\n\n")}`,
           ] },
           // ── progress / liveness ─────────────────────────────────────────────
           { id: "R29", lane: "current", from: [C, G], on: ["no_progress"], guard: "final_present", to: F, verdict: "applied", effects: weakCandidate },
+          // A watchdog tick that finds the worker still parked on its prompt: one bounded reminder approval notice
+          // per SUSPENSION_REMINDER_MS (reducer `suspension_reminder_due`); otherwise only recorded.
+          { id: "R30p", lane: "current", from: [S], on: ["no_progress"], guard: "parked_suspension_observation", to: "same", verdict: "applied", effects: [
+            { e: "notify", notify: "from_suspension", when: "suspension_reminder_due" }
+          ] },
           { id: "R30", lane: "current", from: [C, G, S, F], on: ["no_progress"], guard: "otherwise", to: "same", verdict: "applied", effects: [
             { e: "notify", notify: "no_progress", when: "no_progress_due" }
           ] },
@@ -53384,6 +53393,18 @@ ${rendered.join("\n\n")}`,
             if (attempt.candidateNotifiedGeneration === attempt.generation) return;
             attempt.candidateNotifiedGeneration = attempt.generation;
           }
+          if (template.when === "suspension_reminder_due") {
+            const susp = attempt.data.providerSuspension;
+            if (!susp || !attempt.suspension) return;
+            const last = susp.lastReminderAt ?? susp.at ?? attempt.lastActivityAt ?? 0;
+            if ((susp.reminders ?? 0) >= MAX_SUSPENSION_REMINDERS || draft.ctx.nowMs - last < SUSPENSION_REMINDER_MS) {
+              draft.effects.push({ kind: "record", note: "suspension_reminder_not_due" });
+              return;
+            }
+            attempt.data.providerSuspension = { ...susp, reminders: (susp.reminders ?? 0) + 1, lastReminderAt: draft.ctx.nowMs };
+            notify(draft, attempt.suspension);
+            return;
+          }
           if (template.when === "no_progress_due") {
             if (attempt.lastNoProgressNoticeAt !== null) {
               draft.effects.push({ kind: "record", note: "stall_notice_already_sent" });
@@ -53396,7 +53417,7 @@ ${rendered.join("\n\n")}`,
             }
             ACTIONS.stamp_no_progress_notice(draft);
           }
-          const kind = template.notify === "from_modal" ? ev.modal : template.notify;
+          const kind = template.notify === "from_modal" ? ev.modal : template.notify === "from_suspension" ? attempt.suspension ?? "approval" : template.notify;
           const summary = summaryOf(ev);
           notify(draft, kind, {
             ...template.generation === "evidence" && draft.ctx.effectiveGeneration !== null ? { generation: draft.ctx.effectiveGeneration } : {},
@@ -53626,6 +53647,7 @@ ${rendered.join("\n\n")}`,
           no_provider_failure: (ctx) => ctx.evidence.kind === "process_exit" && !ctx.evidence.providerFailure && !exitAfterReport(ctx),
           exit_after_report: (ctx) => exitAfterReport(ctx),
           holder_is_this_attempt: (ctx) => ctx.evidence.kind === "duplicate_dispatch_refusal" && ctx.evidence.holderAttemptId === ctx.attempt?.attemptId,
+          parked_suspension_observation: (ctx) => ctx.evidence.kind === "no_progress" && (ctx.evidence.observedStatus === "waiting_approval" || ctx.evidence.observedStatus === "waiting_choice") && !!ctx.attempt?.suspension && ctx.attempt.data.providerSuspension?.generation === ctx.attempt.generation && ctx.attempt.data.providerSuspension.resolvedAt === null,
           final_present: (ctx) => ctx.evidence.kind === "no_progress" && ctx.evidence.finalAssistantPresent && !reportedThisGeneration(ctx),
           hold_await_delivery: (ctx) => holdIs(ctx, "await_delivery"),
           hold_await_consume_redrive: (ctx) => holdIs(ctx, "await_consume") && ctx.attempt.redriveCount < MAX_REDRIVES_PER_GENERATION,
@@ -55581,6 +55603,12 @@ ${line}`;
           }
           stats?.recordDelivered(entry.meshId, notify2);
           if (outcome.kind === "delivered" || outcome.kind === "queued") stats?.recordWake(entry.meshId, extras.length);
+          if (outcome.kind === "delivered" && deps.onNoticeWritten) {
+            try {
+              deps.onNoticeWritten({ messageId, sessionId: route.sessionId, notify: notify2, claimEventIds: [entry, ...extras].map((n) => deliveryClaimId(entry.meshId, n.writer, n.seq)) });
+            } catch {
+            }
+          }
           if (outcome.kind === "delivered") counters4.delivered++;
           else if (outcome.kind === "queued") counters4.queued++;
           else counters4.duplicates++;
@@ -162667,6 +162695,53 @@ ${defangRelayBody(text10)}`;
         NONE = { migrated: false, conflictsResolved: 0, meshesWithValues: 0 };
       }
     });
+    function createNoticeConsumeWatch(deps) {
+      const delayMs = deps.delayMs ?? LATCH_EXPIRY_PLUS_SLACK_MS;
+      const setTimer = deps.setTimer ?? ((fn, ms3) => setTimeout(fn, ms3));
+      const retried = /* @__PURE__ */ new Set();
+      const log = deps.log;
+      async function check(input) {
+        if (deps.stillParked?.(input.sessionId, input.messageId)) return "parked";
+        let view2;
+        try {
+          view2 = await deps.settle(input.sessionId, input.messageId);
+        } catch {
+          view2 = void 0;
+        }
+        if (view2?.state === "consumed") return "consumed";
+        if (view2?.state === "queued") return "parked";
+        retried.add(input.messageId);
+        deps.forget(input.messageId);
+        let released = 0;
+        for (const id4 of input.claimEventIds) {
+          try {
+            if (deps.release(id4)) released++;
+          } catch {
+          }
+        }
+        log?.warn(`notice ${input.messageId} (${input.notify}) not confirmed consumed ${delayMs}ms after write (state=${view2?.state ?? "none"}) \u2014 claim released for one redelivery`);
+        return released > 0 ? "released" : "unreleased";
+      }
+      return {
+        check,
+        watch(input) {
+          if (!CONSUME_WATCHED_NOTIFY.has(input.notify) || retried.has(input.messageId)) return;
+          const t = setTimer(() => {
+            void check(input).catch(() => void 0);
+          }, delayMs);
+          t.unref?.();
+        }
+      };
+    }
+    var CONSUME_WATCHED_NOTIFY;
+    var LATCH_EXPIRY_PLUS_SLACK_MS;
+    var init_notice_consume_watch = __esm2({
+      "src/mesh/turn-ledger/notice-consume-watch.ts"() {
+        "use strict";
+        CONSUME_WATCHED_NOTIFY = /* @__PURE__ */ new Set(["approval", "choice", "blocked", "failed", "late_completion"]);
+        LATCH_EXPIRY_PLUS_SLACK_MS = 65e3;
+      }
+    });
     function createNoticeSubmitInventory(ledger, consume) {
       const db3 = ledger.store.db, active = /* @__PURE__ */ new Set();
       db3.exec(`CREATE TABLE IF NOT EXISTS turn_notice_submit_metadata(
@@ -164094,8 +164169,10 @@ ${defangRelayBody(text10)}`;
       const inputPort = components.cliManager.input;
       const deliverLog = { info: (m) => LOG.info("MeshNotice", m), warn: (m) => LOG.warn("MeshNotice", m) };
       const noticeSubmitMetadata = createNoticeSubmitInventory(ledger, components.cliManager.consumeAck);
+      let noticeConsumeWatch = null;
       const deliverDeps = {
         submitInventory: noticeSubmitMetadata,
+        onNoticeWritten: (info) => noticeConsumeWatch?.watch(info),
         ledger,
         selfDaemonIds,
         port: inputPort,
@@ -164140,6 +164217,13 @@ ${defangRelayBody(text10)}`;
         noticeStats: (meshId) => noticeStats.snapshot(meshId),
         quietWorkerSignals: (meshId) => workerSessionHealthFor(components).quiet(meshId, (attemptId) => !ledger.getAttempt(attemptId)?.terminal)
       };
+      noticeConsumeWatch = createNoticeConsumeWatch({
+        settle: (sessionId, messageId) => components.cliManager.input.settleConsume(sessionId, messageId),
+        forget: (messageId) => components.cliManager.input.forgetSettled(messageId),
+        release: (claimEventId) => notices.releaseDelivery?.(claimEventId) === true,
+        stillParked: (sessionId, messageId) => components.cliManager.resolveSessionInputTarget(sessionId)?.hasQueuedSend?.(messageId) === true,
+        log: deliverLog
+      });
       bindMeshNoticeRuntime(notices);
       setStageArtifactRegistrar((input) => {
         return registerSessionArtifact(MeshRuntimeStore.getInstance().db, input).record.artifactId;
@@ -164536,6 +164620,7 @@ ${defangRelayBody(text10)}`;
         init_notice_stats();
         init_policy();
         init_worker_session_health();
+        init_notice_consume_watch();
         init_notice_submit_inventory();
         init_artifact_store();
         init_stage_ports_default();
@@ -190495,6 +190580,9 @@ ${marker2}`,
           } catch {
           }
           return consumeAck.read(messageId);
+        },
+        forgetSettled: (messageId) => {
+          settled.delete(messageId);
         },
         getConsumeStates: (ids) => ids.map((id4) => consumeAck?.read(id4)).filter((v) => !!v),
         isReceiptUnverified: (messageId) => unverifiedReceipts.has(messageId) || receiptStore.isUnverified(messageId),
@@ -227519,6 +227607,17 @@ ${buttons.join("\n")}`;
         host.meshStallAnchorAt = now;
         host.meshStallEmittedForAnchor = false;
         host.meshStallTranscriptPendingSince = void 0;
+        if (host.turnEvidencePort && host.currentAttemptRef?.()) {
+          emitNoProgress(host.turnEvidencePort, {
+            sessionId: host.instanceId,
+            observedBy: "mesh_stall_watchdog",
+            source: "mesh_stall_watchdog",
+            attemptRef: host.currentAttemptRef() ?? void 0,
+            stalledMs,
+            observedStatus: toNoProgressObservedStatus2(observedStatus),
+            finalAssistantPresent: false
+          });
+        }
         return;
       }
       const turnPresentation = resolveSessionTurnPresentation({

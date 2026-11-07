@@ -42,6 +42,8 @@ import {
     endProbeGraceMs,
     reportCorrectionMs,
     RECLAIM_BUDGET,
+    SUSPENSION_REMINDER_MS,
+    MAX_SUSPENSION_REMINDERS,
     awaitDeliveryMs,
     consumeGraceFor,
     livenessReArmMs,
@@ -387,6 +389,8 @@ const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> 
     no_provider_failure: (ctx) => ctx.evidence.kind === 'process_exit' && !ctx.evidence.providerFailure && !exitAfterReport(ctx),
     exit_after_report: (ctx) => exitAfterReport(ctx),
     holder_is_this_attempt: (ctx) => ctx.evidence.kind === 'duplicate_dispatch_refusal' && ctx.evidence.holderAttemptId === ctx.attempt?.attemptId,
+    parked_suspension_observation: (ctx) => ctx.evidence.kind === 'no_progress' && (ctx.evidence.observedStatus === 'waiting_approval' || ctx.evidence.observedStatus === 'waiting_choice')
+        && !!ctx.attempt?.suspension && ctx.attempt.data.providerSuspension?.generation === ctx.attempt.generation && ctx.attempt.data.providerSuspension.resolvedAt === null,
     final_present: (ctx) => ctx.evidence.kind === 'no_progress' && ctx.evidence.finalAssistantPresent && !reportedThisGeneration(ctx),
     hold_await_delivery: (ctx) => holdIs(ctx, 'await_delivery'),
     hold_await_consume_redrive: (ctx) => holdIs(ctx, 'await_consume') && ctx.attempt!.redriveCount < MAX_REDRIVES_PER_GENERATION,
@@ -1107,6 +1111,18 @@ function applyTemplate(template: EffectTemplate, draft: Draft): void {
                 if (attempt.candidateNotifiedGeneration === attempt.generation) return;
                 attempt.candidateNotifiedGeneration = attempt.generation;
             }
+            if (template.when === 'suspension_reminder_due') {
+                const susp = attempt.data.providerSuspension;
+                if (!susp || !attempt.suspension) return;
+                const last = susp.lastReminderAt ?? susp.at ?? attempt.lastActivityAt ?? 0;
+                if ((susp.reminders ?? 0) >= MAX_SUSPENSION_REMINDERS || draft.ctx.nowMs - last < SUSPENSION_REMINDER_MS) {
+                    draft.effects.push({ kind: 'record', note: 'suspension_reminder_not_due' });
+                    return;
+                }
+                attempt.data.providerSuspension = { ...susp, reminders: (susp.reminders ?? 0) + 1, lastReminderAt: draft.ctx.nowMs };
+                notify(draft, attempt.suspension);
+                return;
+            }
             if (template.when === 'no_progress_due') {
                 // A stall is informational until it needs action (2026-11-02): below the wake
                 // threshold, or while the provider still shows a busy status, it is recorded and
@@ -1124,7 +1140,7 @@ function applyTemplate(template: EffectTemplate, draft: Draft): void {
                 }
                 ACTIONS.stamp_no_progress_notice(draft);
             }
-            const kind: NotifyKind = template.notify === 'from_modal' ? (ev as TurnEvidenceOf<'suspension'>).modal : template.notify;
+            const kind: NotifyKind = template.notify === 'from_modal' ? (ev as TurnEvidenceOf<'suspension'>).modal : template.notify === 'from_suspension' ? attempt.suspension ?? 'approval' : template.notify;
             const summary = summaryOf(ev);
             notify(draft, kind, {
                 ...(template.generation === 'evidence' && draft.ctx.effectiveGeneration !== null ? { generation: draft.ctx.effectiveGeneration } : {}),

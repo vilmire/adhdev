@@ -61,7 +61,7 @@ export type GuardId =
     | 'reported_terminal'
     | 'provider_failure' | 'no_provider_failure'
     | 'holder_is_this_attempt' | 'confirmed_provider_setup' | 'held_provider_setup' | 'stale_modal_resolution'
-    | 'final_present'
+    | 'final_present' | 'parked_suspension_observation'
     | 'hold_await_delivery' | 'hold_await_consume_redrive' | 'hold_await_consume_exhausted' | 'hold_await_turn'
     | 'hold_liveness' | 'hold_hard_ceiling' | 'hold_suspension_before_consumed' | 'hold_weak_candidate' | 'hold_admission'
     | 'hold_await_report'
@@ -93,7 +93,7 @@ export type EffectTemplate =
         /** `recorded_report` = the text (summary pointer + local text event) of the report R17g recorded on the attempt, not the committing evidence's. */
         text?: 'recorded_report' }
     | { e: 'reclaim'; reason: TurnReason | 'from_refusal' | 'from_exit_state' }
-    | { e: 'notify'; notify: NotifyKind | 'from_modal'; when?: 'candidate_once' | 'no_progress_due'
+    | { e: 'notify'; notify: NotifyKind | 'from_modal' | 'from_suspension'; when?: 'candidate_once' | 'no_progress_due' | 'suspension_reminder_due'
         /** `evidence` = the notice names the evidence's (stale) generation, not the attempt's. */
         generation?: 'evidence' }
     /** R27a: commit g−1's outcome onto the attempt, cutting g first. */
@@ -485,6 +485,11 @@ export const TRANSITIONS: readonly TransitionRule[] = [
 
     // ── progress / liveness ─────────────────────────────────────────────
     { id: 'R29', lane: 'current', from: [C, G], on: ['no_progress'], guard: 'final_present', to: F, verdict: 'applied', effects: weakCandidate },
+    // A watchdog tick that finds the worker still parked on its prompt: one bounded reminder approval notice
+    // per SUSPENSION_REMINDER_MS (reducer `suspension_reminder_due`); otherwise only recorded.
+    { id: 'R30p', lane: 'current', from: [S], on: ['no_progress'], guard: 'parked_suspension_observation', to: 'same', verdict: 'applied', effects: [
+        { e: 'notify', notify: 'from_suspension', when: 'suspension_reminder_due' },
+    ] },
     { id: 'R30', lane: 'current', from: [C, G, S, F], on: ['no_progress'], guard: 'otherwise', to: 'same', verdict: 'applied', effects: [
         { e: 'notify', notify: 'no_progress', when: 'no_progress_due' },
     ] },

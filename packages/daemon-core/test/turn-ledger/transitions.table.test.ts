@@ -13,7 +13,7 @@ import { NOW, POLICY, REF, ev, expired, makeAttempt, makeHold, variantsFor } fro
 
 const PLAN_IDS = [
     'R0', 'R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8', 'R9', 'R10', 'R11', 'R12', 'R13a', 'R13b', 'R14', 'R15', 'R16',
-    'R17', 'R18', 'R19', 'R20', 'R21', 'R22', 'R23', 'R24', 'R25', 'R26', 'R27', 'R28', 'R29', 'R30', 'R31', 'R32', 'R33',
+    'R17', 'R18', 'R19', 'R20', 'R21', 'R22', 'R23', 'R24', 'R25', 'R26', 'R27', 'R28', 'R29', 'R30p', 'R30', 'R31', 'R32', 'R33',
     'R34', 'R35', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'H7',
 ];
 
@@ -128,6 +128,7 @@ const FIRES: Record<string, Fixture> = {
     R22: { attempt: G(), evidence: ev('cancel', { reason: 'operator_cancel' }, { source: 'operator' }), state: 'stopping', effects: ['cancel_dispatch', 'hold'] },
     R23: { attempt: G(), evidence: ev('operator_status', { status: 'failed', reason: 'refine_terminal' }, { source: 'operator' }), state: 'stopping', effects: ['cancel_dispatch', 'hold'] },
     R29: { attempt: G(), evidence: ev('no_progress', { stalledMs: 200_000, observedStatus: 'idle', finalAssistantPresent: true }), state: 'finalizing', effects: ['hold'] },
+    R30p: { attempt: makeAttempt('suspended', { suspension: 'approval', data: { providerSuspension: { generation: 1, modalKey: 'modal:a', at: NOW - 600_000, resolvedAt: null } } }), evidence: ev('no_progress', { stalledMs: 300_000, observedStatus: 'waiting_approval', finalAssistantPresent: false }), state: 'suspended', effects: ['notify_coordinator'] },
     R30: { attempt: G(), evidence: ev('no_progress', { stalledMs: 900_000, observedStatus: 'idle', finalAssistantPresent: false }), state: 'generating', effects: ['notify_coordinator'] },
     R31: { attempt: G(), evidence: ev('liveness', { result: 'dead' }), state: 'stopping', generation: 1, effects: ['cancel_dispatch', 'hold'] },
     R31a: { attempt: G(), evidence: ev('liveness', { result: 'read_failed' }), state: 'generating' },

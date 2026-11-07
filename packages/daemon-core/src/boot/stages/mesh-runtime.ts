@@ -1,6 +1,7 @@
 import { createNoticeStats } from '../../mesh/turn-ledger/notice-stats.js';
 import { resolveTurnPolicy } from '../../mesh/turn-ledger/policy.js';
 import { workerSessionHealthFor } from '../../mesh/turn-ledger/worker-session-health.js';
+import {createNoticeConsumeWatch} from '../../mesh/turn-ledger/notice-consume-watch.js';
 import {createNoticeSubmitInventory} from '../../mesh/turn-ledger/notice-submit-inventory.js';
 import { registerSessionArtifact } from '../../artifacts/artifact-store.js';
 import { setStageArtifactRegistrar } from '../../mesh/stage-ports-default.js';
@@ -368,8 +369,11 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
     const inputPort = components.cliManager.input;
     const deliverLog = { info: (m: string) => LOG.info('MeshNotice', m), warn: (m: string) => LOG.warn('MeshNotice', m) };
     const noticeSubmitMetadata=createNoticeSubmitInventory(ledger, components.cliManager.consumeAck);
+    // Unconfirmed-notice recovery: bound after `notices` exists (releaseDelivery lives there).
+    let noticeConsumeWatch: ReturnType<typeof createNoticeConsumeWatch> | null = null;
     const deliverDeps: TurnDeliverDeps = {
         submitInventory:noticeSubmitMetadata,
+        onNoticeWritten: (info) => noticeConsumeWatch?.watch(info),
         ledger,
         selfDaemonIds,
         port: inputPort,
@@ -414,6 +418,13 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
         noticeStats: (meshId) => noticeStats.snapshot(meshId),
         quietWorkerSignals: (meshId) => workerSessionHealthFor(components).quiet(meshId, (attemptId) => !ledger.getAttempt(attemptId)?.terminal),
     };
+    noticeConsumeWatch = createNoticeConsumeWatch({
+        settle: (sessionId, messageId) => components.cliManager.input.settleConsume(sessionId, messageId),
+        forget: (messageId) => components.cliManager.input.forgetSettled(messageId),
+        release: (claimEventId) => notices.releaseDelivery?.(claimEventId) === true,
+        stillParked: (sessionId, messageId) => components.cliManager.resolveSessionInputTarget(sessionId)?.hasQueuedSend?.(messageId) === true,
+        log: deliverLog,
+    });
     bindMeshNoticeRuntime(notices);
     // Review-in-task: the stage pipeline registers its diff / self-check / verdict artifacts (producerRole 'pipeline').
     setStageArtifactRegistrar((input) => {

@@ -59,7 +59,7 @@ import {
 } from '@adhdev/mesh-shared';
 import { DEFAULT_TURN_POLICY, type TurnPolicy } from './policy.js';
 import type { TurnLedger } from './ledger.js';
-import { parseDeliveryClaimId, type TurnEventRow } from './store.js';
+import { deliveryClaimId, parseDeliveryClaimId, type TurnEventRow } from './store.js';
 import type { TurnAttempt } from './types.js';
 import { isUnredeliveredDirectFailure, reportHeldDuringStop } from './reducer.js';
 import { renderTurnNotify, type FormatStopReason, type TurnNotifyRefs, type TurnNotifyScalars } from './format.js';
@@ -556,6 +556,8 @@ export function createDeliverEdgeWaiter(opts: { now: () => number; timers?: Deli
 
 export interface TurnDeliverDeps extends RenderContext {
     submitInventory?:NoticeSubmitInventory;
+    /** A notice was typed into a coordinator composer (`delivered`): lets the runtime verify it was consumed. */
+    onNoticeWritten?(info:{messageId:string;sessionId:string;claimEventIds:readonly string[];notify:NotifyKind}):void;
     ledger: Pick<TurnLedger, 'getAttempt' | 'store' | 'claimDelivery' | 'selfDaemonId'>;
     selfDaemonIds: () => readonly string[];
     port: NoticeInputPort;
@@ -760,6 +762,11 @@ export function createTurnDeliverHandler(deps: TurnDeliverDeps, handlerOpts: Tur
             }
             stats?.recordDelivered(entry.meshId, notify);
             if (outcome.kind === 'delivered' || outcome.kind === 'queued') stats?.recordWake(entry.meshId, extras.length);
+            if (outcome.kind === 'delivered' && deps.onNoticeWritten) {
+                try {
+                    deps.onNoticeWritten({ messageId, sessionId: route.sessionId, notify, claimEventIds: [entry, ...extras].map((n) => deliveryClaimId(entry.meshId, n.writer, n.seq)) });
+                } catch { /* verification is best-effort */ }
+            }
             if (outcome.kind === 'delivered') counters.delivered++;
             else if (outcome.kind === 'queued') counters.queued++;
             else counters.duplicates++;

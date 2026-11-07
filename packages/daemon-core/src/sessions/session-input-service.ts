@@ -156,6 +156,8 @@ export interface SessionInputService {
     /** Refresh one message's journal row from the send engine's exact per-messageId acceptance, then read it. */
     settleConsume(sessionId: string, messageId: string): Promise<ConsumeView | undefined>;
     isReceiptUnverified?(messageId: string): boolean;
+    /** Forget the delivered-dedupe of `messageId` so a deliberate, proven-unconfirmed redelivery is written instead of answered `duplicate`. */
+    forgetSettled(messageId: string): void;
     submit(msg: OutboundMessage, prepareInput?: PrepareSessionInput): Promise<SubmitOutcome>;
     /**
      * Withdraw a parked body (dashboard cancel). `removed: false` is the honest
@@ -710,6 +712,7 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
             } catch { /* no evidence is not an ACK */ }
             return consumeAck.read(messageId);
         },
+        forgetSettled: messageId => { settled.delete(messageId); },
         getConsumeStates: ids => ids.map(id => consumeAck?.read(id)).filter((v): v is ConsumeView => !!v),
         isReceiptUnverified: messageId => unverifiedReceipts.has(messageId) || receiptStore.isUnverified(messageId),
         getReceipts: (sessionId, ids) => receiptStore.list(sessionId, ids).map(receipt => {
