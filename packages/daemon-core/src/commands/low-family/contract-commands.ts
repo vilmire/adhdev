@@ -21,6 +21,8 @@
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 import { defineCommandSpecs } from '../command-registry.js';
 import { isTrustedOwnerIngress } from '../command-args.js';
+import { readMeshSender } from '../mesh-sender.js';
+import { unwrapMeshRelayResult } from '../mesh-relay-result.js';
 import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
 import { getContractCtx } from '../../mesh/contract-runtime.js';
 import { isContractRefusal, CONTRACT_GRANT_OPS, type ContractGrantOp } from '../../mesh/contract/contract-types.js';
@@ -71,6 +73,9 @@ function ownerFrom(args: any): OwnerPrincipal | null {
     return null;
 }
 
+/** Owner-side command a member relays a worker's contract call through (mesh source only). */
+export const WORKER_CONTRACT_FORWARD_COMMAND = 'worker_contract_forwarded';
+
 const COORDINATOR_ACTION_OPS: Record<string, ContractGrantOp> = {
     propose: 'propose', review: 'review', accept: 'accept', close: 'review', revoke_revision: 'revoke',
     bind_mission: 'assign', revalidate: 'assess', status: 'assess',
@@ -95,35 +100,69 @@ function statusView(namespaceId: string) {
     };
 }
 
+type WorkerContractOp = 'read' | 'observe' | 'current';
+const WORKER_OPS: readonly WorkerContractOp[] = ['read', 'observe', 'current'];
+
+/** The op's own parameters, picked from the worker's args (credentials never travel past this point). */
+function pickOpParams(op: WorkerContractOp, args: any): Record<string, unknown> {
+    if (op === 'current') return {};
+    if (op === 'observe') return { bindingId: args?.bindingId, units: Array.isArray(args?.units) ? args.units : [] };
+    return {
+        bindingId: args?.bindingId, unitId: args?.unitId,
+        ...(Number.isSafeInteger(args?.rangeStart) ? { rangeStart: args.rangeStart } : {}),
+        ...(Number.isSafeInteger(args?.rangeEnd) ? { rangeEnd: args.rangeEnd } : {}),
+        ...(typeof args?.requestId === 'string' ? { requestId: args.requestId } : {}),
+    };
+}
+
+function runWorkerOp(ctx: NonNullable<ReturnType<typeof getContractCtx>>, principal: ReturnType<typeof issueWorkerPrincipal>, op: WorkerContractOp, p: any): any {
+    return run(() => {
+        if (op === 'current') return contractCurrent(ctx, principal);
+        if (op === 'observe') return contractObserve(ctx, principal, { bindingId: p?.bindingId, units: Array.isArray(p?.units) ? p.units : [] });
+        return contractRead(ctx, principal, p as any);
+    });
+}
+
+/**
+ * A worker whose task another daemon owns (live 2026-11-07: `contract_current` was refused `unauthenticated` on a
+ * member). The attempt, the contract state and the grants live on the owner/host, so the member relays the call —
+ * the same way a remote worker's report travels — and returns the owner's answer.
+ */
+async function forwardWorkerOp(ctx: LowFamilyContext, args: any, op: WorkerContractOp, localError: string): Promise<any> {
+    const { resolveRemoteWorker } = await import('./worker-report.js');
+    const remote = await resolveRemoteWorker(ctx, args);
+    if (!remote) return refused(localError);
+    const dispatch = ctx?.deps?.dispatchMeshCommand;
+    if (!dispatch) return refused('unauthenticated', { detail: `this worker's task is owned by daemon ${remote.ownerDaemonId}, and this daemon has no mesh transport to reach it` });
+    try {
+        const raw = await dispatch(remote.ownerDaemonId, WORKER_CONTRACT_FORWARD_COMMAND, {
+            meshId: remote.meshId, sessionId: remote.sessionId,
+            ...(remote.taskId ? { taskId: remote.taskId } : {}),
+            ...(remote.attemptId ? { attemptId: remote.attemptId } : {}),
+            ...(remote.generation !== undefined ? { generation: remote.generation } : {}),
+            ...(remote.nodeId ? { nodeId: remote.nodeId } : {}),
+            op, params: pickOpParams(op, args),
+        });
+        return unwrapMeshRelayResult(raw, { command: WORKER_CONTRACT_FORWARD_COMMAND, peerDaemonId: remote.ownerDaemonId });
+    } catch (e: any) {
+        return refused('forward_failed', { detail: e?.message || String(e) });
+    }
+}
+
+function workerHandler(op: WorkerContractOp): LowFamilyHandler {
+    return async (lctx: LowFamilyContext, args: any) => {
+        const w = await resolveWorker(args);
+        if ('error' in w) return forwardWorkerOp(lctx, args, op, w.error as string);
+        const ctx = getContractCtx();
+        if (!ctx) return refused('unavailable');
+        return runWorkerOp(ctx, w.principal, op, pickOpParams(op, args));
+    };
+}
+
 export const contractCommandHandlers: Record<string, LowFamilyHandler> = {
-    worker_contract_read: async (_ctx: LowFamilyContext, args: any) => {
-        const ctx = getContractCtx();
-        if (!ctx) return refused('unavailable');
-        const w = await resolveWorker(args);
-        if ('error' in w) return refused(w.error as string);
-        return run(() => contractRead(ctx, w.principal, {
-            bindingId: args?.bindingId, unitId: args?.unitId,
-            ...(Number.isSafeInteger(args?.rangeStart) ? { rangeStart: args.rangeStart } : {}),
-            ...(Number.isSafeInteger(args?.rangeEnd) ? { rangeEnd: args.rangeEnd } : {}),
-            ...(typeof args?.requestId === 'string' ? { requestId: args.requestId } : {}),
-        }));
-    },
-
-    worker_contract_observe: async (_ctx: LowFamilyContext, args: any) => {
-        const ctx = getContractCtx();
-        if (!ctx) return refused('unavailable');
-        const w = await resolveWorker(args);
-        if ('error' in w) return refused(w.error as string);
-        return run(() => contractObserve(ctx, w.principal, { bindingId: args?.bindingId, units: Array.isArray(args?.units) ? args.units : [] }));
-    },
-
-    worker_contract_current: async (_ctx: LowFamilyContext, args: any) => {
-        const ctx = getContractCtx();
-        if (!ctx) return refused('unavailable');
-        const w = await resolveWorker(args);
-        if ('error' in w) return refused(w.error as string);
-        return run(() => contractCurrent(ctx, w.principal));
-    },
+    worker_contract_read: workerHandler('read'),
+    worker_contract_observe: workerHandler('observe'),
+    worker_contract_current: workerHandler('current'),
 
     contract_owner: async (_ctx: LowFamilyContext, args: any) => {
         const owner = ownerFrom(args);
@@ -207,6 +246,33 @@ export const contractCommandHandlers: Record<string, LowFamilyHandler> = {
             return { success: true, strict: false };
         }
     },
+
+    /**
+     * Owner/host side of a relayed worker call. Authorised like a forwarded report: the claim is re-resolved against
+     * this daemon's own ledger and the transport-stamped sender must own the node the task was assigned to. Only a
+     * LIVE attempt qualifies — a late (terminal) attempt reads nothing.
+     */
+    [WORKER_CONTRACT_FORWARD_COMMAND]: async (lctx: LowFamilyContext, args: any) => {
+        const { decodeForwardedClaim, CLAIM_KEYS, ownerRosterNodeDaemonLookup, selfDaemonPredicate } = await import('./worker-report.js');
+        const decoded = decodeForwardedClaim(args, new Set<string>([...CLAIM_KEYS, 'op', 'params']));
+        const op = decoded?.record.op as WorkerContractOp | undefined;
+        const params = decoded?.record.params;
+        if (!decoded || !op || !WORKER_OPS.includes(op) || !params || typeof params !== 'object' || Array.isArray(params)) return refused('invalid_input');
+        const { resolveForwardedWorkerIdentity } = await import('../../mesh/worker-report-forwarded.js');
+        const resolved = resolveForwardedWorkerIdentity(decoded.claim, {
+            senderDaemonId: readMeshSender(args), nodeDaemonId: await ownerRosterNodeDaemonLookup(lctx, decoded.claim.meshId),
+        }, Date.now(), selfDaemonPredicate(lctx));
+        if ('refused' in resolved) return refused('unauthenticated', { detail: resolved.refused });
+        if (!('live' in resolved) || !resolved.live.attemptId) return refused('binding_missing');
+        const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(resolved.live.attemptId);
+        if (!attempt) return refused('binding_missing');
+        const ctx = getContractCtx();
+        if (!ctx) return refused('unavailable');
+        return runWorkerOp(ctx, issueWorkerPrincipal({
+            meshId: resolved.live.meshId, taskId: resolved.live.taskId, attemptId: resolved.live.attemptId,
+            generation: attempt.generation, sessionId: resolved.live.sessionId,
+        }), op, params);
+    },
 };
 
 export const contractCommandSpecs = defineCommandSpecs('low', contractCommandHandlers, {
@@ -214,6 +280,7 @@ export const contractCommandSpecs = defineCommandSpecs('low', contractCommandHan
     worker_contract_read: { sources: ['ipc', 'standalone'] },
     worker_contract_observe: { sources: ['ipc', 'standalone'] },
     worker_contract_current: { sources: ['ipc', 'standalone'] },
+    [WORKER_CONTRACT_FORWARD_COMMAND]: { sources: ['mesh'], meshSender: 'roster' },
     contract_coordinator: { sources: ['ipc', 'standalone', 'p2p', 'ws'] },
     contract_mission_scope: { sources: ['ipc', 'standalone', 'p2p', 'ws'] },
 });

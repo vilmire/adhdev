@@ -137,7 +137,7 @@ export function findLocalWorkerOfRemoteTask(ctx: LowFamilyContext, meshId: strin
 }
 
 /** This daemon's own-id predicate, or undefined when the host never told us our id. */
-function selfDaemonPredicate(ctx: LowFamilyContext): ((daemonId: string) => boolean) | undefined {
+export function selfDaemonPredicate(ctx: LowFamilyContext): ((daemonId: string) => boolean) | undefined {
     const selfDaemonId = readNonEmpty(ctx?.deps?.statusInstanceId);
     return selfDaemonId ? (daemonId: string) => daemonIdsEquivalent(daemonId, selfDaemonId) : undefined;
 }
@@ -166,7 +166,7 @@ export async function resolveRemoteWorker(ctx: LowFamilyContext, args: any): Pro
  * An unresolvable mesh yields a lookup that knows no node (fail-closed:
  * `node_unresolved`).
  */
-async function ownerRosterNodeDaemonLookup(ctx: LowFamilyContext, meshId: string): Promise<(nodeId: string) => string | undefined> {
+export async function ownerRosterNodeDaemonLookup(ctx: LowFamilyContext, meshId: string): Promise<(nodeId: string) => string | undefined> {
     let nodes: any[] = [];
     try {
         const record = await ctx?.getMeshForCommand?.(meshId, undefined, { preferInline: true });
@@ -444,7 +444,7 @@ async function forwardToOwner(
     return answer;
 }
 
-const CLAIM_KEYS = ['meshId', 'taskId', 'attemptId', 'sessionId', 'nodeId', 'generation'] as const;
+export const CLAIM_KEYS = ['meshId', 'taskId', 'attemptId', 'sessionId', 'nodeId', 'generation'] as const;
 const FORWARD_KEYS = new Set<string>([...CLAIM_KEYS, 'report', 'deliveryId', 'reportedAtMs']);
 const PROGRESS_FORWARD_KEYS = new Set<string>([...CLAIM_KEYS, 'note', 'deliveryId', 'reportedAtMs']);
 
@@ -453,7 +453,7 @@ const PROGRESS_FORWARD_KEYS = new Set<string>([...CLAIM_KEYS, 'note', 'deliveryI
  * (router-internal `_` keys stripped first), meshId + sessionId required, and a
  * present optional id must be a non-empty string.
  */
-function decodeForwardedClaim(
+export function decodeForwardedClaim(
     args: unknown,
     allowedKeys: ReadonlySet<string>,
 ): { claim: ForwardedWorkerReportClaim; record: Record<string, unknown> } | null {

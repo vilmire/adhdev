@@ -283,6 +283,8 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     // ingress; contract_coordinator needs a daemon-minted csb_ capability. None accepts `mesh`.
     'worker_contract_read', 'worker_contract_observe', 'worker_contract_current',
     'contract_owner', 'contract_coordinator', 'contract_mission_scope',
+    // + relay of a member's worker contract call to the owner (mesh source only).
+    'worker_contract_forwarded',
 ];
 
 /** The turn-ledger IPC commands: reachable ONLY over the local IPC source. */

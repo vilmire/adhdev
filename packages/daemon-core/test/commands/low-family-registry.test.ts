@@ -99,7 +99,7 @@ const WORKER_REPORT_CMDS = ['worker_bridge_prepare', 'worker_resolve_task', 'wor
 // (routed cross-daemon via mesh_notify_worker) and the worker-side drain.
 const WORKER_MAILBOX_CMDS = ['deposit_worker_mailbox', 'worker_drain_mailbox']
 // Contract versioning Cut A: worker E2/C1/current + owner/coordinator surfaces.
-const CONTRACT_CMDS = ['worker_contract_read', 'worker_contract_observe', 'worker_contract_current', 'contract_owner', 'contract_coordinator', 'contract_mission_scope']
+const CONTRACT_CMDS = ['worker_contract_read', 'worker_contract_observe', 'worker_contract_current', 'contract_owner', 'contract_coordinator', 'contract_mission_scope', 'worker_contract_forwarded']
 // WORKER-MCP D: the worker's read-only sibling-context lookup (design §6).
 const WORKER_PEER_CONTEXT_CMDS = ['worker_peer_context_pull']
 // Phase 3 §8 unit 3: daemon-local transcript replica IPC (design §4,
@@ -156,7 +156,7 @@ const NEW_WORK_HOLD_CMDS = [
 ]
 
 describe('low-family registry', () => {
-  it('registers all 137 LOW family commands once, no overlap', () => {
+  it('registers all 138 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,
@@ -185,8 +185,9 @@ describe('low-family registry', () => {
     // (same-machine light tasks, 2026-11-01) = 129, +1 project_transfer_set_relay (2026-11-02) = 130,
     // + project_transfer_set_agent_auto_approve / _revert / _agent (agent transfers + overwrite revert, 2026-11-02) = 133, + get_daemon_cpu_profile (2026-11-04) = 134,
     // + mesh_attest_node_ownership / mesh_attest_remote_ownership (remote writers, 2026-11-05) = 136,
-    // + mission_read_relay (non-host mission reads forwarded to the host, 2026-11-07) = 137.
-    expect(all).toHaveLength(137)
+    // + mission_read_relay (non-host mission reads forwarded to the host, 2026-11-07) = 137,
+    // + worker_contract_forwarded (member relays a worker contract call to the owner, 2026-11-07) = 138.
+    expect(all).toHaveLength(138)
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
     expect(lowFamilyNames()).toHaveLength(all.length)
