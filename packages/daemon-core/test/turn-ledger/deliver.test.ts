@@ -587,6 +587,36 @@ describe('backlog + MCP inbox', () => {
     });
 });
 
+describe('MCP inbox read by a live CLI coordinator (claim: informational)', () => {
+    async function seed(f: ReturnType<typeof fixture>) {
+        const notifier = createCoordinatorNotifier({ ledger: f.ledger, selfDaemonIds: () => ['dc'], now: () => f.clock.now });
+        notifier.notify({ meshId: 'm1', event: 'refine:failed', nodeLabel: 'n1', coordinatorMessage: '[System] refine failed', metadataEvent: { taskId: 't1' } });
+        notifier.notify({ meshId: 'm1', event: 'mesh:dispatch_blocked', nodeLabel: 'n2', coordinatorMessage: '[System] blocked', metadataEvent: { taskId: 't9' } });
+        await f.ledger.flushPublish();
+    }
+
+    it('action-needing notice is surfaced but left undelivered for the cursor; informational one is claimed', async () => {
+        const f = fixture();
+        await seed(f);
+        const read = readCoordinatorNotices(f.deps, 'm1', { claim: 'informational' });
+        expect(read.map((n) => n.event).sort()).toEqual(['mesh:dispatch_blocked', 'refine:failed']);
+        expect(read.find((n) => n.event === 'refine:failed')!.alsoInjected).toBe(true);
+        expect(read.find((n) => n.event === 'mesh:dispatch_blocked')!.alsoInjected).toBeUndefined();
+        const left = f.ledger.store.listUndeliveredNotifies('m1');
+        expect(left).toHaveLength(1);
+        expect(left[0]!.payload.event).toBe('refine:failed');
+    });
+
+    it('claim:all (MCP-only coordinator) claims both as before', async () => {
+        const f = fixture();
+        await seed(f);
+        const read = readCoordinatorNotices(f.deps, 'm1');
+        expect(read).toHaveLength(2);
+        expect(read.some((n) => n.alsoInjected)).toBe(false);
+        expect(f.ledger.store.listUndeliveredNotifies('m1')).toHaveLength(0);
+    });
+});
+
 describe('report gate — queue report-missing expiry requests recovery (R13q)', () => {
     it('await_report expiry after a fresh session probe delivers a recovery candidate', async () => {
         const f = fixture();

@@ -12,6 +12,7 @@ import { fastForwardMeshNode } from '../../mesh/mesh-fast-forward.js';
 import { runMeshInit } from '../../mesh/mesh-init.js';
 import { getCachedCliInventory } from '../../detection/cli-detector.js';
 import { buildMeshRefineValidationPlan } from '../router.js';
+import { previewRefineNodePublication, refineArgsCarryPublicationContract, refinePublicationPreviewRefusalResult } from '../../mesh/mesh-refine-publication-contract.js';
 import { planMeshRefineNodeSubmodulePreflight } from '../../mesh/mesh-refine-submodule-preflight.js';
 import { resolveMeshRefineConfigBaseRefs } from '../../mesh/refine-config.js';
 import type { CommandRouterResult } from '../router.js';
@@ -229,11 +230,19 @@ export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
             if (!node?.workspace) return { success: false, error: `Node '${nodeId}' workspace not found` };
             // Same submodule reachability preflight as plan_mesh_refine_node (see there).
             const submoduleReachabilityPreflight = await planMeshRefineNodeSubmodulePreflight({ mesh, node }).catch(() => undefined);
+            // Same publication-contract verdict the execute job would reach (read-only).
+            const publication = refineArgsCarryPublicationContract(args)
+                ? await previewRefineNodePublication({ mesh, node, nodeId, args })
+                : undefined;
+            if (publication && !publication.ok) {
+                return refinePublicationPreviewRefusalResult(nodeId, publication, { workspace: node.workspace });
+            }
             return {
                 success: true,
                 dryRun: true,
                 nodeId,
                 workspace: node.workspace,
+                ...(publication ? { publicationContract: { ok: true, branchHead: publication.branchHead, baseHead: publication.baseHead, baseRef: publication.baseRef, ...(publication.fetchWarning ? { fetchWarning: publication.fetchWarning } : {}) } } : {}),
                 validationPlan: buildMeshRefineValidationPlan(mesh, node.workspace, { baseRefs: resolveMeshRefineConfigBaseRefs(mesh, node) }),
                 mergeWillRun: false,
                 cleanupWillRun: false,

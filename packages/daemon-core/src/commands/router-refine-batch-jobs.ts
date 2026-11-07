@@ -286,7 +286,7 @@ export async function batchRefineMeshNodes(self: DaemonCommandRouter, meshId: st
         if (dryRunVeto.isDryRun) {
             // Dry-run result assembly + the submodule reachability preflight live in
             // mesh-refine-submodule-preflight.ts (this file is at its frozen size baseline).
-            return buildMeshRefineBatchDryRunResult({ mesh, orderedNodes, ordering });
+            return buildMeshRefineBatchDryRunResult({ mesh, orderedNodes, ordering, commandArgs: args });
         }
 
         // Execute: refine each node in order via the shared convergence core.

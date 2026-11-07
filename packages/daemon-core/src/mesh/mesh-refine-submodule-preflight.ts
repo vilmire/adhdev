@@ -52,6 +52,9 @@ import type { MeshRefineBatchOrderingResult } from './mesh-refine-batch.js';
 // Type-only (erased at compile time — same no-cycle discipline mesh-refine-gates.ts uses).
 import type { CommandRouterResult } from '../commands/router.js';
 import { buildMeshRefineValidationPlan } from './mesh-refine-gates.js';
+import type { RefineExecFileAsync } from './mesh-refine-gates.js';
+import { previewRefinePublicationContract, refineArgsCarryPublicationContract, selectRefineNodePublicationArgs } from './mesh-refine-publication-contract.js';
+import type { RefineCommandArgs } from './mesh-refine-publication-contract.js';
 import { resolveMeshRefineConfigBaseRefs } from './refine-config.js';
 import { resolveSubmoduleDefaultBranch } from './worktree-bootstrap-config.js';
 
@@ -285,9 +288,32 @@ export async function buildMeshRefineBatchDryRunResult(args: {
     mesh: any;
     orderedNodes: any[];
     ordering: MeshRefineBatchOrderingResult;
+    /** Command args; when they carry a publication contract each node gets the same read-only verdict as execute. */
+    commandArgs?: RefineCommandArgs;
 }): Promise<CommandRouterResult> {
     const { mesh, orderedNodes, ordering } = args;
     const warnings: string[] = [];
+    const publicationContract: Record<string, unknown> = {};
+    let publicationRefused = false;
+    if (args.commandArgs && refineArgsCarryPublicationContract(args.commandArgs)) {
+        for (const [index, node] of orderedNodes.entries()) {
+            const area = ordering.changeAreas[node.id];
+            if (!area || area.error || !area.repoRoot || !area.baseRef || !area.branchRef) continue;
+            try {
+                const run = promisify(execFile) as unknown as RefineExecFileAsync;
+                const rev = async (ref: string) => (await run('git', ['rev-parse', ref], { cwd: area.repoRoot!, encoding: 'utf8', windowsHide: true, env: gitChildEnv() })).stdout.trim();
+                const v = await previewRefinePublicationContract({
+                    args: selectRefineNodePublicationArgs(args.commandArgs, node.id), nodeId: node.id,
+                    branchHead: area.branchRef, baseHead: await rev(area.baseRef), repoRoot: area.repoRoot, execFileAsync: run,
+                });
+                // Later nodes in a sequential batch merge onto the base AFTER earlier nodes publish, so a
+                // fast-forward miss against today's base is advisory for them; only the first node is decisive.
+                const advisory = index > 0 && (v.code === 'approved_history_requires_ff' || v.code === 'ff_only_required');
+                publicationContract[node.id] = { ok: v.ok, ...(v.code ? { code: v.code } : {}), branchHead: v.branchHead, baseHead: v.baseHead, ...(advisory ? { advisory: true } : {}) };
+                if (!v.ok && !advisory) { publicationRefused = true; warnings.push(`Node ${node.id}: publication contract would refuse (${v.code}).`); }
+            } catch { /* best-effort */ }
+        }
+    }
     for (const node of orderedNodes) {
         const area = ordering.changeAreas[node.id];
         // ★Scope: only submodule-touching nodes pay for the probe (one fetch +
@@ -308,9 +334,12 @@ export async function buildMeshRefineBatchDryRunResult(args: {
         }
     }
     return {
-        success: true,
+        success: !publicationRefused,
         batch: true,
         dryRun: true,
+        ...(publicationRefused ? { code: 'publication_contract_refused', convergenceStatus: 'blocked_review',
+            nextAction: "If fast-forward is impossible the owner must authorize a merge: re-run with mergeMode:'merge' and without the approved* fields." } : {}),
+        ...(Object.keys(publicationContract).length ? { publicationContract } : {}),
         nodeCount: orderedNodes.length,
         order: ordering.order,
         orderingRationale: ordering.rationale,

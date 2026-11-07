@@ -1,7 +1,11 @@
-import type { RefineContext, RefineStageOutcome } from './mesh-refine-gates.js';
+import type { RefineContext, RefineStageOutcome, RefineExecFileAsync } from './mesh-refine-gates.js';
 import type { PublicPublishApprovals } from './mesh-refine-gitlink-utils.js';
 import { gitChildEnv } from '../git/git-locale.js';
 import { devNull } from 'node:os';
+import { existsSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { validateRetirementProof } from '../git/normal-retirement-proof.mjs';
 
 /** Requests without approval fields retain the intentional legacy merge workflow. */
@@ -62,6 +66,52 @@ export function selectRefineNodePublicationArgs(args: RefineCommandArgs, nodeId:
         ? { ...args, approvedPublishShas: args.approvedPublishShasByNode![nodeId] } : args;
 }
 
+const PUBLICATION_REFUSAL_ERROR = 'Publication approval contract refused. Approved history must remain unchanged and fast-forward from the base. Ask the owner for explicit merge authorization if fast-forward is impossible; no rule-B terms are available. Candidate and base are retained.';
+
+/** Shared rule tail (mode/target/ff checks): used by the real gate and the read-only dry-run preview so they cannot drift. */
+async function evaluateRefinePublicationRule(p: {
+    args: RefineCommandArgs; nodeId: string; branchHead: string; baseHead: string; repoRoot: string; execFileAsync: RefineContext['execFileAsync'];
+}): Promise<string | undefined> {
+    const { args, nodeId, branchHead, baseHead, repoRoot, execFileAsync } = p;
+    const mode = args?.mergeMode;
+    const target = args?.approvedTargetShas?.[nodeId];
+    const preserve = hasRefineApprovalContract(args);
+    let code: string | undefined;
+    if (mode !== undefined && mode !== 'merge' && mode !== 'ff-only') code = 'invalid_merge_mode';
+    else if ((mode === 'ff-only' || target !== undefined) && (!sha(target) || target !== branchHead)) code = 'approved_target_mismatch';
+    else if (mode === 'ff-only' && args.approvedPublishShas === undefined) code = 'publish_approval_required';
+    else if (mode === 'ff-only' || preserve) {
+        try {
+            await execFileAsync('git', ['--no-replace-objects', 'merge-base', '--is-ancestor', baseHead, branchHead], { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: { ...gitChildEnv(), GIT_NO_REPLACE_OBJECTS: '1', GIT_GRAFT_FILE: devNull } });
+        } catch { code = mode === 'ff-only' ? 'ff_only_required' : 'approved_history_requires_ff'; }
+    }
+    return code;
+}
+
+export interface RefinePublicationPreview {
+    ok: boolean;
+    code?: string;
+    error?: string;
+    branchHead: string;
+    baseHead: string;
+}
+
+/** Read-only dry-run verdict: same malformed-authority and mode/target/ff rules as the execute gate (source-phase checks stay execute-only). */
+export async function previewRefinePublicationContract(p: {
+    args: RefineCommandArgs; nodeId: string; branchHead: string; baseHead: string; repoRoot: string; execFileAsync: RefineContext['execFileAsync'];
+}): Promise<RefinePublicationPreview> {
+    const { branchHead, baseHead } = p;
+    const malformed = refinePublicationAuthorityRefusal(p.args, p.nodeId);
+    if (malformed) return { ok: false, code: malformed.code, error: malformed.error, branchHead, baseHead };
+    const code = await evaluateRefinePublicationRule(p);
+    return code ? { ok: false, code, error: PUBLICATION_REFUSAL_ERROR, branchHead, baseHead } : { ok: true, branchHead, baseHead };
+}
+
+/** Whether the args carry anything the publication contract would enforce. */
+export function refineArgsCarryPublicationContract(args: RefineCommandArgs): boolean {
+    return hasRefineApprovalContract(args) || args?.mergeMode !== undefined;
+}
+
 /** Runs before sync can rewrite anything, and again inside the merge CAS window. */
 export async function checkRefinePublicationContract(ctx: RefineContext): Promise<RefineStageOutcome | undefined> {
     const { args, nodeId, branchHead, baseHead, repoRoot, execFileAsync } = ctx;
@@ -96,22 +146,63 @@ export async function checkRefinePublicationContract(ctx: RefineContext): Promis
             } };
         }
     }
-    const mode = args?.mergeMode;
-    const target = args?.approvedTargetShas?.[nodeId];
-    const preserve = hasRefineApprovalContract(args);
-    let code: string | undefined;
-    if (mode !== undefined && mode !== 'merge' && mode !== 'ff-only') code = 'invalid_merge_mode';
-    else if ((mode === 'ff-only' || target !== undefined) && (!sha(target) || target !== branchHead)) code = 'approved_target_mismatch';
-    else if (mode === 'ff-only' && args.approvedPublishShas === undefined) code = 'publish_approval_required';
-    else if (mode === 'ff-only' || preserve) {
-        try {
-            await execFileAsync('git', ['--no-replace-objects', 'merge-base', '--is-ancestor', baseHead, branchHead], { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: { ...gitChildEnv(), GIT_NO_REPLACE_OBJECTS: '1', GIT_GRAFT_FILE: devNull } });
-        } catch { code = mode === 'ff-only' ? 'ff_only_required' : 'approved_history_requires_ff'; }
-    }
+    const code = await evaluateRefinePublicationRule({ args, nodeId, branchHead, baseHead, repoRoot, execFileAsync });
     if (!code) return undefined;
     return { kind: 'terminal', result: {
         success: false, code, convergenceStatus: 'blocked_review', merged: false, pushed: false,
-        error: 'Publication approval contract refused. Approved history must remain unchanged and fast-forward from the base. Ask the owner for explicit merge authorization if fast-forward is impossible; no rule-B terms are available. Candidate and base are retained.',
+        error: PUBLICATION_REFUSAL_ERROR,
         refineStages: ctx.refineStages,
     } };
+}
+
+export interface RefineDryRunPublicationVerdict extends RefinePublicationPreview {
+    /** Set when `git fetch origin <base>` failed and the local remote-tracking ref was used. */
+    fetchWarning?: string;
+    baseRef?: string;
+}
+
+/**
+ * Dry-run entry: resolve branch/base the way the real job does (bounded fetch of origin/<base>,
+ * fetch failure tolerated) and return the publication-contract verdict. Never mutates a worktree.
+ * Returns undefined when refs cannot be resolved (the dry-run then stays as before).
+ */
+export async function previewRefineNodePublication(p: {
+    mesh: any; node: any; nodeId: string; args: RefineCommandArgs; execFileAsync?: RefineExecFileAsync;
+}): Promise<RefineDryRunPublicationVerdict | undefined> {
+    const { mesh, node, nodeId, args } = p;
+    const run: RefineExecFileAsync = p.execFileAsync ?? (promisify(execFile) as unknown as RefineExecFileAsync);
+    const git = async (cwd: string, gitArgs: string[], timeout?: number) =>
+        (await run('git', gitArgs, { cwd, encoding: 'utf8', windowsHide: true, env: gitChildEnv(), ...(timeout ? { timeout } : {}) })).stdout.trim();
+    try {
+        if (!node?.workspace || !existsSync(node.workspace)) return undefined;
+        const sourceNode = node.clonedFromNodeId
+            ? mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, node.clonedFromNodeId))
+            : mesh?.nodes?.find((n: any) => !n.isLocalWorktree);
+        const repoRoot: string | undefined = sourceNode?.repoRoot || sourceNode?.workspace || node.workspace;
+        if (!repoRoot) return undefined;
+        const branchHead = await git(node.workspace, ['rev-parse', 'HEAD']);
+        const baseBranch = await git(repoRoot, ['branch', '--show-current']);
+        let fetchWarning: string | undefined;
+        let baseRef = baseBranch ? `origin/${baseBranch}` : 'HEAD';
+        if (baseBranch) {
+            try { await git(repoRoot, ['fetch', 'origin', baseBranch], 30_000); }
+            catch (e: any) { fetchWarning = `git fetch origin ${baseBranch} failed; used the local ${baseRef} ref (may be stale): ${e?.message}`; }
+        }
+        let baseHead: string;
+        try { baseHead = await git(repoRoot, ['rev-parse', baseRef]); }
+        catch { baseRef = 'HEAD'; baseHead = await git(repoRoot, ['rev-parse', 'HEAD']); }
+        const verdict = await previewRefinePublicationContract({ args, nodeId, branchHead, baseHead, repoRoot, execFileAsync: run });
+        return { ...verdict, baseRef, ...(fetchWarning ? { fetchWarning } : {}) };
+    } catch { return undefined; }
+}
+
+export function refinePublicationPreviewRefusalResult(nodeId: string, v: RefineDryRunPublicationVerdict, extra: Record<string, unknown> = {}) {
+    return {
+        success: false, dryRun: true, nodeId, code: v.code, convergenceStatus: 'blocked_review', mergeWillRun: false, cleanupWillRun: false,
+        publicationContract: { ok: false, code: v.code, branchHead: v.branchHead, baseHead: v.baseHead, baseRef: v.baseRef },
+        error: v.error,
+        ...(v.fetchWarning ? { fetchWarning: v.fetchWarning } : {}),
+        nextAction: 'If fast-forward is impossible the owner must authorize a merge: re-run with mergeMode:\'merge\' and without approvedTargetShas / approvedPublishShas / approvedPublishShasByNode. Otherwise rebase the candidate onto the current base and re-approve the new SHAs.',
+        ...extra,
+    };
 }

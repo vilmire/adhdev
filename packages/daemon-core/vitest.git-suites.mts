@@ -62,6 +62,7 @@ export const GIT_HEAVY_SUITES: string[] = [
   'test/commands/refine-submodule-rebase-generated-bundle.test.ts',
   'test/commands/refine-gitlink-ff-undeterminable.test.ts',
   'test/commands/refine-gitlink-trivial-ff.test.ts',
+  'test/commands/refine-dry-run-publication-contract.test.ts',
   'test/commands/refine-patch-equivalence-classification.test.ts',
   'test/commands/refine-reachability-fetch-undeterminable.test.ts',
   'test/commands/refine-trivial-ff-gitlink-rebase.test.ts',

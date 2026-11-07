@@ -71,6 +71,17 @@ describe('get_pending_mesh_events for a client without a coordinator session', (
         expect(f.reads[0]).toMatchObject({ ack: true, surfacedSessionId: 'coord-1' });
     });
 
+    it('self read: claim mode is informational only with a live CLI coordinator; MCP-only claims everything', async () => {
+        const live = fakeRuntime(true);
+        bindMeshNoticeRuntime(live.runtime);
+        await handler({} as any, { meshId: 'm1', coordinatorDaemonId: 'daemon-A', selfCoordinatorInboxRead: true });
+        expect(live.reads[0]).toMatchObject({ claim: 'informational' });
+        const mcpOnly = fakeRuntime(false);
+        bindMeshNoticeRuntime(mcpOnly.runtime);
+        await handler({} as any, { meshId: 'm1', coordinatorDaemonId: 'daemon-A', selfCoordinatorInboxRead: true });
+        expect(mcpOnly.reads[0]!.claim).toBeUndefined();
+    });
+
     it('every answer carries the quiet notice counters and worker signals — as state, never as events', async () => {
         const f = fakeRuntime(true);
         const stats = { since: 1, wakes: 4, delivered: { completed: 5 }, suppressed: { 'no_progress:attempt_terminal': 2 }, coalesced: 1 };

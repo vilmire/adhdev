@@ -83,6 +83,9 @@ export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
         const ack = args?.ack !== false;
         const events = runtime.readNotices(meshId, {
             ack,
+            // A live CLI coordinator also gets action-needing notices injected by the cursor; the tool
+            // result may be unprinted by a script, so only informational notices are claimed here.
+            ...(hasLiveCliCoordinator ? { claim: 'informational' as const } : {}),
             ...(typeof args?.sessionId === 'string' && args.sessionId.trim() ? { surfacedSessionId: args.sessionId.trim() } : {}),
         });
         return {

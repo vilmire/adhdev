@@ -871,6 +871,11 @@ export interface PendingCoordinatorNoticeWire {
     workspace?: string;
     targetCoordinatorSessionId?: string;
     metadataEvent?: Record<string, unknown>;
+    /**
+     * Surfaced in this tool result but deliberately NOT claimed: the `turn.deliver` cursor still injects it
+     * into the live CLI coordinator as a chat turn (a script that calls MCP tools may never print this field).
+     */
+    alsoInjected?: true;
 }
 
 interface ReadNoticesDeps extends RenderContext {
@@ -951,8 +956,9 @@ function pendingNoticeRows(deps: ReadNoticesDeps, meshId: string, limit: number)
  * claimed into the same `delivered:` rows, so the deliver cursor passes them
  * without submitting. Suppressed notices are claimed and not returned.
  */
-export function readCoordinatorNotices(deps: ReadNoticesDeps, meshId: string, opts: { ack?: boolean; limit?: number; surfacedSessionId?: string } = {}): PendingCoordinatorNoticeWire[] {
+export function readCoordinatorNotices(deps: ReadNoticesDeps, meshId: string, opts: { ack?: boolean; limit?: number; surfacedSessionId?: string; claim?: 'all' | 'informational' } = {}): PendingCoordinatorNoticeWire[] {
     const ack = opts.ack !== false;
+    const claimInformationalOnly = opts.claim === 'informational';
     const counters = deps.counters ?? createTurnDeliverCounters();
     const out: PendingCoordinatorNoticeWire[] = [];
     // Facts already surfaced earlier in THIS read (no-ack peeks never write a claim to dedupe against).
@@ -978,7 +984,11 @@ export function readCoordinatorNotices(deps: ReadNoticesDeps, meshId: string, op
         }
         const rendered = renderNotice(deps, meshId, entry, row);
         if (wakeKey && rendered.text.trim()) surfacedKeys.add(wakeKey);
-        if (ack) {
+        // A live CLI coordinator that reads its own inbox: only informational notices are claimed here.
+        // Action-needing ones (outcomes, failures, blocked, refine terminals) stay for the cursor injection.
+        const leaveForCursor = claimInformationalOnly
+            && !isHoldableNotice(notify, notify === 'mesh_event' && !!rendered.event && shouldForceInjectMeshEvent(rendered.event));
+        if (ack && !leaveForCursor) {
             deps.ledger.claimDelivery({ writer, seq, meshId, sessionId: opts.surfacedSessionId ?? str(entry.targetSessionId) ?? '', outcome: 'mcp_read', ...(wakeKey && rendered.text.trim() ? { wakeKey } : {}) });
             if (rendered.text.trim()) deps.stats?.recordDelivered(meshId, notify);
         }
@@ -1001,10 +1011,11 @@ export function readCoordinatorNotices(deps: ReadNoticesDeps, meshId: string, op
             ...(str(local.workspace) ? { workspace: str(local.workspace)! } : {}),
             ...(str(entry.targetSessionId) ? { targetCoordinatorSessionId: str(entry.targetSessionId)! } : {}),
             ...(isRecord(local.metadataEvent) ? { metadataEvent: local.metadataEvent as Record<string, unknown> } : {}),
+            ...(leaveForCursor ? { alsoInjected: true as const } : {}),
         });
         counters.mcpRead++;
     }
-    if (ack && out.length > 0) deps.waiter?.wake(meshId);
+    if (ack && out.some((n) => !n.alsoInjected)) deps.waiter?.wake(meshId);
     return out;
 }
 
@@ -1117,7 +1128,7 @@ export function retractCoordinatorNotices(
  */
 export interface MeshNoticeRuntime {
     notify(notice: CoordinatorNotice): { eventId: string; queued: boolean };
-    readNotices(meshId: string, opts?: { ack?: boolean; limit?: number; surfacedSessionId?: string }): PendingCoordinatorNoticeWire[];
+    readNotices(meshId: string, opts?: { ack?: boolean; limit?: number; surfacedSessionId?: string; claim?: 'all' | 'informational' }): PendingCoordinatorNoticeWire[];
     controlNotices(meshId: string, event: string): ReturnType<typeof listControlNotices>;
     retract(meshId: string, match: (event: string, metadataEvent: Record<string, unknown>) => boolean): number;
     /** An own undelivered notice for this mesh exists (idle-mission reminder gate). */

@@ -58,6 +58,10 @@ export interface MeshRefineBatchNodeChangeArea {
     changedFiles: string[];
     /** Submodule gitlink paths touched by the branch (subset of changedTopLevelPaths). */
     touchedSubmodulePaths: string[];
+    /** Resolution inputs kept so dry-run can run the publication-contract preview. */
+    repoRoot?: string;
+    baseRef?: string;
+    branchRef?: string;
     /** True when the branch touches at least one submodule gitlink. */
     touchesSubmodule: boolean;
     /** Number of commits the branch is ahead of base; 0 means nothing to merge. */
@@ -121,6 +125,9 @@ export async function analyzeMeshRefineNodeChangeArea(args: {
         changedTopLevelPaths: [],
         changedFiles: [],
         touchedSubmodulePaths: [],
+        repoRoot,
+        baseRef,
+        branchRef,
         touchesSubmodule: false,
         aheadCount: 0,
     };
