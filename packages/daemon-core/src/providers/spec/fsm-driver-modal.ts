@@ -42,6 +42,9 @@ const DETACHED_CURSOR_GAP_ROW_RE = /^\s*(?:┃.*)?$/;
 const PARKED_BELOW_SWITCHER_RE = /^\s*←\/→ to switch approval\s*$/;
 /** A key-hinted option row (`→ Run (once) (y)`, `Skip (esc or n)`). */
 const PARKED_BELOW_KEY_HINT_RE = /\((?:y|n|p|tab|shift\+tab|esc(?:\s+or\s+n)?)\)\s*$/i;
+/** cursor-agent's single-approval prompt: its last option row, and the header above it. */
+const PARKED_BELOW_SKIP_ROW_RE = /^\s*Skip & tell the agent what to do instead \(esc or n\)\s*$/;
+const PARKED_BELOW_PROMPT_RE = /^\s*Run this (?:command|MCP tool)\?\s*$/;
 
 function matchNumberedChoiceIndex(line: string): number | null {
     const m = NUMBERED_CHOICE_LINE_RE.exec(line);
@@ -282,12 +285,19 @@ export function resolveLiveModalSlice(
             // Narrow on purpose: a far cursor below a short Codex/Claude snapshot is still
             // rejected (nested-approval-false-positive). Only that switcher on the bottom row,
             // key-hinted option rows just above it and blank rows down to the cursor qualify.
-            const parkedBelow = effectiveCursorRow > lastNonBlankRow
-                && modalEndRow === lastNonBlankRow
-                && PARKED_BELOW_SWITCHER_RE.test(lines[lastNonBlankRow])
-                && lines.slice(lastNonBlankRow + 1, effectiveCursorRow + 1).every(row => !row.trim())
+            // The single-approval form ends on its `Skip & tell … (esc or n)` option instead
+            // (live 2026-11-06: reviewer a9238ac9, cursor row 33 on a 32-row screen).
+            const blankDownToCursor = lines.slice(lastNonBlankRow + 1, effectiveCursorRow + 1).every(row => !row.trim());
+            const queuedForm = PARKED_BELOW_SWITCHER_RE.test(lines[lastNonBlankRow])
                 && lines.slice(Math.max(interactiveStartRow, lastNonBlankRow - 4), lastNonBlankRow)
                     .some(row => PARKED_BELOW_KEY_HINT_RE.test(row));
+            const singleForm = PARKED_BELOW_SKIP_ROW_RE.test(lines[lastNonBlankRow])
+                && lines.slice(Math.max(interactiveStartRow, lastNonBlankRow - 8), lastNonBlankRow)
+                    .some(row => PARKED_BELOW_PROMPT_RE.test(row));
+            const parkedBelow = effectiveCursorRow > lastNonBlankRow
+                && modalEndRow === lastNonBlankRow
+                && blankDownToCursor
+                && (queuedForm || singleForm);
             if (!detached && !parkedBelow) return empty;
         }
     }

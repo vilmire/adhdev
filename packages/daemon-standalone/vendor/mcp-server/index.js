@@ -134285,7 +134285,10 @@ ${detail.join("\n")}` : stripped;
         }
         if (effectiveCursorRow < interactiveStartRow || effectiveCursorRow > modalEndRow + 1) {
           const detached = effectiveCursorRow < interactiveStartRow && lastChoiceBlock !== void 0 && choiceEndRow === lastChoiceBlock.endRow && DETACHED_CURSOR_FOOTER_RE.test(lines[lastNonBlankRow]) && DETACHED_CURSOR_ACTIVITY_ROW_RE.test(lines[effectiveCursorRow] ?? "") && lines.slice(effectiveCursorRow + 1, lastNonBlankRow).every((row2) => DETACHED_CURSOR_GAP_ROW_RE.test(row2));
-          const parkedBelow = effectiveCursorRow > lastNonBlankRow && modalEndRow === lastNonBlankRow && PARKED_BELOW_SWITCHER_RE.test(lines[lastNonBlankRow]) && lines.slice(lastNonBlankRow + 1, effectiveCursorRow + 1).every((row2) => !row2.trim()) && lines.slice(Math.max(interactiveStartRow, lastNonBlankRow - 4), lastNonBlankRow).some((row2) => PARKED_BELOW_KEY_HINT_RE.test(row2));
+          const blankDownToCursor = lines.slice(lastNonBlankRow + 1, effectiveCursorRow + 1).every((row2) => !row2.trim());
+          const queuedForm = PARKED_BELOW_SWITCHER_RE.test(lines[lastNonBlankRow]) && lines.slice(Math.max(interactiveStartRow, lastNonBlankRow - 4), lastNonBlankRow).some((row2) => PARKED_BELOW_KEY_HINT_RE.test(row2));
+          const singleForm = PARKED_BELOW_SKIP_ROW_RE.test(lines[lastNonBlankRow]) && lines.slice(Math.max(interactiveStartRow, lastNonBlankRow - 8), lastNonBlankRow).some((row2) => PARKED_BELOW_PROMPT_RE.test(row2));
+          const parkedBelow = effectiveCursorRow > lastNonBlankRow && modalEndRow === lastNonBlankRow && blankDownToCursor && (queuedForm || singleForm);
           if (!detached && !parkedBelow) return empty;
         }
       }
@@ -134411,6 +134414,8 @@ ${detail.join("\n")}` : stripped;
     var DETACHED_CURSOR_GAP_ROW_RE;
     var PARKED_BELOW_SWITCHER_RE;
     var PARKED_BELOW_KEY_HINT_RE;
+    var PARKED_BELOW_SKIP_ROW_RE;
+    var PARKED_BELOW_PROMPT_RE;
     var init_fsm_driver_modal = __esm2({
       "src/providers/spec/fsm-driver-modal.ts"() {
         "use strict";
@@ -134427,6 +134432,8 @@ ${detail.join("\n")}` : stripped;
         DETACHED_CURSOR_GAP_ROW_RE = /^\s*(?:┃.*)?$/;
         PARKED_BELOW_SWITCHER_RE = /^\s*←\/→ to switch approval\s*$/;
         PARKED_BELOW_KEY_HINT_RE = /\((?:y|n|p|tab|shift\+tab|esc(?:\s+or\s+n)?)\)\s*$/i;
+        PARKED_BELOW_SKIP_ROW_RE = /^\s*Skip & tell the agent what to do instead \(esc or n\)\s*$/;
+        PARKED_BELOW_PROMPT_RE = /^\s*Run this (?:command|MCP tool)\?\s*$/;
       }
     });
     function unavailableSignalSnapshot(now, reason, profile) {

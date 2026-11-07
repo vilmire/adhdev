@@ -70,3 +70,42 @@ maybe('cursor-cli queued multi-approval ("Approval 1 of 3")', () => {
     ])
   })
 })
+
+/**
+ * The single-approval form (live 2026-11-06, Prefex reviewer a9238ac9): no "Approval 1 of N"
+ * and no switcher row — the prompt ends on its `Skip & tell … (esc or n)` option, with the
+ * cursor parked two rows below the 32-row screen. The reviewer sat 10+ minutes as `generating`.
+ */
+const SINGLE = [
+  '  $ cd /work/feat && git rev-parse HEAD && git merge-base HEAD 8ee262d7272f',
+  '    2>/dev/null; git log --oneline 8ee262d..HEAD Waiting for approval...',
+  '',
+  RULE,
+  ' $  cd /work/feat && git rev-parse HEAD && git merge-base HEAD 8ee262d7272f',
+  '    2>/dev/null; git log --oneline 8ee262d..HEAD in .',
+  '',
+  ' Run this command?',
+  ' Shell allowlist is empty',
+  '  → Run (once) (y)',
+  '    Add Shell(cd), Shell(git rev-parse), Shell(git merge-base), Shell(git log)',
+  '  to allowlist? (tab)',
+  '    Run Everything (shift+tab)',
+  '    Skip & tell the agent what to do instead (esc or n)',
+]
+
+maybe('cursor-cli single approval with the cursor parked below the screen', () => {
+  const spec = JSON.parse(fs.readFileSync(SPEC_PATH, 'utf8'))
+
+  for (const cursor of [{ row: SINGLE.length + 1, col: 0 }, { row: SINGLE.length, col: 0 }, undefined]) {
+    it(`fires → approval from busy (cursor ${JSON.stringify(cursor)})`, () => {
+      const ev = evaluateFsm(spec, 'busy', SINGLE.join('\n'), cursor as any, undefined, clk(10000))
+      expect(ev.fired?.to).toBe('approval')
+    })
+  }
+
+  it('still rejects the parked cursor when the prompt is followed by more output', () => {
+    const quoted = [...SINGLE, '', '  ⬢ Ran the command.']
+    const ev = evaluateFsm(spec, 'busy', quoted.join('\n'), { row: quoted.length + 1, col: 0 }, undefined, clk(10000))
+    expect(ev.fired?.to).not.toBe('approval')
+  })
+})
