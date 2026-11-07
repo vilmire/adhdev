@@ -165,6 +165,12 @@ describe('renderTurnNotify — golden parity with buildMeshSystemMessage', () =>
         expect(text).not.toContain('rm -rf');
     });
 
+    it('approval needed — names the waiting session and task with the exact mesh_approve target', () => {
+        const { text } = render('approval', { nodeLabel: NODE_LABEL, sessionId: 'sess-1', taskId: 'task-9', nodeId: 'node_x' }, {});
+        expect(text).toContain('(session sess-1, task task-9)');
+        expect(text).toContain('mesh_approve node_id=node_x session_id=sess-1');
+    });
+
     it('choice needed, with questions — byte-identical', () => {
         const metadataEvent = {
             promptId: 'p1',

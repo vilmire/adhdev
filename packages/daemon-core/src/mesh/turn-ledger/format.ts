@@ -363,7 +363,12 @@ function renderCompleted(input: RenderTurnNotifyInput, missing: SummaryRef[]): s
 }
 
 function renderApproval(input: RenderTurnNotifyInput): string {
-    return `[System] ${input.scalars.nodeLabel} is waiting for approval to proceed. You may use mesh_read_chat and mesh_approve to handle it.`;
+    const s = input.scalars;
+    // Name the exact session (and task): several workers on one node can wait at once, and
+    // mesh_approve requires session_id — a node-only notice left the coordinator guessing.
+    const who = [s.sessionId ? `session ${s.sessionId}` : null, s.taskId ? `task ${s.taskId}` : null].filter(Boolean).join(', ');
+    const call = s.sessionId && s.nodeId ? ` (mesh_approve node_id=${s.nodeId} session_id=${s.sessionId})` : '';
+    return `[System] ${s.nodeLabel}${who ? ` (${who})` : ''} is waiting for approval to proceed. You may use mesh_read_chat and mesh_approve${call} to handle it.`;
 }
 
 function renderChoice(input: RenderTurnNotifyInput, missing: SummaryRef[]): string {

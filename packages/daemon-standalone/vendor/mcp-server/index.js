@@ -54407,7 +54407,10 @@ ${surfaced}`;
       return `${completionLead} This completion came from the agent status event path;${reviewNote}`;
     }
     function renderApproval(input) {
-      return `[System] ${input.scalars.nodeLabel} is waiting for approval to proceed. You may use mesh_read_chat and mesh_approve to handle it.`;
+      const s2 = input.scalars;
+      const who = [s2.sessionId ? `session ${s2.sessionId}` : null, s2.taskId ? `task ${s2.taskId}` : null].filter(Boolean).join(", ");
+      const call2 = s2.sessionId && s2.nodeId ? ` (mesh_approve node_id=${s2.nodeId} session_id=${s2.sessionId})` : "";
+      return `[System] ${s2.nodeLabel}${who ? ` (${who})` : ""} is waiting for approval to proceed. You may use mesh_read_chat and mesh_approve${call2} to handle it.`;
     }
     function renderChoice(input, missing) {
       const s2 = input.scalars;
