@@ -254,3 +254,12 @@ describe('worker footer — literal shell paths rule', () => {
         expect(RULE).toMatch(/shell variables/)
     })
 })
+
+describe('reviewer footer — where a review report goes', () => {
+    it('tells the reviewer not to write inside the checkout and to register the report instead', () => {
+        const text = renderWorkerProtocolFooter({ stage: { role: 'review', round: 1, maxRevisions: 2 } })
+        expect(text).toMatch(/Never write files inside the reviewed checkout/)
+        expect(text).toMatch(/reviewer_mutated_source/)
+        expect(text).toMatch(/artifact_register/)
+    })
+})

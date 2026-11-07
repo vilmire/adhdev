@@ -232,7 +232,9 @@ export function renderStageProtocolLines(stage: NonNullable<WorkerProtocolFooter
     if (stage.role === 'review') {
         return [
             `STAGE: you are the independent reviewer (round ${stage.round} of at most ${stage.maxRevisions + 1}). Read the input artifacts first (diff, self-check log, previous verdict).`
-                + (stage.workspace ? ` Your workspace ${stage.workspace} is pinned to the round head — you may run tests, but nothing you change lands; do not fix, record findings instead.` : ' Do not modify the workspace: read it, and record findings instead of fixing.'),
+                + (stage.workspace ? ` Your workspace ${stage.workspace} is pinned to the round head — you may run tests, but nothing you change lands; do not fix, record findings instead.` : ' Do not modify the workspace: read it, and record findings instead of fixing.')
+                + ' Never write files inside the reviewed checkout, not even a review report: any new or changed file there fails the review as reviewer_mutated_source. '
+                + 'Put a report in your system temp directory, register it with `artifact_register`, and cite its id in `report_completion` `artifact_ids`.',
             'Your `report_completion` MUST carry `review`: {verdict: approve | approve_with_nits | changes_requested | reject_approach, findings[{id, severity, category, claim, evidence, suggested_fix?}], checked[], not_checked[], tests_run?[]}. '
                 + '`changes_requested` needs at least one blocking/major finding; `approve` allows none. From round 2 also give `prior_findings[{id, status}]` for every earlier blocking/major finding. '
                 + '`reject_approach` is only for a wrong approach, not for fixable defects.',
