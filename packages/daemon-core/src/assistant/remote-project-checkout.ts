@@ -1,7 +1,8 @@
 /** Fixed GitHub checkout operation. No shell, caller paths, credentials or raw child errors. */
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
+import { remoteProjectKey } from './remote-project-key.js';
 import { lstat, mkdir, readFile, realpath, rename, rm, rmdir, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { getConfigDir } from '../config/config.js';
@@ -125,7 +126,7 @@ export async function managedCheckoutPath(meshId: string, identity: string): Pro
     const root = join(config, 'remote-projects');
     try { await mkdir(root); } catch (e: any) { if (e.code !== 'EEXIST') throw e; }
     if ((await lstat(root)).isSymbolicLink() || await realpath(root) !== resolve(root)) throw new AttachFailure('PATH_CONFLICT', 'checkout', 'The managed remote-projects directory must be a real directory.');
-    const key = createHash('sha256').update(`${meshId}\0${identity}`).digest('hex').slice(0, 24);
+    const key = remoteProjectKey(meshId, identity);
     return join(root, key);
 }
 export async function verifyCheckout(workspace: string, identity: string): Promise<void> {

@@ -9,6 +9,7 @@ import { loadConfig } from '../config/config.js';
 import { getMesh } from '../config/mesh-config.js';
 import { expandPath } from '../config/workspaces.js';
 import { MESH_NODE_WORKSPACE_PREFIX, meshScopeFromEntry } from './workspace-scope.js';
+import { resolveRemoteProjectWorkspaceById } from './remote-project-scope.js';
 import type { WorkspaceMatch } from './workspace-lookup.js';
 
 function isDir(p: string): boolean { try { return fs.statSync(p).isDirectory(); } catch { return false; } }
@@ -32,5 +33,7 @@ export function resolveTransferWorkspaceById(id: string, selfDaemonId: string): 
   if (!q) return null;
   const w = (loadConfig().workspaces ?? []).find((x) => x.id === q);
   if (w) return { id: w.id, path: path.resolve(expandPath(w.path)), label: w.label };
+  const remote = resolveRemoteProjectWorkspaceById(q);
+  if (remote) return isDir(remote.path) ? remote : null;
   return resolveMeshNodeWorkspaceById(q, selfDaemonId);
 }

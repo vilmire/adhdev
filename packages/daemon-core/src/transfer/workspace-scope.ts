@@ -11,6 +11,7 @@ import { getMesh } from '../config/mesh-config.js';
 import { expandPath } from '../config/workspaces.js';
 import { readMeshNodeDaemonId } from '../mesh/mesh-node-identity.js';
 import { resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
+import { remoteProjectScopeFor } from './remote-project-scope.js';
 import type { WorkspaceMatch } from './workspace-lookup.js';
 
 export interface MeshScope { workspaces: WorkspaceMatch[] }
@@ -87,7 +88,11 @@ const defaultResolver: MeshScopeResolver = (meshId, machine, via) => {
   if (!meshId) return null;
   let mesh: unknown;
   try { mesh = getMesh(meshId); } catch { return null; }
-  return mesh ? meshScopeFromEntry(mesh, machine, via) : null;
+  if (mesh) return meshScopeFromEntry(mesh, machine, via);
+  // A member that attached the host's project as a remote project has no mesh record, only a host
+  // record plus the managed checkouts; the host (or a local caller) may use exactly those.
+  const remote = remoteProjectScopeFor(meshId, via);
+  return remote.length ? { workspaces: remote } : null;
 };
 
 let resolver: MeshScopeResolver = defaultResolver;
