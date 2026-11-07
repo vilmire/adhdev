@@ -94,6 +94,7 @@ describe('LIGHT-TASK enqueue shape', () => {
       expect(() => enqueueTask(meshId, 'x', { taskMode: 'code_change', difficulty: 'easy', light: true } as any)).toThrow(/light_requires_owned_paths/)
       expect(() => enqueueTask(meshId, 'x', { taskMode: 'code_change', difficulty: 'easy', light: true, readonly: true, ownedPaths: ['a'] } as any)).toThrow(/light_mode_conflict/)
       expect(() => enqueueTask(meshId, 'x', { taskMode: 'validation', difficulty: 'easy', light: true, ownedPaths: ['a'] } as any)).toThrow(/light_mode_conflict/)
+      expect(() => enqueueTask(meshId, 'x', { taskMode: 'code_change', difficulty: 'medium', light: true, ownedPaths: ['a'], review: true } as any)).toThrow(/light_review_unsupported/)
       const ok = enqueueLight(meshId)
       expect(ok.light).toBe(true)
       expect(ok.lightBaseNodeId).toBe(NODE_A)

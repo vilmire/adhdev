@@ -343,8 +343,13 @@ async function normalizeEnqueueTaskArgs(
     // Review-in-task (docs/design/2026-11-01-review-in-task.md §9.1, R5): resolve the option (and its
     // medium/difficult code_change default) here, so the daemon only ever sees an explicit decision.
     let review: NormalizedEnqueueTaskArgs['review'];
+    // A light task works in a private worktree that no reviewer session can be launched into yet, so in-task review
+    // can never start for it: no default, and an explicit request is refused instead of stalling the task later.
+    if (args.light === true && args.review !== undefined && args.review !== false) {
+        return { ok: false, code: 'light_review_unsupported', error: `${callerLabel}: in-task review is not supported for light tasks yet (no reviewer can run in a light worktree). Enqueue it as a normal worktree task to get a review, or omit review.` };
+    }
     try {
-        const plan = resolveStagePlan(args.review, { taskMode, difficulty, readonly });
+        const plan = args.light === true ? null : resolveStagePlan(args.review, { taskMode, difficulty, readonly });
         review = plan ? { max_revisions: plan.maxRevisions, independence: plan.independence } : (args.review === false ? false : undefined);
     } catch (e) {
         return { ok: false, code: 'invalid_review_option', error: `${callerLabel}: ${e instanceof Error ? e.message : String(e)}` };

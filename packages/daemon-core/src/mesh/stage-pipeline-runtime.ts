@@ -22,7 +22,7 @@ const DIFF_MAX = 1_500_000;
  * create_review_child failures that retrying cannot fix: the required input evidence is unauthorized, gone or
  * changed. Everything else (busy checkout, missing local context, a raced parent) is retried on the next tick.
  */
-const isLastingReviewInputError = (detail: string): boolean => /^review_input_artifact(s_missing|_unauthorized|_path|_hash)\b/.test(detail);
+const isLastingReviewInputError = (detail: string): boolean => /^(review_input_artifact(s_missing|_unauthorized|_path|_hash)|review_unsupported_for_light_task)\b/.test(detail);
 
 export class StagePipelineRuntime {
     /** Parents with an effect chain in flight (serializes per parent; events arriving meanwhile queue behind it). */
@@ -321,6 +321,8 @@ export class StagePipelineRuntime {
             case 'create_review_child': {
                 // A persisted child owns its original baseline; retries must never refresh a started review.
                 if (st.reviewTaskIds.some(cid => { const c = this.ports.queue.get(meshId, cid); return c?.stageRound === effect.round && (c.status === 'pending' || c.status === 'assigned'); })) return;
+                // A reviewer must claim from the reviewed checkout, and none can be launched into a light worktree.
+                if (parent.light) throw new Error('review_unsupported_for_light_task');
                 const workspace = this.ports.workspaceOf(parent);
                 const head = st.stageHeads[st.stageHeads.length - 1]?.rootSha ?? '';
                 const plan = parent.stagePlan!;

@@ -557,6 +557,17 @@ describe('stage effect retry bound and stale parent (live 2026-11-07 c8b231ee)',
         expect(h.log.progress.filter(t => /create_review_child failed: stage_review_stale_parent/.test(t))).toHaveLength(1);
         expect(h.log.progress.filter(t => /gave up/.test(t))).toHaveLength(1);
     });
+    it('a light parent blocks at once with a clear reason (no reviewer can run in a light worktree)', async () => {
+        const h = harness();
+        const row = h.parent(); (row as any).light = true; (row as any).lightWorkspaceId = 'lw1';
+        let calls = 0;
+        h.ports.queue.enqueueReviewChild = () => { calls++; throw new Error('should not be called'); };
+        await h.implDone('a1');
+        expect(calls).toBe(0);
+        expect(h.parent().status).toBe('blocked');
+        expect(h.parent().stageState!.blockedDetail).toMatch(/review_unsupported_for_light_task/);
+        expect(h.log.notices.map(n => n.status)).toEqual(['blocked']);
+    });
     it('a busy reviewer checkout is an honest wait: logged once, never escalated', async () => {
         const h = harness();
         h.ports.queue.enqueueReviewChild = () => { throw new Error('review_input_busy'); };

@@ -77473,6 +77473,7 @@ ${env2.envelopes.join("\n\n")}${tail}`;
       } catch {
       }
       const stagePlan = stageChild ? null : resolveStagePlan2(opts?.review, { taskMode: modeValidation.taskMode, difficulty: taskDifficulty, readonly }, { defaultOn: false });
+      if (stagePlan && light) throw new Error("light_review_unsupported: in-task review is not supported for light tasks yet; enqueue a normal worktree task to get a review, or omit review.");
       const result = withQueueLock(meshId, () => {
         if (MeshRuntimeStore.getInstance().findQueueEntryById(meshId, id4)) {
           throw new Error(`duplicate_task_id: task '${id4}' already exists in mesh '${meshId}'`);
@@ -78888,7 +78889,7 @@ ${body.replace(/<\/?\s*(untrusted_[a-z_]+)\b[^>]*>/gi, "[tag removed]")}
         STAGE_PARENT_ENDED = /* @__PURE__ */ new Set(["completed", "failed", "blocked", "cancelled"]);
         SELF_CHECK_LOG_MAX = 6e4;
         DIFF_MAX = 15e5;
-        isLastingReviewInputError = (detail) => /^review_input_artifact(s_missing|_unauthorized|_path|_hash)\b/.test(detail);
+        isLastingReviewInputError = (detail) => /^(review_input_artifact(s_missing|_unauthorized|_path|_hash)|review_unsupported_for_light_task)\b/.test(detail);
         StagePipelineRuntime = class {
           constructor(ports) {
             this.ports = ports;
@@ -79209,6 +79210,7 @@ ${result.log.slice(-SELF_CHECK_LOG_MAX)}
                   const c = this.ports.queue.get(meshId, cid);
                   return c?.stageRound === effect.round && (c.status === "pending" || c.status === "assigned");
                 })) return;
+                if (parent.light) throw new Error("review_unsupported_for_light_task");
                 const workspace = this.ports.workspaceOf(parent);
                 const head = st.stageHeads[st.stageHeads.length - 1]?.rootSha ?? "";
                 const plan = parent.stagePlan;
@@ -81438,7 +81440,7 @@ ${asText(streams.stderr)}
           enqueueReviewChild: (parent, spec) => {
             return withQueueLock(parent.meshId, () => {
               const current5 = store5().findQueueEntryById(parent.meshId, parent.id);
-              if (!current5 || current5.status !== "assigned" || current5.stageState?.released || current5.stageState?.phase !== "awaiting_review" || current5.stageState.round !== spec.round || (current5.revision ?? 0) !== (parent.revision ?? 0)) throw new Error("stage_review_stale_parent");
+              if (!current5 || current5.status !== "assigned" || current5.stageState?.released || current5.stageState?.phase !== "awaiting_review" && current5.stageState?.phase !== "reviewing" || current5.stageState.round !== spec.round || (current5.revision ?? 0) !== (parent.revision ?? 0)) throw new Error("stage_review_stale_parent");
               const existing = current5.stageState.reviewTaskIds.map((id4) => store5().findQueueEntryById(parent.meshId, id4)).find((c) => c?.stageRound === spec.round && (c.status === "pending" || c.status === "assigned"));
               if (existing && (existing.status === "assigned" || existing.assignedSessionId || existing.attemptId || existing.autoLaunch?.sessionId)) throw new Error("stage_review_already_started");
               if (existing) return existing;
@@ -252276,8 +252278,11 @@ async function normalizeEnqueueTaskArgs(ctx, rawArgs, callerLabel) {
   const inputArtifactIds = Array.isArray(rawInputArtifactIds) ? rawInputArtifactIds : void 0;
   const inheritArtifacts = (args.inheritArtifacts ?? args.inherit_artifacts) === false ? false : void 0;
   let review;
+  if (args.light === true && args.review !== void 0 && args.review !== false) {
+    return { ok: false, code: "light_review_unsupported", error: `${callerLabel}: in-task review is not supported for light tasks yet (no reviewer can run in a light worktree). Enqueue it as a normal worktree task to get a review, or omit review.` };
+  }
   try {
-    const plan = resolveStagePlan(args.review, { taskMode, difficulty, readonly });
+    const plan = args.light === true ? null : resolveStagePlan(args.review, { taskMode, difficulty, readonly });
     review = plan ? { max_revisions: plan.maxRevisions, independence: plan.independence } : args.review === false ? false : void 0;
   } catch (e) {
     return { ok: false, code: "invalid_review_option", error: `${callerLabel}: ${e instanceof Error ? e.message : String(e)}` };

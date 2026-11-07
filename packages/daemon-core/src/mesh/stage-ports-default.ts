@@ -264,7 +264,7 @@ export function createProductionStagePorts(components: Pick<DaemonComponents, 's
                 return withQueueLock(parent.meshId, () => {
                     const current = store().findQueueEntryById(parent.meshId, parent.id);
                     if (!current || current.status !== 'assigned' || current.stageState?.released
-                        || current.stageState?.phase !== 'awaiting_review' || current.stageState.round !== spec.round
+                        || (current.stageState?.phase !== 'awaiting_review' && current.stageState?.phase !== 'reviewing') || current.stageState.round !== spec.round
                         || (current.revision ?? 0) !== (parent.revision ?? 0)) throw new Error('stage_review_stale_parent');
                     // Transactional idempotency: a retry cannot create a second child for the same round.
                     const existing = current.stageState.reviewTaskIds.map(id => store().findQueueEntryById(parent.meshId, id))

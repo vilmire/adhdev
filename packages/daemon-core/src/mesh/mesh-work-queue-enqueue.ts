@@ -205,6 +205,8 @@ export function enqueueTask(
     // Review-in-task: resolve an EXPLICIT `review` option into a plan (throws invalid_review_option). The R5
     // default-on is applied by the MCP enqueue tools, so internal/legacy enqueuers never get a pipeline implicitly.
     const stagePlan = stageChild ? null : resolveStagePlan(opts?.review, { taskMode: modeValidation.taskMode, difficulty: taskDifficulty, readonly }, { defaultOn: false });
+    // No reviewer session can run in a light task's private worktree yet, so the review could never start.
+    if (stagePlan && light) throw new Error('light_review_unsupported: in-task review is not supported for light tasks yet; enqueue a normal worktree task to get a review, or omit review.');
     const result = withQueueLock(meshId, () => {
         if (MeshRuntimeStore.getInstance().findQueueEntryById(meshId, id)) {
             throw new Error(`duplicate_task_id: task '${id}' already exists in mesh '${meshId}'`);
