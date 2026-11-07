@@ -2,17 +2,19 @@
 import * as path from 'node:path';
 import { loadConfig } from '../config/config.js';
 import { expandPath } from '../config/workspaces.js';
+import { resolveMeshNodeWorkspaceById } from './workspace-resolve.js';
 
 export interface WorkspaceMatch { id: string; path: string; label?: string }
 
-export type WorkspaceLookup = (query: string) => WorkspaceMatch | null;
+export type WorkspaceLookup = (query: string, selfDaemonId?: string) => WorkspaceMatch | null;
 
-const defaultLookup: WorkspaceLookup = (query) => {
+const defaultLookup: WorkspaceLookup = (query, selfDaemonId) => {
   const q = query.trim();
   if (!q) return null;
   const all = loadConfig().workspaces ?? [];
   const byId = all.find((w) => w.id === q);
   if (byId) return { id: byId.id, path: path.resolve(expandPath(byId.path)), label: byId.label };
+  if (selfDaemonId) { const node = resolveMeshNodeWorkspaceById(q, selfDaemonId); if (node) return node; }
   const byLabel = all.filter((w) => w.label === q);
   if (byLabel.length === 1) return { id: byLabel[0]!.id, path: path.resolve(expandPath(byLabel[0]!.path)), label: byLabel[0]!.label };
   const abs = path.resolve(expandPath(q));
@@ -21,5 +23,5 @@ const defaultLookup: WorkspaceLookup = (query) => {
 };
 
 let lookup: WorkspaceLookup = defaultLookup;
-export function findWorkspace(query: string): WorkspaceMatch | null { return lookup(query); }
+export function findWorkspace(query: string, selfDaemonId?: string): WorkspaceMatch | null { return lookup(query, selfDaemonId); }
 export function setWorkspaceLookupForTest(fn: WorkspaceLookup | null): void { lookup = fn ?? defaultLookup; }

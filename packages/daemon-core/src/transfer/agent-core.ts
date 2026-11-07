@@ -73,7 +73,7 @@ export async function requestLocal(engine: ProjectTransferEngine, caller: AgentC
   const mode = a.targetMode === 'existing_path' ? 'existing_path' : a.targetMode === undefined || a.targetMode === 'new_folder' ? 'new_folder' : null;
   if (!mode) return bad('INVALID_TARGET_MODE', "targetMode must be 'new_folder' or 'existing_path'");
   if (mode === 'new_folder' && !str(a.finalName)) return bad('INVALID_FINAL_NAME', 'finalName (the new folder name) is required');
-  const from = findWorkspace(str(a.fromWorkspace));
+  const from = findWorkspace(str(a.fromWorkspace), engine.selfId());
   if (!from || !allowedSourceWorkspaceIds?.has(from.id)) return bad('WORKSPACE_NOT_IN_SCOPE', 'fromWorkspace is not a workspace of this project on that machine (use its workspace id or label)');
   const target = await engine.resolveTargetWorkspace(toDaemonId, str(a.toWorkspace), caller.meshId);
   if (!target) return bad('WORKSPACE_NOT_IN_SCOPE', 'toWorkspace is not a workspace of this project on the target machine (use its workspace id or label)');

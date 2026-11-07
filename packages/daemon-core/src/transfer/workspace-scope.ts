@@ -21,6 +21,9 @@ export interface MeshScope { workspaces: WorkspaceMatch[] }
  */
 export type MeshScopeResolver = (meshId: string, machineDaemonId: string, viaDaemonId?: string | null) => MeshScope | null;
 
+export const MESH_NODE_WORKSPACE_PREFIX = 'mesh-node:';
+export function meshNodeWorkspaceId(meshId: string, nodeId: string): string { return `${MESH_NODE_WORKSPACE_PREFIX}${meshId}:${nodeId}`; }
+
 const rec = (v: unknown): Record<string, unknown> | null => (v && typeof v === 'object' ? v as Record<string, unknown> : null);
 
 /** Scope of one mesh record on one machine: its nodes there, matched to registered workspaces by path. */
@@ -52,16 +55,30 @@ export function meshScopeFromEntry(mesh: unknown, machineDaemonId: string, viaDa
     } catch { anonymousNodesAreOurs = false; }
     return anonymousNodesAreOurs;
   };
-  const paths = new Set<string>();
+  const nodeFolders = new Map<string, Record<string, unknown>>();
   for (const n of nodes) {
     const d = readMeshNodeDaemonId(n);
     if (d ? !daemonIdsEquivalent(d, machineDaemonId) : !anonymousOurs()) continue;
-    if (typeof n.workspace === 'string' && n.workspace.trim()) paths.add(path.resolve(expandPath(n.workspace)));
+    if (typeof n.workspace === 'string' && n.workspace.trim()) {
+      const p = path.resolve(expandPath(n.workspace));
+      if (!nodeFolders.has(p)) nodeFolders.set(p, n);
+    }
   }
   const out: WorkspaceMatch[] = [];
+  const matched = new Set<string>();
   for (const w of loadConfig().workspaces ?? []) {
     const p = path.resolve(expandPath(w.path));
-    if (paths.has(p)) out.push({ id: w.id, path: p, label: w.label });
+    if (nodeFolders.has(p)) { out.push({ id: w.id, path: p, label: w.label }); matched.add(p); }
+  }
+  // Node folders that are not registered workspaces (e.g. daemon-managed remote-project checkouts) get a
+  // stable synthetic id so they can still be a transfer source/target.
+  const meshId = typeof m?.id === 'string' ? m.id : '';
+  if (meshId) {
+    for (const [p, n] of nodeFolders) {
+      if (matched.has(p) || typeof n.id !== 'string' || !n.id) continue;
+      const label = [n.label, n.name].find((v): v is string => typeof v === 'string' && !!v.trim()) ?? path.basename(p);
+      out.push({ id: meshNodeWorkspaceId(meshId, n.id), path: p, label });
+    }
   }
   return { workspaces: out };
 }

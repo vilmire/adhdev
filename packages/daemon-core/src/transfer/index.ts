@@ -5,3 +5,4 @@ export * from './link.js';
 export { ProjectTransferEngine, defaultTransferBaseDir, type TransferHostPorts, type WorkspaceRef } from './engine.js';
 export { configureProjectTransfer, getProjectTransferEngine } from './runtime.js';
 export type { TransferRecord, TransferState } from './store.js';
+export { resolveTransferWorkspaceById } from './workspace-resolve.js';
