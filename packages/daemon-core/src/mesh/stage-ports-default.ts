@@ -346,7 +346,12 @@ export function createProductionStagePorts(components: Pick<DaemonComponents, 's
                     e.message = `${memo}\n\n(Original task, for reference:)\n${e.stageState.originalMessage}`;
                     e.inputArtifactIds = [...new Set([...(e.inputArtifactIds ?? []), ...opts.inputArtifactIds])];
                     e.status = 'pending';
-                    e.updatedAt = new Date().toISOString();
+                    // Re-anchor the target-pin TTL (it ages from requeuedAt/createdAt): without this a
+                    // revision pinned back to the session that just finished the round inherits the
+                    // task's original age and parks on the very next tick (live: 7491s ≥ 900s, 19 s
+                    // after the round's report).
+                    e.requeuedAt = new Date().toISOString();
+                    e.updatedAt = e.requeuedAt;
                     store().updateQueueEntry(e);
                     endTaskDispatchInFlight(parent.meshId, parent.id);
                 });

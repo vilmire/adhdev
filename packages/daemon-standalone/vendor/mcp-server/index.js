@@ -81569,7 +81569,8 @@ Note: implementer artifact(s) ${withheld.join(", ")} changed or disappeared afte
 ${e.stageState.originalMessage}`;
               e.inputArtifactIds = [.../* @__PURE__ */ new Set([...e.inputArtifactIds ?? [], ...opts.inputArtifactIds])];
               e.status = "pending";
-              e.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+              e.requeuedAt = (/* @__PURE__ */ new Date()).toISOString();
+              e.updatedAt = e.requeuedAt;
               store5().updateQueueEntry(e);
               endTaskDispatchInFlight(parent.meshId, parent.id);
             });

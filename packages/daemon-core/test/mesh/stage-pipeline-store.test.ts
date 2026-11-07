@@ -348,3 +348,21 @@ describe('review stats wiring', () => {
         expect(computeStageReviewStatsForMesh(mesh, 'other')!.stageTasks).toBe(0);
     });
 });
+
+describe('requeueForRevision re-anchors the target-pin TTL', () => {
+    it('stamps a fresh requeuedAt so a revision pinned back to the same session does not inherit the task age', async () => {
+        const { createProductionStagePorts } = await import('../../src/mesh/stage-ports-default.js');
+        const { targetPinAgeMs } = await import('../../src/mesh/mesh-skip-notify.js');
+        const mesh = newMesh();
+        const t = enqueueTask(mesh, 'fix', stagey);
+        const old = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
+        assigned(mesh, t.id, { createdAt: old, requeuedAt: old } as any);
+        const parent = store().findQueueEntryById(mesh, t.id)!;
+        const ports = createProductionStagePorts({ sessionRegistry: undefined, instanceManager: undefined, statusInstanceId: 'x' } as any);
+        ports.queue.requeueForRevision(parent, 'memo', { sameSessionId: 'sess-impl', inputArtifactIds: [] } as any);
+        const after = store().findQueueEntryById(mesh, t.id)!;
+        expect(after.status).toBe('pending');
+        expect(after.targetSessionId).toBe('sess-impl');
+        expect(targetPinAgeMs(after)!).toBeLessThan(60_000);
+    });
+});
