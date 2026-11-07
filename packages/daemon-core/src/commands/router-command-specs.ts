@@ -20,6 +20,7 @@ import { daemonLifecycleSpecs } from './low-family/daemon-lifecycle.js';
 import { quotaReserveSpecs } from './low-family/quota-reserve-commands.js';
 import { meshLedgerSpecs } from './low-family/mesh-ledger.js';
 import { turnLedgerIpcSpecs } from './low-family/turn-ledger-ipc.js';
+import { missionReadRelaySpecs } from './low-family/mission-read-forward.js';
 import { meshNodeLogsSpecs } from './low-family/mesh-node-logs.js';
 import { meshOwnershipAttestSpecs } from './low-family/mesh-ownership-attest.js';
 import { workerReportSpecs } from './low-family/worker-report.js';
@@ -81,6 +82,7 @@ export function buildDaemonCommandSpecs(): CommandSpec[] {
         ...quotaReserveSpecs,
         ...meshLedgerSpecs,
         ...turnLedgerIpcSpecs,
+        ...missionReadRelaySpecs,
         ...meshNodeLogsSpecs,
         ...meshOwnershipAttestSpecs,
         ...workerReportSpecs,

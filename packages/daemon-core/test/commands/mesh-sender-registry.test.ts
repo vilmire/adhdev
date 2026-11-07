@@ -51,6 +51,8 @@ const EXPECTED_CLASSES: Record<string, string> = {
     retry_mesh_node_bootstrap: 'any_member_mesh',
     // host → member: read-only ref containment probe of the member's own repos (inputs validated in mission-ref-input.ts)
     mesh_ref_containment_probe: 'any_member_mesh',
+    // A non-host daemon forwards mission reads to the host (mission-read-forward.ts).
+    mission_read_relay: 'any_member_mesh',
     fast_forward_mesh_node: 'any_member_mesh',
     refine_mesh_node: 'any_member_mesh',
     get_mesh_node_logs: 'any_member_mesh',

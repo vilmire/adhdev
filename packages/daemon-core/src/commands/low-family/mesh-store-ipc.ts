@@ -1,4 +1,5 @@
 import { settleQueueWriter, WRITER_UNKNOWN_ERROR } from '../../mesh/mesh-queue-retirement.js';
+import { withMissionReadForward } from './mission-read-forward.js';
 import { writerCancelRefusalHint } from '../../mesh/mesh-writer-stop-diagnostics.js';
 import { assertNotStageChild } from '../../mesh/stage-guards.js';
 import { getMesh } from '../../config/mesh-config.js';
@@ -665,7 +666,7 @@ const recoveryContextQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, ar
 export const meshStoreIpcHandlers: Record<string, LowFamilyHandler> = {
     tool_call_record: toolCallRecord,
     ledger_query: ledgerQuery,
-    mission_list_query: missionListQuery,
+    mission_list_query: withMissionReadForward('mission_list_query', missionListQuery),
     record_local: recordLocal,
     queue_query: queueQuery,
     queue_enqueue: queueEnqueue,

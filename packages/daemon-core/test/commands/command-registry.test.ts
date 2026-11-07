@@ -248,6 +248,10 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     // mcp-server in-process daemon-core paths: task/mission stats, one prune
     // audit, orphaned-pin notify. IPC-only too.
     'task_stats_query', 'prune_stale_direct', 'orphaned_pin_notify',
+    // NOT a legacy-table migration: the host side of mission reads forwarded by a non-host daemon
+    // (low-family/mission-read-forward.ts, 2026-11-07). Mesh-only, meshSender 'any_member_mesh', reads only —
+    // the IPC mission commands above stay local-only.
+    'mission_read_relay',
     // NOT a legacy-table migration: the cooperative-maintenance actor/collection
     // surface (low-family/cooperative-maintenance.ts, rc13 cooperative old-entry
     // drain, 2026-10-14). The actor/observe/status routes are IPC + mesh with

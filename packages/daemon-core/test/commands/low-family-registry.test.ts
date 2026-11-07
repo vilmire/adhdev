@@ -23,6 +23,7 @@ import { maintenanceHoldSpecs } from '../../src/commands/low-family/maintenance-
 import { projectTransferSpecs } from '../../src/commands/low-family/project-transfer.js'
 import { quotaReserveSpecs } from '../../src/commands/low-family/quota-reserve-commands.js'
 import { cooperativeMaintenanceSpecs } from '../../src/commands/low-family/cooperative-maintenance.js'
+import { missionReadRelaySpecs } from '../../src/commands/low-family/mission-read-forward.js'
 
 // RF-ROUTER LOW family: the command registry must carry exactly the low-family
 // handler tables as `family: 'low'` specs, and each handler must return the same
@@ -155,14 +156,14 @@ const NEW_WORK_HOLD_CMDS = [
 ]
 
 describe('low-family registry', () => {
-  it('registers all 136 LOW family commands once, no overlap', () => {
+  it('registers all 137 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,
       ...NOTIFICATION_CMDS, ...DAEMON_LIFECYCLE_CMDS, ...MESH_LEDGER_CMDS, ...MESH_NODE_LOGS_CMDS, ...MESH_OWNERSHIP_ATTEST_CMDS,
       ...WORKER_REPORT_CMDS, ...WORKER_BRIDGE_CMDS, ...WORKER_MAILBOX_CMDS, ...WORKER_PEER_CONTEXT_CMDS,
       ...TRANSCRIPT_REPLICA_CMDS, ...TURN_LEDGER_IPC_CMDS, ...COOPERATIVE_MAINTENANCE_CMDS, ...NEW_WORK_HOLD_CMDS,
-      ...CONTRACT_CMDS, ...PROJECT_TRANSFER_CMDS, ...QUOTA_RESERVE_CMDS,
+      ...CONTRACT_CMDS, ...PROJECT_TRANSFER_CMDS, ...QUOTA_RESERVE_CMDS, 'mission_read_relay',
     ]
     // 69 − import_mesh_ledger_slice (C-W9a) + 13 store IPC commands + 1
     // report_transcript_transport (G2b, 2026-09-24) + 8 C-W9c graph/stats/prune/
@@ -183,8 +184,9 @@ describe('low-family registry', () => {
     // (quota_reserve_get/set, 2026-11-01) = 127; + light_land/light_discard
     // (same-machine light tasks, 2026-11-01) = 129, +1 project_transfer_set_relay (2026-11-02) = 130,
     // + project_transfer_set_agent_auto_approve / _revert / _agent (agent transfers + overwrite revert, 2026-11-02) = 133, + get_daemon_cpu_profile (2026-11-04) = 134,
-    // + mesh_attest_node_ownership / mesh_attest_remote_ownership (remote writers, 2026-11-05) = 136.
-    expect(all).toHaveLength(136)
+    // + mesh_attest_node_ownership / mesh_attest_remote_ownership (remote writers, 2026-11-05) = 136,
+    // + mission_read_relay (non-host mission reads forwarded to the host, 2026-11-07) = 137.
+    expect(all).toHaveLength(137)
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
     expect(lowFamilyNames()).toHaveLength(all.length)
@@ -235,7 +237,7 @@ describe('low-family registry', () => {
       // cooperative-maintenance.ts exports the already-built spec ARRAY
       // (defineCommandSpecs returns CommandSpec[]), not a name→handler map, so
       // its names come off .name rather than Object.keys.
-      .concat(cooperativeMaintenanceSpecs.map((spec) => spec.name), maintenanceHoldSpecs.map((spec) => spec.name), projectTransferSpecs.map((spec) => spec.name), quotaReserveSpecs.map((spec) => spec.name))
+      .concat(cooperativeMaintenanceSpecs.map((spec) => spec.name), maintenanceHoldSpecs.map((spec) => spec.name), projectTransferSpecs.map((spec) => spec.name), quotaReserveSpecs.map((spec) => spec.name), missionReadRelaySpecs.map((spec) => spec.name))
 
     expect(new Set(union).size).toBe(union.length)
     expect(lowFamilyNames().sort()).toEqual([...union].sort())

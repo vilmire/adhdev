@@ -135091,6 +135091,71 @@ ${detail.join("\n")}` : stripped;
         TRANSFER_DECISION_KEY_PREFIX = "project-transfer:";
       }
     });
+    async function forwardTarget(ctx, meshId) {
+      if (!meshId || !ctx?.deps?.dispatchMeshCommand) return void 0;
+      let mesh;
+      try {
+        mesh = (await ctx.getMeshForCommand?.(meshId, void 0, { preferInline: true }))?.mesh;
+      } catch {
+        return void 0;
+      }
+      if (!mesh) return void 0;
+      const self = ctx.deps.statusInstanceId;
+      const status = resolveMeshHostStatus(mesh, self ? { localDaemonId: self } : void 0);
+      if (status.role === "host") return void 0;
+      const target2 = status.handedOffTo?.daemonId ?? status.hostDaemonId;
+      if (!target2 || self && daemonIdsEquivalent5(target2, self)) return void 0;
+      return target2;
+    }
+    function withMissionReadForward(command, run5) {
+      const wrapped = async (ctx, args) => {
+        const { [MISSION_READ_FORWARDED_KEY]: forwarded2, ...rest } = args ?? {};
+        if (forwarded2 !== true) {
+          const meshId = typeof rest.meshId === "string" ? rest.meshId.trim() : "";
+          const target2 = await forwardTarget(ctx, meshId);
+          if (target2) {
+            try {
+              const raw = await ctx.deps.dispatchMeshCommand(target2, MISSION_READ_RELAY_COMMAND, { command, args: rest });
+              return unwrapMeshRelayResult(raw, { command, peerDaemonId: target2 });
+            } catch (e) {
+              return { success: false, code: "mesh_host_unreachable", error: `${command}: missions live on the mesh host (${target2}), which could not be reached: ${e?.message ?? String(e)}. This daemon's local copy may be stale, so it is not served.` };
+            }
+          }
+        }
+        return run5(ctx, rest);
+      };
+      if (RELAYABLE.has(command)) relayTargets.set(command, wrapped);
+      return wrapped;
+    }
+    var MISSION_READ_RELAY_COMMAND;
+    var RELAYABLE;
+    var relayTargets;
+    var MISSION_READ_FORWARDED_KEY;
+    var missionReadRelay;
+    var missionReadRelaySpecs;
+    var init_mission_read_forward = __esm2({
+      "src/commands/low-family/mission-read-forward.ts"() {
+        "use strict";
+        init_dist();
+        init_mesh_host_ownership();
+        init_mesh_relay_result();
+        init_command_registry();
+        MISSION_READ_RELAY_COMMAND = "mission_read_relay";
+        RELAYABLE = /* @__PURE__ */ new Set(["mission_query", "mission_list_query"]);
+        relayTargets = /* @__PURE__ */ new Map();
+        MISSION_READ_FORWARDED_KEY = "missionReadForwarded";
+        missionReadRelay = async (ctx, args) => {
+          const command = typeof args?.command === "string" ? args.command : "";
+          const run5 = relayTargets.get(command);
+          if (!RELAYABLE.has(command) || !run5) return { success: false, code: "mission_read_relay_refused", error: `mission_read_relay: '${command}' is not a relayable mission read` };
+          const inner = args?.args && typeof args.args === "object" && !Array.isArray(args.args) ? args.args : {};
+          return run5(ctx, { ...inner, [MISSION_READ_FORWARDED_KEY]: true });
+        };
+        missionReadRelaySpecs = defineCommandSpecs("low", { [MISSION_READ_RELAY_COMMAND]: missionReadRelay }, {
+          [MISSION_READ_RELAY_COMMAND]: { sources: ["mesh"], meshSender: "any_member_mesh" }
+        });
+      }
+    });
     async function settleQueueWriter(meshId, taskId, reason) {
       const store5 = MeshRuntimeStore.getInstance();
       const attempt = store5.turnStore().findLatestAttemptForTask(meshId, taskId);
@@ -139230,6 +139295,7 @@ ${tail}` : ""
       "src/commands/low-family/mesh-store-ipc.ts"() {
         "use strict";
         init_mesh_queue_retirement();
+        init_mission_read_forward();
         init_mesh_writer_stop_diagnostics();
         init_stage_guards();
         init_mesh_config();
@@ -139649,7 +139715,7 @@ ${tail}` : ""
         meshStoreIpcHandlers = {
           tool_call_record: toolCallRecord2,
           ledger_query: ledgerQuery2,
-          mission_list_query: missionListQuery2,
+          mission_list_query: withMissionReadForward("mission_list_query", missionListQuery2),
           record_local: recordLocal2,
           queue_query: queueQuery2,
           queue_enqueue: queueEnqueue2,
@@ -139965,6 +140031,7 @@ ${tail}` : ""
     var init_turn_ledger_ipc = __esm2({
       "src/commands/low-family/turn-ledger-ipc.ts"() {
         "use strict";
+        init_mission_read_forward();
         import_crypto42 = require("crypto");
         import_node_util14 = require("util");
         init_dist();
@@ -140275,7 +140342,7 @@ ${tail}` : ""
           turn_query: turnQuery,
           mesh_index_query: meshIndexQuery,
           mission_upsert: missionUpsert2,
-          mission_query: missionQuery2,
+          mission_query: withMissionReadForward("mission_query", missionQuery2),
           note_upsert: noteUpsert2,
           note_forget: noteForget2,
           // C-W9b / C-W9a: the mcp-server's store access (records, queue, missions,
@@ -198084,6 +198151,7 @@ ${marker2}`,
     };
     var meshLedgerSpecs = defineCommandSpecs("low", meshLedgerHandlers, {}, { meshSender: "authenticated_peer" });
     init_turn_ledger_ipc();
+    init_mission_read_forward();
     init_dist();
     var fs106 = __toESM2(require("fs"));
     init_logger();
@@ -209157,6 +209225,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         ...quotaReserveSpecs,
         ...meshLedgerSpecs,
         ...turnLedgerIpcSpecs,
+        ...missionReadRelaySpecs,
         ...meshNodeLogsSpecs,
         ...meshOwnershipAttestSpecs,
         ...workerReportSpecs,

@@ -70,6 +70,7 @@
  *     mcp-server call it in-process).
  */
 
+import { withMissionReadForward } from './mission-read-forward.js';
 import { randomUUID } from 'crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { CANCEL_REASONS, type CancelReason, type TurnEvidence } from '@adhdev/mesh-shared';
@@ -647,7 +648,7 @@ export const turnLedgerIpcHandlers: Record<string, LowFamilyHandler> = {
     turn_query: turnQuery,
     mesh_index_query: meshIndexQuery,
     mission_upsert: missionUpsert,
-    mission_query: missionQuery,
+    mission_query: withMissionReadForward('mission_query', missionQuery),
     note_upsert: noteUpsert,
     note_forget: noteForget,
     // C-W9b / C-W9a: the mcp-server's store access (records, queue, missions,
