@@ -492,7 +492,15 @@ export function createComponentsProbeReader(components: ProbeComponents, options
     async function readLocal(attempt: TurnAttempt, holds: readonly HoldReason[]): Promise<TurnProbeRead> {
         const target = components.sessionRegistry.get(attempt.sessionId);
         const instance = target ? null : components.instanceManager.getInstance(attempt.sessionId);
-        if (!target && !instance) return { presence: 'absent' };
+        if (!target && !instance) {
+            // Hosted sessions are re-registered by restore (S8), after the scheduler can
+            // already tick: until restore resolves, a missing session is not proof of absence
+            // (live 2026-11-06: a mesh reviewer reclaimed ~1 s into a daemon upgrade, then
+            // kept running unbound). hard_ceiling still bounds a writer that never returns.
+            const restore = (components as { cliManager?: { hostedRestoreState?: string } }).cliManager?.hostedRestoreState;
+            if (restore && restore !== 'ready') return { presence: 'unknown' };
+            return { presence: 'absent' };
+        }
         const instanceKey = target?.instanceKey || attempt.sessionId;
         const status = localInstanceStatus(components, instanceKey, target?.transport ?? 'pty');
         // A background-terminal footer can keep the PTY generating after the native

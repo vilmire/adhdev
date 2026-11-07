@@ -191,6 +191,21 @@ describe('B4 locality — 0 get_status_metadata for the local node; 1 cached pro
         expect(dispatchMeshCommand).not.toHaveBeenCalled();
     });
 
+    it('a local session missing while hosted-session restore is still pending is unknown, not absent', async () => {
+        // Live 2026-11-06: a daemon upgrade ticked the probe ~1 s before restore re-registered a
+        // live mesh reviewer; `absent` → liveness dead → reclaim cut its attempt.
+        for (const state of ['pending', 'failed']) {
+            const { comps } = components();
+            (comps as any).cliManager = { hostedRestoreState: state };
+            const reader = createComponentsProbeReader(comps, { analyzer: () => obs() });
+            expect(await reader.read(attempt({ sessionId: 's-gone' }), { kind: 'local' }, [])).toEqual({ presence: 'unknown' });
+        }
+        const { comps } = components();
+        (comps as any).cliManager = { hostedRestoreState: 'ready' };
+        const reader = createComponentsProbeReader(comps, { analyzer: () => obs() });
+        expect(await reader.read(attempt({ sessionId: 's-gone' }), { kind: 'local' }, [])).toEqual({ presence: 'absent' });
+    });
+
     it('a local session missing from the registry is absent, still with 0 get_status_metadata', async () => {
         const { comps, handle } = components();
         const reader = createComponentsProbeReader(comps, { analyzer: () => obs() });

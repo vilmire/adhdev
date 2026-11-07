@@ -104073,7 +104073,11 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
       async function readLocal(attempt, holds) {
         const target2 = components.sessionRegistry.get(attempt.sessionId);
         const instance = target2 ? null : components.instanceManager.getInstance(attempt.sessionId);
-        if (!target2 && !instance) return { presence: "absent" };
+        if (!target2 && !instance) {
+          const restore = components.cliManager?.hostedRestoreState;
+          if (restore && restore !== "ready") return { presence: "unknown" };
+          return { presence: "absent" };
+        }
         const instanceKey = target2?.instanceKey || attempt.sessionId;
         const status = localInstanceStatus(components, instanceKey, target2?.transport ?? "pty");
         const background = await readLocalBackgroundProcesses(attempt, instanceKey, instance);
