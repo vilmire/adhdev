@@ -521,7 +521,9 @@ export function decodeQueueReviseRequest(value: unknown): QueueReviseRequest | n
     if (p.requestQuotaOverride && (value.dryRun !== undefined || value.deferScheduling !== undefined)) return null
     if (p.requestQuotaOverride !== undefined && (p.requestQuotaOverride !== true || Object.keys(p).length !== 1)) return null
     // Alone, like the quota request: it edits no field, it only attaches the missing physical proof of a running writer.
-    if (p.attestActiveOwnership && (value.dryRun !== undefined || value.deferScheduling !== undefined)) return null
+    // `dry_run` is allowed (the hold text recommends it): it validates the same gates and saves nothing.
+    // There is nothing to defer, so `defer_scheduling` stays refused.
+    if (p.attestActiveOwnership && value.deferScheduling !== undefined) return null
     if (p.attestActiveOwnership !== undefined && (p.attestActiveOwnership !== true || Object.keys(p).length !== 1)) return null
     if (p.message !== undefined && (typeof p.message !== 'string' || !p.message.trim())) return null
     if (p.phase !== undefined && p.phase !== 'source' && p.phase !== 'integration') return null

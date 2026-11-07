@@ -144,11 +144,33 @@ describe('attach the missing scope to a running writer', () => {
         expect(await call({ attestActiveOwnership: true }, ok.task.revision)).toMatchObject({ success: false });
     });
 
+    it('a dry-run attest, built exactly as the MCP tool builds it, validates every gate and saves nothing', async () => {
+        const running = unscopedWriter();
+        state.sessions.set('sess-a', wsA);
+        // Same construction as mcp-server meshQueueRevise → queueRevise → dispatch (v + camelCase fields, dry_run → dryRun).
+        const args = { task_id: running.id, expected_revision: running.revision ?? 0, patch: { attestActiveOwnership: true as const }, dry_run: true };
+        const wire = { v: TURN_IPC_PROTOCOL_VERSION, meshId, taskId: args.task_id, expectedRevision: args.expected_revision, patch: args.patch, ...(args.dry_run !== undefined ? { dryRun: args.dry_run } : {}) };
+        const dry = await meshStoreIpcHandlers.queue_revise(ctx(), wire) as any;
+        expect(dry).toMatchObject({ success: true });
+        expect(dry.task.ownershipScope).toBeDefined();
+        expect(row(running.id).ownershipScope).toBeUndefined();
+        expect(row(running.id).revision ?? 0).toBe(running.revision ?? 0);
+        state.trigger.mockClear();
+        const real = await meshStoreIpcHandlers.queue_revise(ctx(), { ...wire, dryRun: false }) as any;
+        expect(real).toMatchObject({ success: true });
+        expect(row(running.id).ownershipScope).toBeDefined();
+        expect(state.trigger).toHaveBeenCalled();
+    });
+
     it('wire decoding accepts the attest patch only alone', () => {
         const base = { v: TURN_IPC_PROTOCOL_VERSION, meshId, taskId: 't', expectedRevision: 1 };
         expect(decodeQueueReviseRequest({ ...base, patch: { attestActiveOwnership: true } })).not.toBeNull();
         expect(decodeQueueReviseRequest({ ...base, patch: { attestActiveOwnership: true, message: 'x' } })).toBeNull();
-        expect(decodeQueueReviseRequest({ ...base, dryRun: true, patch: { attestActiveOwnership: true } })).toBeNull();
+        // The hold text recommends a dry run first: it must decode (live 2026-11-07 "request failed decode (bad shape)").
+        expect(decodeQueueReviseRequest({ ...base, dryRun: true, patch: { attestActiveOwnership: true } })).not.toBeNull();
+        expect(decodeQueueReviseRequest({ ...base, dryRun: false, patch: { attestActiveOwnership: true } })).not.toBeNull();
+        expect(decodeQueueReviseRequest({ ...base, deferScheduling: true, patch: { attestActiveOwnership: true } })).toBeNull();
+        expect(decodeQueueReviseRequest({ ...base, dryRun: 'true', patch: { attestActiveOwnership: true } })).toBeNull();
         expect(decodeQueueReviseRequest({ ...base, patch: { attestActiveOwnership: false } })).toBeNull();
     });
 });

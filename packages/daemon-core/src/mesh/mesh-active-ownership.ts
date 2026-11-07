@@ -25,7 +25,7 @@ export interface ActiveOwnershipHostContext {
  * node checkout (attesting the roster checkout would otherwise authorize a write
  * in another worktree). Same transaction and CAS as `revisePendingTask`.
  */
-export function attestActiveTaskOwnership(meshId: string, taskId: string, expectedRevision: number, host: ActiveOwnershipHostContext): MeshWorkQueueEntry {
+export function attestActiveTaskOwnership(meshId: string, taskId: string, expectedRevision: number, host: ActiveOwnershipHostContext, opts: { dryRun?: boolean } = {}): MeshWorkQueueEntry {
     if (!host?.actor || !host.repoIdentity || !host.machineId) throw new Error('authenticated_host_required');
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new Error('invalid_expected_revision');
     const store = MeshRuntimeStore.getInstance();
@@ -59,7 +59,7 @@ export function attestActiveTaskOwnership(meshId: string, taskId: string, expect
             revision: expectedRevision, at: new Date().toISOString(), actor: host.actor,
             before: { message: before.message, ownedPaths: before.ownedPaths, phase: before.phase, dependsOn: before.dependsOn, ownershipScope: undefined, routingPreferences: before.routingPreferences, review: before.review },
         }];
-        store.updateQueueEntry(next);
+        if (!opts.dryRun) store.updateQueueEntry(next); // dry run: every gate above ran, nothing is saved
         return next;
     });
 }

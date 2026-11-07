@@ -11,6 +11,7 @@ import { dropStageReport, peekStageReport } from './stage-report-stash.js';
 import { buildFinalReport, buildReviewerMessage, buildRevisionMemo } from './stage-synthesis.js';
 import { isStageBlockOverwritten, isStageChild, isStageParent, selectStageInputArtifacts } from './stage-state.js';
 import { independenceRefusalExceeded } from './stage-independence.js';
+import { StageEffectFailureTracker } from './stage-effect-failures.js';
 
 const STAGE_PARENT_ENDED = new Set(['completed', 'failed', 'blocked', 'cancelled']);
 
@@ -28,6 +29,7 @@ export class StagePipelineRuntime {
     private readonly chains = new Map<string, Promise<void>>();
     /** Prepared reviewer workspaces by review child id; released when the child ends (or is cancelled). In-memory: a daemon restart leaves them to the light-workspace sweep. */
     private readonly reviewerWorkspaces = new Map<string, { release(): Promise<void> }>();
+    private readonly failures = new StageEffectFailureTracker();
     constructor(private readonly ports: StageRuntimePorts) {}
 
     private iso(): string { return new Date(this.ports.now()).toISOString(); }
@@ -261,14 +263,24 @@ export class StagePipelineRuntime {
         for (const effect of effects) {
             const parent = this.ports.queue.get(meshId, parentId);
             if (!parent || !isStageParent(parent)) return;
-            try { await this.runEffect(parent, effect); }
+            try { await this.runEffect(parent, effect); this.failures.clear(meshId, parentId, effect.kind); }
             catch (e: any) {
                 const detail = String(e?.message || e);
-                this.ports.events.progress(meshId, parentId, `stage effect ${effect.kind} failed: ${detail}`);
+                const verdict = this.failures.record(meshId, parentId, effect.kind, detail);
+                // One ledger row per failure streak (not per retry); the escalation below adds the closing row.
+                if (verdict.log && !verdict.escalate) this.ports.events.progress(meshId, parentId, `stage effect ${effect.kind} failed: ${detail}`);
                 // A reviewer whose required evidence is invalid would otherwise retry silently forever (and an
                 // earlier round's child would look like this round's): block with the real reason instead.
                 if (effect.kind === 'create_review_child' && isLastingReviewInputError(detail)) {
                     await this.apply(meshId, parentId, { kind: 'review_input_failed', detail, at: this.iso() });
+                    this.failures.clear(meshId, parentId);
+                } else if (effect.kind === 'create_review_child' && verdict.escalate) {
+                    // The same error N ticks in a row is not transient: block the stage (blocked_review for the
+                    // coordinator, via the normal release/notice path) instead of retrying for ever.
+                    const text = `create_review_child failed ${verdict.count}x in a row: ${detail}`;
+                    this.ports.events.progress(meshId, parentId, `stage effect ${effect.kind} gave up: ${text}`);
+                    await this.apply(meshId, parentId, { kind: 'review_input_failed', detail: text, at: this.iso() });
+                    this.failures.clear(meshId, parentId);
                 }
             }
         }
@@ -335,7 +347,13 @@ export class StagePipelineRuntime {
                 }
                 let child: MeshWorkQueueEntry;
                 try {
-                    child = this.ports.queue.enqueueReviewChild(parent, {
+                    // The reads above are async (reviewer workspace, fingerprint) and other writers touch the row
+                    // meanwhile; a snapshot taken before them is stale by construction, so every retry would be
+                    // refused `stage_review_stale_parent`. Re-read right before the (synchronous, locked) enqueue;
+                    // the port still refuses when the stage genuinely moved on (phase/round/released).
+                    const current = this.ports.queue.get(meshId, id);
+                    if (!current || !isStageParent(current)) throw new Error('stage_review_stale_parent');
+                    child = this.ports.queue.enqueueReviewChild(current, {
                         round: effect.round, message: msg, inputArtifactIds: inputs,
                         independence: 'different_provider',
                         ...(readLease && fingerprint ? { reviewFingerprint: fingerprint } : {}),

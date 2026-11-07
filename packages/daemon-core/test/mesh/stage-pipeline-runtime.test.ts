@@ -520,3 +520,49 @@ describe('claim hook forwarding', () => {
         expect(seen).toEqual(['c1']);
     });
 });
+
+describe('stage effect retry bound and stale parent (live 2026-11-07 c8b231ee)', () => {
+    /** A port that mimics the production revision CAS, and a reviewer-workspace prepare during which another writer touches the row. */
+    function racing() {
+        const h = harness();
+        const bump = () => { const p = h.rows.get(PARENT)!; p.revision = (p.revision ?? 0) + 1; };
+        const enqueue = h.ports.queue.enqueueReviewChild;
+        h.ports.queue.enqueueReviewChild = (p, spec) => {
+            const cur = h.rows.get(PARENT)!;
+            if ((cur.revision ?? 0) !== (p.revision ?? 0)) throw new Error('stage_review_stale_parent');
+            return enqueue(p, spec);
+        };
+        // get() hands out a snapshot copy, like the production store (a fresh row per read).
+        const get = h.ports.queue.get;
+        h.ports.queue.get = (m, id) => { const r = get(m, id); return r ? { ...r } : r; };
+        h.ports.reviewerWorkspace = { prepare: async () => { bump(); return null; } };
+        return h;
+    }
+    it('creates the review child although the row is touched while the reviewer workspace is prepared', async () => {
+        const h = racing();
+        await h.implDone('a1');
+        expect(h.parent().stageState!.reviewTaskIds).toHaveLength(1);
+        expect(h.log.progress.filter(t => /stale_parent/.test(t))).toEqual([]);
+    });
+    it('a genuinely moved-on parent still refuses, escalates to one blocked outcome after N identical failures, and logs once', async () => {
+        const h = harness();
+        h.ports.queue.enqueueReviewChild = () => { throw new Error('stage_review_stale_parent'); };
+        await h.implDone('a1');
+        expect(h.parent().status).toBe('assigned');
+        for (let i = 0; i < 20 && h.parent().status === 'assigned'; i++) { await h.rt.tick(); await h.rt.idle(); }
+        expect(h.parent().status).toBe('blocked');
+        expect(h.parent().stageState!.blockedReason).toBe('review_unavailable');
+        expect(h.parent().stageState!.blockedDetail).toMatch(/failed 8x in a row: stage_review_stale_parent/);
+        expect(h.log.notices.map(n => n.status)).toEqual(['blocked']);
+        expect(h.log.progress.filter(t => /create_review_child failed: stage_review_stale_parent/.test(t))).toHaveLength(1);
+        expect(h.log.progress.filter(t => /gave up/.test(t))).toHaveLength(1);
+    });
+    it('a busy reviewer checkout is an honest wait: logged once, never escalated', async () => {
+        const h = harness();
+        h.ports.queue.enqueueReviewChild = () => { throw new Error('review_input_busy'); };
+        await h.implDone('a1');
+        for (let i = 0; i < 15; i++) { await h.rt.tick(); await h.rt.idle(); }
+        expect(h.parent().status).toBe('assigned');
+        expect(h.log.progress.filter(t => /review_input_busy/.test(t))).toHaveLength(1);
+    });
+});

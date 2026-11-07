@@ -53,3 +53,15 @@ test('revision preview and deferred scheduling flags are typed and forwarded', a
     assert.equal(decodeQueueReviseRequest({ ...calls[0].args, dryRun: 'true' }), null);
     assert.equal(decodeQueueReviseRequest({ ...calls[0].args, patch: { requestQuotaOverride: true } }), null);
 });
+test('attestActiveOwnership with dry_run (the call the hold text recommends) decodes on the daemon wire', async () => {
+    const calls: any[] = [];
+    const ctx = { mesh: { id: 'mesh' }, transport: { command: async (name: string, args: unknown) => { calls.push({ name, args }); return { success: true, task: { id: 'task', status: 'assigned', revision: 3 } }; } } } as any;
+    for (const dry_run of [true, false]) {
+        const result = JSON.parse(await meshQueueRevise(ctx, { task_id: 'task', expected_revision: 3, patch: { attestActiveOwnership: true }, dry_run }));
+        assert.equal(result.success, true);
+        assert.equal(result.dryRun, dry_run);
+    }
+    assert.equal(calls.length, 2);
+    for (const call of calls) assert.ok(decodeQueueReviseRequest(call.args), `decode ${JSON.stringify(call.args)}`);
+    assert.equal(decodeQueueReviseRequest({ ...calls[0].args, deferScheduling: true }), null);
+});

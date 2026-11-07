@@ -68,7 +68,21 @@ export function ownedPathsHoldFromConflicts(
     return { blockingTaskIds, detail: { overlappingPaths } };
 }
 
-export function queueHoldContext(task: MeshWorkQueueEntry, reason: string, queue: readonly MeshWorkQueueEntry[], nodeId?: string, prospectiveScope?: PhysicalOwnershipScope): Pick<MeshQueueHold, 'blockingTaskIds' | 'detail'> {
+
+function pushLogicalOverlaps(
+    overlaps: NonNullable<MeshQueueHold['detail']['overlappingPaths']>,
+    task: MeshWorkQueueEntry,
+    other: MeshWorkQueueEntry,
+    blockingPaths: NonNullable<MeshWorkQueueEntry['ownedPaths']>,
+): void {
+    for (const owned of task.ownedPaths!.paths) for (const blocking of blockingPaths.paths) {
+        if (findOwnershipConflicts({ paths: [owned] }, [{ taskId: other.id, paths: { paths: [blocking] } }]).length) {
+            overlaps.push({ taskId: other.id, ownedPath: owned.path + (owned.subtree ? '/**' : ''), blockingPath: blocking.path + (blocking.subtree ? '/**' : '') });
+        }
+    }
+}
+
+export function queueHoldContext(task: MeshWorkQueueEntry, reason: string, queue: readonly MeshWorkQueueEntry[], nodeId?: string, prospectiveScope?: PhysicalOwnershipScope, opts?: { preSpawn?: boolean }): Pick<MeshQueueHold, 'blockingTaskIds' | 'detail'> {
     const active = holdActiveWriters(task, queue);
     const overlaps: NonNullable<MeshQueueHold['detail']['overlappingPaths']> = [];
     let explained: { taskId: string; reason: PhysicalOverlapExplanation } | undefined;
@@ -80,16 +94,18 @@ export function queueHoldContext(task: MeshWorkQueueEntry, reason: string, queue
             if (!blockingPaths || (isReadonly && !blockingScope)) continue;
             const candidateScope = prospectiveScope ?? currentPhysicalScope(task.ownershipScope, task.ownedPaths);
             const otherScope = currentPhysicalScope(blockingScope, blockingPaths);
+            // Mirrors the pre-spawn admission (evaluateTaskOwnedPathsAdmission): against a light writer whose private
+            // worktree scope still reproduces, a task with no attestation yet is held only by a logical path overlap.
+            if (opts?.preSpawn && !task.ownershipScope && !candidateScope && otherScope && other.light && other.lightWorkspaceId) {
+                pushLogicalOverlaps(overlaps, task, other, blockingPaths);
+                continue;
+            }
             const physical = comparePhysicalOwnership(task.ownedPaths, candidateScope, blockingPaths, otherScope);
             if (!physical.physicalConflict) continue;
             const reasonForPair = explainPhysicalOverlap(task.ownedPaths, candidateScope, blockingPaths, otherScope);
             if (!explained) explained = { taskId: other.id, reason: reasonForPair };
             if (!physical.logicalOverlap) overlaps.push({ taskId: other.id, ownedPath: 'physical_workspace_or_shared_resource', blockingPath: 'physical_workspace_or_shared_resource' });
-            for (const owned of task.ownedPaths.paths) for (const blocking of blockingPaths.paths) {
-                if (findOwnershipConflicts({ paths: [owned] }, [{ taskId: other.id, paths: { paths: [blocking] } }]).length) {
-                    overlaps.push({ taskId: other.id, ownedPath: owned.path + (owned.subtree ? '/**' : ''), blockingPath: blocking.path + (blocking.subtree ? '/**' : '') });
-                }
-            }
+            pushLogicalOverlaps(overlaps, task, other, blockingPaths);
         }
     }
     if (reason === 'owned_paths_conflict') {
@@ -100,9 +116,19 @@ export function queueHoldContext(task: MeshWorkQueueEntry, reason: string, queue
         const detail: MeshQueueHold['detail'] = { overlappingPaths: overlaps };
         if (explained?.reason.kind === 'missing_scope') {
             detail.unknownField = 'ownershipScope';
-            detail.resolution = `assigned task ${explained.taskId} has no host-attested ownershipScope, so it counts as an unknown writer and every other write task waits behind it. `
-                + `If it declared owned_paths and runs on a node of this host, attach the proof without stopping it: mesh_queue_revise task_id=${explained.taskId} patch={attestActiveOwnership:true} with its current expected_revision. `
-                + 'Otherwise it stays closed until that task is completed, failed, or cancelled.';
+            const blocker = active.find(other => other.id === explained!.taskId);
+            if (blocker?.ownershipScope && explained.reason.side === 'a') {
+                // The blocker is attested; the task being held is the unproven one (nothing attested for it on this node yet).
+                detail.resolution = `this task has no host-attested ownershipScope for the node checkout yet, so it cannot be shown isolated from assigned task ${explained.taskId} and waits behind it. `
+                    + 'It is attested when it is claimed on a node of this host (declare owned_paths and a phase so it can be); otherwise it waits until that task is completed, failed, or cancelled.';
+            } else if (blocker?.ownershipScope) {
+                detail.resolution = `assigned task ${explained.taskId} has an ownershipScope, but this host can no longer re-verify it (its worktree moved or was removed, or its owned_paths changed since it was attested), so it counts as an unknown writer. `
+                    + 'It stays closed until that task is completed, failed, or cancelled.';
+            } else {
+                detail.resolution = `assigned task ${explained.taskId} has no host-attested ownershipScope, so it counts as an unknown writer and every other write task waits behind it. `
+                    + `If it declared owned_paths and runs on a node of this host, attach the proof without stopping it: mesh_queue_revise task_id=${explained.taskId} patch={attestActiveOwnership:true} with its current expected_revision. `
+                    + 'Otherwise it stays closed until that task is completed, failed, or cancelled.';
+            }
         } else if (explained?.reason.kind === 'resource' || explained?.reason.kind === 'worktree') {
             detail.canonicalResource = explained.reason.path;
             detail.resolution = `resolves when task ${explained.taskId} is no longer assigned or its attested resources no longer include this path.`;

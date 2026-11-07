@@ -38,7 +38,7 @@ import { dirtyWriteVerdict, describeDirtyWriteRefusal, type DirtyWriteGate } fro
 /** The MeshRuntimeStore members these functions read or call (compiler-checked; no cast). */
 export type MeshRuntimeStoreClaimHost = Pick<MeshRuntimeStore, 'activeProviderAssignmentCount' | 'activeSlotAssignmentCount' | 'assignedRowsMeshWide' | 'db' | 'getQueueEntries' | 'getQueueSchedulingGraph' | 'ensureLegacyQueueMigrated' | 'hasActiveNodeWriteAssignment' | 'hasActiveSessionAssignment' | 'maybeCheckpointWal' | 'transaction' | 'turnStore'>;
 
-export interface ScopedInFlightOwnership extends InFlightOwnership { ownershipScope?: PhysicalOwnershipScope; readLease?: boolean }
+export interface ScopedInFlightOwnership extends InFlightOwnership { ownershipScope?: PhysicalOwnershipScope; readLease?: boolean; /** A light task: its scope is a private worktree no other task ever claims. */ privateWorktree?: boolean }
 type OwnershipCandidate = Pick<MeshWorkQueueEntry, 'ownedPaths' | 'readonly' | 'taskMode' | 'ownershipScope'> & Partial<Pick<MeshWorkQueueEntry, 'id'>>;
 const unknownWriterPaths = { paths: [{ path: '', subtree: true }] };
 type OwnershipHost = Pick<MeshRuntimeStoreClaimHost, 'assignedRowsMeshWide'> & Partial<Pick<MeshRuntimeStore, 'getQueueEntries'>>;
@@ -58,7 +58,7 @@ export function readInFlightOwnershipMeshWide(
                     const scope = parsed.reviewInputScope;
                     return scope ? { taskId: parsed.id, paths: { paths: scope.declaration }, ownershipScope: scope, readLease: true } : null;
                 }
-                return { taskId: parsed.id, paths: parsed.ownedPaths ?? unknownWriterPaths, ownershipScope: parsed.ownershipScope };
+                return { taskId: parsed.id, paths: parsed.ownedPaths ?? unknownWriterPaths, ownershipScope: parsed.ownershipScope, ...(parsed.light && parsed.lightWorkspaceId ? { privateWorktree: true } : {}) };
             } catch { return { taskId: 'unproven_active_writer', paths: unknownWriterPaths }; }
         })
         .filter((v): v is ScopedInFlightOwnership => v !== null);
@@ -69,13 +69,22 @@ export function findTaskOwnedPathsConflicts(
     candidate: OwnershipCandidate,
     inFlightOwnership: readonly ScopedInFlightOwnership[],
     prospectiveScope?: PhysicalOwnershipScope,
+    opts?: { preSpawn?: boolean },
 ) {
     if (isTaskReadonly(candidate)) return [];
     const paths = candidate.ownedPaths ?? unknownWriterPaths;
     const scope = prospectiveScope ?? currentPhysicalScope(candidate.ownershipScope, paths);
+    // Before a spawn the candidate has no checkout yet. A light writer works in its own private worktree that no
+    // other task can ever claim, so against such a writer with a verified scope only a logical path overlap can hold
+    // the candidate (live 2026-11-07: light c8b231ee held base-checkout task 81ff5c9c). Writers in shared checkouts
+    // keep the physical check — a same-checkout candidate admitted here would only be refused at claim and relaunch.
+    const logicalOnly = !!opts?.preSpawn && !candidate.ownershipScope && !prospectiveScope;
     return inFlightOwnership.flatMap(other => {
         if (other.taskId === candidate.id) return [];
         const current = currentPhysicalScope(other.ownershipScope, other.paths);
+        // Only a light writer whose attestation still reproduces is known to sit in a private worktree; a writer with
+        // no (or an unreproducible) scope stays an unknown writer of every checkout and blocks as before.
+        if (logicalOnly && current && other.privateWorktree) return findOwnershipConflicts(paths, [other]);
         // A read lease also fences attested nested Git stores. Its empty write declaration must not erase them.
         const otherScope = other.readLease && current && other.ownershipScope
             ? { ...current, resources: [...current.resources, ...other.ownershipScope.resources] } : current;
@@ -112,7 +121,7 @@ export function evaluateTaskOwnedPathsAdmission(
         return { allowed: true, conflicts: [] };
     }
     const inFlight = inFlightOwnership ?? readInFlightOwnershipMeshWide(host, meshId);
-    const conflicts = findTaskOwnedPathsConflicts(candidate, inFlight);
+    const conflicts = findTaskOwnedPathsConflicts(candidate, inFlight, undefined, { preSpawn: true });
     if (conflicts.length === 0) return { allowed: true, conflicts: [] };
     return {
         allowed: false,

@@ -484,7 +484,8 @@ const queueRevise: LowFamilyHandler = async (ctx, args: unknown) => {
                 actor: self, repoIdentity: mesh.repoIdentity, machineId,
                 ...(localNode ? { nodeId: localNode.id, workspace: localNode.workspace } : {}),
                 ...(typeof sessionWorkspace === 'string' ? { sessionWorkspace } : {}),
-            });
+            }, { dryRun: req.dryRun === true });
+            if (req.dryRun === true) return { success: true, task: queueWire(attested) };
             // Tasks held behind this writer may now be admissible.
             try { void triggerMeshQueue(ctx.components(), req.meshId).catch(e => LOG.warn('MeshQueue', `Ownership attest reschedule: ${String(e)}`)); } catch { /* boot drain will retry */ }
             return { success: true, task: queueWire(attested) };

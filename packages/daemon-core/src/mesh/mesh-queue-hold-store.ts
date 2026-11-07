@@ -24,7 +24,7 @@ export function recordQueueTaskHold(meshId: string, taskId: string, reason: stri
         const writers = store.assignedRowsMeshWide(meshId).map(row => JSON.parse(row.payload) as MeshWorkQueueEntry);
         const pending = store.getQueueEntries(meshId, ['pending']);
         const queue = [...writers, ...pending.filter(p => !writers.some(w => w.id === p.id))];
-        const context = queueHoldContext(task, reason, queue, nodeId);
+        const context = queueHoldContext(task, reason, queue, nodeId, undefined, { preSpawn: true });
         if (reason === 'dependencies_unsatisfied') {
             const completed = new Set(store.getQueueHeads(meshId, ['completed']).map(head => head.id));
             context.blockingTaskIds = (task.dependsOn || []).filter(id => !completed.has(id));

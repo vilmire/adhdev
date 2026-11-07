@@ -26440,7 +26440,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       const p = value.patch;
       if (p.requestQuotaOverride && (value.dryRun !== void 0 || value.deferScheduling !== void 0)) return null;
       if (p.requestQuotaOverride !== void 0 && (p.requestQuotaOverride !== true || Object.keys(p).length !== 1)) return null;
-      if (p.attestActiveOwnership && (value.dryRun !== void 0 || value.deferScheduling !== void 0)) return null;
+      if (p.attestActiveOwnership && value.deferScheduling !== void 0) return null;
       if (p.attestActiveOwnership !== void 0 && (p.attestActiveOwnership !== true || Object.keys(p).length !== 1)) return null;
       if (p.message !== void 0 && (typeof p.message !== "string" || !p.message.trim())) return null;
       if (p.phase !== void 0 && p.phase !== "source" && p.phase !== "integration") return null;
@@ -48905,7 +48905,14 @@ ${error.message || ""}`;
     function holdActiveWriters(task, queue) {
       return queue.filter((other) => other.id !== task.id && (other.status !== "pending" || pendingLaunchReservation(other)));
     }
-    function queueHoldContext(task, reason, queue, nodeId, prospectiveScope) {
+    function pushLogicalOverlaps(overlaps2, task, other, blockingPaths) {
+      for (const owned of task.ownedPaths.paths) for (const blocking of blockingPaths.paths) {
+        if (findOwnershipConflicts2({ paths: [owned] }, [{ taskId: other.id, paths: { paths: [blocking] } }]).length) {
+          overlaps2.push({ taskId: other.id, ownedPath: owned.path + (owned.subtree ? "/**" : ""), blockingPath: blocking.path + (blocking.subtree ? "/**" : "") });
+        }
+      }
+    }
+    function queueHoldContext(task, reason, queue, nodeId, prospectiveScope, opts) {
       const active = holdActiveWriters(task, queue);
       const overlaps2 = [];
       let explained;
@@ -48917,16 +48924,16 @@ ${error.message || ""}`;
           if (!blockingPaths || isReadonly && !blockingScope) continue;
           const candidateScope = prospectiveScope ?? currentPhysicalScope(task.ownershipScope, task.ownedPaths);
           const otherScope = currentPhysicalScope(blockingScope, blockingPaths);
+          if (opts?.preSpawn && !task.ownershipScope && !candidateScope && otherScope && other.light && other.lightWorkspaceId) {
+            pushLogicalOverlaps(overlaps2, task, other, blockingPaths);
+            continue;
+          }
           const physical = comparePhysicalOwnership(task.ownedPaths, candidateScope, blockingPaths, otherScope);
           if (!physical.physicalConflict) continue;
           const reasonForPair = explainPhysicalOverlap(task.ownedPaths, candidateScope, blockingPaths, otherScope);
           if (!explained) explained = { taskId: other.id, reason: reasonForPair };
           if (!physical.logicalOverlap) overlaps2.push({ taskId: other.id, ownedPath: "physical_workspace_or_shared_resource", blockingPath: "physical_workspace_or_shared_resource" });
-          for (const owned of task.ownedPaths.paths) for (const blocking of blockingPaths.paths) {
-            if (findOwnershipConflicts2({ paths: [owned] }, [{ taskId: other.id, paths: { paths: [blocking] } }]).length) {
-              overlaps2.push({ taskId: other.id, ownedPath: owned.path + (owned.subtree ? "/**" : ""), blockingPath: blocking.path + (blocking.subtree ? "/**" : "") });
-            }
-          }
+          pushLogicalOverlaps(overlaps2, task, other, blockingPaths);
         }
       }
       if (reason === "owned_paths_conflict") {
@@ -48937,7 +48944,14 @@ ${error.message || ""}`;
         const detail = { overlappingPaths: overlaps2 };
         if (explained?.reason.kind === "missing_scope") {
           detail.unknownField = "ownershipScope";
-          detail.resolution = `assigned task ${explained.taskId} has no host-attested ownershipScope, so it counts as an unknown writer and every other write task waits behind it. If it declared owned_paths and runs on a node of this host, attach the proof without stopping it: mesh_queue_revise task_id=${explained.taskId} patch={attestActiveOwnership:true} with its current expected_revision. Otherwise it stays closed until that task is completed, failed, or cancelled.`;
+          const blocker = active.find((other) => other.id === explained.taskId);
+          if (blocker?.ownershipScope && explained.reason.side === "a") {
+            detail.resolution = `this task has no host-attested ownershipScope for the node checkout yet, so it cannot be shown isolated from assigned task ${explained.taskId} and waits behind it. It is attested when it is claimed on a node of this host (declare owned_paths and a phase so it can be); otherwise it waits until that task is completed, failed, or cancelled.`;
+          } else if (blocker?.ownershipScope) {
+            detail.resolution = `assigned task ${explained.taskId} has an ownershipScope, but this host can no longer re-verify it (its worktree moved or was removed, or its owned_paths changed since it was attested), so it counts as an unknown writer. It stays closed until that task is completed, failed, or cancelled.`;
+          } else {
+            detail.resolution = `assigned task ${explained.taskId} has no host-attested ownershipScope, so it counts as an unknown writer and every other write task waits behind it. If it declared owned_paths and runs on a node of this host, attach the proof without stopping it: mesh_queue_revise task_id=${explained.taskId} patch={attestActiveOwnership:true} with its current expected_revision. Otherwise it stays closed until that task is completed, failed, or cancelled.`;
+          }
         } else if (explained?.reason.kind === "resource" || explained?.reason.kind === "worktree") {
           detail.canonicalResource = explained.reason.path;
           detail.resolution = `resolves when task ${explained.taskId} is no longer assigned or its attested resources no longer include this path.`;
@@ -78817,6 +78831,42 @@ ${body.replace(/<\/?\s*(untrusted_[a-z_]+)\b[^>]*>/gi, "[tag removed]")}
 </${tag}>`;
       }
     });
+    var STAGE_EFFECT_FAILURE_ESCALATION_THRESHOLD;
+    var isWaitingError;
+    var StageEffectFailureTracker;
+    var init_stage_effect_failures = __esm2({
+      "src/mesh/stage-effect-failures.ts"() {
+        "use strict";
+        STAGE_EFFECT_FAILURE_ESCALATION_THRESHOLD = 8;
+        isWaitingError = (detail) => /^review_input_busy\b/.test(detail);
+        StageEffectFailureTracker = class {
+          constructor(threshold = STAGE_EFFECT_FAILURE_ESCALATION_THRESHOLD) {
+            this.threshold = threshold;
+          }
+          streaks = /* @__PURE__ */ new Map();
+          key(meshId, parentId, effectKind) {
+            return `${meshId}\0${parentId}\0${effectKind}`;
+          }
+          record(meshId, parentId, effectKind, detail) {
+            const k = this.key(meshId, parentId, effectKind);
+            const prev = this.streaks.get(k);
+            const count2 = prev && prev.signature === detail ? prev.count + 1 : 1;
+            this.streaks.set(k, { signature: detail, count: count2 });
+            const escalate = count2 >= this.threshold && !isWaitingError(detail);
+            return { log: count2 === 1 || escalate, escalate, count: count2 };
+          }
+          /** The effect succeeded (or the stage moved on): the next failure starts a fresh streak. */
+          clear(meshId, parentId, effectKind) {
+            if (effectKind) {
+              this.streaks.delete(this.key(meshId, parentId, effectKind));
+              return;
+            }
+            const prefix = `${meshId}\0${parentId}\0`;
+            for (const k of [...this.streaks.keys()]) if (k.startsWith(prefix)) this.streaks.delete(k);
+          }
+        };
+      }
+    });
     var STAGE_PARENT_ENDED;
     var SELF_CHECK_LOG_MAX;
     var DIFF_MAX;
@@ -78833,6 +78883,7 @@ ${body.replace(/<\/?\s*(untrusted_[a-z_]+)\b[^>]*>/gi, "[tag removed]")}
         init_stage_synthesis();
         init_stage_state();
         init_stage_independence();
+        init_stage_effect_failures();
         init_stage_state();
         STAGE_PARENT_ENDED = /* @__PURE__ */ new Set(["completed", "failed", "blocked", "cancelled"]);
         SELF_CHECK_LOG_MAX = 6e4;
@@ -78846,6 +78897,7 @@ ${body.replace(/<\/?\s*(untrusted_[a-z_]+)\b[^>]*>/gi, "[tag removed]")}
           chains = /* @__PURE__ */ new Map();
           /** Prepared reviewer workspaces by review child id; released when the child ends (or is cancelled). In-memory: a daemon restart leaves them to the light-workspace sweep. */
           reviewerWorkspaces = /* @__PURE__ */ new Map();
+          failures = new StageEffectFailureTracker();
           iso() {
             return new Date(this.ports.now()).toISOString();
           }
@@ -79089,11 +79141,19 @@ ${body.replace(/<\/?\s*(untrusted_[a-z_]+)\b[^>]*>/gi, "[tag removed]")}
               if (!parent || !isStageParent(parent)) return;
               try {
                 await this.runEffect(parent, effect);
+                this.failures.clear(meshId, parentId, effect.kind);
               } catch (e) {
                 const detail = String(e?.message || e);
-                this.ports.events.progress(meshId, parentId, `stage effect ${effect.kind} failed: ${detail}`);
+                const verdict = this.failures.record(meshId, parentId, effect.kind, detail);
+                if (verdict.log && !verdict.escalate) this.ports.events.progress(meshId, parentId, `stage effect ${effect.kind} failed: ${detail}`);
                 if (effect.kind === "create_review_child" && isLastingReviewInputError(detail)) {
                   await this.apply(meshId, parentId, { kind: "review_input_failed", detail, at: this.iso() });
+                  this.failures.clear(meshId, parentId);
+                } else if (effect.kind === "create_review_child" && verdict.escalate) {
+                  const text10 = `create_review_child failed ${verdict.count}x in a row: ${detail}`;
+                  this.ports.events.progress(meshId, parentId, `stage effect ${effect.kind} gave up: ${text10}`);
+                  await this.apply(meshId, parentId, { kind: "review_input_failed", detail: text10, at: this.iso() });
+                  this.failures.clear(meshId, parentId);
                 }
               }
             }
@@ -79177,7 +79237,9 @@ ${result.log.slice(-SELF_CHECK_LOG_MAX)}
                 }
                 let child;
                 try {
-                  child = this.ports.queue.enqueueReviewChild(parent, {
+                  const current5 = this.ports.queue.get(meshId, id4);
+                  if (!current5 || !isStageParent(current5)) throw new Error("stage_review_stale_parent");
+                  child = this.ports.queue.enqueueReviewChild(current5, {
                     round: effect.round,
                     message: msg,
                     inputArtifactIds: inputs,
@@ -87571,7 +87633,7 @@ ${includeRefs[0]}`;
         const writers = store5.assignedRowsMeshWide(meshId).map((row2) => JSON.parse(row2.payload));
         const pending = store5.getQueueEntries(meshId, ["pending"]);
         const queue = [...writers, ...pending.filter((p) => !writers.some((w) => w.id === p.id))];
-        const context2 = queueHoldContext(task, reason, queue, nodeId);
+        const context2 = queueHoldContext(task, reason, queue, nodeId, void 0, { preSpawn: true });
         if (reason === "dependencies_unsatisfied") {
           const completed = new Set(store5.getQueueHeads(meshId, ["completed"]).map((head) => head.id));
           context2.blockingTaskIds = (task.dependsOn || []).filter((id4) => !completed.has(id4));
@@ -98457,19 +98519,21 @@ ${continuationNotice}` } : dispatchTask,
             const scope2 = parsed.reviewInputScope;
             return scope2 ? { taskId: parsed.id, paths: { paths: scope2.declaration }, ownershipScope: scope2, readLease: true } : null;
           }
-          return { taskId: parsed.id, paths: parsed.ownedPaths ?? unknownWriterPaths, ownershipScope: parsed.ownershipScope };
+          return { taskId: parsed.id, paths: parsed.ownedPaths ?? unknownWriterPaths, ownershipScope: parsed.ownershipScope, ...parsed.light && parsed.lightWorkspaceId ? { privateWorktree: true } : {} };
         } catch {
           return { taskId: "unproven_active_writer", paths: unknownWriterPaths };
         }
       }).filter((v) => v !== null);
     }
-    function findTaskOwnedPathsConflicts(candidate, inFlightOwnership, prospectiveScope) {
+    function findTaskOwnedPathsConflicts(candidate, inFlightOwnership, prospectiveScope, opts) {
       if (isTaskReadonly3(candidate)) return [];
       const paths = candidate.ownedPaths ?? unknownWriterPaths;
       const scope2 = prospectiveScope ?? currentPhysicalScope(candidate.ownershipScope, paths);
+      const logicalOnly = !!opts?.preSpawn && !candidate.ownershipScope && !prospectiveScope;
       return inFlightOwnership.flatMap((other) => {
         if (other.taskId === candidate.id) return [];
         const current5 = currentPhysicalScope(other.ownershipScope, other.paths);
+        if (logicalOnly && current5 && other.privateWorktree) return findOwnershipConflicts2(paths, [other]);
         const otherScope = other.readLease && current5 && other.ownershipScope ? { ...current5, resources: [...current5.resources, ...other.ownershipScope.resources] } : current5;
         if (other.ownershipScope && !otherScope) return [{ taskId: other.taskId, overlappingPaths: ["unproven_active_physical_resource"] }];
         const comparison = comparePhysicalOwnership(paths, scope2, other.paths, otherScope);
@@ -98489,7 +98553,7 @@ ${continuationNotice}` } : dispatchTask,
         return { allowed: true, conflicts: [] };
       }
       const inFlight9 = inFlightOwnership ?? readInFlightOwnershipMeshWide(host, meshId);
-      const conflicts = findTaskOwnedPathsConflicts(candidate, inFlight9);
+      const conflicts = findTaskOwnedPathsConflicts(candidate, inFlight9, void 0, { preSpawn: true });
       if (conflicts.length === 0) return { allowed: true, conflicts: [] };
       return {
         allowed: false,
@@ -135083,7 +135147,7 @@ ${detail.join("\n")}` : stripped;
         MAX_REMEMBERED = 200;
       }
     });
-    function attestActiveTaskOwnership(meshId, taskId, expectedRevision, host) {
+    function attestActiveTaskOwnership(meshId, taskId, expectedRevision, host, opts = {}) {
       if (!host?.actor || !host.repoIdentity || !host.machineId) throw new Error("authenticated_host_required");
       if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new Error("invalid_expected_revision");
       const store5 = MeshRuntimeStore.getInstance();
@@ -135124,7 +135188,7 @@ ${detail.join("\n")}` : stripped;
           actor: host.actor,
           before: { message: before.message, ownedPaths: before.ownedPaths, phase: before.phase, dependsOn: before.dependsOn, ownershipScope: void 0, routingPreferences: before.routingPreferences, review: before.review }
         }];
-        store5.updateQueueEntry(next);
+        if (!opts.dryRun) store5.updateQueueEntry(next);
         return next;
       });
     }
@@ -139437,7 +139501,8 @@ ${tail}` : ""
                 machineId,
                 ...localNode ? { nodeId: localNode.id, workspace: localNode.workspace } : {},
                 ...typeof sessionWorkspace === "string" ? { sessionWorkspace } : {}
-              });
+              }, { dryRun: req.dryRun === true });
+              if (req.dryRun === true) return { success: true, task: queueWire(attested) };
               try {
                 void triggerMeshQueue(ctx.components(), req.meshId).catch((e) => LOG.warn("MeshQueue", `Ownership attest reschedule: ${String(e)}`));
               } catch {
@@ -248739,7 +248804,7 @@ var MESH_QUEUE_REVISE_TOOL = {
             differentProvider: { const: true }
           } },
           difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: "Reclassify THIS pending task (the supported recovery when a hold says task_difficulty_floor_unavailable for the node's slots). Preset-derived model/thinking follow the new class; explicit ones stay. Never changes node slots or global brain presets. Not for stage (review-in-task) tasks." },
-          attestActiveOwnership: { const: true, description: "Alone, on an ASSIGNED write task that declared owned_paths but has no host-attested ownership scope (it blocks every other write task as an unknown writer): attach the scope for the running task without stopping it. Needs the current expected_revision; refused when the task declared no paths, is remote, or its live session is not in the node checkout." },
+          attestActiveOwnership: { const: true, description: "Alone, on an ASSIGNED write task that declared owned_paths but has no host-attested ownership scope (it blocks every other write task as an unknown writer): attach the scope for the running task without stopping it. Needs the current expected_revision; dry_run validates every gate and saves nothing (defer_scheduling is not accepted); refused when the task declared no paths, is remote, or its live session is not in the node checkout." },
           requestQuotaOverride: { const: true, description: "Alone: ask the OWNER to let this quota-held task run despite the quota reserve (raises an owner decision; you cannot grant it)." }
         }
       }

@@ -263,7 +263,7 @@ export const MESH_QUEUE_REVISE_TOOL = {
                         sourceTaskId: { type: 'string' }, differentProvider: { const: true },
                     } },
                     difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: 'Reclassify THIS pending task (the supported recovery when a hold says task_difficulty_floor_unavailable for the node\'s slots). Preset-derived model/thinking follow the new class; explicit ones stay. Never changes node slots or global brain presets. Not for stage (review-in-task) tasks.' },
-                    attestActiveOwnership: { const: true, description: 'Alone, on an ASSIGNED write task that declared owned_paths but has no host-attested ownership scope (it blocks every other write task as an unknown writer): attach the scope for the running task without stopping it. Needs the current expected_revision; refused when the task declared no paths, is remote, or its live session is not in the node checkout.' },
+                    attestActiveOwnership: { const: true, description: 'Alone, on an ASSIGNED write task that declared owned_paths but has no host-attested ownership scope (it blocks every other write task as an unknown writer): attach the scope for the running task without stopping it. Needs the current expected_revision; dry_run validates every gate and saves nothing (defer_scheduling is not accepted); refused when the task declared no paths, is remote, or its live session is not in the node checkout.' },
                     requestQuotaOverride: { const: true, description: 'Alone: ask the OWNER to let this quota-held task run despite the quota reserve (raises an owner decision; you cannot grant it).' },
                 },
             },
