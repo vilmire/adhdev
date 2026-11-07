@@ -125,6 +125,8 @@ export interface ResidueSweepCandidate {
     drainedAt: number;
     /** The exact text injected into the coordinator PTY (ledger original). */
     coordinatorMessage: string;
+    /** The session the notice was typed into, when the claim recorded it. Matched only against that session. */
+    sessionId?: string | null;
 }
 
 export interface ResidueSweepDeps {
@@ -144,6 +146,13 @@ export interface ResidueSweepDeps {
      *  consumed by THIS process's live delivery machinery and are never
      *  recovery-eligible; residue is by definition a pre-boot drain. */
     bootAt?: number;
+    /**
+     * True when the session started or finished a turn after `sinceMs`: it took the input typed
+     * before then, so matching text on screen is conversation history, not composer residue.
+     * (Live 2026-11-07: codex marks past user messages with the composer's own `›` glyph, so every
+     * restart re-delivered the coordinator's last, already-answered notice.)
+     */
+    sessionTurnedSince?: (sessionKey: string, sinceMs: number) => boolean;
 }
 
 export interface ResidueFinding {
@@ -236,6 +245,10 @@ export function runComposerResidueSweep(deps: ResidueSweepDeps): ResidueFinding[
         // (a longer exact-present body subsumes a shorter one's probes).
         let best: { candidate: ResidueSweepCandidate; integrity: 'full' | 'partial' } | null = null;
         for (const candidate of candidates) {
+            if (candidate.sessionId && candidate.sessionId !== session.key) continue;
+            let consumed = false;
+            try { consumed = deps.sessionTurnedSince?.(session.key, candidate.drainedAt) === true; } catch { consumed = false; }
+            if (consumed) continue;
             const verdict = matchCandidate(session, candidate.coordinatorMessage);
             if (!verdict) continue;
             if (
@@ -378,7 +391,7 @@ export interface ComposerResidueSweepHandle {
 interface SweepComponents {
     cliManager: { adapters: ReadonlyMap<string, CliAdapter> };
     /** The S7 notice wiring (delivered-notice read + claim release); absent → detection-only, no candidates. */
-    meshTurn?: { notices: Pick<MeshNoticeRuntime, 'recentDeliveredNotices' | 'releaseDelivery'> } | null;
+    meshTurn?: { notices: Pick<MeshNoticeRuntime, 'recentDeliveredNotices' | 'releaseDelivery' | 'sessionTurnedSince'> } | null;
 }
 
 function readAutoRecoverEnabled(env: NodeJS.ProcessEnv): boolean {
@@ -462,6 +475,7 @@ function collectSweepCandidates(components: SweepComponents, now: number): Resid
             taskId: notice.taskId,
             drainedAt: notice.deliveredAt,
             coordinatorMessage: notice.text,
+            sessionId: notice.sessionId,
         });
     }
     return candidates;
@@ -501,6 +515,7 @@ export function scheduleComposerResidueSweep(
                 autoRecoverEnabled: readAutoRecoverEnabled(env),
                 recoveryEnabled: readRecoveryEnabled(env),
                 bootAt,
+                sessionTurnedSince: (key, sinceMs) => components.meshTurn?.notices.sessionTurnedSince?.(key, sinceMs) === true,
                 undrainRow: (candidate) => {
                     try {
                         // Release the delivery claim: the notice reads as undelivered

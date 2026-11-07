@@ -396,6 +396,12 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
         hasUndelivered: (meshId) => ledger.store.hasUndeliveredNotify(meshId, Date.now() - 24 * 60 * 60 * 1000),
         hasLiveCliCoordinator: (meshId) => listLocalCoordinatorSessions(components, meshId).length > 0,
         recentDeliveredNotices: (sinceMs) => listRecentDeliveredNotices({ ledger, resolveHandoff }, sinceMs),
+        sessionTurnedSince: (sessionId, sinceMs) => {
+            const open = ledger.store.findOpenAttemptForSession(sessionId);
+            if (open && open.acceptedAt > sinceMs) return true;
+            const last = ledger.store.listTerminalPlainAttemptsForSession(sessionId, 1)[0];
+            return !!last && ((last.terminal?.at ?? 0) > sinceMs || last.acceptedAt > sinceMs);
+        },
         releaseDelivery: (claimEventId) => {
             const released = ledger.store.releaseDeliveryClaim(claimEventId);
             if (released) scheduleBacklog();

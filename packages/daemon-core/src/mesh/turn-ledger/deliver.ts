@@ -903,6 +903,8 @@ interface DeliveredNoticeView {
     event: string;
     taskId: string | null;
     deliveredAt: number;
+    /** The coordinator session the notice was typed into (from the claim), when recorded. */
+    sessionId: string | null;
     /**
      * The rendered body WITHOUT the trailing mesh status line (the line is
      * re-rendered live, so it would not match what was typed; the body before
@@ -936,6 +938,7 @@ export function listRecentDeliveredNotices(ctx: RenderContext, sinceMs: number, 
             event: rendered.event ?? rendered.notify,
             taskId: str(entry.taskId) ?? null,
             deliveredAt: claim.recordedAt,
+            sessionId: str(claim.payload.sessionId) ?? null,
             text: rendered.text,
         });
     }
@@ -1146,6 +1149,8 @@ export interface MeshNoticeRuntime {
     recentDeliveredNotices?(sinceMs: number): DeliveredNoticeView[];
     /** Release one delivery claim so the backlog redelivers the notice (composer-residue recovery). */
     releaseDelivery?(claimEventId: string): boolean;
+    /** The session started or finished a turn after `sinceMs` — it took the input typed before then (composer-residue sweep). */
+    sessionTurnedSince?(sessionId: string, sinceMs: number): boolean;
     /** True when `daemonId` is one of this daemon's id forms. */
     isSelfDaemon(daemonId: string): boolean;
     /** Another writer's `mesh.<id>.events` entries have not replicated here yet (seqscribe `staleness().behind` from direct peers). */

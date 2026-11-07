@@ -55686,6 +55686,7 @@ ${line}`;
           event: rendered.event ?? rendered.notify,
           taskId: str5(entry.taskId) ?? null,
           deliveredAt: claim.recordedAt,
+          sessionId: str5(claim.payload.sessionId) ?? null,
           text: rendered.text
         });
       }
@@ -163247,6 +163248,14 @@ ${defangRelayBody(text10)}`;
         if (session.status !== "idle") continue;
         let best = null;
         for (const candidate of candidates) {
+          if (candidate.sessionId && candidate.sessionId !== session.key) continue;
+          let consumed = false;
+          try {
+            consumed = deps.sessionTurnedSince?.(session.key, candidate.drainedAt) === true;
+          } catch {
+            consumed = false;
+          }
+          if (consumed) continue;
           const verdict = matchCandidate(session, candidate.coordinatorMessage);
           if (!verdict) continue;
           if (!best || verdict === "full" && best.integrity === "partial" || verdict === best.integrity && candidate.coordinatorMessage.length > best.candidate.coordinatorMessage.length) {
@@ -163410,7 +163419,8 @@ ${defangRelayBody(text10)}`;
           eventId: notice.claimEventId,
           taskId: notice.taskId,
           drainedAt: notice.deliveredAt,
-          coordinatorMessage: notice.text
+          coordinatorMessage: notice.text,
+          sessionId: notice.sessionId
         });
       }
       return candidates;
@@ -163433,6 +163443,7 @@ ${defangRelayBody(text10)}`;
             autoRecoverEnabled: readAutoRecoverEnabled(env2),
             recoveryEnabled: readRecoveryEnabled(env2),
             bootAt,
+            sessionTurnedSince: (key7, sinceMs) => components.meshTurn?.notices.sessionTurnedSince?.(key7, sinceMs) === true,
             undrainRow: (candidate) => {
               try {
                 return components.meshTurn?.notices.releaseDelivery?.(candidate.rowId) === true;
@@ -164199,6 +164210,12 @@ ${defangRelayBody(text10)}`;
         hasUndelivered: (meshId) => ledger.store.hasUndeliveredNotify(meshId, Date.now() - 24 * 60 * 60 * 1e3),
         hasLiveCliCoordinator: (meshId) => listLocalCoordinatorSessions(components, meshId).length > 0,
         recentDeliveredNotices: (sinceMs) => listRecentDeliveredNotices({ ledger, resolveHandoff }, sinceMs),
+        sessionTurnedSince: (sessionId, sinceMs) => {
+          const open = ledger.store.findOpenAttemptForSession(sessionId);
+          if (open && open.acceptedAt > sinceMs) return true;
+          const last = ledger.store.listTerminalPlainAttemptsForSession(sessionId, 1)[0];
+          return !!last && ((last.terminal?.at ?? 0) > sinceMs || last.acceptedAt > sinceMs);
+        },
         releaseDelivery: (claimEventId) => {
           const released = ledger.store.releaseDeliveryClaim(claimEventId);
           if (released) scheduleBacklog();

@@ -314,3 +314,23 @@ describe('ENTER-LOSS ③ — undrain recovery (composer clear + durable requeue)
         expect(calls).toEqual([]);
     });
 });
+
+describe('composer residue — answered notices are history, not residue', () => {
+    it('skips a notice when its session has taken a turn since the notice was delivered', () => {
+        const findings = runComposerResidueSweep({
+            sessions: [session()],
+            candidates: [candidate()],
+            autoRecoverEnabled: false,
+            sessionTurnedSince: () => true,
+        });
+        expect(findings.filter(f => f.kind === 'identified')).toHaveLength(0);
+    });
+
+    it('matches a notice only against the session it was typed into', () => {
+        const s = session();
+        const other = runComposerResidueSweep({ sessions: [s], candidates: [candidate({ sessionId: 'someone-else' })], autoRecoverEnabled: false });
+        expect(other.filter(f => f.kind === 'identified')).toHaveLength(0);
+        const own = runComposerResidueSweep({ sessions: [s], candidates: [candidate({ sessionId: s.key })], autoRecoverEnabled: false, sessionTurnedSince: () => false });
+        expect(own.filter(f => f.kind === 'identified')).toHaveLength(1);
+    });
+});
