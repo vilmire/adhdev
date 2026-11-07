@@ -24,6 +24,7 @@ const HOST = 'daemon_mach_host';
 const OTHER = 'daemon_mach_other';
 const SELF = 'daemon_mach_self';
 const IDENTITY = 'github.com/acme/widget';
+const MIXED_URL = 'https://github.com/Acme/WidgetPro.git';
 
 function checkout(key: string, origin: string): string {
   const dir = path.join(cfg, 'remote-projects', key);
@@ -39,12 +40,22 @@ const wrongKey = 'a'.repeat(24);
 checkout(wrongKey, 'https://github.com/acme/other.git');
 fs.writeFileSync(path.join(cfg, 'remote-projects', `${goodKey}.lock`), '');
 writeMeshHostRecord(M, HOST, 'pairing');
+const M2 = 'mesh-remote-2';
+const mixedKey = remoteProjectKey(M2, 'github.com/acme/widgetpro');
+checkout(mixedKey, MIXED_URL);
+writeMeshHostRecord(M2, HOST, 'pairing');
 
 describe('remote-project checkouts as transfer scope on a member', () => {
   it('a request from the recorded host sees the checkout under a remote-project id', () => {
     const scope = resolveMeshScope(M, SELF, HOST)!;
     expect(scope.workspaces).toEqual([{ id: `remote-project:${goodKey}`, path: goodDir, label: 'widget' }]);
     expect(matchScopedWorkspace(scope, 'widget')?.id).toBe(`remote-project:${goodKey}`);
+  });
+
+  it('the label keeps the repository name as the origin spells it (the key uses the lowercased identity)', () => {
+    const scope = resolveMeshScope(M2, SELF, HOST)!;
+    expect(scope.workspaces.map((w) => w.label)).toEqual(['WidgetPro']);
+    expect(matchScopedWorkspace(scope, 'WidgetPro')?.id).toBe(`remote-project:${mixedKey}`);
   });
 
   it('a local caller sees it too', () => {

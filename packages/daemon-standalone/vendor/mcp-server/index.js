@@ -194062,7 +194062,8 @@ ${marker2}`,
         const url = originUrl(dir);
         const identity5 = url ? githubRemote(url)?.identity : void 0;
         if (!identity5 || remoteProjectKey(meshId, identity5) !== key7) continue;
-        out.push({ id: REMOTE_PROJECT_WORKSPACE_PREFIX + key7, path: dir, label: identity5.split("/").pop() });
+        const repoName = /\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(url)?.[1] ?? identity5.split("/").pop();
+        out.push({ id: REMOTE_PROJECT_WORKSPACE_PREFIX + key7, path: dir, label: repoName });
       }
       return out;
     }

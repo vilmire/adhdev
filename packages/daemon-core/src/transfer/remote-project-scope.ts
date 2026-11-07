@@ -45,7 +45,10 @@ export function remoteProjectScopeFor(meshId: string, viaDaemonId?: string | nul
     const url = originUrl(dir);
     const identity = url ? githubRemote(url)?.identity : undefined;
     if (!identity || remoteProjectKey(meshId, identity) !== key) continue;
-    out.push({ id: REMOTE_PROJECT_WORKSPACE_PREFIX + key, path: dir, label: identity.split('/').pop() });
+    // The identity is lowercased for the key; the label keeps the repository name as the origin spells it
+    // ("Prefex", not "prefex"), because callers name the target by that label.
+    const repoName = /\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(url!)?.[1] ?? identity.split('/').pop();
+    out.push({ id: REMOTE_PROJECT_WORKSPACE_PREFIX + key, path: dir, label: repoName });
   }
   return out;
 }
