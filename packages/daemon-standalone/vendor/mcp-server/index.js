@@ -66515,9 +66515,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }
       const { mkdtempSync: mkdtempSync4, rmSync: rmSync21, openSync: openSync31, closeSync: closeSync31 } = await import("fs");
       const { tmpdir: tmpdir12 } = await import("os");
-      const { join: join186 } = await import("path");
-      const scratch = mkdtempSync4(join186(tmpdir12(), "adhdev-patchid-"));
-      const patchFile = join186(scratch, "patch.diff");
+      const { join: join187 } = await import("path");
+      const scratch = mkdtempSync4(join187(tmpdir12(), "adhdev-patchid-"));
+      const patchFile = join187(scratch, "patch.diff");
       try {
         const out = openSync31(patchFile, "w");
         let diffRun;
@@ -124716,6 +124716,16 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         }
       }
     }
+    function redactSecretLines(text10) {
+      let redactedLines = 0;
+      const out = text10.split("\n").map((line) => {
+        if (!containsEncodedOrRawSecret(line, SECRET_CONTENT_PATTERNS)) return line;
+        redactedLines++;
+        const lead = /^[+\- ]/.test(line) ? line[0] : "";
+        return `${lead}[line redacted: matched a secret or token pattern]`;
+      });
+      return { text: out.join("\n"), redactedLines };
+    }
     function assertNotSecretContent(buffer, _kind) {
       if (buffer.byteLength === 0) {
         return;
@@ -164334,7 +164344,18 @@ ${defangRelayBody(text10)}`;
       });
       bindMeshNoticeRuntime(notices);
       setStageArtifactRegistrar((input) => {
-        return registerSessionArtifact(MeshRuntimeStore.getInstance().db, input).record.artifactId;
+        const register = () => registerSessionArtifact(MeshRuntimeStore.getInstance().db, input).record.artifactId;
+        try {
+          return register();
+        } catch (e) {
+          if (e?.code !== "secret_file_refused" || !String(input.path).endsWith(".diff")) throw e;
+          const file = nodePath.join(input.workspaceRoot, input.path);
+          const redacted = redactSecretLines(nodeFs2.readFileSync(file, "utf8"));
+          if (redacted.redactedLines === 0) throw e;
+          nodeFs2.writeFileSync(file, redacted.text, "utf8");
+          input = { ...input, title: `${input.title} (${redacted.redactedLines} line(s) redacted)` };
+          return register();
+        }
       });
       setLightSessionStopper(async ({ meshId, sessionId }) => {
         const result = await components.router.cleanupMeshSessions({ meshId, nodeId: "", node: void 0, mode: "stop", sessionIds: [sessionId], source: "mesh_cleanup_sessions" });
@@ -164719,6 +164740,8 @@ ${defangRelayBody(text10)}`;
         }
       });
     }
+    var nodeFs2;
+    var nodePath;
     var PROVIDER_CONSUMPTION_CAPABILITIES;
     var DISPATCH_TIMESTAMP_CLOCK_SKEW_GUARD_MS;
     var cachedAnalyzeProbeTranscript;
@@ -164731,6 +164754,9 @@ ${defangRelayBody(text10)}`;
         init_notice_consume_watch();
         init_notice_submit_inventory();
         init_artifact_store();
+        init_artifact_path_guard();
+        nodeFs2 = __toESM2(require("fs"));
+        nodePath = __toESM2(require("path"));
         init_stage_ports_default();
         init_light_task_result();
         init_mesh_quota_sources();
@@ -183941,10 +183967,10 @@ ${output}` : "";
     init_cooperative_gate();
     var sha4 = (v) => (0, import_node_crypto33.createHash)("sha256").update(v).digest("hex");
     function lifecycleProcessIdentity() {
-      const nodePath = fs75.realpathSync(process.execPath), entryPath = fs75.realpathSync(process.argv[1]);
+      const nodePath2 = fs75.realpathSync(process.execPath), entryPath = fs75.realpathSync(process.argv[1]);
       const birth = (0, import_node_child_process25.execFileSync)("/bin/ps", ["-o", "lstart=", "-p", String(process.pid)], { encoding: "utf8", timeout: 3e3, windowsHide: true, env: { LC_ALL: "C" } }).trim().replace(/\s+/g, " ");
       if (!birth) throw Error("lifecycle_birth_unknown");
-      return { pid: process.pid, birth, bootNonce: MAINTENANCE_BOOT_NONCE, nodePath, nodeSha256: sha4(fs75.readFileSync(nodePath)), entryPath, entrySha256: sha4(fs75.readFileSync(entryPath)) };
+      return { pid: process.pid, birth, bootNonce: MAINTENANCE_BOOT_NONCE, nodePath: nodePath2, nodeSha256: sha4(fs75.readFileSync(nodePath2)), entryPath, entrySha256: sha4(fs75.readFileSync(entryPath)) };
     }
     function directory(root, create = false) {
       root = fs75.realpathSync(root);
@@ -203822,12 +203848,12 @@ ${marker2}`,
             normalizeRepoMeshDeclarativeConfig: normalizeRepoMeshDeclarativeConfig2,
             MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
           } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
-          const { mkdirSync: mkdirSync83, writeFileSync: writeFileSync66 } = await import("fs");
-          const { dirname: dirname75, join: join186 } = await import("path");
+          const { mkdirSync: mkdirSync83, writeFileSync: writeFileSync67 } = await import("fs");
+          const { dirname: dirname75, join: join187 } = await import("path");
           const scaffold = buildMeshJsonConfigScaffold2(mesh);
           const scaffoldJson = serializeMeshJsonConfigScaffold2(scaffold);
           const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
-          const absolutePath = join186(workspace, relativePath);
+          const absolutePath = join187(workspace, relativePath);
           const validation = normalizeRepoMeshDeclarativeConfig2(scaffold);
           if (!validation.valid) {
             return { success: false, meshId, error: `invalid mesh.json scaffold: ${validation.errors.join("; ")}` };
@@ -203864,7 +203890,7 @@ ${marker2}`,
             };
           }
           mkdirSync83(dirname75(absolutePath), { recursive: true });
-          writeFileSync66(absolutePath, `${scaffoldJson}
+          writeFileSync67(absolutePath, `${scaffoldJson}
 `, "utf-8");
           return {
             success: true,
@@ -203932,18 +203958,18 @@ ${marker2}`,
             normalizeRepoMeshDeclarativeConfig: normalizeRepoMeshDeclarativeConfig2,
             MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
           } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
-          const { existsSync: existsSync148, readFileSync: readFileSync135, mkdirSync: mkdirSync83, writeFileSync: writeFileSync66 } = await import("fs");
-          const { dirname: dirname75, join: join186 } = await import("path");
+          const { existsSync: existsSync148, readFileSync: readFileSync136, mkdirSync: mkdirSync83, writeFileSync: writeFileSync67 } = await import("fs");
+          const { dirname: dirname75, join: join187 } = await import("path");
           const yaml3 = await Promise.resolve().then(() => (init_js_yaml(), js_yaml_exports));
           const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
           let baseDoc = { version: 1 };
-          let existingPath = join186(workspace, relativePath);
+          let existingPath = join187(workspace, relativePath);
           let existedAsYaml = false;
           for (const relative30 of MESH_JSON_CONFIG_LOCATIONS2) {
-            const candidate = join186(workspace, relative30);
+            const candidate = join187(workspace, relative30);
             if (!existsSync148(candidate)) continue;
             try {
-              const text10 = readFileSync135(candidate, "utf-8");
+              const text10 = readFileSync136(candidate, "utf-8");
               const parsed = /\.json$/i.test(candidate) ? JSON.parse(text10) : yaml3.load(text10);
               if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
                 baseDoc = parsed;
@@ -203998,7 +204024,7 @@ ${marker2}`,
             };
           }
           mkdirSync83(dirname75(absolutePath), { recursive: true });
-          writeFileSync66(absolutePath, serialized, "utf-8");
+          writeFileSync67(absolutePath, serialized, "utf-8");
           return {
             success: true,
             written: true,
@@ -205801,7 +205827,7 @@ ${ptyResult.output.slice(-2e3)}`);
             workspace
           };
         }
-        const { existsSync: existsSync148, readFileSync: readFileSync135, writeFileSync: writeFileSync66, mkdirSync: mkdirSync83 } = await import("fs");
+        const { existsSync: existsSync148, readFileSync: readFileSync136, writeFileSync: writeFileSync67, mkdirSync: mkdirSync83 } = await import("fs");
         const { dirname: dirname75 } = await import("path");
         const mcpConfigPath = cliType === "claude-cli" ? resolveClaudeCoordinatorMcpConfigPath({ configPath: coordinatorSetup.configPath, workspace, meshId, configDir: getConfigDir2() }) : coordinatorSetup.configPath;
         let mcpServerEnv;
@@ -205841,7 +205867,7 @@ ${ptyResult.output.slice(-2e3)}`);
           let existingMcpConfigText = "";
           if (hadExistingMcpConfig) {
             try {
-              existingMcpConfigText = readFileSync135(mcpConfigPath, "utf-8");
+              existingMcpConfigText = readFileSync136(mcpConfigPath, "utf-8");
               const parsedExistingMcpConfig = parseMeshCoordinatorMcpConfig(existingMcpConfigText, configFormat);
               existingMcpConfig = { ...existingMcpConfig, ...parsedExistingMcpConfig };
             } catch (error) {
@@ -205869,9 +205895,9 @@ ${ptyResult.output.slice(-2e3)}`);
                 const backupDir = (0, import_path39.join)(getConfigDir2(), "mcp-config-backups");
                 mkdirSync83(backupDir, { recursive: true });
                 const backupName = `${mcpConfigPath.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+/, "")}.${Date.now()}`;
-                writeFileSync66((0, import_path39.join)(backupDir, backupName), existingMcpConfigText, "utf-8");
+                writeFileSync67((0, import_path39.join)(backupDir, backupName), existingMcpConfigText, "utf-8");
               }
-              writeFileSync66(mcpConfigPath, nextMcpConfigText, "utf-8");
+              writeFileSync67(mcpConfigPath, nextMcpConfigText, "utf-8");
             }
           } catch (error) {
             const message = `Could not write MCP config for automatic setup: ${error?.message || error}`;
@@ -238488,7 +238514,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (maintenance) {
           if (process.platform === "win32") throw new Error("maintenance_windows_retained_host_unsupported");
           const h = maintenance.retainedHost, endpoint = getEndpoint();
-          const nodePath = process.platform === "linux" ? fs146.realpathSync(`/proc/${h.pid}/exe`) : String(hiddenExecFileSync("/bin/ps", ["-o", "comm=", "-p", String(h.pid)], { encoding: "utf8", timeout: 5e3 })).trim();
+          const nodePath2 = process.platform === "linux" ? fs146.realpathSync(`/proc/${h.pid}/exe`) : String(hiddenExecFileSync("/bin/ps", ["-o", "comm=", "-p", String(h.pid)], { encoding: "utf8", timeout: 5e3 })).trim();
           const birth = String(hiddenExecFileSync("/bin/ps", ["-o", "lstart=", "-p", String(h.pid)], { encoding: "utf8", timeout: 5e3 })).trim();
           const ownerText = String(hiddenExecFileSync(process.platform === "darwin" ? "/usr/sbin/lsof" : "/usr/bin/lsof", ["-t", endpoint.path], { encoding: "utf8", timeout: 5e3 })).trim();
           if (!/^\d+$/.test(ownerText)) throw new Error("maintenance_retained_socket_owner_unknown");
@@ -238500,7 +238526,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             verifyRetainedMaintenanceHost(maintenance, {
               pid: getPid(),
               birth,
-              nodePath,
+              nodePath: nodePath2,
               socketOwnerPid: Number(ownerText),
               entryPath: parseNodeScriptPath(getProcessCommandLine(h.pid)),
               endpoint: endpoint.path,

@@ -4,6 +4,9 @@ import { workerSessionHealthFor } from '../../mesh/turn-ledger/worker-session-he
 import {createNoticeConsumeWatch} from '../../mesh/turn-ledger/notice-consume-watch.js';
 import {createNoticeSubmitInventory} from '../../mesh/turn-ledger/notice-submit-inventory.js';
 import { registerSessionArtifact } from '../../artifacts/artifact-store.js';
+import { redactSecretLines } from '../../artifacts/artifact-path-guard.js';
+import * as nodeFs from 'node:fs';
+import * as nodePath from 'node:path';
 import { setStageArtifactRegistrar } from '../../mesh/stage-ports-default.js';
 import { setLightSessionStopper } from '../../mesh/light-task-result.js';
 import { armQuotaRestartWarmup } from '../../mesh/mesh-quota-sources.js';
@@ -434,7 +437,20 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
     bindMeshNoticeRuntime(notices);
     // Review-in-task: the stage pipeline registers its diff / self-check / verdict artifacts (producerRole 'pipeline').
     setStageArtifactRegistrar((input) => {
-        return registerSessionArtifact(MeshRuntimeStore.getInstance().db as never, input).record.artifactId;
+        const register = () => registerSessionArtifact(MeshRuntimeStore.getInstance().db as never, input).record.artifactId;
+        try {
+            return register();
+        } catch (e: any) {
+            // A review diff whose fixtures carry token-shaped strings is refused as a secret (live
+            // 2026-11-07), leaving the reviewer with no diff at all. Mask those lines and retry once.
+            if (e?.code !== 'secret_file_refused' || !String(input.path).endsWith('.diff')) throw e;
+            const file = nodePath.join(input.workspaceRoot, input.path);
+            const redacted = redactSecretLines(nodeFs.readFileSync(file, 'utf8'));
+            if (redacted.redactedLines === 0) throw e;
+            nodeFs.writeFileSync(file, redacted.text, 'utf8');
+            input = { ...input, title: `${input.title} (${redacted.redactedLines} line(s) redacted)` };
+            return register();
+        }
     });
 
     // Light tasks: end the worker session once its task is terminal and captured (the workspace stays until land/discard).

@@ -97,6 +97,22 @@ export function assertNotSecretPath(candidatePathOrRel: string): void {
  * OD-6 fail-closed secret content check: refuses files containing private keys
  * or credential/token patterns (including polyglot/embedded payloads in image files).
  */
+/**
+ * Replace every line that would make {@link assertNotSecretContent} refuse the text with a marker,
+ * keeping a leading diff column (`+`, `-`, space) so a redacted diff still reads as a diff. Used
+ * where a partial artifact beats none (a review diff whose fixtures carry token-shaped strings).
+ */
+export function redactSecretLines(text: string): { text: string; redactedLines: number } {
+    let redactedLines = 0;
+    const out = text.split('\n').map(line => {
+        if (!containsEncodedOrRawSecret(line, SECRET_CONTENT_PATTERNS)) return line;
+        redactedLines++;
+        const lead = /^[+\- ]/.test(line) ? line[0] : '';
+        return `${lead}[line redacted: matched a secret or token pattern]`;
+    });
+    return { text: out.join('\n'), redactedLines };
+}
+
 export function assertNotSecretContent(buffer: Buffer, _kind: ArtifactKind): void {
     if (buffer.byteLength === 0) {
         return;
