@@ -45,7 +45,8 @@ export function withMissionReadForward(command: string, run: LowFamilyHandler): 
             const target = await forwardTarget(ctx, meshId);
             if (target) {
                 try {
-                    const raw = await ctx.deps.dispatchMeshCommand!(target, MISSION_READ_RELAY_COMMAND, { command, args: rest });
+                    // meshId at the TOP level: the any_member_mesh sender gate checks the roster of exactly this mesh.
+                    const raw = await ctx.deps.dispatchMeshCommand!(target, MISSION_READ_RELAY_COMMAND, { meshId, command, args: rest });
                     return unwrapMeshRelayResult(raw, { command, peerDaemonId: target }) as CommandRouterResult;
                 } catch (e: any) {
                     return { success: false, code: 'mesh_host_unreachable', error: `${command}: missions live on the mesh host (${target}), which could not be reached: ${e?.message ?? String(e)}. This daemon's local copy may be stale, so it is not served.` };
@@ -63,10 +64,19 @@ export function withMissionReadForward(command: string, run: LowFamilyHandler): 
  * source and only the two read commands — a write or any other command name is refused.
  */
 const missionReadRelay: LowFamilyHandler = async (ctx, args) => {
+    const refuse = (why: string) => ({ success: false, code: 'mission_read_relay_refused', error: `mission_read_relay: ${why}` });
     const command = typeof args?.command === 'string' ? args.command : '';
     const run = relayTargets.get(command);
-    if (!RELAYABLE.has(command) || !run) return { success: false, code: 'mission_read_relay_refused', error: `mission_read_relay: '${command}' is not a relayable mission read` };
-    const inner = args?.args && typeof args.args === 'object' && !Array.isArray(args.args) ? args.args as Record<string, unknown> : {};
+    if (!RELAYABLE.has(command) || !run) return refuse(`'${command}' is not a relayable mission read`);
+    const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+    const inner = args?.args && typeof args.args === 'object' && !Array.isArray(args.args) ? args.args as Record<string, unknown> : null;
+    // The sender gate authorised the TOP-level mesh; the read must be for that same mesh and no other.
+    if (!meshId || !inner || inner.meshId !== meshId) return refuse('the read must name the same mesh as the relay request');
+    // Only the host answers for a mesh's missions (a member or fenced former host holds a stale copy).
+    let mesh: unknown;
+    try { mesh = (await ctx.getMeshForCommand?.(meshId, undefined, { preferInline: true }))?.mesh; } catch { mesh = undefined; }
+    const self = ctx.deps.statusInstanceId;
+    if (!mesh || resolveMeshHostStatus(mesh, self ? { localDaemonId: self } : undefined).role !== 'host') return refuse('this daemon is not the host of that mesh');
     return run(ctx, { ...inner, [MISSION_READ_FORWARDED_KEY]: true });
 };
 

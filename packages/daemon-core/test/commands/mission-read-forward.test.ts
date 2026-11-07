@@ -18,7 +18,7 @@ describe('mission reads on a non-host daemon (live 2026-11-07: a former host ser
         localRun.mockClear();
         const run = withMissionReadForward('mission_query', localRun);
         const res: any = await run(ctxFor({ role: 'member', hostDaemonId: HOST }, dispatch), { v: 1, meshId: 'm1' });
-        expect(dispatch).toHaveBeenCalledWith(HOST, 'mission_read_relay', { command: 'mission_query', args: { v: 1, meshId: 'm1' } });
+        expect(dispatch).toHaveBeenCalledWith(HOST, 'mission_read_relay', { meshId: 'm1', command: 'mission_query', args: { v: 1, meshId: 'm1' } });
         expect(res.missions).toEqual(['from-host']);
         expect(localRun).not.toHaveBeenCalled();
     });
@@ -60,10 +60,18 @@ describe('mission reads on a non-host daemon (live 2026-11-07: a former host ser
         withMissionReadForward('mission_query', localRun);
         const relay = missionReadRelaySpecs[0];
         expect(relay.sources).toEqual(['mesh']);
-        const ok: any = await relay.run(ctxFor({ role: 'member', hostDaemonId: HOST }, dispatch), { command: 'mission_query', args: { meshId: 'm1' } });
+        const host = ctxFor({ role: 'host', hostDaemonId: SELF }, dispatch);
+        const ok: any = await relay.run(host, { meshId: 'm1', command: 'mission_query', args: { meshId: 'm1' } });
         expect(dispatch).not.toHaveBeenCalled();
         expect(ok.seenArgs).toEqual({ meshId: 'm1' });
-        const refused: any = await relay.run(ctxFor({ role: 'host', hostDaemonId: SELF }), { command: 'mission_upsert', args: { meshId: 'm1' } });
-        expect(refused.code).toBe('mission_read_relay_refused');
+        // writes / other commands are refused
+        expect(((await relay.run(host, { meshId: 'm1', command: 'mission_upsert', args: { meshId: 'm1' } })) as any).code).toBe('mission_read_relay_refused');
+        // the gate authorised the top-level mesh: a different nested mesh (or none) is refused
+        expect(((await relay.run(host, { meshId: 'm1', command: 'mission_query', args: { meshId: 'other' } })) as any).code).toBe('mission_read_relay_refused');
+        expect(((await relay.run(host, { command: 'mission_query', args: { meshId: 'm1' } })) as any).code).toBe('mission_read_relay_refused');
+        // a daemon that is not the host of that mesh does not answer
+        localRun.mockClear();
+        expect(((await relay.run(ctxFor({ role: 'member', hostDaemonId: HOST }, dispatch), { meshId: 'm1', command: 'mission_query', args: { meshId: 'm1' } })) as any).code).toBe('mission_read_relay_refused');
+        expect(localRun).not.toHaveBeenCalled();
     });
 });

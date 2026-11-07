@@ -135115,7 +135115,7 @@ ${detail.join("\n")}` : stripped;
           const target2 = await forwardTarget(ctx, meshId);
           if (target2) {
             try {
-              const raw = await ctx.deps.dispatchMeshCommand(target2, MISSION_READ_RELAY_COMMAND, { command, args: rest });
+              const raw = await ctx.deps.dispatchMeshCommand(target2, MISSION_READ_RELAY_COMMAND, { meshId, command, args: rest });
               return unwrapMeshRelayResult(raw, { command, peerDaemonId: target2 });
             } catch (e) {
               return { success: false, code: "mesh_host_unreachable", error: `${command}: missions live on the mesh host (${target2}), which could not be reached: ${e?.message ?? String(e)}. This daemon's local copy may be stale, so it is not served.` };
@@ -135145,10 +135145,21 @@ ${detail.join("\n")}` : stripped;
         relayTargets = /* @__PURE__ */ new Map();
         MISSION_READ_FORWARDED_KEY = "missionReadForwarded";
         missionReadRelay = async (ctx, args) => {
+          const refuse11 = (why) => ({ success: false, code: "mission_read_relay_refused", error: `mission_read_relay: ${why}` });
           const command = typeof args?.command === "string" ? args.command : "";
           const run5 = relayTargets.get(command);
-          if (!RELAYABLE.has(command) || !run5) return { success: false, code: "mission_read_relay_refused", error: `mission_read_relay: '${command}' is not a relayable mission read` };
-          const inner = args?.args && typeof args.args === "object" && !Array.isArray(args.args) ? args.args : {};
+          if (!RELAYABLE.has(command) || !run5) return refuse11(`'${command}' is not a relayable mission read`);
+          const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
+          const inner = args?.args && typeof args.args === "object" && !Array.isArray(args.args) ? args.args : null;
+          if (!meshId || !inner || inner.meshId !== meshId) return refuse11("the read must name the same mesh as the relay request");
+          let mesh;
+          try {
+            mesh = (await ctx.getMeshForCommand?.(meshId, void 0, { preferInline: true }))?.mesh;
+          } catch {
+            mesh = void 0;
+          }
+          const self = ctx.deps.statusInstanceId;
+          if (!mesh || resolveMeshHostStatus(mesh, self ? { localDaemonId: self } : void 0).role !== "host") return refuse11("this daemon is not the host of that mesh");
           return run5(ctx, { ...inner, [MISSION_READ_FORWARDED_KEY]: true });
         };
         missionReadRelaySpecs = defineCommandSpecs("low", { [MISSION_READ_RELAY_COMMAND]: missionReadRelay }, {
