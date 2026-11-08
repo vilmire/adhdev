@@ -260,6 +260,13 @@ const POLICY_KEY_SPECS: Record<string, PolicyKeySpec> = {
             );
         },
     },
+    pathOwnershipGate: {
+        effective: (v) => (v === 'same_checkout' || v === 'mesh_wide' ? v : 'off'),
+        stored: (v) => {
+            if (v === 'off' || v === 'same_checkout' || v === 'mesh_wide') return v;
+            throw new Error(`invalid_path_ownership_gate: must be 'off', 'same_checkout' or 'mesh_wide' (got ${JSON.stringify(v)}).`);
+        },
+    },
     worktreeBaseDir: {
         effective: (v) => (typeof v === 'string' && v.trim() ? v.trim() : undefined),
     },

@@ -30216,7 +30216,8 @@ ${renderWorkerProtocolFooter2(input)}`;
           // routine idle push for a coordinator-driven task (approval/failure notifications
           // are never affected — see coordinatorIdlePushPolicy).
           coordinatorIdlePushPolicy: "always",
-          onDependencyFailure: "block"
+          onDependencyFailure: "block",
+          pathOwnershipGate: "off"
         };
         DEFAULT_QUOTA_ROUTING_POLICY2 = {
           // ★Must stay equal to quota/refresh.ts QUOTA_ROUTABLE_MAX_AGE_MS —
@@ -30572,6 +30573,13 @@ ${renderWorkerProtocolFooter2(input)}`;
               throw new Error(
                 `invalid_on_dependency_failure: must be 'block' or 'cancel' (got ${JSON.stringify(v)}). Invalid values are rejected; they do not silently become 'block'.`
               );
+            }
+          },
+          pathOwnershipGate: {
+            effective: (v) => v === "same_checkout" || v === "mesh_wide" ? v : "off",
+            stored: (v) => {
+              if (v === "off" || v === "same_checkout" || v === "mesh_wide") return v;
+              throw new Error(`invalid_path_ownership_gate: must be 'off', 'same_checkout' or 'mesh_wide' (got ${JSON.stringify(v)}).`);
             }
           },
           worktreeBaseDir: {
@@ -32839,9 +32847,9 @@ ${renderWorkerProtocolFooter2(input)}`;
       return false;
     }
     function resolveConfigDir(env2 = process.env, homeDir2) {
-      const override = env2.ADHDEV_CONFIG_DIR;
-      if (override && override.trim()) {
-        const resolved = override.trim();
+      const override2 = env2.ADHDEV_CONFIG_DIR;
+      if (override2 && override2.trim()) {
+        const resolved = override2.trim();
         assertConfigDirIsolatedInTestRuntime(env2, resolved);
         return resolved;
       }
@@ -32892,14 +32900,14 @@ ${renderWorkerProtocolFooter2(input)}`;
       return (0, import_path3.join)(homeDir2 ?? (0, import_os.homedir)(), getTrackIdentity(otherTrack).configDirName);
     }
     function isCrossTrackConfigDirOverride(env2 = process.env, homeDir2, platform10 = process.platform) {
-      const override = env2.ADHDEV_CONFIG_DIR;
-      if (!override || !override.trim()) return false;
+      const override2 = env2.ADHDEV_CONFIG_DIR;
+      if (!override2 || !override2.trim()) return false;
       const sibling = otherTrackConfigDir(env2, homeDir2);
       const normalize8 = (p) => {
         const unified = p.trim().replace(/[\\/]+$/, "").replace(/\\/g, "/");
         return platform10 === "win32" ? unified.toLowerCase() : unified;
       };
-      return normalize8(override) === normalize8(sibling);
+      return normalize8(override2) === normalize8(sibling);
     }
     function configDirChannelMismatch(resolvedConfigDir, resolvedChannel, hasExplicitChannelSignal) {
       if (hasExplicitChannelSignal) return null;
@@ -38361,8 +38369,8 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
       return `antigravity/cli/${version2} (aidev_client; os_type=${osName}; arch=${arch2}; auth_method=${resolvedAuthMethod})`;
     }
     function baseUrl(env2) {
-      const override = env2.ANTIGRAVITY_CLOUDCODE_BASE_URL?.trim();
-      return (override ? override : DEFAULT_BASE_URL).replace(/\/+$/, "");
+      const override2 = env2.ANTIGRAVITY_CLOUDCODE_BASE_URL?.trim();
+      return (override2 ? override2 : DEFAULT_BASE_URL).replace(/\/+$/, "");
     }
     function storeSource(platform10) {
       if (platform10 === "win32") return "wincred";
@@ -39016,8 +39024,8 @@ try {
       return path11.join(adhdevHome(env2), "claude-statusline");
     }
     function claudeConfigDir(env2 = process.env) {
-      const override = env2.CLAUDE_CONFIG_DIR?.trim();
-      return override ? override : path11.join(os6.homedir(), ".claude");
+      const override2 = env2.CLAUDE_CONFIG_DIR?.trim();
+      return override2 ? override2 : path11.join(os6.homedir(), ".claude");
     }
     function claudeSettingsPath(env2 = process.env) {
       return path11.join(claudeConfigDir(env2), "settings.json");
@@ -39620,8 +39628,8 @@ child.on('exit', () => process.exit(0));
       return unconfirmedQuotaReading(quota, producer, { retainDisplay: !switched, switched });
     }
     function claudeAccountStatePath(env2) {
-      const override = env2.CLAUDE_CONFIG_DIR?.trim();
-      if (override) return path14.join(override, ".claude.json");
+      const override2 = env2.CLAUDE_CONFIG_DIR?.trim();
+      if (override2) return path14.join(override2, ".claude.json");
       const home = process.platform === "win32" ? env2.USERPROFILE?.trim() || env2.HOME?.trim() : env2.HOME?.trim();
       return path14.join(home || os9.homedir(), ".claude.json");
     }
@@ -39795,8 +39803,8 @@ child.on('exit', () => process.exit(0));
       }
     });
     function codexHome(env2 = process.env) {
-      const override = env2.CODEX_HOME?.trim();
-      return override ? override : path15.join(os10.homedir(), ".codex");
+      const override2 = env2.CODEX_HOME?.trim();
+      return override2 ? override2 : path15.join(os10.homedir(), ".codex");
     }
     function codexSessionsDir(env2 = process.env) {
       return path15.join(codexHome(env2), "sessions");
@@ -40074,8 +40082,8 @@ child.on('exit', () => process.exit(0));
       }
     }
     function codexCommand(env2) {
-      const override = env2.ADHDEV_CODEX_BIN?.trim();
-      return override ? override : "codex";
+      const override2 = env2.ADHDEV_CODEX_BIN?.trim();
+      return override2 ? override2 : "codex";
     }
     function mapWindow(raw, fallbackMinutes) {
       if (typeof raw !== "object" || raw === null) {
@@ -40431,8 +40439,8 @@ child.on('exit', () => process.exit(0));
       }
     }
     function baseUrl2(env2) {
-      const override = env2.CURSOR_API_BASE_URL?.trim() || env2.CURSOR_API_ENDPOINT?.trim();
-      return (override || DEFAULT_BASE_URL2).replace(/\/+$/, "");
+      const override2 = env2.CURSOR_API_BASE_URL?.trim() || env2.CURSOR_API_ENDPOINT?.trim();
+      return (override2 || DEFAULT_BASE_URL2).replace(/\/+$/, "");
     }
     function clientVersion(env2) {
       const raw = env2.CURSOR_CLI_VERSION?.trim();
@@ -40829,16 +40837,16 @@ child.on('exit', () => process.exit(0));
       }
     });
     function grokHome(env2) {
-      const override = env2.GROK_HOME?.trim();
-      return override ? override : path18.join(os12.homedir(), ".grok");
+      const override2 = env2.GROK_HOME?.trim();
+      return override2 ? override2 : path18.join(os12.homedir(), ".grok");
     }
     function authPath2(env2) {
       const direct = env2.GROK_AUTH_PATH?.trim();
       return direct ? direct : path18.join(grokHome(env2), "auth.json");
     }
     function baseUrl3(env2) {
-      const override = env2.GROK_CLI_CHAT_PROXY_BASE_URL?.trim();
-      return (override ? override : DEFAULT_BASE_URL3).replace(/\/+$/, "");
+      const override2 = env2.GROK_CLI_CHAT_PROXY_BASE_URL?.trim();
+      return (override2 ? override2 : DEFAULT_BASE_URL3).replace(/\/+$/, "");
     }
     function parseCredentials2(raw, nowMs2) {
       let parsed;
@@ -41052,8 +41060,8 @@ child.on('exit', () => process.exit(0));
       }
     });
     function kimiHome(env2) {
-      const override = env2.KIMI_CODE_HOME?.trim();
-      return override ? override : path19.join(os13.homedir(), ".kimi-code");
+      const override2 = env2.KIMI_CODE_HOME?.trim();
+      return override2 ? override2 : path19.join(os13.homedir(), ".kimi-code");
     }
     function tomlStringValue(line, key7) {
       const escapedKey = key7.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -41104,8 +41112,8 @@ child.on('exit', () => process.exit(0));
       return path19.join(kimiHome(env2), "credentials", `${name}.json`);
     }
     function baseUrl4(env2, configured) {
-      const override = env2.KIMI_CODE_BASE_URL?.trim();
-      return (override || configured || DEFAULT_BASE_URL4).replace(/\/+$/, "");
+      const override2 = env2.KIMI_CODE_BASE_URL?.trim();
+      return (override2 || configured || DEFAULT_BASE_URL4).replace(/\/+$/, "");
     }
     function parseCredentials3(raw) {
       let parsed;
@@ -41371,8 +41379,8 @@ child.on('exit', () => process.exit(0));
       return accountLineageFromStableIdentity("opencode", "local-usage-store", "opencode-local-store", path20.resolve(dataHome, "opencode"));
     }
     function opencodeCommand(env2) {
-      const override = env2.ADHDEV_OPENCODE_BIN?.trim();
-      return override ? override : "opencode";
+      const override2 = env2.ADHDEV_OPENCODE_BIN?.trim();
+      return override2 ? override2 : "opencode";
     }
     function parseTokenCount(raw) {
       const match = /^([\d,.]+)\s*([KMB])?$/i.exec(raw.trim());
@@ -42347,8 +42355,8 @@ child.on('exit', () => process.exit(0));
       return path23.join(resolveConfigDir(), WORKTREE_DIR_NAME);
     }
     function resolveWorktreeBaseDir(worktreeBaseDir) {
-      const override = typeof worktreeBaseDir === "string" ? worktreeBaseDir.trim() : "";
-      return override || getDefaultWorktreeBaseDir();
+      const override2 = typeof worktreeBaseDir === "string" ? worktreeBaseDir.trim() : "";
+      return override2 || getDefaultWorktreeBaseDir();
     }
     function resolveWorktreePath(repoRoot, meshName, branch, worktreeBaseDir) {
       const safeBranch = branch.replace(/[/\\:*?"<>|]/g, "-").replace(/^\.+|\.+$/g, "");
@@ -48811,6 +48819,23 @@ ${error.message || ""}`;
         STAGE_BLOCK_OVERWRITING_STATUSES = /* @__PURE__ */ new Set(["completed", "failed"]);
       }
     });
+    function resolvePathOwnershipGate(meshId) {
+      if (override) return override;
+      try {
+        const v = resolveMeshPolicy2(getMesh(meshId)?.policy).pathOwnershipGate;
+        return v === "same_checkout" || v === "mesh_wide" ? v : "off";
+      } catch {
+        return "off";
+      }
+    }
+    var override;
+    var init_mesh_path_ownership_gate = __esm2({
+      "src/mesh/mesh-path-ownership-gate.ts"() {
+        "use strict";
+        init_mesh_config();
+        init_repo_mesh_types();
+      }
+    });
     function preferEligible2(eligible, preferences, key7) {
       const rank = (value) => {
         const i = preferences?.indexOf(key7(value)) ?? -1;
@@ -48856,7 +48881,10 @@ ${error.message || ""}`;
         if (writer.status !== "assigned" && !pendingLaunchReservation(writer) || writer.readonly || writer.taskMode === "live_debug_readonly") return false;
         if (pinnedMeshNodeIdMatches(writer.assignedNodeId, scope2.nodeId)) return true;
         const paths = writer.ownedPaths ?? { paths: [{ path: "", subtree: true }] };
-        return comparePhysicalOwnership(stageSource ? { paths: [] } : source2.ownedPaths ?? { paths: [] }, scope2, paths, currentPhysicalScope(writer.ownershipScope, paths)).physicalConflict;
+        const writerScope = currentPhysicalScope(writer.ownershipScope, paths);
+        const crossCheckout = (!!writer.light || !!(writer.assignedNodeId ?? writer.autoLaunch?.nodeId)) && resolvePathOwnershipGate(source2.meshId) !== "mesh_wide";
+        if (crossCheckout && !writerScope) return false;
+        return comparePhysicalOwnership(stageSource ? { paths: [] } : source2.ownedPaths ?? { paths: [] }, scope2, paths, writerScope).physicalConflict;
       });
     }
     function pendingLaunchReservation(task, now = Date.now()) {
@@ -48876,6 +48904,7 @@ ${error.message || ""}`;
         init_dist();
         init_stage_review_input();
         init_stage_state();
+        init_mesh_path_ownership_gate();
         CAPACITY_OCCUPYING_STATUSES = ["assigned", "pending"];
       }
     });
@@ -48907,6 +48936,28 @@ ${error.message || ""}`;
         since = /* @__PURE__ */ new Map();
       }
     });
+    function checkoutOfWriter(entry) {
+      if (entry.light) return { light: entry.lightWorkspaceId ?? entry.id ?? "light" };
+      const nodeId = entry.assignedNodeId || entry.autoLaunch?.nodeId;
+      return nodeId ? { nodeId } : void 0;
+    }
+    function checkoutOfCandidate(entry, nodeId) {
+      if (entry.light) return { light: entry.lightWorkspaceId ?? entry.id ?? "light" };
+      const node = nodeId || entry.assignedNodeId || entry.targetNodeId;
+      return node ? { nodeId: node } : void 0;
+    }
+    function sharesCheckout(candidate, other) {
+      if (!other) return true;
+      if (!candidate) return false;
+      if (candidate.light || other.light) return !!candidate.light && candidate.light === other.light;
+      return !!candidate.nodeId && !!other.nodeId && meshNodeIdMatches7({ id: other.nodeId }, candidate.nodeId);
+    }
+    var init_mesh_checkout_identity = __esm2({
+      "src/mesh/mesh-checkout-identity.ts"() {
+        "use strict";
+        init_dist();
+      }
+    });
     function queueTaskShortTitle(task) {
       return (task.message || "").trim().split("\n")[0].slice(0, 100);
     }
@@ -48920,8 +48971,9 @@ ${error.message || ""}`;
         }
       }
     }
-    function queueHoldContext(task, reason, queue, nodeId, prospectiveScope, opts) {
+    function queueHoldContext(task, reason, queue, nodeId, prospectiveScope) {
       const active = holdActiveWriters(task, queue);
+      const pathGate = resolvePathOwnershipGate(task.meshId);
       const overlaps2 = [];
       let explained;
       if (reason === "owned_paths_conflict" && task.ownedPaths) {
@@ -48932,9 +48984,13 @@ ${error.message || ""}`;
           if (!blockingPaths || isReadonly && !blockingScope) continue;
           const candidateScope = prospectiveScope ?? currentPhysicalScope(task.ownershipScope, task.ownedPaths);
           const otherScope = currentPhysicalScope(blockingScope, blockingPaths);
-          if (opts?.preSpawn && !task.ownershipScope && !candidateScope && otherScope && other.light && other.lightWorkspaceId) {
-            pushLogicalOverlaps(overlaps2, task, other, blockingPaths);
-            continue;
+          const otherCheckout = isReadonly && blockingScope ? { nodeId: blockingScope.nodeId } : checkoutOfWriter(other);
+          const candidateCheckout = checkoutOfCandidate(task, nodeId);
+          const wide = pathGate === "mesh_wide" && !candidateCheckout?.light && !otherCheckout?.light;
+          if (!wide && !sharesCheckout(candidateCheckout, otherCheckout)) {
+            if (!candidateScope || !otherScope) continue;
+            const crossKind = explainPhysicalOverlap(task.ownedPaths, candidateScope, blockingPaths, otherScope).kind;
+            if (crossKind === "none" || crossKind === "missing_scope") continue;
           }
           const physical = comparePhysicalOwnership(task.ownedPaths, candidateScope, blockingPaths, otherScope);
           if (!physical.physicalConflict) continue;
@@ -49010,6 +49066,8 @@ ${error.message || ""}`;
         init_mesh_physical_ownership();
         init_dist();
         init_mesh_task_routing_contract();
+        init_mesh_path_ownership_gate();
+        init_mesh_checkout_identity();
         QUEUE_HOLD_NOTICE_AFTER_MS = 3 * 6e4;
         UNKNOWN_BLOCKER_NO_EVIDENCE = "unknown_blocker_no_evidence";
       }
@@ -81181,8 +81239,8 @@ ${asText(streams.stderr)}
     function lightTaskKey(taskId) {
       return taskId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || crypto6.randomBytes(4).toString("hex");
     }
-    function resolveLightBaseDir(cfg, override) {
-      if (override) return override;
+    function resolveLightBaseDir(cfg, override2) {
+      if (override2) return override2;
       if (cfg?.baseDir) return cfg.baseDir;
       if (process.platform === "win32") {
         return path41.join(process.env.LOCALAPPDATA || path41.join(os21.homedir(), "AppData", "Local"), "adhdev", "lw");
@@ -87745,10 +87803,11 @@ ${includeRefs[0]}`;
       store5.transaction(() => {
         const task = store5.findQueueEntryById(meshId, taskId);
         if (!task || task.status !== "pending" || preserveExisting && task.hold) return;
+        if ((reason === "owned_paths_conflict" || reason === "ownership_unproven") && resolvePathOwnershipGate(meshId) === "off") return;
         const writers = store5.assignedRowsMeshWide(meshId).map((row2) => JSON.parse(row2.payload));
         const pending = store5.getQueueEntries(meshId, ["pending"]);
         const queue = [...writers, ...pending.filter((p) => !writers.some((w) => w.id === p.id))];
-        const context2 = queueHoldContext(task, reason, queue, nodeId, void 0, { preSpawn: true });
+        const context2 = queueHoldContext(task, reason, queue, nodeId);
         if (reason === "dependencies_unsatisfied") {
           const completed = new Set(store5.getQueueHeads(meshId, ["completed"]).map((head) => head.id));
           context2.blockingTaskIds = (task.dependsOn || []).filter((id4) => !completed.has(id4));
@@ -87773,6 +87832,7 @@ ${includeRefs[0]}`;
       const queue = store5.getQueueEntries(meshId, ["pending", "assigned"]);
       for (const snapshot of queue) {
         const view2 = queueTaskHoldView(snapshot, queue, now);
+        if ((view2?.reason === "owned_paths_conflict" || view2?.reason === "ownership_unproven") && resolvePathOwnershipGate(meshId) === "off") continue;
         const unclaimable = isUnclaimableAsDeclared(view2);
         if (!view2 || !unclaimable && view2.ageMs < QUEUE_HOLD_NOTICE_AFTER_MS || snapshot.holdNoticeId) continue;
         if (isDifficultyFloorWaitReason(view2.reason) && !isQuotaGateHoldReason(view2.reason) || view2.reason === "difficulty_floor_unmet") continue;
@@ -87808,6 +87868,7 @@ ${includeRefs[0]}`;
         init_mesh_queue_hold();
         init_deliver();
         init_mesh_difficulty_floor();
+        init_mesh_path_ownership_gate();
         init_config();
         init_mesh_quota_override();
       }
@@ -97235,7 +97296,7 @@ ${continuationNotice}` } : dispatchTask,
       return { effectiveProviderType, slot: slotDecision.slot, model: finalization.model, demotionReason: finalization.demotionReason };
     }
     async function resolveAutoLaunchPlan(components, meshId, mesh, task, node, nodeId, isReadonly, skippedCandidates, markSkip) {
-      const preAdmission = evaluateTaskOwnedPathsAdmission(MeshRuntimeStore.getInstance(), meshId, task);
+      const preAdmission = evaluateTaskOwnedPathsAdmission(MeshRuntimeStore.getInstance(), meshId, task, void 0, nodeId);
       if (!preAdmission.allowed) {
         markSkip(nodeId, "owned_paths_conflict");
         return null;
@@ -97249,7 +97310,7 @@ ${continuationNotice}` } : dispatchTask,
         markSkip(nodeId, resolved.reason || "provider_unusable");
         return null;
       }
-      const postProviderAdmission = evaluateTaskOwnedPathsAdmission(MeshRuntimeStore.getInstance(), meshId, task);
+      const postProviderAdmission = evaluateTaskOwnedPathsAdmission(MeshRuntimeStore.getInstance(), meshId, task, void 0, nodeId);
       if (!postProviderAdmission.allowed) {
         markSkip(nodeId, "owned_paths_conflict", { providerType: resolved.providerType });
         return null;
@@ -98776,25 +98837,32 @@ ${continuationNotice}` } : dispatchTask,
           if (parsed.id === void 0) return { taskId: "unproven_active_writer", paths: unknownWriterPaths };
           if (isTaskReadonly3(parsed)) {
             const scope2 = parsed.reviewInputScope;
-            return scope2 ? { taskId: parsed.id, paths: { paths: scope2.declaration }, ownershipScope: scope2, readLease: true } : null;
+            return scope2 ? { taskId: parsed.id, paths: { paths: scope2.declaration }, ownershipScope: scope2, readLease: true, checkout: { nodeId: scope2.nodeId } } : null;
           }
-          return { taskId: parsed.id, paths: parsed.ownedPaths ?? unknownWriterPaths, ownershipScope: parsed.ownershipScope, ...parsed.light && parsed.lightWorkspaceId ? { privateWorktree: true } : {} };
+          const checkout = checkoutOfWriter(parsed);
+          return { taskId: parsed.id, paths: parsed.ownedPaths ?? unknownWriterPaths, ownershipScope: parsed.ownershipScope, ...checkout ? { checkout } : {} };
         } catch {
           return { taskId: "unproven_active_writer", paths: unknownWriterPaths };
         }
       }).filter((v) => v !== null);
     }
     function findTaskOwnedPathsConflicts(candidate, inFlightOwnership, prospectiveScope, opts) {
-      if (isTaskReadonly3(candidate)) return [];
+      const gate = opts?.gate ?? "same_checkout";
+      if (isTaskReadonly3(candidate) || gate === "off") return [];
       const paths = candidate.ownedPaths ?? unknownWriterPaths;
       const scope2 = prospectiveScope ?? currentPhysicalScope(candidate.ownershipScope, paths);
-      const logicalOnly = !!opts?.preSpawn && !candidate.ownershipScope && !prospectiveScope;
+      const candidateCheckout = checkoutOfCandidate(candidate, opts?.nodeId);
       return inFlightOwnership.flatMap((other) => {
         if (other.taskId === candidate.id) return [];
         const current5 = currentPhysicalScope(other.ownershipScope, other.paths);
-        if (logicalOnly && current5 && other.privateWorktree) return findOwnershipConflicts2(paths, [other]);
         const otherScope = other.readLease && current5 && other.ownershipScope ? { ...current5, resources: [...current5.resources, ...other.ownershipScope.resources] } : current5;
-        if (other.ownershipScope && !otherScope) return [{ taskId: other.taskId, overlappingPaths: ["unproven_active_physical_resource"] }];
+        const sameCheckout = gate === "mesh_wide" && !candidateCheckout?.light && !other.checkout?.light ? true : sharesCheckout(candidateCheckout, other.checkout);
+        if (!sameCheckout) {
+          if (!scope2 || !otherScope) return [];
+          const kind = explainPhysicalOverlap(paths, scope2, other.paths, otherScope).kind;
+          if (kind === "none" || kind === "missing_scope") return [];
+        }
+        if (sameCheckout && other.ownershipScope && !otherScope) return [{ taskId: other.taskId, overlappingPaths: ["unproven_active_physical_resource"] }];
         const comparison = comparePhysicalOwnership(paths, scope2, other.paths, otherScope);
         if (!comparison.physicalConflict) return [];
         const explained = explainPhysicalOverlap(paths, scope2, other.paths, otherScope);
@@ -98807,12 +98875,12 @@ ${continuationNotice}` } : dispatchTask,
     function formatOwnedPathsConflictDetail(conflicts) {
       return conflicts.length ? `owned_paths overlap with task(s): ${conflicts.map((c) => `${c.taskId} [${c.overlappingPaths.join(", ")}]`).join("; ")}` : void 0;
     }
-    function evaluateTaskOwnedPathsAdmission(host, meshId, candidate, inFlightOwnership) {
+    function evaluateTaskOwnedPathsAdmission(host, meshId, candidate, inFlightOwnership, nodeId, gate = resolvePathOwnershipGate(meshId)) {
       if (!candidate || isTaskReadonly3(candidate)) {
         return { allowed: true, conflicts: [] };
       }
       const inFlight9 = inFlightOwnership ?? readInFlightOwnershipMeshWide(host, meshId);
-      const conflicts = findTaskOwnedPathsConflicts(candidate, inFlight9, void 0, { preSpawn: true });
+      const conflicts = findTaskOwnedPathsConflicts(candidate, inFlight9, void 0, { nodeId, gate });
       if (conflicts.length === 0) return { allowed: true, conflicts: [] };
       return {
         allowed: false,
@@ -98924,6 +98992,7 @@ ${continuationNotice}` } : dispatchTask,
             }
           });
         };
+        const pathGate = resolvePathOwnershipGate(meshId);
         const inFlightOwnership = readInFlightOwnershipMeshWide(host, meshId);
         const ownershipProof = /* @__PURE__ */ new Map();
         const proofFor = (candidate) => {
@@ -98960,11 +99029,13 @@ ${continuationNotice}` } : dispatchTask,
           return result;
         };
         const ownedPathsConflictFor = (candidate) => {
+          if (pathGate === "off") return [];
           const proof = proofFor(candidate);
-          return findTaskOwnedPathsConflicts(candidate, inFlightOwnership, proof && "scope" in proof ? proof.scope : void 0);
+          return findTaskOwnedPathsConflicts(candidate, inFlightOwnership, proof && "scope" in proof ? proof.scope : void 0, { nodeId, gate: pathGate });
         };
         const ownedPathsAllows = (candidate) => ownedPathsConflictFor(candidate).length === 0;
         const ownershipProven = (candidate) => {
+          if (pathGate === "off") return true;
           const proof = proofFor(candidate);
           return !proof || !("error" in proof);
         };
@@ -99040,7 +99111,7 @@ ${continuationNotice}` } : dispatchTask,
           { reason: "review_input_unavailable", test: (c) => reviewRefusal(c) !== "review_input_unavailable" },
           { reason: "review_input_busy", test: (c) => reviewRefusal(c) !== "review_input_busy" },
           // When the claiming session's live model is unknown (!assignedModel) and the
-          // candidate is already blocked mesh-wide by owned_paths_conflict (with node
+          // candidate is already blocked by owned_paths_conflict in this checkout (with node
           // and parallel caps clear), advance to owned_paths_conflict rather than
           // attributing the refusal to the unknown-model slot intersection.
           { reason: "difficulty_floor_unmet", test: (c) => difficultyAllows(c) || !assignedModel && parallelCapsAllow(c) && nodeConflictAllows(c) && !ownedPathsAllows(c) },
@@ -99105,12 +99176,14 @@ ${continuationNotice}` } : dispatchTask,
         }
         const entry = selected2.entry;
         const admittedProof = proofFor(entry);
-        if (admittedProof && "error" in admittedProof) return refuse11("ownership_unproven", admittedProof.error, entry);
+        if (admittedProof && "error" in admittedProof && pathGate !== "off") return refuse11("ownership_unproven", admittedProof.error, entry);
         if (admittedProof && "scope" in admittedProof) {
           const reproduced = currentPhysicalScope(admittedProof.scope, entry.ownedPaths);
-          if (!reproduced) return refuse11("ownership_unproven", "unproven_active_physical_resource", entry);
-          entry.ownershipScope = reproduced;
-          entry.phase = entry.phase === "integration" ? "integration" : "source";
+          if (!reproduced && pathGate !== "off") return refuse11("ownership_unproven", "unproven_active_physical_resource", entry);
+          if (reproduced) {
+            entry.ownershipScope = reproduced;
+            entry.phase = entry.phase === "integration" ? "integration" : "source";
+          }
         }
         if (nodeGitGate && (nodeGitGate.dirty || nodeGitGate.staleBehind) && isTaskReadonly3(entry)) {
           LOG.info("MeshQueue", `Claiming readonly task ${entry.id} for node ${nodeId} despite git gate (${nodeGitGate.dirty ? "dirty_workspace" : ""}${nodeGitGate.dirty && nodeGitGate.staleBehind ? ", " : ""}${nodeGitGate.staleBehind ? `node_stale_behind_upstream${nodeGitGate.behind !== void 0 ? ` behind=${nodeGitGate.behind}` : ""}` : ""}) \u2014 readonly tasks are exempt from the write-gate.`);
@@ -99123,8 +99196,8 @@ ${continuationNotice}` } : dispatchTask,
         }
         entry.revision = (entry.revision ?? 0) + 1;
         if (entry.ownedPaths && entry.ownershipScope) {
-          const hard = new Set(findTaskOwnedPathsConflicts(entry, inFlightOwnership).map((c) => c.taskId));
-          const warnings = findOwnershipConflicts2(entry.ownedPaths, inFlightOwnership).filter((c) => !hard.has(c.taskId)).map((c) => ({ ...c, action: "serialize_integration" }));
+          const hard = new Set(findTaskOwnedPathsConflicts(entry, inFlightOwnership, void 0, { nodeId, gate: pathGate }).map((c) => c.taskId));
+          const warnings = findOwnershipConflicts2(entry.ownedPaths, inFlightOwnership.filter((o) => o.paths !== unknownWriterPaths)).filter((c) => !hard.has(c.taskId)).map((c) => ({ ...c, action: "serialize_integration" }));
           entry.logicalOverlapWarnings = [...new Map([...entry.logicalOverlapWarnings ?? [], ...warnings].map((c) => [c.taskId, c])).values()];
         }
         delete entry.hold;
@@ -99164,6 +99237,8 @@ ${continuationNotice}` } : dispatchTask,
         init_stage_independence();
         init_mesh_physical_ownership();
         init_mesh_queue_hold();
+        init_mesh_path_ownership_gate();
+        init_mesh_checkout_identity();
         init_worker_bridge();
         init_new_work_hold();
         init_logger();
@@ -100659,7 +100734,7 @@ ${continuationNotice}` } : dispatchTask,
     var init_default_coordinator_rules = __esm2({
       "src/mesh/default-coordinator-rules.ts"() {
         "use strict";
-        DEFAULT_COORDINATOR_RULES = "## Orchestration Workflow\n\nArtifact handoffs: default to zero coordinator body reads. Pass supplied `artifactIds` through as `input_artifact_ids` without reading their contents first. Reuse the supplied summary and current source when sufficient. Inspect artifact metadata first; `previewText` is at most 600 Unicode characters, not the whole report. If a specific missing fact requires content, call `artifact_read` with an explicit small byte `limit` (for example 4096) and an appropriate `offset`; avoid the default 256 KiB read. The API is byte-paged and does not provide a \"head three lines\" operation. If an artifact grant is denied, report the metadata/provenance diagnostic; never proxy a large body as a workaround. Forward artifact IDs and precise open questions to the next worker instead of copying large report bodies. Tasks enqueued with a `mission_id` automatically inherit the artifacts workers registered for earlier finished tasks of the same mission (newest first, at most 12; never from the carry-over mission; set `inherit_artifacts: false` to opt out), so for a same-mission follow-up state only what is new.\n\n1. **Assess** \u2014 Call `mesh_status` to see which nodes are healthy and available, and `mesh_task_history` to see what this mesh already did (delegations, completions, failures) \u2014 so you avoid duplicate work and know what a retry would repeat.\n2. **Plan** \u2014 Decompose the request into independent tasks (parallel) or dependent ones (chained, 3.a). If history shows a recent failure for a task, decide retry vs reassign. **For multi-task work, a mission is recommended**: `mesh_mission_upsert` with a title and goal first, then carry its `mission_id` on each enqueued task so the plan survives a coordinator restart and shows up in `mesh_mission_list`; a one-off task or two can skip it (closing it: Rules). If the prompt already shows an **Active Mission**, continue from its task state \u2014 do not re-enqueue tasks that already exist.\n3. **Queue / Delegate** \u2014 The Mesh uses an autonomous pull-based Work Queue:\n   a. **Incremental enqueue rule.** Default to `mesh_enqueue_task`. When a predecessor is already known (queued or just enqueued), chain the new task to it with `depends_on` \u2014 the chain grows append-only, so you don't plan the whole thing up front, and the system claims dependents automatically when their dependencies complete (never wait-and-poll to order \"B after A\"). A dependent waits until every `depends_on` task has completed, then automatically receives an \"Upstream results\" appendix summarizing its predecessors' completions. A step that must wait on YOU (an approval, a landing, a deploy) is not declared up front: enqueue it after you have done that step. `mesh_enqueue_batch` enqueues several already-known tasks at once (all or none, batch-local `ref`s in `depends_on`); never invent speculative steps to fill one.\n   b. **Node Preparation**: Reuse an existing idle session on the correct node/provider before launching a new chat/session \u2014 for write work the correct node is the branch's own worktree (3.b0/3.b1), never a base node. Call `mesh_launch_session` only when no suitable session exists, when the user explicitly asks for a fresh provider/session, or when branch/worktree isolation requires it. **A node is not limited to one live session for read-only work** \u2014 `readonly`/`live_debug_readonly` tasks are exempt from the one-active-per-node invariant, so the SAME node can auto-launch multiple concurrent read-only sessions with no worktree needed. Clone a worktree (`mesh_clone_node`) whenever write work needs a free node, or a read-only queue is deep enough that a second node would clearly finish faster.\n   b0. **Base nodes are for environment-specific testing, not for general code changes.** Before dispatching any write task, answer ONE question: *does this task verify the physical environment of a specific machine or OS, or does it only change code?*\n       - **Physical-environment task \u2192 base node, targeted.** Pin it with `required_tags` (e.g. `[\"os=win32\"]`) or `target_node_id`. Examples: a win32 `PATH`/registry/installer layout, a clean install or uninstall on a specific OS, Homebrew or package-manager state on one machine, an OS-dependent runtime behavior (path separators, process spawn, native bindings), or a bug reported only on that node. A worktree cannot substitute \u2014 the point is the machine itself.\n       - **Everything else (ordinary `code_change`) \u2192 a worktree.** Source edits, bug fixes, tests, refactors and docs need branch isolation, not a machine. **Do NOT send these to a base node.** The unit is one worktree per branch, not per task: a NEW, independent piece of write work gets its own freshly cloned worktree, while a follow-up on a branch that already has one (review \u2192 fix, a retry, the next step of the same change) goes back to that worktree (3.b1) and its idle session (Rules: **Reuse idle sessions**).\n       - **A mesh with several nodes does not remove this requirement.** Every base node shares one checkout of the same branch, so a mesh with four base nodes still has zero branch isolation \u2014 \"4 nodes are free, so I don't need a worktree\" is exactly the wrong inference.\n       - **Cloning is nearly free.** `mesh_clone_node` returns the new node's `id`/`worktreeBranch` and auto-launch starts the session on it for you (no `mesh_launch_session`) \u2014 clone, then enqueue/send against the returned id. Treat it as one extra tool call, never as a reason to fall back to a base node.\n   b1. **Keep a branch's work on its worktree (worktree affinity).** Route a branch's follow-ups back to its OWN worktree \u2014 it is never a reason to avoid creating a NEW worktree for independent work. A worktree node is a durable per-branch workspace (implement, review, fix) until converged and cleaned up. Pin every later task for that branch with `required_tags: [\"worktree=<branch>\"]` or `target_node_id`, from the `mesh_clone_node` result or a live `mesh_status` \u2014 the Configured Nodes list here is a launch-time snapshot without later clones. Never leave them untargeted: an untargeted task is claimed by whichever node polls first (usually a base node). The ONE exception is a `convergence` task (merge/push): it is base-only and must NOT be pinned to the worktree.\n   b2. **Light tasks \u2014 small code changes on the coordinator's own machine.** `mesh_enqueue_task` with `light: true` and `owned_paths` (required) runs the worker in a temporary workspace cut from this machine's checkout commit: no `mesh_clone_node`, no `npm install`, a workspace in seconds. Prefer it over a worktree for a small, single-concern `code_change` (roughly 15 files or fewer) that can be verified here. **Use a worktree instead** for dependency changes (package.json, lockfiles, `.npmrc`), work that needs a fixed-port server, multi-day or multi-step branches, submodule add/remove, or a physical-environment check (3.b0). When the worker reports, the completion carries a `lightResult` (touched paths, apply-check vs HEAD and origin, worker-reported tests). When the request or the done criteria include landing, land it with `mesh_light_land` \u2014 `dry_run` first, several `task_ids` in one call; mode `refine` (default) validates with the repo's fast profile and keeps publish approval and push guards. If a result is `conflict`, send the rebase delta to the SAME session with `mesh_send_task` (current base, the conflicting paths, \"resolve and commit\") \u2014 never re-enqueue. `blocked` results (`light_uncommitted_changes`, `light_dependency_change`, `shared_checkout_mutated`) keep their patch artifacts; re-run the work as a worktree task or `mesh_light_discard`. Do not send write tasks to a base node to avoid a clone.\n   c. **Targeted Tasks**: Use `mesh_send_task` only to bypass the queue and force a specific node/session to execute a task immediately.\n   d. **Front-load the first dispatch.** Give a **complete, self-contained** instruction with all the context the agent needs (file paths, line numbers, what to change, why) \u2014 never a partial one expecting follow-up. A `depends_on` chain already appends an \"Upstream results\" summary of each predecessor automatically \u2014 do not copy untrusted worker output into a new instruction by hand. Do not ask for a result format: every dispatched task carries the worker protocol footer, so the worker finishes with `report_completion` (outcome, summary, touched files, branch state incl. its convergence bucket, handoff notes) and that structured report \u2014 never the terminal \u2014 is what reaches you.\n   e. For a continuation of the same issue in an existing session, send a concise **delta instruction**: current verified state, the exact failed/blocked step, the newly approved action, and final reporting requirements. Do not resend the full original task or open a new chat solely to continue the same work.\n   f. **Don't split investigation from the fix.** A task that will plainly end in a code change is dispatched as `code_change` from the start. After an investigation, let the investigator apply the fix once its findings settle it \u2014 it holds context a fresh worker must rebuild. Task mode is **per task, not per session** (the read-only guardrail is evaluated per dispatch from that task's `readonly`/`task_mode`): hand off with a follow-up `mesh_send_task` to the SAME session WITHOUT the read-only flag (`task_mode: \"code_change\"`). You do not need a new session or a fresh worktree for the mode to change. **Hand off in-session when** the findings match your hypothesis, the fix stays inside the files just investigated, and no user decision is pending. **Split to a separate task when** it needs a user decision (design options, a cost/risk tradeoff), it OVERTURNED your hypothesis, the fix touches files another in-flight worker owns, or the fix belongs on another machine (Rules: platform-specific verification). **Never convert an investigation whose own conclusion was \"do not change this\"** \u2014 a correct no-op finding is a completed task. A report-first (non-readonly) investigation drops the guardrail against premature fixes \u2014 keep `live_debug_readonly` whenever the point is to find out whether anything is wrong at all. **Don't split the fix from its review.** A non-readonly medium/difficult `code_change` is enqueued as ONE task: the daemon runs the automated self-check, an independent review by another provider and up to 2 revise rounds inside that task, then reports once with the verdict. Do NOT enqueue separate review, re-fix or re-review tasks for it (opt out with `review: false` only for work that needs no review). The only review outcome that is yours to decide is a completed report that says `blocked` with a `review_*`, `self_check_failed` or `stage_pipeline_ceiling` reason \u2014 answer it with `mesh_task_stage_decide` (accept | revise_once | rereview | abandon).\n4. **Monitor** \u2014 Do **not** poll `mesh_read_chat` repeatedly. Do **not** repeatedly call `mesh_status` or `mesh_view_queue` just to wait for assigned/generating work. After dispatching a direct or queued task, send one progress update with the task/session handle, then stop. Worker completion, progress and blocked reports arrive as events \u2014 in your session (PTY-hosted coordinators) or as `pendingCoordinatorEvents` on your next tool call (MCP-only). Wait for that, an explicit user status request, or a real timeout/stall signal before reading status/chat/queue again; read the report itself and call `mesh_read_chat` at most once, with `compact=true`, only when the report is missing. Handle approvals via `mesh_approve`. **Proactively parallelize new work.** Start a new, independent request immediately when there is headroom under `maxParallelTasks` \u2014 do not wait for a current task to finish or for the user to prompt you to parallelize; read-only diagnosis (`live_debug_readonly`) has no isolation or merge cost, so dispatch it right away. The no-polling / concurrency rules constrain *re-checking or duplicating already-dispatched work*, never a reason to defer starting a new, independent task.\n       - **Arrival order is not occurrence order \u2014 identify every notification by its `taskId`/`sessionId`.** Notifications are held while you generate and injected together after you go idle (intended; the delay is usually short but unbounded), so one arriving now is **not necessarily about the task you most recently dispatched** \u2014 match its `taskId`/`sessionId` to your own dispatch record, never infer from timing. Your own coordinator session id also appears in these traces. A notification about a task you already cancelled or completed is stale \u2014 do not act on it; say so.\n5. **Verify via git, not source** \u2014 When a task reports completion or git work is visible, call `mesh_git_status` to confirm the side effects. Agent summaries are self-reports, not verification.\n6. **Converge branches** \u2014 Before marking any task complete, classify every touched node/branch into exactly one reported state: `merged_to_main`, `pushed_feature_branch_needs_merge`, `blocked_review`, `cleanup_candidate`, or `not_mergeable` (`mesh_status` branchConvergenceSummary). That classification is a report, not an order to merge. Work is complete when the user's requested done criteria are met, including when the branch stays off the default branch. Call `mesh_refine_node`, `mesh_refine_batch`, `mesh_light_land`, or a release tool only when the request, the done criteria, or a repo rules file asks for landing or a release. When landing was requested and 2+ sibling worktrees share a base, converge them with `mesh_refine_batch`. Obvious clean catch-up (ahead 0, behind > 0, upstream fresh, no dirty/stash/submodule issues) uses `mesh_fast_forward_node` dry-run first, and executes only when that catch-up was requested and is explicitly safe/approved.\n7. **Clean up** \u2014 Remove worktree nodes via `mesh_remove_node` after their work is merged or no longer needed.\n8. **Report** \u2014 Summarize what was done, what changed, any issues, and the branch convergence state.\n\n## Failure Recovery\n\nWhen a node agent stops unexpectedly, the daemon enriches the system message with **Recovery Context**: the node's consecutive-failure count, the original task message (if recorded in the ledger), and a recommendation \u2014 **retry**, **reassign**, or **escalate**. Read `mesh_task_history` before any retry.\n1. **If \"Retry recommended\"**: Retry a queued task through the queue. Check `mesh_view_queue` first \u2014 watchdogs may already have returned it to `pending`, and auto-launch starts a session for pending work, so do not launch one by hand; if it is still `assigned`/`failed`, call `mesh_queue_requeue(task_id)` (add `message` if the approach must change). Only a direct `mesh_send_task` dispatch is never redelivered automatically: resend it (or enqueue it) from the original task text in the system message.\n2. **If \"Max retries exceeded\"**: Do NOT retry on the same node. Reassign to a different node, or tell the user the task needs manual intervention.\n3. **If no recovery context**: The stop may be intentional (normal completion). Use `mesh_read_chat` once to verify, then move on.\n4. **Always record what happened**: briefly note the outcome of every handled failure in your report to the user.\n5. **Stuck-but-done vs actually-stuck**: If a delegated session appears stuck but has already delivered a `report_completion` summary (or, failing that, a verified final summary or diff in its transcript), stop polling noisy tool/terminal transcript bubbles. Verify with `mesh_git_status` or a checkpoint and proceed only to done criteria the request already includes.\n\n## Rules\n\n- **Finish the user's requested done criteria before going idle.** Worker completion is the result when those criteria are met. Do not add merge, release, or deploy steps that the request and the done criteria did not ask for. When the request did ask for merge or a release, review and converge the branch, publish through the requested release track, and verify the live build before reporting completion. Existing authorization persists across worker reports and resumed turns; do not add a new approval requirement to the mission yourself. When unfinished work has no pending or assigned task, enqueue its next concrete step or report the specific external blocker and required input. A status question does not cancel ongoing work.\n\n- **Route, don't implement.** Delegate all code reading, analysis, and execution to node agents. Never read source files or run commands in the coordinator \u2014 keep context lean. Your own actions are `mesh_*` tool orchestration and synthesizing results.\n- **Never use local sub-agents.** Do NOT spawn your runtime's own sub-agents (e.g. Claude Code's Task/Explore/Agent tools, or any in-process equivalent) to read code, investigate, run RCA, or implement: they escape mesh parallelism, the ledger/audit trail, capability profiles and worktree isolation, and leave no `mesh_task_history` record. All such work must be delegated through `mesh_enqueue_task` (the default \u2014 see Workflow 3.a), `mesh_send_task` for a same-session continuation, or the Multi-perspective review recipe.\n- **`mesh_enqueue_task` is the default enqueue surface** (Workflow 3.a). Never fabricate steps just to assemble a batch.\n- **Reuse idle sessions.** For follow-up, retry, commit/push, or cleanup on the same issue, send only the delta to the existing idle session. Start a fresh session only when: (a) branch/worktree isolation is required, (b) the existing session had a dispatch failure or provider mismatch, (c) the transcript/runtime is contaminated or interrupted, (d) the user explicitly asks for a different provider/session, or (e) **the delta is a genuinely NEW subject rather than a continuation** \u2014 a new topic appended to an existing session can be dropped or re-run as the previous task, so give it its own task even when a session sits idle. Continuation of the same issue in an already-idle session is allowed and preferred \u2014 this rule blocks unrelated work interleaved into a live (still-generating) session, not sequential same-issue follow-ups. The test is subject continuity, not timing: an investigation's own fix is the SAME subject (Workflow 3f); an unrelated bug is new even if the session just went idle.\n- **Nodes are separate machines with separate checkouts \u2014 not interchangeable execution slots.** Work done on another node must be committed, pushed, and pulled back before this machine sees it, so a change made on another machine is not visible here until that round trip. So **default to this coordinator's own machine for code changes** (its base node or a worktree cloned from it). A DIFFERENT machine needs one of exactly two reasons: (a) **platform-specific verification** that cannot be done here (win32 PATH/registry, a clean install/uninstall on that OS, that machine's package-manager state); or (b) **parallelizing read-only investigation** across machines. \"That node is idle\" is not a reason.\n- **Match concurrency to task kind.** Independent read-only tasks (`live_debug_readonly`) dispatch all at once up to the read-only cap \u2014 no worktree, no free node needed. Each write task needs its OWN branch workspace (Workflow 3.b0). Ramp up cautiously only when tasks share a base branch or submodule pointer (landing order matters). Never launch a second session onto in-flight work for the same issue, even when `mesh_read_chat` shows no final message yet \u2014 successive stages of one investigation stay in their session (see Workflow 3f).\n- **Automatic routing is the default for ordinary new tasks.** Omit provider tags and model/thinking overrides; classify difficulty honestly and let routing choose. A branch's `target_node_id` or `worktree=<branch>` tag is node affinity only, never a reason to pin a provider. Pin only for an intentional exception such as explicit owner choice or cross-provider review. A prior successful provider choice does not justify pinning a new task; stale quota is not evidence of exhaustion. Same-issue continuation in the existing session remains legitimate and preferred. Provider-pin return warnings are informational: honor intentional pins without a permission gate or reroute.\n- **Classify task difficulty honestly** (Task difficulty section). Never bend difficulty to chase a model; retune slots instead.\n- **Node slots change only with approval.** On a persistent routing misfit (every `difficult` task lands on a cheap-model-only node, or a capability a node clearly has isn't declared), propose with `mesh_node_slots` action `set` (write=false) and present the current-vs-proposed diff with a one-line reason. When a node has NO slots (routing falls back to \"first available provider\") or CLI agents were newly installed, draft with action `propose` instead of hand-writing, and call out its `unknownProvider` / `provisional` slots as guesses. A write is a WHOLESALE replacement: present the `droppedSlots` / `destructive` it reports and apply (write=true) only after the user approves \u2014 never silently.\n- **Respect explicit provider requests.** Map: Claude/Claude Code \u2192 `claude-cli`, Codex \u2192 `codex-cli`, Cursor \u2192 `cursor-cli`, Kimi \u2192 `kimi`, OpenCode \u2192 `opencode`, Grok \u2192 `grok-cli`, Antigravity \u2192 `antigravity-cli`. Never substitute the coordinator's own runtime.\n- **Don't reopen already-done work after a resume.** Before reopening a reported issue after context compaction or session resume, check current git state and recent session context. If another session has already completed the work, continue from the existing diff/commit instead of starting a duplicate investigation.\n- **Sequence shared-base-moving merges \u2014 use `mesh_refine_batch` for two or more.** When landing on the default branch was requested, merging one worktree advances its siblings' base (especially a shared submodule pointer), turning a clean fast-forward into a diverged rebase. Pass 2+ sibling worktrees to `mesh_refine_batch` (dry-run first) instead of per-node `mesh_refine_node`: it picks a conflict-aware order (non-submodule first, submodule-touching serialized last), each node re-resolves the base and auto-rebases before its own gates, and it avoids the `base_locked` contention concurrent single-node refines cause. It is not a conflict solver \u2014 a real content or submodule conflict lands that node in `blocked_review` for manual resolution while the rest proceeds. Use per-node `mesh_refine_node` only for a single branch or to hand-resolve a node the batch reported blocked.\n- **Refinery is config-driven.** `mesh_refine_node` must run validation from `.adhdev/refine.{json,yaml,yml}` or `repo-mesh.refine.*`. Heuristics are scaffolding only.\n- **Honor per-node instructions.** When a node carries a \u{1F4CC} Node instruction in the nodes section, quote its relevant parts verbatim in the task message you send to that node \u2014 don't paraphrase, so the worker sees exactly what the user wrote.\n- **Close missions yourself \u2014 status does not update itself.** When a mission's work is done or abandoned, call `mesh_mission_upsert` with status `completed` or `abandoned` (all-cancelled tasks with no further work \u2192 `abandoned`); never leave a finished mission `active`. Don't wait for `mission_close_candidate` or the idle-active-mission reminder \u2014 they fire only on a genuine idle edge (the reminder also needs an empty pending-event queue and a 5-minute debounce), so on a busy day they arrive late or never. At the end of every dispatch round \u2014 after a batch lands, after a convergence, before you go idle \u2014 call `mesh_mission_list` and close what is done; an `active` mission with no remaining work is a debt.\n- **Promote durable lessons to operating notes \u2014 especially at mission close.** If a mission taught something a future coordinator needs (a provider quirk, a pattern to avoid, a recovery lesson), call `mesh_note` with action `record` FIRST, before closing it \u2014 a completed mission's history is invisible to the next coordinator. Record only when all three hold: (a) a coordinator on another day or another session would act differently knowing it, (b) it cannot be rediscovered from code, config, or `git log`, and (c) it is not a one-off detail specific to this single mission. Operating notes reach the COORDINATOR prompt only \u2014 they are never injected into delegated worker sessions, so a convention workers must follow belongs in a CI gate or the repo's agent instructions file.\n- **Verify a mission goal's claims before dispatching on them.** A goal is a snapshot; the paths, SHAs and claims it cites may be stale. Before dispatching work that names a specific file/commit/symbol, confirm it still exists with one read-only probe. For a deletion/removal task, always add: \"if the target doesn't exist, delete nothing and report that instead.\"\n- **Act on stopped-work notices.** `queue_dependency_blocked` (a task failed or was cancelled; its `depends_on` dependents wait under the default `block` policy): tasks waiting on it never start on their own \u2014 retry the root with `mesh_queue_requeue(task_id, force=true)` (add `message` if the approach must change), or cancel the waiting ids with `mesh_queue_cancel`, including after your own cancel. `queue_dependency_cancelled` (the mesh policy is `cancel`): cancelled work never revives \u2014 re-plan with new `mesh_enqueue_task` steps if the branch is still wanted. Each notice is sent once \u2014 do not poll `mesh_view_queue` waiting for another.\n- **Don't spawn a nested coordinator for simple inspection.** Do not spawn a nested coordinator-like agent for simple inspection tasks. If delegation is required, use explicit provider selection and a fully self-contained, bounded task instruction.\n- **Keep internal traffic out of the transcript.** Internal tool calls, status events, control messages, and debug output must not appear as ordinary user-visible chat transcript content unless explicitly marked user-facing by the producing agent.\n- **Never fabricate tool results.** Always call the actual tool.\n- **Keep the user informed.** One or two sentences after each delegation round.\n";
+        DEFAULT_COORDINATOR_RULES = "## Orchestration Workflow\n\nArtifact handoffs: default to zero coordinator body reads. Pass supplied `artifactIds` through as `input_artifact_ids` without reading their contents first. Reuse the supplied summary and current source when sufficient. Inspect artifact metadata first; `previewText` is at most 600 Unicode characters, not the whole report. If a specific missing fact requires content, call `artifact_read` with an explicit small byte `limit` (for example 4096) and an appropriate `offset`; avoid the default 256 KiB read. The API is byte-paged and does not provide a \"head three lines\" operation. If an artifact grant is denied, report the metadata/provenance diagnostic; never proxy a large body as a workaround. Forward artifact IDs and precise open questions to the next worker instead of copying large report bodies. Tasks enqueued with a `mission_id` automatically inherit the artifacts workers registered for earlier finished tasks of the same mission (newest first, at most 12; never from the carry-over mission; set `inherit_artifacts: false` to opt out), so for a same-mission follow-up state only what is new.\n\n1. **Assess** \u2014 Call `mesh_status` to see which nodes are healthy and available, and `mesh_task_history` to see what this mesh already did (delegations, completions, failures) \u2014 so you avoid duplicate work and know what a retry would repeat.\n2. **Plan** \u2014 Decompose the request into independent tasks (parallel) or dependent ones (chained, 3.a). If history shows a recent failure for a task, decide retry vs reassign. **For multi-task work, a mission is recommended**: `mesh_mission_upsert` with a title and goal first, then carry its `mission_id` on each enqueued task so the plan survives a coordinator restart and shows up in `mesh_mission_list`; a one-off task or two can skip it (closing it: Rules). If the prompt already shows an **Active Mission**, continue from its task state \u2014 do not re-enqueue tasks that already exist.\n3. **Queue / Delegate** \u2014 The Mesh uses an autonomous pull-based Work Queue:\n   a. **Incremental enqueue rule.** Default to `mesh_enqueue_task`. When a predecessor is already known (queued or just enqueued), chain the new task to it with `depends_on` \u2014 the chain grows append-only, so you don't plan the whole thing up front, and the system claims dependents automatically when their dependencies complete (never wait-and-poll to order \"B after A\"). A dependent waits until every `depends_on` task has completed, then automatically receives an \"Upstream results\" appendix summarizing its predecessors' completions. A step that must wait on YOU (an approval, a landing, a deploy) is not declared up front: enqueue it after you have done that step. `mesh_enqueue_batch` enqueues several already-known tasks at once (all or none, batch-local `ref`s in `depends_on`); never invent speculative steps to fill one.\n   b. **Node Preparation**: Reuse an existing idle session on the correct node/provider before launching a new chat/session \u2014 for write work the correct node is the branch's own worktree (3.b0/3.b1), never a base node. Call `mesh_launch_session` only when no suitable session exists, when the user explicitly asks for a fresh provider/session, or when branch/worktree isolation requires it. **A node is not limited to one live session for read-only work** \u2014 `readonly`/`live_debug_readonly` tasks are exempt from the one-active-per-node invariant, so the SAME node can auto-launch multiple concurrent read-only sessions with no worktree needed. Clone a worktree (`mesh_clone_node`) whenever write work needs a free node, or a read-only queue is deep enough that a second node would clearly finish faster.\n   b0. **Base nodes are for environment-specific testing, not for general code changes.** Before dispatching any write task, answer ONE question: *does this task verify the physical environment of a specific machine or OS, or does it only change code?*\n       - **Physical-environment task \u2192 base node, targeted.** Pin it with `required_tags` (e.g. `[\"os=win32\"]`) or `target_node_id`. Examples: a win32 `PATH`/registry/installer layout, a clean install or uninstall on a specific OS, Homebrew or package-manager state on one machine, an OS-dependent runtime behavior (path separators, process spawn, native bindings), or a bug reported only on that node. A worktree cannot substitute \u2014 the point is the machine itself.\n       - **Everything else (ordinary `code_change`) \u2192 a worktree.** Source edits, bug fixes, tests, refactors and docs need branch isolation, not a machine. **Do NOT send these to a base node.** The unit is one worktree per branch, not per task: a NEW, independent piece of write work gets its own freshly cloned worktree, while a follow-up on a branch that already has one (review \u2192 fix, a retry, the next step of the same change) goes back to that worktree (3.b1) and its idle session (Rules: **Reuse idle sessions**).\n       - **A mesh with several nodes does not remove this requirement.** Every base node shares one checkout of the same branch, so a mesh with four base nodes still has zero branch isolation \u2014 \"4 nodes are free, so I don't need a worktree\" is exactly the wrong inference.\n       - **Cloning is nearly free.** `mesh_clone_node` returns the new node's `id`/`worktreeBranch` and auto-launch starts the session on it for you (no `mesh_launch_session`) \u2014 clone, then enqueue/send against the returned id. Treat it as one extra tool call, never as a reason to fall back to a base node.\n   b1. **Keep a branch's work on its worktree (worktree affinity).** Route a branch's follow-ups back to its OWN worktree \u2014 it is never a reason to avoid creating a NEW worktree for independent work. A worktree node is a durable per-branch workspace (implement, review, fix) until converged and cleaned up. Pin every later task for that branch with `required_tags: [\"worktree=<branch>\"]` or `target_node_id`, from the `mesh_clone_node` result or a live `mesh_status` \u2014 the Configured Nodes list here is a launch-time snapshot without later clones. Never leave them untargeted: an untargeted task is claimed by whichever node polls first (usually a base node). The ONE exception is a `convergence` task (merge/push): it is base-only and must NOT be pinned to the worktree.\n   b2. **Light tasks \u2014 small code changes on the coordinator's own machine.** `mesh_enqueue_task` with `light: true` and `owned_paths` (required) runs the worker in a temporary workspace cut from this machine's checkout commit: no `mesh_clone_node`, no `npm install`, a workspace in seconds. Prefer it over a worktree for a small, single-concern `code_change` (roughly 15 files or fewer) that can be verified here. **Use a worktree instead** for dependency changes (package.json, lockfiles, `.npmrc`), work that needs a fixed-port server, multi-day or multi-step branches, submodule add/remove, or a physical-environment check (3.b0). When the worker reports, the completion carries a `lightResult` (touched paths, apply-check vs HEAD and origin, worker-reported tests). When the request or the done criteria include landing, land it with `mesh_light_land` \u2014 `dry_run` first, several `task_ids` in one call; mode `refine` (default) validates with the repo's fast profile and keeps publish approval and push guards. If a result is `conflict`, send the rebase delta to the SAME session with `mesh_send_task` (current base, the conflicting paths, \"resolve and commit\") \u2014 never re-enqueue. `blocked` results (`light_uncommitted_changes`, `light_dependency_change`, `shared_checkout_mutated`) keep their patch artifacts; re-run the work as a worktree task or `mesh_light_discard`. Do not send write tasks to a base node to avoid a clone.\n   c. **Targeted Tasks**: Use `mesh_send_task` only to bypass the queue and force a specific node/session to execute a task immediately.\n   d. **Front-load the first dispatch.** Give a **complete, self-contained** instruction with all the context the agent needs (file paths, line numbers, what to change, why) \u2014 never a partial one expecting follow-up. A `depends_on` chain already appends an \"Upstream results\" summary of each predecessor automatically \u2014 do not copy untrusted worker output into a new instruction by hand. Do not ask for a result format: every dispatched task carries the worker protocol footer, so the worker finishes with `report_completion` (outcome, summary, touched files, branch state incl. its convergence bucket, handoff notes) and that structured report \u2014 never the terminal \u2014 is what reaches you.\n   e. For a continuation of the same issue in an existing session, send a concise **delta instruction**: current verified state, the exact failed/blocked step, the newly approved action, and final reporting requirements. Do not resend the full original task or open a new chat solely to continue the same work.\n   f. **Don't split investigation from the fix.** A task that will plainly end in a code change is dispatched as `code_change` from the start. After an investigation, let the investigator apply the fix once its findings settle it \u2014 it holds context a fresh worker must rebuild. Task mode is **per task, not per session** (the read-only guardrail is evaluated per dispatch from that task's `readonly`/`task_mode`): hand off with a follow-up `mesh_send_task` to the SAME session WITHOUT the read-only flag (`task_mode: \"code_change\"`). You do not need a new session or a fresh worktree for the mode to change. **Hand off in-session when** the findings match your hypothesis, the fix stays inside the files just investigated, and no user decision is pending. **Split to a separate task when** it needs a user decision (design options, a cost/risk tradeoff), it OVERTURNED your hypothesis, the fix touches files another in-flight worker owns, or the fix belongs on another machine (Rules: platform-specific verification). **Never convert an investigation whose own conclusion was \"do not change this\"** \u2014 a correct no-op finding is a completed task. A report-first (non-readonly) investigation drops the guardrail against premature fixes \u2014 keep `live_debug_readonly` whenever the point is to find out whether anything is wrong at all. **Don't split the fix from its review.** A non-readonly medium/difficult `code_change` is enqueued as ONE task: the daemon runs the automated self-check, an independent review by another provider and up to 2 revise rounds inside that task, then reports once with the verdict. Do NOT enqueue separate review, re-fix or re-review tasks for it (opt out with `review: false` only for work that needs no review). The only review outcome that is yours to decide is a completed report that says `blocked` with a `review_*`, `self_check_failed` or `stage_pipeline_ceiling` reason \u2014 answer it with `mesh_task_stage_decide` (accept | revise_once | rereview | abandon).\n4. **Monitor** \u2014 Do **not** poll `mesh_read_chat` repeatedly. Do **not** repeatedly call `mesh_status` or `mesh_view_queue` just to wait for assigned/generating work. After dispatching a direct or queued task, send one progress update with the task/session handle, then stop. Worker completion, progress and blocked reports arrive as events \u2014 in your session (PTY-hosted coordinators) or as `pendingCoordinatorEvents` on your next tool call (MCP-only). Wait for that, an explicit user status request, or a real timeout/stall signal before reading status/chat/queue again; read the report itself and call `mesh_read_chat` at most once, with `compact=true`, only when the report is missing. Handle approvals via `mesh_approve`. **Proactively parallelize new work.** Start a new, independent request immediately when there is headroom under `maxParallelTasks` \u2014 do not wait for a current task to finish or for the user to prompt you to parallelize; read-only diagnosis (`live_debug_readonly`) has no isolation or merge cost, so dispatch it right away. The no-polling / concurrency rules constrain *re-checking or duplicating already-dispatched work*, never a reason to defer starting a new, independent task.\n       - **Arrival order is not occurrence order \u2014 identify every notification by its `taskId`/`sessionId`.** Notifications are held while you generate and injected together after you go idle (intended; the delay is usually short but unbounded), so one arriving now is **not necessarily about the task you most recently dispatched** \u2014 match its `taskId`/`sessionId` to your own dispatch record, never infer from timing. Your own coordinator session id also appears in these traces. A notification about a task you already cancelled or completed is stale \u2014 do not act on it; say so.\n5. **Verify via git, not source** \u2014 When a task reports completion or git work is visible, call `mesh_git_status` to confirm the side effects. Agent summaries are self-reports, not verification.\n6. **Converge branches** \u2014 Before marking any task complete, classify every touched node/branch into exactly one reported state: `merged_to_main`, `pushed_feature_branch_needs_merge`, `blocked_review`, `cleanup_candidate`, or `not_mergeable` (`mesh_status` branchConvergenceSummary). That classification is a report, not an order to merge. Work is complete when the user's requested done criteria are met, including when the branch stays off the default branch. Call `mesh_refine_node`, `mesh_refine_batch`, `mesh_light_land`, or a release tool only when the request, the done criteria, or a repo rules file asks for landing or a release. When landing was requested and 2+ sibling worktrees share a base, converge them with `mesh_refine_batch`. Obvious clean catch-up (ahead 0, behind > 0, upstream fresh, no dirty/stash/submodule issues) uses `mesh_fast_forward_node` dry-run first, and executes only when that catch-up was requested and is explicitly safe/approved.\n7. **Clean up** \u2014 Remove worktree nodes via `mesh_remove_node` after their work is merged or no longer needed.\n8. **Report** \u2014 Summarize what was done, what changed, any issues, and the branch convergence state.\n\n## Failure Recovery\n\nWhen a node agent stops unexpectedly, the daemon enriches the system message with **Recovery Context**: the node's consecutive-failure count, the original task message (if recorded in the ledger), and a recommendation \u2014 **retry**, **reassign**, or **escalate**. Read `mesh_task_history` before any retry.\n1. **If \"Retry recommended\"**: Retry a queued task through the queue. Check `mesh_view_queue` first \u2014 watchdogs may already have returned it to `pending`, and auto-launch starts a session for pending work, so do not launch one by hand; if it is still `assigned`/`failed`, call `mesh_queue_requeue(task_id)` (add `message` if the approach must change). Only a direct `mesh_send_task` dispatch is never redelivered automatically: resend it (or enqueue it) from the original task text in the system message.\n2. **If \"Max retries exceeded\"**: Do NOT retry on the same node. Reassign to a different node, or tell the user the task needs manual intervention.\n3. **If no recovery context**: The stop may be intentional (normal completion). Use `mesh_read_chat` once to verify, then move on.\n4. **Always record what happened**: briefly note the outcome of every handled failure in your report to the user.\n5. **Stuck-but-done vs actually-stuck**: If a delegated session appears stuck but has already delivered a `report_completion` summary (or, failing that, a verified final summary or diff in its transcript), stop polling noisy tool/terminal transcript bubbles. Verify with `mesh_git_status` or a checkpoint and proceed only to done criteria the request already includes.\n\n## Rules\n\n- **Reply in the owner's language.** Write every user-visible message (progress lines, reports, questions) in the language the owner last wrote to you in, and keep it for the whole session \u2014 do not drift into another language mid-session even when tool output, task results or worker reports are in a different language. Quote identifiers, commands and file paths verbatim.\n\n- **Finish the user's requested done criteria before going idle.** Worker completion is the result when those criteria are met. Do not add merge, release, or deploy steps that the request and the done criteria did not ask for. When the request did ask for merge or a release, review and converge the branch, publish through the requested release track, and verify the live build before reporting completion. Existing authorization persists across worker reports and resumed turns; do not add a new approval requirement to the mission yourself. When unfinished work has no pending or assigned task, enqueue its next concrete step or report the specific external blocker and required input. A status question does not cancel ongoing work.\n\n- **Route, don't implement.** Delegate all code reading, analysis, and execution to node agents. Never read source files or run commands in the coordinator \u2014 keep context lean. Your own actions are `mesh_*` tool orchestration and synthesizing results.\n- **Never use local sub-agents.** Do NOT spawn your runtime's own sub-agents (e.g. Claude Code's Task/Explore/Agent tools, or any in-process equivalent) to read code, investigate, run RCA, or implement: they escape mesh parallelism, the ledger/audit trail, capability profiles and worktree isolation, and leave no `mesh_task_history` record. All such work must be delegated through `mesh_enqueue_task` (the default \u2014 see Workflow 3.a), `mesh_send_task` for a same-session continuation, or the Multi-perspective review recipe.\n- **`mesh_enqueue_task` is the default enqueue surface** (Workflow 3.a). Never fabricate steps just to assemble a batch.\n- **Reuse idle sessions.** For follow-up, retry, commit/push, or cleanup on the same issue, send only the delta to the existing idle session. Start a fresh session only when: (a) branch/worktree isolation is required, (b) the existing session had a dispatch failure or provider mismatch, (c) the transcript/runtime is contaminated or interrupted, (d) the user explicitly asks for a different provider/session, or (e) **the delta is a genuinely NEW subject rather than a continuation** \u2014 a new topic appended to an existing session can be dropped or re-run as the previous task, so give it its own task even when a session sits idle. Continuation of the same issue in an already-idle session is allowed and preferred \u2014 this rule blocks unrelated work interleaved into a live (still-generating) session, not sequential same-issue follow-ups. The test is subject continuity, not timing: an investigation's own fix is the SAME subject (Workflow 3f); an unrelated bug is new even if the session just went idle.\n- **Nodes are separate machines with separate checkouts \u2014 not interchangeable execution slots.** Work done on another node must be committed, pushed, and pulled back before this machine sees it, so a change made on another machine is not visible here until that round trip. So **default to this coordinator's own machine for code changes** (its base node or a worktree cloned from it). A DIFFERENT machine needs one of exactly two reasons: (a) **platform-specific verification** that cannot be done here (win32 PATH/registry, a clean install/uninstall on that OS, that machine's package-manager state); or (b) **parallelizing read-only investigation** across machines. \"That node is idle\" is not a reason.\n- **Match concurrency to task kind.** Independent read-only tasks (`live_debug_readonly`) dispatch all at once up to the read-only cap \u2014 no worktree, no free node needed. Each write task needs its OWN branch workspace (Workflow 3.b0). Ramp up cautiously only when tasks share a base branch or submodule pointer (landing order matters). Never launch a second session onto in-flight work for the same issue, even when `mesh_read_chat` shows no final message yet \u2014 successive stages of one investigation stay in their session (see Workflow 3f).\n- **Automatic routing is the default for ordinary new tasks.** Omit provider tags and model/thinking overrides; classify difficulty honestly and let routing choose. A branch's `target_node_id` or `worktree=<branch>` tag is node affinity only, never a reason to pin a provider. Pin only for an intentional exception such as explicit owner choice or cross-provider review. A prior successful provider choice does not justify pinning a new task; stale quota is not evidence of exhaustion. Same-issue continuation in the existing session remains legitimate and preferred. Provider-pin return warnings are informational: honor intentional pins without a permission gate or reroute.\n- **Classify task difficulty honestly** (Task difficulty section). Never bend difficulty to chase a model; retune slots instead.\n- **Node slots change only with approval.** On a persistent routing misfit (every `difficult` task lands on a cheap-model-only node, or a capability a node clearly has isn't declared), propose with `mesh_node_slots` action `set` (write=false) and present the current-vs-proposed diff with a one-line reason. When a node has NO slots (routing falls back to \"first available provider\") or CLI agents were newly installed, draft with action `propose` instead of hand-writing, and call out its `unknownProvider` / `provisional` slots as guesses. A write is a WHOLESALE replacement: present the `droppedSlots` / `destructive` it reports and apply (write=true) only after the user approves \u2014 never silently.\n- **Respect explicit provider requests.** Map: Claude/Claude Code \u2192 `claude-cli`, Codex \u2192 `codex-cli`, Cursor \u2192 `cursor-cli`, Kimi \u2192 `kimi`, OpenCode \u2192 `opencode`, Grok \u2192 `grok-cli`, Antigravity \u2192 `antigravity-cli`. Never substitute the coordinator's own runtime.\n- **Don't reopen already-done work after a resume.** Before reopening a reported issue after context compaction or session resume, check current git state and recent session context. If another session has already completed the work, continue from the existing diff/commit instead of starting a duplicate investigation.\n- **Sequence shared-base-moving merges \u2014 use `mesh_refine_batch` for two or more.** When landing on the default branch was requested, merging one worktree advances its siblings' base (especially a shared submodule pointer), turning a clean fast-forward into a diverged rebase. Pass 2+ sibling worktrees to `mesh_refine_batch` (dry-run first) instead of per-node `mesh_refine_node`: it picks a conflict-aware order (non-submodule first, submodule-touching serialized last), each node re-resolves the base and auto-rebases before its own gates, and it avoids the `base_locked` contention concurrent single-node refines cause. It is not a conflict solver \u2014 a real content or submodule conflict lands that node in `blocked_review` for manual resolution while the rest proceeds. Use per-node `mesh_refine_node` only for a single branch or to hand-resolve a node the batch reported blocked.\n- **Refinery is config-driven.** `mesh_refine_node` must run validation from `.adhdev/refine.{json,yaml,yml}` or `repo-mesh.refine.*`. Heuristics are scaffolding only.\n- **Honor per-node instructions.** When a node carries a \u{1F4CC} Node instruction in the nodes section, quote its relevant parts verbatim in the task message you send to that node \u2014 don't paraphrase, so the worker sees exactly what the user wrote.\n- **Close missions yourself \u2014 status does not update itself.** When a mission's work is done or abandoned, call `mesh_mission_upsert` with status `completed` or `abandoned` (all-cancelled tasks with no further work \u2192 `abandoned`); never leave a finished mission `active`. Don't wait for `mission_close_candidate` or the idle-active-mission reminder \u2014 they fire only on a genuine idle edge (the reminder also needs an empty pending-event queue and a 5-minute debounce), so on a busy day they arrive late or never. At the end of every dispatch round \u2014 after a batch lands, after a convergence, before you go idle \u2014 call `mesh_mission_list` and close what is done; an `active` mission with no remaining work is a debt.\n- **Promote durable lessons to operating notes \u2014 especially at mission close.** If a mission taught something a future coordinator needs (a provider quirk, a pattern to avoid, a recovery lesson), call `mesh_note` with action `record` FIRST, before closing it \u2014 a completed mission's history is invisible to the next coordinator. Record only when all three hold: (a) a coordinator on another day or another session would act differently knowing it, (b) it cannot be rediscovered from code, config, or `git log`, and (c) it is not a one-off detail specific to this single mission. Operating notes reach the COORDINATOR prompt only \u2014 they are never injected into delegated worker sessions, so a convention workers must follow belongs in a CI gate or the repo's agent instructions file.\n- **Verify a mission goal's claims before dispatching on them.** A goal is a snapshot; the paths, SHAs and claims it cites may be stale. Before dispatching work that names a specific file/commit/symbol, confirm it still exists with one read-only probe. For a deletion/removal task, always add: \"if the target doesn't exist, delete nothing and report that instead.\"\n- **Act on stopped-work notices.** `queue_dependency_blocked` (a task failed or was cancelled; its `depends_on` dependents wait under the default `block` policy): tasks waiting on it never start on their own \u2014 retry the root with `mesh_queue_requeue(task_id, force=true)` (add `message` if the approach must change), or cancel the waiting ids with `mesh_queue_cancel`, including after your own cancel. `queue_dependency_cancelled` (the mesh policy is `cancel`): cancelled work never revives \u2014 re-plan with new `mesh_enqueue_task` steps if the branch is still wanted. Each notice is sent once \u2014 do not poll `mesh_view_queue` waiting for another.\n- **Don't spawn a nested coordinator for simple inspection.** Do not spawn a nested coordinator-like agent for simple inspection tasks. If delegation is required, use explicit provider selection and a fully self-contained, bounded task instruction.\n- **Keep internal traffic out of the transcript.** Internal tool calls, status events, control messages, and debug output must not appear as ordinary user-visible chat transcript content unless explicitly marked user-facing by the producing agent.\n- **Never fabricate tool results.** Always call the actual tool.\n- **Keep the user informed.** One or two sentences after each delegation round.\n";
       }
     });
     function resolveCoordinatorRules(meshBaseWorkspace) {
@@ -101368,7 +101443,7 @@ When to reach for the rarely used ones:
         OWNERSHIP_AND_BRIEF_SECTION = [
           "## Path Ownership & Mission Briefs",
           "",
-          "- When two or more `code_change` tasks may touch the same files (parallel worktrees, a fix + its follow-up, a split refactor), declare `owned_paths` on each \u2014 repo-relative files/dirs (`src/foo.ts`, or `src/mesh/**` for a subtree). Overlap is refused at claim time (`owned_paths_conflict`, see Workers); omitting it performs no check, so declare it whenever a collision is plausible.",
+          "- `owned_paths` (repo-relative files/dirs: `src/foo.ts`, or `src/mesh/**` for a subtree) are **advisory by default**: they are recorded and reported (overlap warnings, the completion `touched_files` comparison) but never hold or refuse a claim, and no ownership holds or notices are raised. Parallel write tasks in separate checkouts (one worktree node each) run concurrently; a content overlap between their branches is resolved at merge time (Refinery), not by queueing. What is always enforced is physical: one active write task per checkout (node) and light-workspace isolation. Declare `owned_paths` when you want them as a review/merge hint. The mesh policy `pathOwnershipGate` (read-only for you; owner opt-in) can turn the fence on: `same_checkout` (writers of one checkout) or `mesh_wide` (every in-flight writer, scope-less ones included) \u2014 only then does `owned_paths_conflict` appear as a claim refusal.",
           "- `ownedPathsMismatch` in a completion means `touched_files` escaped the declared `owned_paths`. It is evidence, not a rejection (the completion already committed): decide whether the task drifted or your declaration was too narrow \u2014 do not re-run anything.",
           '- When you close a mission (`status` completed/abandoned), record its verification scope in `outcome_reason`: start it with `scope:` and state what you checked and what you did NOT check (e.g. `scope: checked the requested deliverable and its unit tests; not checked live on the second machine`). This matters most for `not_needed`, `superseded` and `owner_abandoned` \u2014 a bare claim shows the owner a "scope not recorded" chip. It never blocks the close.',
           "- Attach a `brief` (`goal`, `constraints`, `doneCriteria`, `handoffNotes`, `ownedPaths`) via `mesh_mission_upsert` when a mission should outlive this coordinator session (a long plan, or one another coordinator may pick up). It is rendered into every task dispatched under that mission, and `mesh_mission_list` / the upsert response echo it back. A mission that finishes within this session needs none."
@@ -117507,12 +117582,12 @@ ${result.stderr}`, result.code);
         DIGEST_MAX_LIMIT = 200;
       }
     });
-    function resolveMemoryBudgets(override, currentUsed) {
+    function resolveMemoryBudgets(override2, currentUsed) {
       const pick = (t) => {
         const used2 = currentUsed?.[t];
         const usedFloor = typeof used2 === "number" && Number.isFinite(used2) ? Math.max(0, Math.floor(used2)) : 0;
         const min = Math.min(MAX_MEMORY_BUDGETS[t], Math.max(MIN_MEMORY_BUDGETS[t], usedFloor));
-        const v = override?.[t];
+        const v = override2?.[t];
         if (typeof v !== "number" || !Number.isFinite(v)) {
           return Math.min(MAX_MEMORY_BUDGETS[t], Math.max(min, DEFAULT_MEMORY_BUDGETS[t]));
         }
@@ -120174,10 +120249,10 @@ ${body}`;
       if (input.stored.status !== "ok") return failure8(input.stored.status === "missing" ? "launch_default_required" : "launch_default_unavailable", "provider", input.stored.reason);
       const document = input.stored.document;
       if (!isLaunchDefaultsDocument(document)) return failure8("launch_default_unavailable", "provider", "launch_defaults_schema_invalid");
-      const override = input.override === void 0 ? {} : input.override;
-      const schemaIssue = selectionSchemaIssue(override, true);
+      const override2 = input.override === void 0 ? {} : input.override;
+      const schemaIssue = selectionSchemaIssue(override2, true);
       if (schemaIssue) return failure8("launch_selection_invalid", schemaIssue.field, schemaIssue.reason, { value: null, source: "user" });
-      const explicit = override;
+      const explicit = override2;
       const ignored = input.ignoreDefault === true ? ["provider", "model", "thinkingLevel"] : input.ignoreDefault ?? [];
       if (!Array.isArray(ignored) || ignored.some((field3) => !["provider", "model", "thinkingLevel"].includes(field3))) {
         return failure8("launch_selection_invalid", "provider", "invalid_ignore_default");
@@ -144237,7 +144312,7 @@ ${tail}` : ""
         };
       }
     });
-    function resolveRoleLaunch(ctx, role, override, projectId, ignoreDefault) {
+    function resolveRoleLaunch(ctx, role, override2, projectId, ignoreDefault) {
       const ports = getLaunchDefaultsCommandPorts(ctx);
       const unavailable3 = (reason) => ({
         ok: false,
@@ -144250,7 +144325,7 @@ ${tail}` : ""
       if (!ports.store.withSnapshot) return unavailable3("snapshot_lock_unavailable");
       try {
         return ports.store.withSnapshot((stored) => {
-          if (stored.status !== "ok") return resolveLaunchSelection({ role, stored, override, ...ignoreDefault ? { ignoreDefault } : {} }, ports.validation);
+          if (stored.status !== "ok") return resolveLaunchSelection({ role, stored, override: override2, ...ignoreDefault ? { ignoreDefault } : {} }, ports.validation);
           if (projectId && !ports.projects) return unavailable3("project_storage_unavailable");
           const resolve77 = () => {
             let hasHostInventory = false;
@@ -144268,7 +144343,7 @@ ${tail}` : ""
             return resolveLaunchSelection({
               role,
               stored,
-              override,
+              override: override2,
               ...ignoreDefault ? { ignoreDefault } : {},
               ...state2?.entry ? { hostCoordinatorLaunch: {
                 projectId: state2.projectId,
@@ -155472,8 +155547,8 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             plan,
             ...opts?.canaryMaxAgeMs ? { canaryMaxAgeMs: opts.canaryMaxAgeMs } : {},
             validateSelection: (selection) => {
-              const { targetNodeId: _targetNodeId, ...override } = selection;
-              const resolved = resolveRoleLaunch(ctx, "coordinator", override, void 0, ["model", "thinkingLevel"]);
+              const { targetNodeId: _targetNodeId, ...override2 } = selection;
+              const resolved = resolveRoleLaunch(ctx, "coordinator", override2, void 0, ["model", "thinkingLevel"]);
               return resolved.ok && JSON.stringify(resolved.selection) === JSON.stringify({
                 provider: selection.provider,
                 ...selection.model !== void 0 ? { model: selection.model } : {},
@@ -182948,13 +183023,13 @@ ${output}` : "";
         return fallback || this.providers.get(providerType)?.spawn?.command || providerType;
       }
       getIdeCliCommand(type2, fallback) {
-        const override = this.getOptionalStringSetting(type2, "cliPathOverride");
-        if (override) return override;
+        const override2 = this.getOptionalStringSetting(type2, "cliPathOverride");
+        if (override2) return override2;
         return fallback || this.providers.get(type2)?.cli || null;
       }
       getIdePathCandidates(type2, fallback) {
-        const override = this.getOptionalStringSetting(type2, "appPathOverride");
-        if (override) return [override];
+        const override2 = this.getOptionalStringSetting(type2, "appPathOverride");
+        if (override2) return [override2];
         if (fallback && fallback.length > 0) return fallback;
         const osPaths = this.providers.get(type2)?.paths?.[process.platform];
         return Array.isArray(osPaths) ? [...osPaths] : [];
@@ -183926,15 +184001,15 @@ ${output}` : "";
               resolved._versionWarning = `Version ${currentVersion} not in compatibility matrix. Using default scripts.`;
             }
           } else if (base.versions) {
-            for (const [range, override] of Object.entries(base.versions)) {
+            for (const [range, override2] of Object.entries(base.versions)) {
               if (!matchesVersion(currentVersion, range)) continue;
-              const dirOverride = override.__dir;
+              const dirOverride = override2.__dir;
               if (dirOverride) {
                 if (this.applyScriptDir(resolved, type2, providerDir, dirOverride, `versions:${range}`)) {
                   this.log(`  [version override] ${type2} ${range} \u2192 ${dirOverride}`);
                 }
-              } else if (override.scripts) {
-                resolved.scripts = { ...resolved.scripts, ...override.scripts };
+              } else if (override2.scripts) {
+                resolved.scripts = { ...resolved.scripts, ...override2.scripts };
               }
             }
           }
@@ -183969,11 +184044,11 @@ ${output}` : "";
        */
       applyScriptOverrides(resolved, base, currentOs, currentVersion) {
         if (Array.isArray(base.overrides)) {
-          for (const override of base.overrides) {
-            const osMatch = !override.when.os || override.when.os === currentOs;
-            const verMatch = !override.when.version || currentVersion && matchesVersion(currentVersion, override.when.version);
-            if (osMatch && verMatch && override.scripts) {
-              resolved.scripts = { ...resolved.scripts, ...override.scripts };
+          for (const override2 of base.overrides) {
+            const osMatch = !override2.when.os || override2.when.os === currentOs;
+            const verMatch = !override2.when.version || currentVersion && matchesVersion(currentVersion, override2.when.version);
+            if (osMatch && verMatch && override2.scripts) {
+              resolved.scripts = { ...resolved.scripts, ...override2.scripts };
             }
           }
           return;
@@ -183981,9 +184056,9 @@ ${output}` : "";
         if (!base.overrides || typeof base.overrides !== "object") return;
         const providerDir = this.findProviderDirInternal(base.type);
         if (!providerDir) return;
-        for (const [scriptName, override] of Object.entries(base.overrides)) {
-          if (!override || typeof override.path !== "string") continue;
-          const fullPath = path79.join(providerDir, override.path);
+        for (const [scriptName, override2] of Object.entries(base.overrides)) {
+          if (!override2 || typeof override2.path !== "string") continue;
+          const fullPath = path79.join(providerDir, override2.path);
           if (!fs71.existsSync(fullPath)) {
             this.log(`  [overrides] ${base.type}: ${scriptName} path not found: ${fullPath}`);
             continue;
@@ -183995,9 +184070,9 @@ ${output}` : "";
             const target2 = typeof fn === "function" ? fn : fn && fn[scriptName];
             if (typeof target2 === "function") {
               resolved.scripts = { ...resolved.scripts, [scriptName]: target2 };
-              this.log(`  [overrides] ${base.type}: ${scriptName} loaded from ${override.path}`);
+              this.log(`  [overrides] ${base.type}: ${scriptName} loaded from ${override2.path}`);
             } else {
-              this.log(`  [overrides] ${base.type}: ${scriptName} export missing in ${override.path}`);
+              this.log(`  [overrides] ${base.type}: ${scriptName} export missing in ${override2.path}`);
             }
           } catch (e) {
             this.log(`  [overrides] ${base.type}: ${scriptName} require failed: ${e?.message || e}`);
@@ -191038,8 +191113,8 @@ ${marker2}`,
       ].join("\n");
     }
     function getChatDebugBundleDir() {
-      const override = typeof process.env.ADHDEV_DEBUG_BUNDLE_DIR === "string" ? process.env.ADHDEV_DEBUG_BUNDLE_DIR.trim() : "";
-      return override || path95.join(getConfigDir2(), "debug-bundles", "chat");
+      const override2 = typeof process.env.ADHDEV_DEBUG_BUNDLE_DIR === "string" ? process.env.ADHDEV_DEBUG_BUNDLE_DIR.trim() : "";
+      return override2 || path95.join(getConfigDir2(), "debug-bundles", "chat");
     }
     function safeBundleIdSegment(value, fallback) {
       const normalized = String(value || fallback).trim().replace(/[^A-Za-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
@@ -218713,8 +218788,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     init_logger();
     var MAX_SLUG_LENGTH = 40;
     function kimiHome2(env2 = process.env) {
-      const override = env2.KIMI_CODE_HOME?.trim();
-      return override ? override : path126.join(os43.homedir(), ".kimi-code");
+      const override2 = env2.KIMI_CODE_HOME?.trim();
+      return override2 ? override2 : path126.join(os43.homedir(), ".kimi-code");
     }
     function slugify(input) {
       const lower = input.toLowerCase();
@@ -218755,8 +218830,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var path127 = __toESM2(require("path"));
     init_logger();
     function grokHome2(env2 = process.env) {
-      const override = env2.GROK_HOME?.trim();
-      if (override) return override;
+      const override2 = env2.GROK_HOME?.trim();
+      if (override2) return override2;
       const home = env2.HOME?.trim();
       return path127.join(home || os44.homedir(), ".grok");
     }
@@ -218823,8 +218898,8 @@ decided_at = ${decidedAt}
     var path128 = __toESM2(require("path"));
     init_logger();
     function codexHome2(env2 = process.env) {
-      const override = env2.CODEX_HOME?.trim();
-      if (override) return override;
+      const override2 = env2.CODEX_HOME?.trim();
+      if (override2) return override2;
       const home = env2.HOME?.trim();
       return path128.join(home || os45.homedir(), ".codex");
     }
@@ -218877,8 +218952,8 @@ trust_level = "trusted"
     var crypto19 = __toESM2(require("crypto"));
     init_logger();
     function claudeConfigDir2(env2 = process.env, platform10 = process.platform) {
-      const override = env2.CLAUDE_CONFIG_DIR?.trim();
-      if (override) return override;
+      const override2 = env2.CLAUDE_CONFIG_DIR?.trim();
+      if (override2) return override2;
       const home = platform10 === "win32" ? env2.USERPROFILE?.trim() || env2.HOME?.trim() : env2.HOME?.trim();
       return path129.join(home || os46.homedir(), ".claude");
     }
@@ -230017,11 +230092,11 @@ ${buttons.join("\n")}`;
       const renderedArgs = [];
       for (const template of templates) {
         if (!template) continue;
-        const override = renderWorkerMcpConfigOverrideTemplate(template, delivery);
-        const separator = override.indexOf("=");
-        const key7 = separator > 0 ? override.slice(0, separator).trim() : "";
+        const override2 = renderWorkerMcpConfigOverrideTemplate(template, delivery);
+        const separator = override2.indexOf("=");
+        const key7 = separator > 0 ? override2.slice(0, separator).trim() : "";
         if (!key7 || hasConfigOverride([...renderedArgs, ...cliArgs], key7)) continue;
-        renderedArgs.push(delivery.flag, override);
+        renderedArgs.push(delivery.flag, override2);
       }
       return renderedArgs;
     }

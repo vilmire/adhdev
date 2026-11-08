@@ -173,7 +173,7 @@ describe('LIGHT-TASK central claim rule', () => {
     } finally { cleanup(meshId) }
   })
 
-  it('light rows still honor owned_paths overlap against in-flight writers', () => {
+  it('light rows are isolated from in-flight writers (own private worktree), overlapping owned_paths or not', () => {
     const meshId = `mesh_light_overlap_${randomUUID().slice(0, 8)}`
     try {
       const writer = enqueueTask(meshId, 'regular', { taskMode: 'code_change', difficulty: 'easy', ownedPaths: ['src/a.ts'] })
@@ -181,8 +181,8 @@ describe('LIGHT-TASK central claim rule', () => {
       const light = enqueueLight(meshId)
       pin(meshId, light.id)
       const got = claim(meshId, { lightWorkspaceId: LIGHT_WS }, { sessionId: LIGHT_SESSION })
-      expect(got.task).toBeNull()
-      expect(got.refusal.reason).toBe('owned_paths_conflict')
+      expect(got.refusal.reason).not.toBe('owned_paths_conflict')
+      expect(got.task).not.toBeNull()
     } finally { cleanup(meshId) }
   })
 })
@@ -202,3 +202,9 @@ describe('node_busy hold names its blocker', () => {
     } finally { cleanup(meshId) }
   })
 })
+
+// Path-ownership gate is opt-in (default 'off'); this suite pins the legacy mesh-wide fence.
+import { setPathOwnershipGateForTests as __setGate } from '../../src/mesh/mesh-path-ownership-gate.js'
+import { beforeEach as __gateBefore, afterEach as __gateAfter } from 'vitest'
+__gateBefore(() => __setGate('mesh_wide'))
+__gateAfter(() => __setGate(undefined))

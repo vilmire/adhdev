@@ -3,6 +3,8 @@ import type { PhysicalOwnershipScope } from '@adhdev/mesh-shared';
 import { findOwnershipConflicts, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import type { MeshWorkQueueEntry } from './mesh-work-queue-types.js';
 import { pendingLaunchReservation } from './mesh-task-routing-contract.js';
+import { resolvePathOwnershipGate } from './mesh-path-ownership-gate.js';
+import { checkoutOfCandidate, checkoutOfWriter, sharesCheckout } from './mesh-checkout-identity.js';
 
 /** Codes are the existing claim/auto-launch refusal codes, including their diagnostic suffixes. */
 export interface MeshQueueHold {
@@ -82,8 +84,9 @@ function pushLogicalOverlaps(
     }
 }
 
-export function queueHoldContext(task: MeshWorkQueueEntry, reason: string, queue: readonly MeshWorkQueueEntry[], nodeId?: string, prospectiveScope?: PhysicalOwnershipScope, opts?: { preSpawn?: boolean }): Pick<MeshQueueHold, 'blockingTaskIds' | 'detail'> {
+export function queueHoldContext(task: MeshWorkQueueEntry, reason: string, queue: readonly MeshWorkQueueEntry[], nodeId?: string, prospectiveScope?: PhysicalOwnershipScope): Pick<MeshQueueHold, 'blockingTaskIds' | 'detail'> {
     const active = holdActiveWriters(task, queue);
+    const pathGate = resolvePathOwnershipGate(task.meshId);
     const overlaps: NonNullable<MeshQueueHold['detail']['overlappingPaths']> = [];
     let explained: { taskId: string; reason: PhysicalOverlapExplanation } | undefined;
     if (reason === 'owned_paths_conflict' && task.ownedPaths) {
@@ -94,11 +97,15 @@ export function queueHoldContext(task: MeshWorkQueueEntry, reason: string, queue
             if (!blockingPaths || (isReadonly && !blockingScope)) continue;
             const candidateScope = prospectiveScope ?? currentPhysicalScope(task.ownershipScope, task.ownedPaths);
             const otherScope = currentPhysicalScope(blockingScope, blockingPaths);
-            // Mirrors the pre-spawn admission (evaluateTaskOwnedPathsAdmission): against a light writer whose private
-            // worktree scope still reproduces, a task with no attestation yet is held only by a logical path overlap.
-            if (opts?.preSpawn && !task.ownershipScope && !candidateScope && otherScope && other.light && other.lightWorkspaceId) {
-                pushLogicalOverlaps(overlaps, task, other, blockingPaths);
-                continue;
+            // Mirrors findTaskOwnedPathsConflicts: only a writer of the SAME checkout holds the task. Another
+            // checkout holds it solely through two attested scopes that provably share a physical resource.
+            const otherCheckout = isReadonly && blockingScope ? { nodeId: blockingScope.nodeId } : checkoutOfWriter(other);
+            const candidateCheckout = checkoutOfCandidate(task, nodeId);
+            const wide = pathGate === 'mesh_wide' && !candidateCheckout?.light && !otherCheckout?.light;
+            if (!wide && !sharesCheckout(candidateCheckout, otherCheckout)) {
+                if (!candidateScope || !otherScope) continue;
+                const crossKind = explainPhysicalOverlap(task.ownedPaths, candidateScope, blockingPaths, otherScope).kind;
+                if (crossKind === 'none' || crossKind === 'missing_scope') continue;
             }
             const physical = comparePhysicalOwnership(task.ownedPaths, candidateScope, blockingPaths, otherScope);
             if (!physical.physicalConflict) continue;

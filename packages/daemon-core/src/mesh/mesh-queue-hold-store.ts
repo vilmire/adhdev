@@ -4,6 +4,7 @@ import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { isUnclaimableAsDeclared, queueHoldContext, queueTaskHoldView, setQueueTaskHold, QUEUE_HOLD_NOTICE_AFTER_MS } from './mesh-queue-hold.js';
 import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 import { isDifficultyFloorWaitReason } from './mesh-difficulty-floor.js';
+import { resolvePathOwnershipGate } from './mesh-path-ownership-gate.js';
 import { getMachineId } from '../config/config.js';
 import { isQuotaGateHoldReason, quotaHoldCoordinatorMessage, readQuotaGateEvidence } from './mesh-quota-override.js';
 
@@ -18,13 +19,15 @@ export function recordQueueTaskHold(meshId: string, taskId: string, reason: stri
     store.transaction(() => {
         const task = store.findQueueEntryById(meshId, taskId);
         if (!task || task.status !== 'pending' || (preserveExisting && task.hold)) return;
+        // Path-ownership holds exist only when the opt-in gate is on.
+        if ((reason === 'owned_paths_conflict' || reason === 'ownership_unproven') && resolvePathOwnershipGate(meshId) === 'off') return;
         // Same active-writer set admission uses (assignedRowsMeshWide includes stopping
         // exclusive writers whose queue status may already be terminal) plus pending rows
         // for launch reservations / dependency titles — not a pending+assigned-only copy.
         const writers = store.assignedRowsMeshWide(meshId).map(row => JSON.parse(row.payload) as MeshWorkQueueEntry);
         const pending = store.getQueueEntries(meshId, ['pending']);
         const queue = [...writers, ...pending.filter(p => !writers.some(w => w.id === p.id))];
-        const context = queueHoldContext(task, reason, queue, nodeId, undefined, { preSpawn: true });
+        const context = queueHoldContext(task, reason, queue, nodeId);
         if (reason === 'dependencies_unsatisfied') {
             const completed = new Set(store.getQueueHeads(meshId, ['completed']).map(head => head.id));
             context.blockingTaskIds = (task.dependsOn || []).filter(id => !completed.has(id));
@@ -59,6 +62,8 @@ export function notifyHeldQueueTasks(meshId: string, now = Date.now()): void {
     const queue = store.getQueueEntries(meshId, ['pending', 'assigned']);
     for (const snapshot of queue) {
         const view = queueTaskHoldView(snapshot, queue, now);
+        // A path-ownership hold persisted before the gate went opt-in (or while it was on) is stale when it is off.
+        if ((view?.reason === 'owned_paths_conflict' || view?.reason === 'ownership_unproven') && resolvePathOwnershipGate(meshId) === 'off') continue;
         const unclaimable = isUnclaimableAsDeclared(view);
         if (!view || (!unclaimable && view.ageMs < QUEUE_HOLD_NOTICE_AFTER_MS) || snapshot.holdNoticeId) continue;
         // Floor-wait holds already have their own bounded-wait pager with a double

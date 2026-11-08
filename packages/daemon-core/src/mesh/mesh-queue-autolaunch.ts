@@ -747,7 +747,7 @@ export async function resolveAutoLaunchPlan(
     skippedCandidates: Array<{ nodeId: string; reason: string }>,
     markSkip: AutoLaunchSkipMarker,
 ): Promise<AutoLaunchPlan | null> {
-    const preAdmission = evaluateTaskOwnedPathsAdmission(MeshRuntimeStore.getInstance(), meshId, task);
+    const preAdmission = evaluateTaskOwnedPathsAdmission(MeshRuntimeStore.getInstance(), meshId, task, undefined, nodeId);
     if (!preAdmission.allowed) {
         markSkip(nodeId, 'owned_paths_conflict');
         return null;
@@ -769,7 +769,7 @@ export async function resolveAutoLaunchPlan(
         markSkip(nodeId, resolved.reason || 'provider_unusable');
         return null;
     }
-    const postProviderAdmission = evaluateTaskOwnedPathsAdmission(MeshRuntimeStore.getInstance(), meshId, task);
+    const postProviderAdmission = evaluateTaskOwnedPathsAdmission(MeshRuntimeStore.getInstance(), meshId, task, undefined, nodeId);
     if (!postProviderAdmission.allowed) {
         markSkip(nodeId, 'owned_paths_conflict', { providerType: resolved.providerType });
         return null;

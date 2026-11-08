@@ -221,3 +221,9 @@ for (const status of ['assigned', 'reserved'] as const) {
         expect(row(review.id).hold?.reason).toBe('review_input_busy');
     });
 }
+
+// Path-ownership gate is opt-in (default 'off'); this suite pins the legacy mesh-wide fence.
+import { setPathOwnershipGateForTests as __setGate } from '../../src/mesh/mesh-path-ownership-gate.js'
+import { beforeEach as __gateBefore, afterEach as __gateAfter } from 'vitest'
+__gateBefore(() => __setGate('mesh_wide'))
+__gateAfter(() => __setGate(undefined))

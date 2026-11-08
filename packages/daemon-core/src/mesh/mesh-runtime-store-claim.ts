@@ -14,6 +14,8 @@ function noteStageReviewRefusal(candidate: MeshWorkQueueEntry, refusal: string |
 import { attestLocalOwnership, comparePhysicalOwnership, currentPhysicalScope, explainPhysicalOverlap, isForeignPhysicalScope } from './mesh-physical-ownership.js';
 import type { PhysicalOwnershipScope } from '@adhdev/mesh-shared';
 import { ownershipUnprovenResolution, queueHoldContext, setQueueTaskHold } from './mesh-queue-hold.js';
+import { resolvePathOwnershipGate, type PathOwnershipGate } from './mesh-path-ownership-gate.js';
+import { checkoutOfCandidate, checkoutOfWriter, sharesCheckout, type CheckoutRef } from './mesh-checkout-identity.js';
 /**
  * The queue claim transaction of MeshRuntimeStore: one session atomically claims
  * the next pending task it may run — the dependency gate, notBefore, target pins,
@@ -38,12 +40,16 @@ import { dirtyWriteVerdict, describeDirtyWriteRefusal, type DirtyWriteGate } fro
 /** The MeshRuntimeStore members these functions read or call (compiler-checked; no cast). */
 export type MeshRuntimeStoreClaimHost = Pick<MeshRuntimeStore, 'activeProviderAssignmentCount' | 'activeSlotAssignmentCount' | 'assignedRowsMeshWide' | 'db' | 'getQueueEntries' | 'getQueueSchedulingGraph' | 'ensureLegacyQueueMigrated' | 'hasActiveNodeWriteAssignment' | 'activeNodeWriteAssignmentIds' | 'hasActiveSessionAssignment' | 'maybeCheckpointWal' | 'transaction' | 'turnStore'>;
 
-export interface ScopedInFlightOwnership extends InFlightOwnership { ownershipScope?: PhysicalOwnershipScope; readLease?: boolean; /** A light task: its scope is a private worktree no other task ever claims. */ privateWorktree?: boolean }
-type OwnershipCandidate = Pick<MeshWorkQueueEntry, 'ownedPaths' | 'readonly' | 'taskMode' | 'ownershipScope'> & Partial<Pick<MeshWorkQueueEntry, 'id'>>;
+export interface ScopedInFlightOwnership extends InFlightOwnership { ownershipScope?: PhysicalOwnershipScope; readLease?: boolean; /** The physical checkout this writer occupies; conflicts only exist inside one checkout (mesh-checkout-identity.ts). */ checkout?: CheckoutRef }
+type OwnershipCandidate = Pick<MeshWorkQueueEntry, 'ownedPaths' | 'readonly' | 'taskMode' | 'ownershipScope'> & Partial<Pick<MeshWorkQueueEntry, 'id' | 'light' | 'lightWorkspaceId' | 'assignedNodeId' | 'targetNodeId'>>;
 const unknownWriterPaths = { paths: [{ path: '', subtree: true }] };
 type OwnershipHost = Pick<MeshRuntimeStoreClaimHost, 'assignedRowsMeshWide'> & Partial<Pick<MeshRuntimeStore, 'getQueueEntries'>>;
 
-/** Assigned writers, read leases and short-lived launch reservations, including legacy writers without declarations. */
+/**
+ * Assigned writers, read leases and short-lived launch reservations, including legacy writers without declarations.
+ * Mesh-wide only as the SET of in-flight rows: each carries its `checkout`, and a conflict is only ever raised
+ * between rows of the same physical checkout (findTaskOwnedPathsConflicts).
+ */
 export function readInFlightOwnershipMeshWide(
     host: OwnershipHost,
     meshId: string,
@@ -56,39 +62,50 @@ export function readInFlightOwnershipMeshWide(
                 if (parsed.id === undefined) return { taskId: 'unproven_active_writer', paths: unknownWriterPaths };
                 if (isTaskReadonly(parsed)) {
                     const scope = parsed.reviewInputScope;
-                    return scope ? { taskId: parsed.id, paths: { paths: scope.declaration }, ownershipScope: scope, readLease: true } : null;
+                    return scope ? { taskId: parsed.id, paths: { paths: scope.declaration }, ownershipScope: scope, readLease: true, checkout: { nodeId: scope.nodeId } } : null;
                 }
-                return { taskId: parsed.id, paths: parsed.ownedPaths ?? unknownWriterPaths, ownershipScope: parsed.ownershipScope, ...(parsed.light && parsed.lightWorkspaceId ? { privateWorktree: true } : {}) };
+                const checkout = checkoutOfWriter(parsed);
+                return { taskId: parsed.id, paths: parsed.ownedPaths ?? unknownWriterPaths, ownershipScope: parsed.ownershipScope, ...(checkout ? { checkout } : {}) };
             } catch { return { taskId: 'unproven_active_writer', paths: unknownWriterPaths }; }
         })
         .filter((v): v is ScopedInFlightOwnership => v !== null);
 }
 
-/** Find owned_paths conflicts for a candidate against the mesh-wide in-flight ownership set. */
+/**
+ * Find owned_paths conflicts for a candidate against the in-flight writers of the SAME PHYSICAL CHECKOUT.
+ * A writer in a different checkout (another worktree node, light workspace, member clone) never blocks the
+ * candidate by its owned_paths or by lacking an attested scope: separate checkouts cannot overwrite each
+ * other's files, and a content overlap between their branches is a merge-time concern Refinery handles.
+ * The one cross-checkout fence kept: two ATTESTED scopes that provably share a physical resource (same inode /
+ * shared git store) or integrate into the same repository.
+ */
 export function findTaskOwnedPathsConflicts(
     candidate: OwnershipCandidate,
     inFlightOwnership: readonly ScopedInFlightOwnership[],
     prospectiveScope?: PhysicalOwnershipScope,
-    opts?: { preSpawn?: boolean },
+    opts?: { nodeId?: string; gate?: PathOwnershipGate },
 ) {
-    if (isTaskReadonly(candidate)) return [];
+    const gate = opts?.gate ?? 'same_checkout';
+    // `off` (the default policy): owned_paths are advisory, nothing is ever a conflict.
+    if (isTaskReadonly(candidate) || gate === 'off') return [];
     const paths = candidate.ownedPaths ?? unknownWriterPaths;
     const scope = prospectiveScope ?? currentPhysicalScope(candidate.ownershipScope, paths);
-    // Before a spawn the candidate has no checkout yet. A light writer works in its own private worktree that no
-    // other task can ever claim, so against such a writer with a verified scope only a logical path overlap can hold
-    // the candidate (live 2026-11-07: light c8b231ee held base-checkout task 81ff5c9c). Writers in shared checkouts
-    // keep the physical check — a same-checkout candidate admitted here would only be refused at claim and relaunch.
-    const logicalOnly = !!opts?.preSpawn && !candidate.ownershipScope && !prospectiveScope;
+    const candidateCheckout = checkoutOfCandidate(candidate, opts?.nodeId);
     return inFlightOwnership.flatMap(other => {
         if (other.taskId === candidate.id) return [];
         const current = currentPhysicalScope(other.ownershipScope, other.paths);
-        // Only a light writer whose attestation still reproduces is known to sit in a private worktree; a writer with
-        // no (or an unreproducible) scope stays an unknown writer of every checkout and blocks as before.
-        if (logicalOnly && current && other.privateWorktree) return findOwnershipConflicts(paths, [other]);
         // A read lease also fences attested nested Git stores. Its empty write declaration must not erase them.
         const otherScope = other.readLease && current && other.ownershipScope
             ? { ...current, resources: [...current.resources, ...other.ownershipScope.resources] } : current;
-        if (other.ownershipScope && !otherScope) return [{ taskId: other.taskId, overlappingPaths: ['unproven_active_physical_resource'] }];
+        // mesh_wide is the legacy fence; light workspaces stay private to themselves in every mode.
+        const sameCheckout = gate === 'mesh_wide' && !candidateCheckout?.light && !other.checkout?.light
+            ? true : sharesCheckout(candidateCheckout, other.checkout);
+        if (!sameCheckout) {
+            if (!scope || !otherScope) return [];
+            const kind = explainPhysicalOverlap(paths, scope, other.paths, otherScope).kind;
+            if (kind === 'none' || kind === 'missing_scope') return [];
+        }
+        if (sameCheckout && other.ownershipScope && !otherScope) return [{ taskId: other.taskId, overlappingPaths: ['unproven_active_physical_resource'] }];
         const comparison = comparePhysicalOwnership(paths, scope, other.paths, otherScope);
         if (!comparison.physicalConflict) return [];
         const explained = explainPhysicalOverlap(paths, scope, other.paths, otherScope);
@@ -116,12 +133,14 @@ export function evaluateTaskOwnedPathsAdmission(
     meshId: string,
     candidate: OwnershipCandidate | undefined,
     inFlightOwnership?: readonly ScopedInFlightOwnership[],
+    nodeId?: string,
+    gate: PathOwnershipGate = resolvePathOwnershipGate(meshId),
 ): { allowed: boolean; conflicts: Array<{ taskId: string; overlappingPaths: readonly string[] }>; detail?: string } {
     if (!candidate || isTaskReadonly(candidate)) {
         return { allowed: true, conflicts: [] };
     }
     const inFlight = inFlightOwnership ?? readInFlightOwnershipMeshWide(host, meshId);
-    const conflicts = findTaskOwnedPathsConflicts(candidate, inFlight, undefined, { preSpawn: true });
+    const conflicts = findTaskOwnedPathsConflicts(candidate, inFlight, undefined, { nodeId, gate });
     if (conflicts.length === 0) return { allowed: true, conflicts: [] };
     return {
         allowed: false,
@@ -359,11 +378,15 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
 
         // H1 (path ownership, wiring-unification Phase H — docs/design/2026-09-23-
         // wiring-unification.md §7c): a write (non-readonly) candidate whose declared
-        // owned_paths overlaps another currently-ASSIGNED write task's declared
-        // owned_paths is refused. Scope is MESH-WIDE (assignedRowsMeshWide — every
-        // node/daemon in the mesh), deliberately DIFFERENT from the provider/slot/
-        // node-busy capacity gates above, which stay scoped to assignedRowsForDaemon
-        // (one machine's resources).
+        // owned_paths overlaps (or whose missing scope cannot be told apart from) another
+        // currently-ASSIGNED write task is refused — but ONLY when both run in the SAME
+        // PHYSICAL CHECKOUT (same node base checkout / same worktree; mesh-checkout-identity.ts).
+        // The in-flight set is read mesh-wide, the verdict is per checkout: a writer in another
+        // worktree node, light workspace or member clone cannot overwrite this checkout's files,
+        // and a branch content overlap is resolved at landing by Refinery. (Owner 2026-11-08: the
+        // old mesh-wide fence held a9497cce behind f7e7cb04 in a different worktree node — do not
+        // re-tighten.) The one-writer-per-node rule (nodeWriteBusy below) is the same per-checkout idea.
+        const pathGate = resolvePathOwnershipGate(meshId);
         const inFlightOwnership = readInFlightOwnershipMeshWide(host, meshId);
         const ownershipProof = new Map<string, { scope: PhysicalOwnershipScope } | { error: string }>();
         const proofFor = (candidate: MeshWorkQueueEntry): { scope: PhysicalOwnershipScope } | { error: string } | undefined => {
@@ -401,12 +424,15 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
             return result;
         };
         const ownedPathsConflictFor = (candidate: MeshWorkQueueEntry) => {
+            if (pathGate === 'off') return [];
             const proof = proofFor(candidate);
-            return findTaskOwnedPathsConflicts(candidate, inFlightOwnership, proof && 'scope' in proof ? proof.scope : undefined);
+            return findTaskOwnedPathsConflicts(candidate, inFlightOwnership, proof && 'scope' in proof ? proof.scope : undefined, { nodeId, gate: pathGate });
         };
         const ownedPathsAllows = (candidate: MeshWorkQueueEntry): boolean =>
             ownedPathsConflictFor(candidate).length === 0;
         const ownershipProven = (candidate: MeshWorkQueueEntry): boolean => {
+            // Path isolation is not proven or required when the gate is off (the scope is still recorded below, best effort).
+            if (pathGate === 'off') return true;
             const proof = proofFor(candidate);
             return !proof || !('error' in proof);
         };
@@ -559,7 +585,7 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
             { reason: 'review_input_unavailable', test: c => reviewRefusal(c) !== 'review_input_unavailable' },
             { reason: 'review_input_busy', test: c => reviewRefusal(c) !== 'review_input_busy' },
             // When the claiming session's live model is unknown (!assignedModel) and the
-            // candidate is already blocked mesh-wide by owned_paths_conflict (with node
+            // candidate is already blocked by owned_paths_conflict in this checkout (with node
             // and parallel caps clear), advance to owned_paths_conflict rather than
             // attributing the refusal to the unknown-model slot intersection.
             { reason: 'difficulty_floor_unmet', test: c => difficultyAllows(c) || (!assignedModel && parallelCapsAllow(c) && nodeConflictAllows(c) && !ownedPathsAllows(c)) },
@@ -633,12 +659,14 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
         }
         const entry = selected.entry;
         const admittedProof = proofFor(entry);
-        if (admittedProof && 'error' in admittedProof) return refuse('ownership_unproven', admittedProof.error, entry);
+        if (admittedProof && 'error' in admittedProof && pathGate !== 'off') return refuse('ownership_unproven', admittedProof.error, entry);
         if (admittedProof && 'scope' in admittedProof) {
             const reproduced = currentPhysicalScope(admittedProof.scope, entry.ownedPaths!);
-            if (!reproduced) return refuse('ownership_unproven', 'unproven_active_physical_resource', entry);
-            entry.ownershipScope = reproduced;
-            entry.phase = entry.phase === 'integration' ? 'integration' : 'source';
+            if (!reproduced && pathGate !== 'off') return refuse('ownership_unproven', 'unproven_active_physical_resource', entry);
+            if (reproduced) {
+                entry.ownershipScope = reproduced;
+                entry.phase = entry.phase === 'integration' ? 'integration' : 'source';
+            }
         }
 
         // GIT-GATE: a readonly candidate bypasses nodeNotDirty/nodeNotStaleBehind above
@@ -660,8 +688,9 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
         }
         entry.revision = (entry.revision ?? 0) + 1;
         if (entry.ownedPaths && entry.ownershipScope) {
-            const hard = new Set(findTaskOwnedPathsConflicts(entry, inFlightOwnership).map(c => c.taskId));
-            const warnings = findOwnershipConflicts(entry.ownedPaths, inFlightOwnership)
+            const hard = new Set(findTaskOwnedPathsConflicts(entry, inFlightOwnership, undefined, { nodeId, gate: pathGate }).map(c => c.taskId));
+            // Advisory only: a writer with no declaration is not a logical overlap worth reporting.
+            const warnings = findOwnershipConflicts(entry.ownedPaths, inFlightOwnership.filter(o => o.paths !== unknownWriterPaths))
                 .filter(c => !hard.has(c.taskId)).map(c => ({ ...c, action: 'serialize_integration' as const }));
             entry.logicalOverlapWarnings = [...new Map([...(entry.logicalOverlapWarnings ?? []), ...warnings].map(c => [c.taskId, c])).values()];
         }

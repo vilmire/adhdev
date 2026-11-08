@@ -6,6 +6,7 @@ import { currentPhysicalScope, comparePhysicalOwnership } from './mesh-physical-
 import { reviewIndependenceOf } from '@adhdev/mesh-shared';
 import { currentStageReviewScope } from './stage-review-input.js';
 import { isStageParent } from './stage-state.js';
+import { resolvePathOwnershipGate } from './mesh-path-ownership-gate.js';
 
 /** Stable preferences with a full eligible fallback; never used as an eligibility filter. */
 export function preferEligible<T>(eligible: readonly T[], preferences: readonly string[] | undefined, key: (value: T) => string): T[] {
@@ -62,7 +63,13 @@ export function reviewInputBusy(source: MeshWorkQueueEntry, scope: PhysicalOwner
         if ((writer.status !== 'assigned' && !pendingLaunchReservation(writer)) || writer.readonly || writer.taskMode === 'live_debug_readonly') return false;
         if (pinnedMeshNodeIdMatches(writer.assignedNodeId, scope.nodeId)) return true;
         const paths = writer.ownedPaths ?? { paths: [{ path: '', subtree: true }] };
-        return comparePhysicalOwnership(stageSource ? { paths: [] } : source.ownedPaths ?? { paths: [] }, scope, paths, currentPhysicalScope(writer.ownershipScope, paths)).physicalConflict;
+        const writerScope = currentPhysicalScope(writer.ownershipScope, paths);
+        // A writer in ANOTHER checkout cannot change the reviewed tree. With the path-ownership gate not mesh_wide, its
+        // missing scope (the default now: owned_paths are optional) must not read as "unknown writer of every checkout";
+        // only two attested scopes that provably share a physical resource still count.
+        const crossCheckout = (!!writer.light || !!(writer.assignedNodeId ?? writer.autoLaunch?.nodeId)) && resolvePathOwnershipGate(source.meshId) !== 'mesh_wide';
+        if (crossCheckout && !writerScope) return false;
+        return comparePhysicalOwnership(stageSource ? { paths: [] } : source.ownedPaths ?? { paths: [] }, scope, paths, writerScope).physicalConflict;
     });
 }
 

@@ -154,3 +154,9 @@ describe('mesh_attest_node_ownership (on the machine that holds the checkout)', 
         expect(await handler(ctx(), args('daemon_mach_host', { workspace: join(state.dir, 'missing') }))).toMatchObject({ success: false, code: 'ownership_unproven' });
     });
 });
+
+// Path-ownership gate is opt-in (default 'off'); this suite pins the legacy mesh-wide fence.
+import { setPathOwnershipGateForTests as __setGate } from '../../src/mesh/mesh-path-ownership-gate.js'
+import { beforeEach as __gateBefore, afterEach as __gateAfter } from 'vitest'
+__gateBefore(() => __setGate('mesh_wide'))
+__gateAfter(() => __setGate(undefined))

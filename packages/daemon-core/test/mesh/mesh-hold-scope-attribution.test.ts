@@ -19,6 +19,7 @@ const writer = (extra: Partial<MeshWorkQueueEntry> = {}): MeshWorkQueueEntry => 
 const candidate = (p: string): MeshWorkQueueEntry => ({
     id: '81ff5c9c', meshId: 'm', message: 'probe', status: 'pending', taskMode: 'code_change', ownedPaths: decl(p), origin: 'coordinator', createdAt: '', updatedAt: '',
 } as MeshWorkQueueEntry);
+const sharedWriter = (extra: Partial<MeshWorkQueueEntry> = {}) => writer({ light: undefined, lightWorkspaceId: undefined, ...extra });
 const host = (rows: MeshWorkQueueEntry[]) => ({ assignedRowsMeshWide: () => rows.map(r => ({ payload: JSON.stringify(r) })) }) as any;
 
 describe('hold/admission attribution for a scoped writer in its own worktree (live 2026-11-07)', () => {
@@ -26,36 +27,40 @@ describe('hold/admission attribution for a scoped writer in its own worktree (li
         const r = evaluateTaskOwnedPathsAdmission(host([writer()]), 'm', candidate('docs/evidence/probe.md'));
         expect(r).toEqual({ allowed: true, conflicts: [] });
     });
-    it('still holds a logically overlapping path before spawn', () => {
+    it('does not hold even a logically overlapping path behind a light writer: it works in its own private worktree', () => {
         const r = evaluateTaskOwnedPathsAdmission(host([writer()]), 'm', candidate('prefex-core/src/runtime.rs'));
-        expect(r.allowed).toBe(false);
-        expect(r.conflicts.map(c => c.taskId)).toEqual(['c8b231ee']);
+        expect(r).toEqual({ allowed: true, conflicts: [] });
     });
     it('names the held task, not the blocker, when the held task is the one without a scope', () => {
-        const ctx = queueHoldContext(candidate('docs/evidence/probe.md'), 'owned_paths_conflict', [writer()]);
+        const ctx = queueHoldContext(candidate('docs/evidence/probe.md'), 'owned_paths_conflict', [sharedWriter()]);
         expect(ctx.detail.unknownField).toBe('ownershipScope');
         expect(ctx.detail.resolution).toMatch(/^this task has no host-attested ownershipScope/);
         expect(ctx.detail.resolution).not.toMatch(/attestActiveOwnership/);
     });
     it('says the blocker scope cannot be re-verified when it has one (not that it has none)', () => {
-        const local = writer({ ownershipScope: lightScope('prefex-core/src/runtime.rs', 'this-machine') }); // worktree path does not exist here
+        const local = sharedWriter({ ownershipScope: lightScope('prefex-core/src/runtime.rs', 'this-machine') }); // worktree path does not exist here
         const held = { ...candidate('docs/evidence/probe.md'), ownershipScope: lightScope('docs/evidence/probe.md', 'other-machine') } as MeshWorkQueueEntry;
         const ctx = queueHoldContext(held, 'owned_paths_conflict', [local]);
         expect(ctx.detail.resolution).toMatch(/can no longer re-verify it/);
         expect(ctx.detail.resolution).not.toMatch(/has no host-attested/);
     });
-    it('pre-spawn hold context lists only logical overlaps for an unattested task', () => {
-        const none = queueHoldContext(candidate('docs/evidence/probe.md'), 'owned_paths_conflict', [writer()], undefined, undefined, { preSpawn: true });
+    it('hold context never names a light writer (private worktree) as a blocker, overlapping path or not', () => {
+        const none = queueHoldContext(candidate('docs/evidence/probe.md'), 'owned_paths_conflict', [writer()]);
         expect(none.blockingTaskIds).toEqual([]);
-        const hit = queueHoldContext(candidate('prefex-core/src/runtime.rs'), 'owned_paths_conflict', [writer()], undefined, undefined, { preSpawn: true });
-        expect(hit.blockingTaskIds).toEqual(['c8b231ee']);
-        expect(hit.detail.unknownField).toBeUndefined();
+        const hit = queueHoldContext(candidate('prefex-core/src/runtime.rs'), 'owned_paths_conflict', [writer()]);
+        expect(hit.blockingTaskIds).toEqual([]);
     });
     it('keeps the physical check against a scoped writer in a shared (non-light) checkout', () => {
         const shared = writer({ light: undefined, lightWorkspaceId: undefined });
         const r = evaluateTaskOwnedPathsAdmission(host([shared]), 'm', candidate('docs/evidence/probe.md'));
         expect(r.allowed).toBe(false);
-        const ctx = queueHoldContext(candidate('docs/evidence/probe.md'), 'owned_paths_conflict', [shared], undefined, undefined, { preSpawn: true });
+        const ctx = queueHoldContext(candidate('docs/evidence/probe.md'), 'owned_paths_conflict', [shared]);
         expect(ctx.blockingTaskIds).toEqual(['c8b231ee']);
     });
 });
+
+// Path-ownership gate is opt-in (default 'off'); this suite pins the legacy mesh-wide fence.
+import { setPathOwnershipGateForTests as __setGate } from '../../src/mesh/mesh-path-ownership-gate.js'
+import { beforeEach as __gateBefore, afterEach as __gateAfter } from 'vitest'
+__gateBefore(() => __setGate('mesh_wide'))
+__gateAfter(() => __setGate(undefined))

@@ -296,6 +296,17 @@ export interface RepoMeshPolicy {
      * config validation instead of silently becoming `block`.
      */
     onDependencyFailure?: 'block' | 'cancel';
+    /**
+     * Opt-in path-ownership gate (owner 2026-11-08: "merges resolve conflicts, these are not binary files;
+     * anything that hurts parallelism is not good"). `owned_paths` are ADVISORY metadata by default:
+     * - `off` (default): owned_paths overlap, a scope-less writer and an unattested candidate never hold or
+     *   refuse a claim. The per-node one-writer rule and light-workspace isolation (a physical checkout
+     *   cannot be shared by two writers) stay. Content overlaps resolve at merge time (Refinery).
+     * - `same_checkout`: owned_paths / missing scope fence writers of ONE checkout only.
+     * - `mesh_wide`: the legacy fence — every in-flight writer in the mesh, scope-less ones included.
+     * Read-only surface for the coordinator (mesh_status policy); no UI.
+     */
+    pathOwnershipGate?: 'off' | 'same_checkout' | 'mesh_wide';
 }
 
 /**
@@ -611,6 +622,7 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     // are never affected — see coordinatorIdlePushPolicy).
     coordinatorIdlePushPolicy: 'always',
     onDependencyFailure: 'block',
+    pathOwnershipGate: 'off',
 };
 
 /**

@@ -314,3 +314,9 @@ it('IPC preview/deferred ownership repair never invokes the scheduler or release
     expect(store.findQueueEntryById(meshId, original.id)?.parked).toEqual(before.parked);
     expect(state.trigger).not.toHaveBeenCalled();
 });
+
+// Path-ownership gate is opt-in (default 'off'); this suite pins the legacy mesh-wide fence.
+import { setPathOwnershipGateForTests as __setGate } from '../../src/mesh/mesh-path-ownership-gate.js'
+import { beforeEach as __gateBefore, afterEach as __gateAfter } from 'vitest'
+__gateBefore(() => __setGate('mesh_wide'))
+__gateAfter(() => __setGate(undefined))

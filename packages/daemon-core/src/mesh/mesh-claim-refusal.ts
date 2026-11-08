@@ -67,9 +67,11 @@ export type MeshClaimRefusalReason =
     | 'node_busy_with_active_assignment'
     /** H1 (path ownership, wiring-unification Phase H — docs/design/2026-09-23-wiring-
      *  unification.md §7c): a `code_change` candidate's declared `owned_paths` overlaps
-     *  another in-flight (`assigned`) task's declared `owned_paths`, MESH-WIDE (any
-     *  node/daemon). A missing declaration or a missing host scope still fences
-     *  (`unknownWriterPaths` / missing scope). `ownership_unproven` is the separate
+     *  another in-flight (`assigned`) task's declared `owned_paths` IN THE SAME
+     *  PHYSICAL CHECKOUT (mesh-checkout-identity.ts). Writers of other checkouts (other
+     *  worktree nodes, light workspaces, member clones) never block — a content overlap
+     *  between branches is a merge-time concern (Refinery). Within one checkout a missing
+     *  declaration or host scope still fences (`unknownWriterPaths` / missing scope). `ownership_unproven` is the separate
      *  gate for a candidate that cannot be attested. */
     | 'owned_paths_conflict'
     /** GIT-GATE (owner-requested follow-up to H1): a write (non-readonly) candidate

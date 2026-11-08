@@ -26,6 +26,7 @@ import { normalizeOwnedPaths } from '@adhdev/mesh-shared';
 import { currentStageReviewScope } from '../../src/mesh/stage-review-input.js';
 import { findTaskOwnedPathsConflicts, readInFlightOwnershipMeshWide } from '../../src/mesh/mesh-runtime-store-claim.js';
 import { attestLocalOwnership } from '../../src/mesh/mesh-physical-ownership.js';
+import { setPathOwnershipGateForTests } from '../../src/mesh/mesh-path-ownership-gate.js';
 import { StagePipelineRuntime } from '../../src/mesh/stage-pipeline-runtime.js';
 import { stashStageReport } from '../../src/mesh/stage-report-stash.js';
 import { initialStageState } from '../../src/mesh/stage-state.js';
@@ -43,7 +44,7 @@ afterEach(() => {
     try { fs.rmSync(testTmpDir, { recursive: true, force: true }); } catch { /* best-effort */ }
 });
 
-function setup() {
+function setup(opts: { ownedPaths?: string[] | null } = {}) {
     const ws = fs.mkdtempSync(path.join(tmpdir(), 'stage-attest-')); dirs.push(ws);
     const g = (...args: string[]) => execFileSync('git', args, { cwd: ws, stdio: 'pipe', windowsHide: true, encoding: 'utf8' }).trim();
     g('init', '-q');
@@ -52,7 +53,7 @@ function setup() {
     currentMesh = `mesh_attest_${randomUUID().slice(0, 8)}`;
     bindMeshNoticeRuntime({ notify: () => ({ eventId: 'x', queued: true }), retract: () => 0 } as any);
     meshConfigMocks.getMesh.mockReturnValue({ id: currentMesh, repoIdentity: 'fixture/repo', nodes: [{ id: 'node_a', daemonId: 'test-machine', workspace: ws }] });
-    const parent = enqueueTask(currentMesh, 'review immutable commits', { taskMode: 'code_change', difficulty: 'medium', review: true, ownedPaths: ['oss', 'packages/p/vendor/mcp-server'] } as any);
+    const parent = enqueueTask(currentMesh, 'review immutable commits', { taskMode: 'code_change', difficulty: 'medium', review: true, ...(opts.ownedPaths === null ? {} : { ownedPaths: opts.ownedPaths ?? ['oss', 'packages/p/vendor/mcp-server'] }) } as any);
     const store = MeshRuntimeStore.getInstance();
     const initial = store.findQueueEntryById(currentMesh, parent.id)!;
     Object.assign(initial, { status: 'assigned', assignedNodeId: 'node_a', assignedSessionId: 'sess-impl', assignedProviderType: 'claude-cli' });
@@ -224,3 +225,34 @@ describe('stage readonly input attestation', () => {
         expect(source().stageState!.reviewTaskIds).toEqual([]);
     });
 });
+
+describe('path-ownership gate off (default): a stage review does not depend on the implementer owned_paths', () => {
+    it('implementer without owned_paths or ownershipScope: the review child gets its own checkout+head review input and claims', () => {
+        const { ws, live, ports, source, store } = setup({ ownedPaths: null });
+        expect(source().ownedPaths).toBeUndefined();
+        expect(source().ownershipScope).toBeUndefined();
+        const child = ports.queue.enqueueReviewChild(live, spec);
+        expect(source().stageReviewInput?.headSha).toBe(source().stageState!.stageHeads.at(-1)!.rootSha);
+        expect(reviewRoutingRefusal(child, source(), 'codex-cli', ctx(ws), [source()])).toBeUndefined();
+        const refusal: any = {};
+        const claimed = store.claimNextQueueTask(live.meshId, 'node_a', 'reviewer-sess', [], { providerType: 'codex-cli', physicalContext: { ...ctx(ws), repoIdentity: 'fixture/repo' }, outRefusal: refusal } as any);
+        expect(refusal.reason).toBeUndefined();
+        expect(claimed?.id).toBe(child.id);
+        expect(claimed?.reviewInputScope?.worktree).toBe(fs.realpathSync.native(ws));
+    });
+    it('an unscoped writer in ANOTHER checkout does not make the review input busy; the same checkout still does', () => {
+        const { live, ports, store, source } = setup({ ownedPaths: null });
+        const other = enqueueTask(live.meshId, 'other checkout writer', { taskMode: 'code_change', difficulty: 'medium' });
+        store.updateQueueEntry({ ...other, status: 'assigned', assignedNodeId: 'node_b' });
+        expect(() => ports.queue.enqueueReviewChild(source(), spec)).not.toThrow();
+    });
+    it('mesh_wide keeps the legacy fence: that unscoped writer holds the review input busy', () => {
+        const { live, ports, store, source } = setup({ ownedPaths: null });
+        const other = enqueueTask(live.meshId, 'other checkout writer', { taskMode: 'code_change', difficulty: 'medium' });
+        store.updateQueueEntry({ ...other, status: 'assigned', assignedNodeId: 'node_b' });
+        setPathOwnershipGateForTests('mesh_wide');
+        try { expect(() => ports.queue.enqueueReviewChild(source(), spec)).toThrow('review_input_busy'); }
+        finally { setPathOwnershipGateForTests(undefined); }
+    });
+});
+

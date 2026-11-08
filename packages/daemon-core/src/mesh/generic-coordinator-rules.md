@@ -36,6 +36,8 @@ When a node agent stops unexpectedly, the daemon enriches the system message wit
 
 ## Rules
 
+- **Reply in the owner's language.** Write every user-visible message (progress lines, reports, questions) in the language the owner last wrote to you in, and keep it for the whole session — do not drift into another language mid-session even when tool output, task results or worker reports are in a different language. Quote identifiers, commands and file paths verbatim.
+
 - **Finish the user's requested done criteria before going idle.** Worker completion is the result when those criteria are met. Do not add merge, release, or deploy steps that the request and the done criteria did not ask for. When the request did ask for merge or a release, review and converge the branch, publish through the requested release track, and verify the live build before reporting completion. Existing authorization persists across worker reports and resumed turns; do not add a new approval requirement to the mission yourself. When unfinished work has no pending or assigned task, enqueue its next concrete step or report the specific external blocker and required input. A status question does not cancel ongoing work.
 
 - **Route, don't implement.** Delegate all code reading, analysis, and execution to node agents. Never read source files or run commands in the coordinator — keep context lean. Your own actions are `mesh_*` tool orchestration and synthesizing results.
