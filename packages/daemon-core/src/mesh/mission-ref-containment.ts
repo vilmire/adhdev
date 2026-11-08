@@ -15,6 +15,7 @@
  * node answers; this file imports no mission store and no mission write API.
  */
 import { execFileSync } from 'node:child_process';
+import { hiddenExecFileAsync } from '../process/hidden-spawn.js';
 import { devNull } from 'node:os';
 import type { MissionRefGitDetail, MissionRefGitMethod, MissionRefGitStatus } from '@adhdev/mesh-shared';
 import { gitChildEnv, GIT_LOCAL_TIMEOUT_MS } from '../git/git-locale.js';
@@ -85,17 +86,39 @@ function isShallow(repo: string): boolean {
     }
 }
 
-/** `git merge-tree --write-tree` exit 1 == content conflict (main touched the same lines); any other failure is not an answer. */
-function mergeTreeConflicts(repo: string, base: string, sha: string): boolean {
+/**
+ * `git merge-tree --write-tree` exit 1 == content conflict (main touched the same lines); any other failure is not an answer.
+ * Async so a large merge never blocks the daemon event loop (an exec error carries the exit code as `code`).
+ */
+async function mergeTreeConflicts(repo: string, base: string, sha: string): Promise<boolean> {
     try {
-        execFileSync(GIT, ['--no-replace-objects', 'merge-tree', '--write-tree', base, sha], {
-            cwd: repo, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: realGitEnv(),
+        await hiddenExecFileAsync(GIT, ['--no-replace-objects', 'merge-tree', '--write-tree', base, sha], {
+            cwd: repo, timeout: GIT_LOCAL_TIMEOUT_MS, env: realGitEnv(), encoding: 'utf8',
         });
         return false;
     } catch (e: any) {
-        return e?.status === 1;
+        return e?.code === 1;
     }
 }
+
+/** Short-lived memo of containment verdicts so repeated mission audits of the same commit skip the heavy git work. */
+const CONTAINMENT_MEMO_TTL_MS = 10 * 60_000;
+const CONTAINMENT_MEMO_MAX = 500;
+const containmentMemo = new Map<string, { expiresAt: number; verdict: ContainmentVerdict & { sha?: string } }>();
+const containmentInflight = new Map<string, Promise<ContainmentVerdict & { sha?: string }>>();
+
+function rememberContainment(key: string, verdict: ContainmentVerdict & { sha?: string }): void {
+    containmentMemo.delete(key);
+    containmentMemo.set(key, { expiresAt: Date.now() + CONTAINMENT_MEMO_TTL_MS, verdict });
+    while (containmentMemo.size > CONTAINMENT_MEMO_MAX) {
+        const oldest = containmentMemo.keys().next().value;
+        if (oldest === undefined) break;
+        containmentMemo.delete(oldest);
+    }
+}
+
+/** Test hook: forget every remembered verdict. */
+export function clearContainmentMemo(): void { containmentMemo.clear(); containmentInflight.clear(); }
 
 const unknown = (unknownReason: string): ContainmentVerdict => ({ status: 'unknown', detail: { unknownReason } });
 
@@ -107,6 +130,22 @@ const unknown = (unknownReason: string): ContainmentVerdict => ({ status: 'unkno
 export async function probeCommitContainment(repo: string, base: ResolvedBase, rev: string, opts: { tryCherry: boolean }): Promise<ContainmentVerdict & { sha?: string }> {
     const sha = resolveCommit(repo, rev);
     if (!sha) return unknown('object_missing');
+    // Verdicts are pure functions of (repo, base SHA, commit SHA, cherry mode): a moved ref changes the key.
+    const key = `${repo}\0${base.sha}\0${sha}\0${opts.tryCherry ? 1 : 0}`;
+    const hit = containmentMemo.get(key);
+    if (hit && hit.expiresAt > Date.now()) return hit.verdict;
+    const running = containmentInflight.get(key);
+    if (running) return running;
+    const task = computeContainment(repo, base, sha, opts).then((verdict) => {
+        // `unknown` is often transient (timeout, unfetched object): never remember a non-answer.
+        if (verdict.status !== 'unknown') rememberContainment(key, verdict);
+        return verdict;
+    }).finally(() => { containmentInflight.delete(key); });
+    containmentInflight.set(key, task);
+    return task;
+}
+
+async function computeContainment(repo: string, base: ResolvedBase, sha: string, opts: { tryCherry: boolean }): Promise<ContainmentVerdict & { sha?: string }> {
 
     const ancestry = probeGitAncestry(repo, sha, base.ref);
     if (ancestry === 'undeterminable') return { sha, ...unknown('undeterminable') };
@@ -125,7 +164,7 @@ export async function probeCommitContainment(repo: string, base: ResolvedBase, r
     if (residual.error) {
         if (/submodule conflict/i.test(residual.error)) return { sha, ...unknown('gitlink_undeterminable') };
         // A content conflict means the base touched the same lines: the change is not there as-is.
-        if (mergeTreeConflicts(repo, base.ref, sha)) {
+        if (await mergeTreeConflicts(repo, base.ref, sha)) {
             return { sha, status: 'not_contained', detail: { reasonCode: 'merge_conflict', note: 'modified_since_landing_possible' } };
         }
         return { sha, ...unknown('merge_tree_failed') };

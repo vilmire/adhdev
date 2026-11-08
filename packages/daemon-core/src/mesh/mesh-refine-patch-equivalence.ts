@@ -15,9 +15,47 @@ import {
 } from './mesh-refine-gitlink-utils.js';
 import type { MeshRefinePatchEquivalenceSummary, MeshRefineEffectiveDiffSummary, MeshRefineSubmoduleConflictHint } from './mesh-refine-gates.js';
 import { evaluateGitlinkTrivialFastForward, synthesizeTrivialFastForwardMergeTree, collectFastForwardGitlinkPaths } from './mesh-refine-gitlink-ff.js';
-import { hiddenExecFileSync } from '../process/hidden-spawn.js';
+import { hiddenExecFileSync, hiddenExecFileAsync, hiddenSpawn } from '../process/hidden-spawn.js';
+import { gitChildEnv, GIT_LOCAL_TIMEOUT_MS } from '../git/git-locale.js';
+import type { StdioOptions } from 'node:child_process';
 import { resolveSubmoduleDefaultBranch } from './worktree-bootstrap-config.js';
 import { resolve as pathResolve } from 'path';
+
+const yieldToEventLoop = (): Promise<void> => new Promise(r => setImmediate(r));
+
+/** Bound for the patch-id pipeline's git children (diff of a large vendored bundle can take a while, but never forever). */
+const PATCH_ID_GIT_TIMEOUT_MS = 60_000;
+
+/**
+ * Async git child (never blocks the daemon event loop): `stdio` may hand it file descriptors, stderr/stdout
+ * pipes are captured (stdout capped), and a `timeout` kills it. Resolves with the same `{status, stderr, stdout,
+ * error}` shape the sync spawn returned so callers' error text is unchanged. Env goes through gitChildEnv().
+ */
+function spawnGitAsync(
+    cwd: string,
+    args: string[],
+    stdio: StdioOptions,
+    timeoutMs: number = PATCH_ID_GIT_TIMEOUT_MS,
+): Promise<{ status: number | null; stdout: string; stderr: string; error?: Error }> {
+    return new Promise((resolvePromise) => {
+        let stdout = '';
+        let stderr = '';
+        let settled = false;
+        let timedOut = false;
+        const child = hiddenSpawn(GIT, args, { cwd, stdio, env: gitChildEnv() });
+        const timer = setTimeout(() => { timedOut = true; try { child.kill('SIGKILL'); } catch { /* already gone */ } }, timeoutMs);
+        const done = (r: { status: number | null; error?: Error }) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            resolvePromise({ stdout, stderr, ...r });
+        };
+        child.stdout?.on('data', (c: Buffer) => { if (stdout.length < REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES) stdout += c.toString('utf8'); });
+        child.stderr?.on('data', (c: Buffer) => { if (stderr.length < 64 * 1024) stderr += c.toString('utf8'); });
+        child.on('error', (error) => done({ status: null, error }));
+        child.on('close', (code) => done(timedOut ? { status: null, error: new Error(`git ${args[0]} timed out after ${timeoutMs}ms`) } : { status: code }));
+    });
+}
 
 async function computeGitPatchId(
     cwd: string,
@@ -25,7 +63,6 @@ async function computeGitPatchId(
     toRef: string,
     excludePaths: string[] = [],
 ): Promise<string> {
-    const { hiddenSpawnSync } = await import('../process/hidden-spawn.js');
     // When excludePaths is non-empty we drop those paths from the diff via
     // `:(exclude)` pathspecs. This is used to omit gitlink paths that have
     // already been proven a safe fast-forward: their patch hunks legitimately
@@ -59,11 +96,7 @@ async function computeGitPatchId(
         const out = openSync(patchFile, 'w');
         let diffRun;
         try {
-            diffRun = hiddenSpawnSync(GIT, diffArgs, {
-                cwd,
-                stdio: ['ignore', out, 'pipe'],
-                encoding: 'utf8',
-            });
+            diffRun = await spawnGitAsync(cwd, diffArgs, ['ignore', out, 'pipe']);
         } finally {
             closeSync(out);
         }
@@ -76,12 +109,7 @@ async function computeGitPatchId(
         const patchIn = openSync(patchFile, 'r');
         let patchIdRun;
         try {
-            patchIdRun = hiddenSpawnSync(GIT, ['patch-id', '--stable'], {
-                cwd,
-                stdio: [patchIn, 'pipe', 'pipe'],
-                encoding: 'utf8',
-                maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
-            });
+            patchIdRun = await spawnGitAsync(cwd, ['patch-id', '--stable'], [patchIn, 'pipe', 'pipe']);
         } finally {
             closeSync(patchIn);
         }
@@ -642,25 +670,31 @@ export async function checkWorktreeChangesPatchEquivalentInRef(
 ): Promise<MeshWorktreePatchContainmentSummary> {
     const startedAt = Date.now();
     try {
-        const { hiddenExecFileSync } = await import('../process/hidden-spawn.js');
-        const git = (gitArgs: string[]) => hiddenExecFileSync(GIT, gitArgs, {
+        // Async + bounded: this runs inside the daemon process, and a synchronous merge-base/merge-tree here
+        // froze the event loop for tens of seconds when a coordinator audited many mission items.
+        const git = async (gitArgs: string[]) => (await hiddenExecFileAsync(GIT, gitArgs, {
             cwd: repoRoot,
             encoding: 'utf8',
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
-        });
-        const mergeBase = git(['merge-base', ref, worktreeHead]).trim();
+            timeout: GIT_LOCAL_TIMEOUT_MS,
+            env: gitChildEnv(),
+        })).stdout;
+        const mergeBase = (await git(['merge-base', ref, worktreeHead])).trim();
 
         // Reuse the refine gate's trivial-gitlink-fast-forward handling: a clean
         // submodule pointer fast-forward must not block the cleanup, but a real
         // (non-ff) submodule divergence must keep it blocked.
         let mergedTree = '';
         try {
-            mergedTree = git(['merge-tree', '--write-tree', ref, worktreeHead]).trim().split(/\s+/)[0] || '';
+            mergedTree = (await git(['merge-tree', '--write-tree', ref, worktreeHead])).trim().split(/\s+/)[0] || '';
         } catch (mergeTreeErr: any) {
             const output = `${mergeTreeErr?.message || ''}\n${mergeTreeErr?.stdout || ''}\n${mergeTreeErr?.stderr || ''}`;
             const isSubmoduleConflict = /(submodule|160000)/i.test(output)
                 || /Recursive merging with submodules/i.test(output);
             if (!isSubmoduleConflict) throw mergeTreeErr;
+            // The gitlink evaluator is a chain of short synchronous git probes (one per gitlink); yield first and
+            // between phases so other event-loop work (WS heartbeats, IPC) runs between them.
+            await yieldToEventLoop();
             const evaluation = evaluateGitlinkTrivialFastForward(repoRoot, ref, worktreeHead);
             if (!evaluation.trivial) {
                 // A genuine submodule divergence (or unfetched objects): we cannot
@@ -676,6 +710,7 @@ export async function checkWorktreeChangesPatchEquivalentInRef(
                     error: `merge-tree submodule conflict is not a trivial fast-forward: ${evaluation.reason || 'unknown'}`,
                 };
             }
+            await yieldToEventLoop();
             mergedTree = synthesizeTrivialFastForwardMergeTree(repoRoot, ref, worktreeHead, evaluation.gitlinks) || '';
         }
 
@@ -693,6 +728,7 @@ export async function checkWorktreeChangesPatchEquivalentInRef(
         // Exclude proven fast-forward gitlinks from the residual diff for the same
         // reason the refine gate does: advancing a submodule pointer to a strict
         // descendant is a safe fast-forward and must not count as "new content".
+        await yieldToEventLoop();
         const ffGitlinkExcludePaths = collectFastForwardGitlinkPaths(repoRoot, ref, worktreeHead);
         const residualPatchId = await computeGitPatchId(repoRoot, ref, mergedTree, ffGitlinkExcludePaths);
         const contained = residualPatchId === '';

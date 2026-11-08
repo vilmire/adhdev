@@ -90,6 +90,7 @@ export const GIT_HEAVY_SUITES: string[] = [
   // Production enqueueReviewChild attests the source scope of the stage parent (real git root).
   'test/mesh/stage-ports-attest-scope.test.ts',
   'test/mesh/mission-ref-containment.test.ts',
+  'test/mesh/mission-ref-containment-async.test.ts',
   'test/mesh/mission-git-eval.test.ts',
   'test/mesh/preview-freshness.test.ts',
   // BASE-REF-CONFIG-FALLBACK: real repo + worktree cut before .adhdev/refine.json landed on main.

@@ -66507,8 +66507,37 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_git_status();
       }
     });
+    function spawnGitAsync(cwd, args, stdio, timeoutMs = PATCH_ID_GIT_TIMEOUT_MS) {
+      return new Promise((resolvePromise) => {
+        let stdout = "";
+        let stderr = "";
+        let settled = false;
+        let timedOut = false;
+        const child = hiddenSpawn(GIT, args, { cwd, stdio, env: gitChildEnv() });
+        const timer = setTimeout(() => {
+          timedOut = true;
+          try {
+            child.kill("SIGKILL");
+          } catch {
+          }
+        }, timeoutMs);
+        const done = (r) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolvePromise({ stdout, stderr, ...r });
+        };
+        child.stdout?.on("data", (c) => {
+          if (stdout.length < REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES) stdout += c.toString("utf8");
+        });
+        child.stderr?.on("data", (c) => {
+          if (stderr.length < 64 * 1024) stderr += c.toString("utf8");
+        });
+        child.on("error", (error) => done({ status: null, error }));
+        child.on("close", (code) => done(timedOut ? { status: null, error: new Error(`git ${args[0]} timed out after ${timeoutMs}ms`) } : { status: code }));
+      });
+    }
     async function computeGitPatchId(cwd, fromRef, toRef2, excludePaths = []) {
-      const { hiddenSpawnSync: hiddenSpawnSync2 } = await Promise.resolve().then(() => (init_hidden_spawn(), hidden_spawn_exports));
       const diffArgs = ["diff", "--patch", "--full-index", fromRef, toRef2];
       if (excludePaths.length > 0) {
         diffArgs.push("--", ".", ...excludePaths.map((path144) => `:(exclude)${path144}`));
@@ -66522,11 +66551,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         const out = openSync31(patchFile, "w");
         let diffRun;
         try {
-          diffRun = hiddenSpawnSync2(GIT, diffArgs, {
-            cwd,
-            stdio: ["ignore", out, "pipe"],
-            encoding: "utf8"
-          });
+          diffRun = await spawnGitAsync(cwd, diffArgs, ["ignore", out, "pipe"]);
         } finally {
           closeSync31(out);
         }
@@ -66539,12 +66564,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         const patchIn = openSync31(patchFile, "r");
         let patchIdRun;
         try {
-          patchIdRun = hiddenSpawnSync2(GIT, ["patch-id", "--stable"], {
-            cwd,
-            stdio: [patchIn, "pipe", "pipe"],
-            encoding: "utf8",
-            maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES
-          });
+          patchIdRun = await spawnGitAsync(cwd, ["patch-id", "--stable"], [patchIn, "pipe", "pipe"]);
         } finally {
           closeSync31(patchIn);
         }
@@ -66820,22 +66840,24 @@ ${e?.stderr || ""}`
     async function checkWorktreeChangesPatchEquivalentInRef(repoRoot, ref2, worktreeHead) {
       const startedAt = Date.now();
       try {
-        const { hiddenExecFileSync: hiddenExecFileSync3 } = await Promise.resolve().then(() => (init_hidden_spawn(), hidden_spawn_exports));
-        const git12 = (gitArgs) => hiddenExecFileSync3(GIT, gitArgs, {
+        const git12 = async (gitArgs) => (await hiddenExecFileAsync(GIT, gitArgs, {
           cwd: repoRoot,
           encoding: "utf8",
-          maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES
-        });
-        const mergeBase = git12(["merge-base", ref2, worktreeHead]).trim();
+          maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
+          timeout: GIT_LOCAL_TIMEOUT_MS,
+          env: gitChildEnv()
+        })).stdout;
+        const mergeBase = (await git12(["merge-base", ref2, worktreeHead])).trim();
         let mergedTree = "";
         try {
-          mergedTree = git12(["merge-tree", "--write-tree", ref2, worktreeHead]).trim().split(/\s+/)[0] || "";
+          mergedTree = (await git12(["merge-tree", "--write-tree", ref2, worktreeHead])).trim().split(/\s+/)[0] || "";
         } catch (mergeTreeErr) {
           const output = `${mergeTreeErr?.message || ""}
 ${mergeTreeErr?.stdout || ""}
 ${mergeTreeErr?.stderr || ""}`;
           const isSubmoduleConflict = /(submodule|160000)/i.test(output) || /Recursive merging with submodules/i.test(output);
           if (!isSubmoduleConflict) throw mergeTreeErr;
+          await yieldToEventLoop();
           const evaluation = evaluateGitlinkTrivialFastForward(repoRoot, ref2, worktreeHead);
           if (!evaluation.trivial) {
             warnGitlinkFastForwardUndeterminable(`containment check for ${ref2}`, evaluation.gitlinks);
@@ -66848,6 +66870,7 @@ ${mergeTreeErr?.stderr || ""}`;
               error: `merge-tree submodule conflict is not a trivial fast-forward: ${evaluation.reason || "unknown"}`
             };
           }
+          await yieldToEventLoop();
           mergedTree = synthesizeTrivialFastForwardMergeTree(repoRoot, ref2, worktreeHead, evaluation.gitlinks) || "";
         }
         if (!mergedTree) {
@@ -66860,6 +66883,7 @@ ${mergeTreeErr?.stderr || ""}`;
             error: "could not resolve synthetic merge tree for containment check"
           };
         }
+        await yieldToEventLoop();
         const ffGitlinkExcludePaths = collectFastForwardGitlinkPaths(repoRoot, ref2, worktreeHead);
         const residualPatchId = await computeGitPatchId(repoRoot, ref2, mergedTree, ffGitlinkExcludePaths);
         const contained = residualPatchId === "";
@@ -66961,14 +66985,19 @@ ${mergeTreeErr?.stderr || ""}`;
       };
     }
     var import_path13;
+    var yieldToEventLoop;
+    var PATCH_ID_GIT_TIMEOUT_MS;
     var init_mesh_refine_patch_equivalence = __esm2({
       "src/mesh/mesh-refine-patch-equivalence.ts"() {
         "use strict";
         init_mesh_refine_gitlink_utils();
         init_mesh_refine_gitlink_ff();
         init_hidden_spawn();
+        init_git_locale();
         init_worktree_bootstrap_config();
         import_path13 = require("path");
+        yieldToEventLoop = () => new Promise((r) => setImmediate(r));
+        PATCH_ID_GIT_TIMEOUT_MS = 6e4;
       }
     });
     function git2(cwd, args) {
@@ -67067,23 +67096,46 @@ ${mergeTreeErr?.stderr || ""}`;
         return false;
       }
     }
-    function mergeTreeConflicts(repo, base, sha8) {
+    async function mergeTreeConflicts(repo, base, sha8) {
       try {
-        (0, import_node_child_process13.execFileSync)(GIT, ["--no-replace-objects", "merge-tree", "--write-tree", base, sha8], {
+        await hiddenExecFileAsync(GIT, ["--no-replace-objects", "merge-tree", "--write-tree", base, sha8], {
           cwd: repo,
-          stdio: "ignore",
           timeout: GIT_LOCAL_TIMEOUT_MS,
-          windowsHide: true,
-          env: realGitEnv3()
+          env: realGitEnv3(),
+          encoding: "utf8"
         });
         return false;
       } catch (e) {
-        return e?.status === 1;
+        return e?.code === 1;
+      }
+    }
+    function rememberContainment(key7, verdict) {
+      containmentMemo.delete(key7);
+      containmentMemo.set(key7, { expiresAt: Date.now() + CONTAINMENT_MEMO_TTL_MS, verdict });
+      while (containmentMemo.size > CONTAINMENT_MEMO_MAX) {
+        const oldest = containmentMemo.keys().next().value;
+        if (oldest === void 0) break;
+        containmentMemo.delete(oldest);
       }
     }
     async function probeCommitContainment(repo, base, rev, opts) {
       const sha8 = resolveCommit(repo, rev);
       if (!sha8) return unknown("object_missing");
+      const key7 = `${repo}\0${base.sha}\0${sha8}\0${opts.tryCherry ? 1 : 0}`;
+      const hit = containmentMemo.get(key7);
+      if (hit && hit.expiresAt > Date.now()) return hit.verdict;
+      const running = containmentInflight.get(key7);
+      if (running) return running;
+      const task = computeContainment(repo, base, sha8, opts).then((verdict) => {
+        if (verdict.status !== "unknown") rememberContainment(key7, verdict);
+        return verdict;
+      }).finally(() => {
+        containmentInflight.delete(key7);
+      });
+      containmentInflight.set(key7, task);
+      return task;
+    }
+    async function computeContainment(repo, base, sha8, opts) {
       const ancestry = probeGitAncestry(repo, sha8, base.ref);
       if (ancestry === "undeterminable") return { sha: sha8, ...unknown("undeterminable") };
       if (ancestry === true) return { sha: sha8, status: "contained_ancestor", method: "ancestry" };
@@ -67095,7 +67147,7 @@ ${mergeTreeErr?.stderr || ""}`;
       if (residual.contained) return { sha: sha8, status: "contained_patch_equivalent", method: "residual_patch" };
       if (residual.error) {
         if (/submodule conflict/i.test(residual.error)) return { sha: sha8, ...unknown("gitlink_undeterminable") };
-        if (mergeTreeConflicts(repo, base.ref, sha8)) {
+        if (await mergeTreeConflicts(repo, base.ref, sha8)) {
           return { sha: sha8, status: "not_contained", detail: { reasonCode: "merge_conflict", note: "modified_since_landing_possible" } };
         }
         return { sha: sha8, ...unknown("merge_tree_failed") };
@@ -67128,17 +67180,26 @@ ${mergeTreeErr?.stderr || ""}`;
     var import_node_child_process13;
     var import_node_os7;
     var realGitEnv3;
+    var CONTAINMENT_MEMO_TTL_MS;
+    var CONTAINMENT_MEMO_MAX;
+    var containmentMemo;
+    var containmentInflight;
     var unknown;
     var init_mission_ref_containment = __esm2({
       "src/mesh/mission-ref-containment.ts"() {
         "use strict";
         import_node_child_process13 = require("child_process");
+        init_hidden_spawn();
         import_node_os7 = require("os");
         init_git_locale();
         init_mesh_refine_gitlink_utils();
         init_mesh_refine_patch_equivalence();
         init_mesh_git_cherry();
         realGitEnv3 = () => ({ ...gitChildEnv(), GIT_NO_REPLACE_OBJECTS: "1", GIT_GRAFT_FILE: import_node_os7.devNull });
+        CONTAINMENT_MEMO_TTL_MS = 10 * 6e4;
+        CONTAINMENT_MEMO_MAX = 500;
+        containmentMemo = /* @__PURE__ */ new Map();
+        containmentInflight = /* @__PURE__ */ new Map();
         unknown = (unknownReason) => ({ status: "unknown", detail: { unknownReason } });
       }
     });
@@ -240213,7 +240274,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     function emptyResult() {
       return { legacyCleared: [], discovered: [], budgetExhausted: false, meshRowsPruned: 0, vacuumedPages: 0 };
     }
-    function yieldToEventLoop() {
+    function yieldToEventLoop2() {
       return new Promise((resolve77) => setImmediate(resolve77));
     }
     function errText2(error) {
@@ -240247,7 +240308,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (!result) break;
         freed += result.freedPages;
         if (result.remainingFreePages === 0 || result.freedPages === 0) break;
-        await yieldToEventLoop();
+        await yieldToEventLoop2();
       }
       if (freed > 0) {
         maintenance.checkpoint("TRUNCATE");
@@ -240301,7 +240362,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             rows -= pruned;
             budget -= pruned;
             counters3.legacyRowsPruned += pruned;
-            await yieldToEventLoop();
+            await yieldToEventLoop2();
           }
           if (rows <= 0) {
             result.legacyCleared.push(topic);
@@ -240351,7 +240412,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             budget -= pruned;
             counters3.rowsPruned += pruned;
             if (pruned < maxRows) break;
-            await yieldToEventLoop();
+            await yieldToEventLoop2();
           }
         }
         const mesh = await sweepMeshFullSyncTopics(handle, Object.keys(topics), {
@@ -240421,7 +240482,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             more = true;
             break;
           }
-          await yieldToEventLoop();
+          await yieldToEventLoop2();
         }
       }
       counters3.meshStreamsPinned = pinned;
@@ -240743,7 +240804,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     function transcriptChatRuntimeCounters() {
       return { ...runtimeCounters };
     }
-    function yieldToEventLoop2() {
+    function yieldToEventLoop3() {
       return new Promise((resolve77) => setImmediate(resolve77));
     }
     var CHAT_SCAN_PAGE_ROWS = 2e3;
@@ -240828,7 +240889,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             });
             runtimeCounters.prunedRows += prunedRows;
             if (prunedRows < CHAT_PRUNE_STEP_ROWS) break;
-            await yieldToEventLoop2();
+            await yieldToEventLoop3();
           }
         } catch (error) {
           runtimeCounters.pruneErrors++;
