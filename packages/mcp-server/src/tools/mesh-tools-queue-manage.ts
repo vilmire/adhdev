@@ -426,6 +426,8 @@ export async function meshQueueRequeue(
         keepTargetSession?: boolean;
         force?: boolean;
         message?: string;
+        required_tags?: string[];
+        requiredTags?: string[];
     },
 ): Promise<string> {
     try {
@@ -442,6 +444,8 @@ export async function meshQueueRequeue(
         // PIN-PARKING (edit): optional instruction rewrite. Blank-guarded in
         // requeueTask so an empty string never blanks a task's only instruction.
         const message = typeof args.message === 'string' && args.message.trim() ? args.message : undefined;
+        const rawTags = args.required_tags ?? args.requiredTags;
+        const requiredTags = Array.isArray(rawTags) ? rawTags.filter((t): t is string => typeof t === 'string') : undefined;
 
         // CANON-IDENTITY cross-process single-flight: the in-flight guard set
         // (daemon-core mesh-task-inflight) is process-LOCAL. In IpcTransport (cloud /
@@ -466,6 +470,7 @@ export async function meshQueueRequeue(
                 clearTargetSession,
                 force,
                 ...(message ? { message } : {}),
+                ...(requiredTags ? { requiredTags } : {}),
             });
             const result = unwrapCommandPayload(raw) || {};
             // Refused (in-flight / live-generating guard) or daemon error → surface verbatim
@@ -504,6 +509,7 @@ export async function meshQueueRequeue(
                 ...(clearTargetSession !== undefined ? { clearTargetSession } : {}),
                 ...(force !== undefined ? { force } : {}),
                 ...(message ? { message } : {}),
+                ...(requiredTags ? { requiredTags } : {}),
             },
         })).task as unknown as MeshWorkQueueEntry | null;
         if (!task) return JSON.stringify({ success: false, error: `Queue task '${taskId}' not found` });

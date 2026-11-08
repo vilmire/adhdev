@@ -199,6 +199,7 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
                 // Without this the field would be silently dropped exactly where the
                 // multi-coordinator topology needs it most.
                 message: typeof args?.message === 'string' ? args.message : undefined,
+                ...(Array.isArray(args?.requiredTags) ? { requiredTags: args.requiredTags } : {}),
             });
             const task = outcome?.entry ?? null;
             if (!task) return { success: false, error: `Queue task '${taskId}' not found` };

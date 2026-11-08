@@ -360,6 +360,20 @@ describe('(b) a parked task can be inspected, re-targeted, edited and cancelled'
     }
   })
 
+  // Live 2026-11-08: a task stuck on a broken provider could only move to another one by cancel + re-enqueue.
+  it('EDIT: required_tags on requeue re-pins the provider; [] clears; absent leaves them', () => {
+    const meshId = `mesh_exit_edit_tags_${randomUUID().slice(0, 8)}`
+    try {
+      setMesh(meshId)
+      const t = insertPendingTask(meshId, { targetNodeId: NODE_ID, targetSessionId: 's', message: 'original', parkedAgeMs: 1_000 })
+      expect(requeueTask(meshId, t.id, { requiredTags: ['provider=codex-cli', ' provider=codex-cli ', ''] })?.requiredTags).toEqual(['provider=codex-cli'])
+      expect(requeueTask(meshId, t.id, { force: true })?.requiredTags).toEqual(['provider=codex-cli'])
+      expect(requeueTask(meshId, t.id, { force: true, requiredTags: [] })?.requiredTags).toEqual([])
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
   it('CANCEL: cancelling a parked task is terminal and clears the parked state', () => {
     const meshId = `mesh_exit_cancel_${randomUUID().slice(0, 8)}`
     try {

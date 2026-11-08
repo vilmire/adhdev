@@ -78194,6 +78194,11 @@ ${env2.envelopes.join("\n\n")}${tail}`;
       if (!next || next === entry.message) return;
       entry.message = next;
     }
+    function applyRequeueRequiredTags(entry, tags) {
+      if (!Array.isArray(tags)) return;
+      const next = [...new Set(tags.filter((t) => typeof t === "string").map((t) => t.trim()).filter(Boolean))];
+      entry.requiredTags = next;
+    }
     function requeueTaskWithOutcome(meshId, taskId, opts) {
       requireMeshHostQueueOwner(opts);
       const result = withQueueLock(meshId, () => {
@@ -78245,6 +78250,7 @@ ${env2.envelopes.join("\n\n")}${tail}`;
           entry.dispatchFailureCount = dispatchFailures;
           if (opts?.reason) entry.requeueReason = opts.reason;
           applyRequeueMessageEdit(entry, opts?.message);
+          applyRequeueRequiredTags(entry, opts?.requiredTags);
           delete entry.parked;
           delete entry.autoLaunchUnclaimedCount;
           delete entry.autoLaunchDispatchFailedCount;
@@ -78276,6 +78282,7 @@ ${env2.envelopes.join("\n\n")}${tail}`;
         entry.requeueCount = currentCount + 1;
         if (opts?.reason) entry.requeueReason = opts.reason;
         applyRequeueMessageEdit(entry, opts?.message);
+        applyRequeueRequiredTags(entry, opts?.requiredTags);
         delete entry.parked;
         delete entry.autoLaunch;
         delete entry.autoLaunchUnclaimedCount;
@@ -205015,7 +205022,8 @@ ${marker2}`,
             // IPC/cloud mode has the same exit from parking as the in-process path.
             // Without this the field would be silently dropped exactly where the
             // multi-coordinator topology needs it most.
-            message: typeof args?.message === "string" ? args.message : void 0
+            message: typeof args?.message === "string" ? args.message : void 0,
+            ...Array.isArray(args?.requiredTags) ? { requiredTags: args.requiredTags } : {}
           });
           const task = outcome?.entry ?? null;
           if (!task) return { success: false, error: `Queue task '${taskId}' not found` };
@@ -250003,6 +250011,7 @@ var MESH_QUEUE_REQUEUE_TOOL = {
       clear_target_node: { type: "boolean", description: "When true, remove any existing target node constraint." },
       keep_target_session: { type: "boolean", description: "When true, preserve an existing target session if target_session_id is not provided. Defaults false to avoid stale session targets." },
       force: { type: "boolean", description: "When true, bypass the retry cap and requeue even if maxRetries has been exceeded. Use only for explicit operator recovery." },
+      required_tags: { type: "array", items: { type: "string" }, description: 'Optional REPLACEMENT capability tags, e.g. ["provider=codex-cli"] to move the task off a broken provider; [] clears them.' },
       message: { type: "string", description: "Optional REPLACEMENT instruction for the task. Use when the situation moved on while the task waited \u2014 the common case for a parked delta, e.g. the worker already finished the part your correction was about, so the original wording would now be wrong or redundant. Preserves the task id, mission linkage and dependents (unlike cancel + re-enqueue). Omitted or blank leaves the existing message untouched." }
     },
     required: ["task_id"]
@@ -254329,6 +254338,8 @@ async function meshQueueRequeue(ctx, args) {
     const clearTargetSession = targetSessionId ? false : !keepTargetSession;
     const force = args.force === true;
     const message = typeof args.message === "string" && args.message.trim() ? args.message : void 0;
+    const rawTags = args.required_tags ?? args.requiredTags;
+    const requiredTags = Array.isArray(rawTags) ? rawTags.filter((t) => typeof t === "string") : void 0;
     if (ctx.transport instanceof IpcTransport) {
       const raw = await ctx.transport.command("requeue_mesh_queue_task", {
         meshId: ctx.mesh.id,
@@ -254339,7 +254350,8 @@ async function meshQueueRequeue(ctx, args) {
         clearTargetNode,
         clearTargetSession,
         force,
-        ...message ? { message } : {}
+        ...message ? { message } : {},
+        ...requiredTags ? { requiredTags } : {}
       });
       const result = unwrapCommandPayload(raw) || {};
       if (result.success === false) {
@@ -254374,7 +254386,8 @@ async function meshQueueRequeue(ctx, args) {
         ...clearTargetNode !== void 0 ? { clearTargetNode } : {},
         ...clearTargetSession !== void 0 ? { clearTargetSession } : {},
         ...force !== void 0 ? { force } : {},
-        ...message ? { message } : {}
+        ...message ? { message } : {},
+        ...requiredTags ? { requiredTags } : {}
       }
     })).task;
     if (!task) return JSON.stringify({ success: false, error: `Queue task '${taskId}' not found` });

@@ -628,6 +628,17 @@ function applyRequeueMessageEdit(entry: MeshWorkQueueEntry, message?: string): v
 }
 
 /**
+ * Replace the task's capability tags (e.g. `provider=codex-cli`) on requeue. Live 2026-11-08: a task
+ * stuck on a broken provider could only move to another one by cancel + re-enqueue, losing its id,
+ * mission linkage and dependents. Undefined leaves the tags; an empty array clears them.
+ */
+function applyRequeueRequiredTags(entry: MeshWorkQueueEntry, tags?: unknown): void {
+    if (!Array.isArray(tags)) return;
+    const next = [...new Set(tags.filter((t): t is string => typeof t === 'string').map(t => t.trim()).filter(Boolean))];
+    entry.requiredTags = next;
+}
+
+/**
  * Return a queue task to pending for retry. By default, dead session targeting
  * and assigned ownership are cleared so stale assignments do not strand again.
  */
@@ -687,6 +698,8 @@ export function requeueTaskWithOutcome(
          * only instruction would produce a row that can be dispatched but says nothing.
          */
         message?: string;
+        /** Replace the task's required capability tags (provider pin etc.); [] clears them. */
+        requiredTags?: string[];
     } & MeshQueueMutationOptions,
 ): MeshRequeueOutcome | null {
     requireMeshHostQueueOwner(opts);
@@ -764,6 +777,7 @@ export function requeueTaskWithOutcome(
             entry.dispatchFailureCount = dispatchFailures;
             if (opts?.reason) entry.requeueReason = opts.reason;
             applyRequeueMessageEdit(entry, opts?.message);
+            applyRequeueRequiredTags(entry, opts?.requiredTags);
             // PIN-PARKING: any requeue is an explicit coordinator decision about this
             // row's addressing — which is exactly what parking was waiting for. Unpark.
             delete entry.parked;
@@ -811,6 +825,7 @@ export function requeueTaskWithOutcome(
         entry.requeueCount = currentCount + 1;
         if (opts?.reason) entry.requeueReason = opts.reason;
         applyRequeueMessageEdit(entry, opts?.message);
+            applyRequeueRequiredTags(entry, opts?.requiredTags);
         // PIN-PARKING: an explicit requeue IS the coordinator decision parking waits
         // for, whatever the new addressing is — so it always unparks. Note this runs
         // on the ordinary requeue path too (not only for parked rows), which is
