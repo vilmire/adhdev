@@ -6,6 +6,7 @@ import { useDaemonMetadataLoader } from '../../hooks/useDaemonMetadataLoader'
 import { getMachineDisplayName } from '../../utils/daemon-utils'
 import { AlertBanner } from '../ui/AlertBanner'
 import Button from '../ui/Button'
+import { HISTORY_COLLAPSED_COUNT, transferReasonText } from './transferReasons'
 import {
     TERMINAL_TRANSFER_STATES, TITLE_SAYS_OUTCOME, call, formatBytes, transferTitleKey,
     type BrowseEntry, type SendCommand, type TransferView,
@@ -22,6 +23,10 @@ export interface ProjectTransferSectionProps {
     machines?: ProjectTransferMachine[]
     sendCommand?: SendCommand
     pollMs?: number
+    /** Which part to render: the "send files" form, the recent-transfers list, or both (default). */
+    show?: 'all' | 'form' | 'history'
+    /** Preselect the sending machine (the machine detail page opens the form for its own machine). */
+    initialFromId?: string
 }
 
 const errText = (body: Record<string, any>, fallback: string) =>
@@ -30,7 +35,9 @@ const errText = (body: Record<string, any>, fallback: string) =>
 /** Statuses that explain themselves with one more line under the state word. */
 const STATE_HINTS = new Set(['linking', 'paused', 'awaiting_approval', 'needs_reapproval'])
 
-export function ProjectTransferSection({ machines: machinesProp, sendCommand: sendProp, pollMs = 1500 }: ProjectTransferSectionProps = {}) {
+export function ProjectTransferSection({ machines: machinesProp, sendCommand: sendProp, pollMs = 1500, show = 'all', initialFromId }: ProjectTransferSectionProps = {}) {
+    const showForm = show !== 'history'
+    const showHistory = show !== 'form'
     const { t, i18n } = useTranslation('common')
     const baseDaemons = useBaseDaemons()
     const transport = useTransport()
@@ -50,7 +57,7 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
     }, [machinesProp, baseDaemons?.ides])
     const byId = useMemo(() => new Map(machines.map(m => [m.id, m])), [machines])
 
-    const [fromId, setFromId] = useState('')
+    const [fromId, setFromId] = useState(initialFromId ?? '')
     const [fromWs, setFromWs] = useState('')
     const [toId, setToId] = useState('')
     const [toWs, setToWs] = useState('')
@@ -63,7 +70,8 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
     const [preview, setPreview] = useState<TransferView | null>(null)
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState('')
-    const [caps, setCaps] = useState<Record<string, { supported: boolean; reasons: string[]; relayAllowed: boolean; agentAutoApprove: boolean }>>({})
+    const [caps, setCaps] = useState<Record<string, { supported: boolean; reasons: string[] }>>({})
+    const [showAllHistory, setShowAllHistory] = useState(false)
     const [transfers, setTransfers] = useState<TransferView[]>([])
     // Machines whose workspace list (daemon.metadata lane) is still being fetched.
     const [metaLoading, setMetaLoading] = useState<Set<string>>(new Set())
@@ -71,8 +79,9 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
     const [sizes, setSizes] = useState<Record<string, number>>({})
     const [selectedDirs, setSelectedDirs] = useState<Set<string>>(new Set())
 
-    // Human text for a wire error code; the raw code stays visible next to it.
-    const errorCodeText = useCallback((code: string) => (i18n.exists(`settings.projectTransfer.errors.${code}`, { ns: 'common' }) ? t(`settings.projectTransfer.errors.${code}`) : ''), [t, i18n])
+    // Plain-language text for a wire error code (the raw code is only offered in a details tooltip).
+    const errorCodeText = useCallback((code: string) => transferReasonText(t, i18n, code, { allowLong: true }), [t, i18n])
+    const reasonText = useCallback((code: string) => transferReasonText(t, i18n, code), [t, i18n])
 
     // The daemon entry only carries `workspaces` once its `daemon.metadata` lane is
     // subscribed (the machine detail page does this on open). Subscribe the chosen
@@ -96,40 +105,10 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
         for (const id of [fromId, toId]) {
             if (!id || caps[id]) continue
             void call(sendRef.current, id, 'project_transfer_capabilities', {}).then(body => {
-                setCaps(prev => ({ ...prev, [id]: { supported: body.supported === true, reasons: Array.isArray(body.reasons) ? body.reasons : [], relayAllowed: body.relayAllowed !== false, agentAutoApprove: body.agentAutoApprove === true } }))
-            }).catch(() => setCaps(prev => ({ ...prev, [id]: { supported: false, reasons: ['UNREACHABLE'], relayAllowed: true, agentAutoApprove: false } })))
+                setCaps(prev => ({ ...prev, [id]: { supported: body.supported === true, reasons: Array.isArray(body.reasons) ? body.reasons : [] } }))
+            }).catch(() => setCaps(prev => ({ ...prev, [id]: { supported: false, reasons: ['UNREACHABLE'] } })))
         }
     }, [fromId, toId, caps])
-
-    // Per-machine relay option (default ON on the daemon; shown as recommended).
-    const setRelay = async (id: string, allowRelay: boolean) => {
-        const prev = caps[id]
-        if (!prev) return
-        setCaps(p => ({ ...p, [id]: { ...prev, relayAllowed: allowRelay } }))
-        try {
-            const body = await call(sendRef.current, id, 'project_transfer_set_relay', { allowRelay })
-            if (body.success !== true) throw new Error('set_relay failed')
-            setCaps(p => ({ ...p, [id]: { ...prev, relayAllowed: body.relayAllowed !== false } }))
-        } catch {
-            setCaps(p => ({ ...p, [id]: prev }))
-            setError(t('settings.projectTransfer.relay.setFailed'))
-        }
-    }
-    // Per-machine option (default OFF): agent-requested transfers that replace nothing may skip the owner when BOTH machines allow it.
-    const setAgentAuto = async (id: string, allow: boolean) => {
-        const prev = caps[id]
-        if (!prev) return
-        setCaps(p => ({ ...p, [id]: { ...prev, agentAutoApprove: allow } }))
-        try {
-            const body = await call(sendRef.current, id, 'project_transfer_set_agent_auto_approve', { allow })
-            if (body.success !== true) throw new Error('set_agent_auto_approve failed')
-            setCaps(p => ({ ...p, [id]: { ...prev, agentAutoApprove: body.agentAutoApprove === true } }))
-        } catch {
-            setCaps(p => ({ ...p, [id]: prev }))
-            setError(t('settings.projectTransfer.agent.setFailed'))
-        }
-    }
-    const relayMachines = [...new Set([fromId, toId].filter(id => id && caps[id]?.supported))]
 
     // Browse the source project.
     useEffect(() => {
@@ -165,10 +144,11 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
         setTransfers([...merged.values()].sort((a, b) => b.previewExpiresAt - a.previewExpiresAt))
     }, [machines])
     useEffect(() => {
+        if (!showHistory) return
         void refresh()
         const timer = setInterval(() => { void refresh() }, pollMs)
         return () => clearInterval(timer)
-    }, [refresh, pollMs])
+    }, [refresh, pollMs, showHistory])
 
     const toggle = (name: string) => {
         const rel = dir ? `${dir}/${name}` : name
@@ -185,7 +165,7 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
     const unsupportedMessage = [fromId, toId].map(id => {
         const c = caps[id]
         if (!c || c.supported) return ''
-        const reason = c.reasons.map(r => { const h = errorCodeText(r); return h ? `${h} (${r})` : r }).join(' ') || '?'
+        const reason = c.reasons.map(r => errorCodeText(r) || r).join(' ') || '?'
         return t('settings.projectTransfer.unsupported', { machine: byId.get(id)?.name ?? id, reason })
     }).find(Boolean) ?? ''
 
@@ -253,13 +233,15 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
     }
 
     if (machines.length < 2) {
+        if (!showForm) return null
         return <div className="text-xs text-text-muted px-3.5 py-3 rounded-xl border border-border-subtle bg-bg-glass" data-testid="project-transfer-no-machines">{t('settings.projectTransfer.noMachines')}</div>
     }
 
     return (
         <div className="flex flex-col gap-3" data-testid="project-transfer-section">
+            {(error || (showForm && unsupportedMessage)) && <AlertBanner variant={error ? 'error' : 'warning'}>{error || unsupportedMessage}</AlertBanner>}
+            {showForm && (<>
             <p className="text-xs text-text-muted m-0">{t('settings.projectTransfer.secretsNote')}</p>
-            {(error || unsupportedMessage) && <AlertBanner variant={error ? 'error' : 'warning'}>{error || unsupportedMessage}</AlertBanner>}
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <label className="flex flex-col gap-1 text-xs">{t('settings.projectTransfer.fromMachine')}
@@ -270,32 +252,6 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
                     {machineOptions(toId, v => { setToId(v); setToWs('') }, 'project-transfer-to-machine')}
                     {wsOptions(toMachine, toWs, setToWs, 'project-transfer-to-project')}
                 </label>
-            </div>
-
-            <div className="rounded-xl border border-border-subtle bg-bg-glass p-3 flex flex-col gap-1.5" data-testid="project-transfer-relay">
-                <div className="flex items-center gap-2 text-xs font-medium">
-                    {t('settings.projectTransfer.relay.title')}
-                    <span className="text-2xs font-normal text-accent-primary border border-border-subtle rounded px-1">{t('settings.projectTransfer.relay.recommended')}</span>
-                </div>
-                <div className="text-2xs text-text-muted">{t('settings.projectTransfer.relay.hint')}</div>
-                {relayMachines.length === 0
-                    ? <div className="text-2xs text-text-muted" data-testid="project-transfer-relay-choose">{t('settings.projectTransfer.relay.chooseMachines')}</div>
-                    : relayMachines.map(id => (
-                        <label key={id} className="flex items-center gap-2 text-xs">
-                            <input type="checkbox" checked={caps[id]?.relayAllowed !== false} onChange={e => { void setRelay(id, e.target.checked) }} data-testid={`project-transfer-relay-toggle-${id}`} />
-                            {t('settings.projectTransfer.relay.machineToggle', { machine: byId.get(id)?.name ?? id })}
-                        </label>
-                    ))}
-            </div>
-
-            <div className="rounded-xl border border-border-subtle bg-bg-glass p-3 flex flex-col gap-1.5" data-testid="project-transfer-agent-auto">
-                <div className="text-2xs text-text-muted">{t('settings.projectTransfer.agent.hint')}</div>
-                {relayMachines.map(id => (
-                    <label key={id} className="flex items-center gap-2 text-xs">
-                        <input type="checkbox" checked={caps[id]?.agentAutoApprove === true} onChange={e => { void setAgentAuto(id, e.target.checked) }} data-testid={`project-transfer-agent-auto-toggle-${id}`} />
-                        {t('settings.projectTransfer.agent.toggle', { machine: byId.get(id)?.name ?? id })}
-                    </label>
-                ))}
             </div>
 
             <div className="flex flex-col gap-1 text-xs" role="radiogroup">
@@ -388,10 +344,13 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
                 </div>
             )}
 
+            </>)}
+
+            {showHistory && (
             <div className="flex flex-col gap-2" data-testid="project-transfer-list">
-                <div className="text-sm font-medium">{t('settings.projectTransfer.listTitle')}</div>
+                <div className="text-sm font-medium">{t('settings.fileTransfer.history.title')}</div>
                 {transfers.length === 0 && <div className="text-xs text-text-muted">{t('settings.projectTransfer.noTransfers')}</div>}
-                {transfers.map(tr => {
+                {(showAllHistory ? transfers : transfers.slice(0, HISTORY_COLLAPSED_COUNT)).map(tr => {
                     const done = TERMINAL_TRANSFER_STATES.has(tr.state)
                     const pct = tr.totalBytes > 0 ? Math.min(100, Math.round((tr.bytesDone / tr.totalBytes) * 100)) : tr.state === 'completed' ? 100 : 0
                     const needsMe = (tr.state === 'offered' || tr.state === 'previewed' || tr.state === 'needs_reapproval') && !tr.localApproved
@@ -416,10 +375,9 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
                                 {formatBytes(tr.bytesDone)} / {formatBytes(tr.totalBytes)}{!done && tr.totalBytes > 0 ? ` (${t('settings.projectTransfer.progressPercent', { percent: pct })})` : ''}
                                 {tr.publishedName ? ` · ${t('settings.projectTransfer.received', { name: tr.publishedName })}` : ''}
                             </div>
-                            {tr.errorCode && (
-                                <div className={`text-xs ${tr.state === 'failed' ? 'text-status-error' : 'text-text-muted'}`} data-testid={`project-transfer-error-${tr.id}`}>
-                                    {errorCodeText(tr.errorCode) || (tr.state === 'failed' ? t('settings.projectTransfer.errorGeneric') : '')}
-                                    {' '}<span className="font-mono text-3xs opacity-70" title={t('settings.projectTransfer.errorCode', { code: tr.errorCode })}>{tr.errorCode}</span>
+                            {tr.errorCode && tr.state !== 'cancelled' && (
+                                <div className={`text-xs ${tr.state === 'failed' ? 'text-status-error' : 'text-text-muted'}`} data-testid={`project-transfer-error-${tr.id}`} title={t('settings.fileTransfer.history.details', { code: tr.errorCode })}>
+                                    {reasonText(tr.errorCode) || (tr.state === 'failed' ? t('settings.projectTransfer.errorGeneric') : '')}
                                 </div>
                             )}
                             {tr.overwrite?.revertible && (
@@ -442,7 +400,13 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
                         </div>
                     )
                 })}
+                {transfers.length > HISTORY_COLLAPSED_COUNT && (
+                    <button type="button" className="self-start text-xs text-accent-primary underline bg-transparent border-none p-0 cursor-pointer" onClick={() => setShowAllHistory(v => !v)} data-testid="project-transfer-show-all">
+                        {showAllHistory ? t('settings.fileTransfer.history.showLess') : t('settings.fileTransfer.history.showAll', { count: transfers.length })}
+                    </button>
+                )}
             </div>
+            )}
         </div>
     )
 }

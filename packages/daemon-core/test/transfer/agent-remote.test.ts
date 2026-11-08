@@ -60,6 +60,7 @@ function world(files: Record<string, string>, dst: Record<string, string> = {}):
   a.engine.shutdown();
   a.engine = configureProjectTransfer(a.ports); // the process-wide engine is the agent's daemon
   cleanups.push(() => { a.engine.shutdown(); s.engine.shutdown(); b.engine.shutdown(); });
+  for (const side of [a, s, b]) side.engine.setAgentAutoApprove(false); // shipped default is ON (2026-11-08); these tests pin the asking path
   writeTree(s.ws.path, files);
   writeTree(b.ws.path, dst);
   const extra = tmpDir('s-other');

@@ -4270,6 +4270,49 @@
             "descriptionOn": "工具调用、终端输出和思考过程将显示在聊天消息之间。",
             "descriptionOff": "仅显示对话。工具调用、终端输出和思考过程将保持隐藏。"
         },
+        "fileTransfer": {
+            "title": "文件传输",
+            "description": "在你自己的设备之间移动项目文件。",
+            "intro": "文件在设备之间直接传输，端到端加密。密钥类文件(.env、私钥、.git)绝不会被发送。",
+            "sendFiles": "发送文件",
+            "saveFailed": "无法保存设置。",
+            "noMachines": "没有已连接的设备。",
+            "offline": "离线",
+            "columns": {
+                "machine": "设备",
+                "attach": "远程项目连接",
+                "relay": "无法直连时使用中继",
+                "agents": "智能体可免询问发送新文件夹"
+            },
+            "tips": {
+                "attach": "当从另一台设备连接项目时，允许本设备参与。两台设备都需要开启。",
+                "relay": "两台设备无法直连时，改用加密中继重试(每次传输 500 MB，每台设备每天 2 GB)。两台设备都需要开启。",
+                "agents": "允许协调器或助手无需询问就把文件发送到新文件夹。会覆盖文件的传输始终会先询问。两台设备都需要开启。"
+            },
+            "history": {
+                "title": "最近的传输",
+                "showAll": "查看全部 ({{count}})",
+                "showLess": "收起",
+                "details": "详情：{{code}}"
+            },
+            "reasons": {
+                "PREVIEW_EXPIRED": "预览已过期 — 请重新发送。",
+                "CONSENT_EXPIRED": "批准已过期 — 请重新发送。",
+                "DIRECT_UNAVAILABLE": "无法直连 — 请开启中继。",
+                "RELAY_LIMIT_EXCEEDED": "已达中继上限 — 请明天再试。",
+                "CANCELLED": "已取消。",
+                "PEER_CANCELLED": "对方设备已取消。",
+                "PEER_REFUSED": "对方设备已拒绝。",
+                "PEER_UNREACHABLE": "对方设备离线。",
+                "LINK_LOST": "连接中断 — 请重新发送。",
+                "LINK_UNAVAILABLE": "无法连接 — 请确认两台设备都在线。",
+                "TARGET_CHANGED": "目标已变化 — 请重新发送。",
+                "SOURCE_CHANGED": "发送过程中文件发生变化 — 请重新发送。",
+                "VERIFY_FAILED": "文件不一致，未保存任何内容。",
+                "DISK_SPACE_EXHAUSTED": "接收设备磁盘空间不足。",
+                "SECRET_PATH_REJECTED": "该位置受保护，无法写入。"
+            }
+        },
         "projectTransfer": {
             "sectionTitle": "项目文件传输",
             "sectionDescription": "在你自己的设备之间发送文件。数据通过点对点直连传输,并保存到新文件夹,绝不覆盖任何内容。",
@@ -4429,7 +4472,17 @@
             "needsUpdate": "这台机器需要先更新,才能管理驱动权限。",
             "saveFailed": "无法保存权限,已恢复为之前的设置。",
             "empty": "这台机器上还没有需要权限的驱动。电脑操控驱动尚未安装在这台机器上。",
-            "needsApproval": "该驱动正在等待你的批准。请在收件箱中批准后才能使用。",
+            "needsApproval": "该驱动正在等待你的批准。在此批准后即可启用。",
+            "needsApprovalNoRequest": "请先在下方开启至少一项权限。这会生成批准请求，然后即可在此批准。",
+            "approveAndEnable": "批准并启用",
+            "approveNeedsGrant": "请至少开启一项权限后再批准。",
+            "approveFailed": "无法批准该驱动，它仍保持关闭。",
+            "providersPointer": "驱动按机器启用：请打开机器详情的“提供商”标签，选择 DRIVER，在那里设置权限并批准。",
+            "activation": {
+                "ready": "可用",
+                "needs_approval": "等待批准",
+                "disabled": "已关闭"
+            },
             "platformUnsupported": "这台机器的操作系统不支持该驱动,因此无法修改其权限。",
             "osHint": "使用前的准备:macOS 需要在系统设置中,为运行守护进程的程序授予“屏幕录制”和“辅助功能”权限。Windows 需要守护进程运行在已登录的桌面会话中。Linux 仅支持 X11(暂不支持 Wayland),并需要安装 xdotool 以及 maim 或 scrot。",
             "warning": {
@@ -4450,17 +4503,6 @@
                     "description": "以运行守护进程的用户身份执行命令,不受工作进程私有主目录的限制。"
                 }
             }
-        },
-        "remoteProjectAttach": {
-            "sectionTitle": "远程项目挂载",
-            "sectionDescription": "按机器控制的仅限所有者开关，用于跨机器挂载项目（allowRemoteProjectAttach）。默认关闭。",
-            "bothMachinesNote": "跨机器挂载项目前，源机器和目标机器都必须启用此选项。",
-            "rowDescription": "允许此机器参与远程项目挂载（allowRemoteProjectAttach）。",
-            "noMachines": "暂无已连接的机器。",
-            "statusOn": "开启",
-            "statusOff": "关闭",
-            "statusOffline": "离线",
-            "saveFailed": "无法更新远程项目挂载设置。"
         }
     },
     "historyModal": {

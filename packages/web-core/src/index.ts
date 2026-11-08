@@ -310,15 +310,14 @@ export { ChatActivitySection } from './components/settings/ChatActivitySection'
 export { AppearanceSettingsSection } from './components/settings/AppearanceSettingsSection'
 export type { AppearanceSettingsSectionProps } from './components/settings/AppearanceSettingsSection'
 export {
-    RemoteProjectAttachSection,
+    FileTransferCard,
+    SendFilesButton,
     REMOTE_PROJECT_ATTACH_SETTINGS_COMMAND,
-} from './components/settings/RemoteProjectAttachSection'
-export type {
-    RemoteProjectAttachSectionProps,
-    RemoteProjectAttachMachine,
-} from './components/settings/RemoteProjectAttachSection'
+} from './components/settings/FileTransferCard'
+export type { FileTransferCardProps } from './components/settings/FileTransferCard'
 export { ProjectTransferSection } from './components/settings/ProjectTransferSection'
 export type { ProjectTransferSectionProps, ProjectTransferMachine } from './components/settings/ProjectTransferSection'
+export { DriverGrantsPanel } from './components/settings/driverGrants'
 export { DriverPermissionsSection } from './components/settings/DriverPermissionsSection'
 export type { DriverPermissionsSectionProps, DriverPermissionsMachine, DriverGrantsDriverView, DriverGrantView } from './components/settings/DriverPermissionsSection'
 

@@ -3,7 +3,7 @@ import { defineCommandSpecs } from '../command-registry.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
 import type { CommandRouterDeps } from '../router.js';
 import { getAssistantServices } from '../../assistant/assistant-services.js';
-import { resolveWorkerIdentity } from '../../mesh/worker-report.js';
+import { resolveDriverWorkerIdentity, driverIdentityHandlers, DRIVER_IDENTITY_VERIFY_COMMAND } from './driver-worker-identity.js';
 import { depositWorkerMailboxMessage } from '../../mesh/worker-mailbox.js';
 import { dirname } from 'node:path';
 import { DriverGrantStore } from '../../drivers/grant-store.js';
@@ -47,8 +47,9 @@ export const driverHandlers: Record<string, MedFamilyHandler> = {
     driver_list: async ctx => getDriverService(ctx).list(),
     driver_describe: async (ctx, args) => getDriverService(ctx).describe(String(args?.type ?? '')),
     driver_invoke: async (ctx, args) => {
-        const identity = resolveWorkerIdentity({ token: args?.token, bind: args?.bind });
-        if (!identity) return { success: false, code: 'worker_credential_required' };
+        const resolved = await resolveDriverWorkerIdentity(ctx, args);
+        if ('error' in resolved) return { success: false, code: resolved.error, ...(resolved.detail ? { detail: resolved.detail } : {}) };
+        const identity = resolved.identity;
         return getDriverService(ctx).invoke(identity, { type: String(args?.type ?? ''), action: String(args?.action ?? ''),
             args: args?.args, resourceKey: args?.resourceKey, target: args?.target });
     },
@@ -62,10 +63,13 @@ export const driverHandlers: Record<string, MedFamilyHandler> = {
         if (typeof args?.type !== 'string') return { success: false, code: 'invalid_arguments' };
         return getDriverService(ctx).setGrants(args.type, args.grants);
     },
+    ...driverIdentityHandlers,
 };
 export const driverSpecs = defineCommandSpecs('med', driverHandlers, {
     driver_set_enabled: { sources: ['p2p', 'ws', 'standalone'] },
     // No 'ws': a compromised server must not be able to turn on desktop control.
     driver_grants_get: { sources: ['p2p', 'standalone'] },
     driver_grants_set: { sources: ['p2p', 'standalone'] },
+    // Owner-side verify-only relay of a member's driver call (no execution here).
+    [DRIVER_IDENTITY_VERIFY_COMMAND]: { sources: ['mesh'], meshSender: 'roster' },
 }, { sources: ['ipc', 'standalone'] });

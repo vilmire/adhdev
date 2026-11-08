@@ -164,8 +164,11 @@ export class TransferStore {
     this.atomicWrite(this.p('settings.json'), JSON.stringify({ ...this.readSettings(), allowRelay: allowed }));
   }
 
-  /** Per-machine opt-in (default OFF): agent-requested transfers may be approved without the owner (never when they replace files). */
-  readAgentAutoApprove(): boolean { return this.readSettings().allowAgentTransferAutoApprove === true; }
+  /**
+   * Per-machine setting, default ON (owner decision 2026-11-08): agent-requested transfers into a NEW folder
+   * (nothing replaced) may proceed without asking. An explicit owner "off" is respected; overwrites always ask.
+   */
+  readAgentAutoApprove(): boolean { return this.readSettings().allowAgentTransferAutoApprove !== false; }
 
   writeAgentAutoApprove(allowed: boolean): void {
     this.atomicWrite(this.p('settings.json'), JSON.stringify({ ...this.readSettings(), allowAgentTransferAutoApprove: allowed }));

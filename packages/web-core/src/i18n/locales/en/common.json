@@ -4270,6 +4270,49 @@
             "descriptionOn": "Tool calls, terminal output and thinking are shown between chat messages.",
             "descriptionOff": "Only the conversation is shown. Tool calls, terminal output and thinking stay hidden."
         },
+        "fileTransfer": {
+            "title": "File transfer",
+            "description": "Move project files between your own machines.",
+            "intro": "Files go straight from machine to machine, end-to-end encrypted. Secrets (.env, keys, .git) are never sent.",
+            "sendFiles": "Send files",
+            "saveFailed": "Could not save the setting.",
+            "noMachines": "No machines connected.",
+            "offline": "Offline",
+            "columns": {
+                "machine": "Machine",
+                "attach": "Remote project attach",
+                "relay": "Relay if no direct connection",
+                "agents": "Agents may send new folders without asking"
+            },
+            "tips": {
+                "attach": "Lets this machine take part when a project is attached from another machine. Both machines need it on.",
+                "relay": "If two machines can't connect directly, retry through an encrypted relay (500 MB per transfer, 2 GB per machine per day). Both machines need it on.",
+                "agents": "Lets the coordinator or assistant send files into a new folder without asking you. Anything that would overwrite files always asks. Both machines need it on."
+            },
+            "history": {
+                "title": "Recent transfers",
+                "showAll": "Show all ({{count}})",
+                "showLess": "Show less",
+                "details": "Details: {{code}}"
+            },
+            "reasons": {
+                "PREVIEW_EXPIRED": "Preview expired — send again.",
+                "CONSENT_EXPIRED": "Approval expired — send again.",
+                "DIRECT_UNAVAILABLE": "No direct connection — turn on relay.",
+                "RELAY_LIMIT_EXCEEDED": "Relay limit reached — try again tomorrow.",
+                "CANCELLED": "Cancelled.",
+                "PEER_CANCELLED": "Cancelled on the other machine.",
+                "PEER_REFUSED": "The other machine declined.",
+                "PEER_UNREACHABLE": "The other machine is offline.",
+                "LINK_LOST": "Connection dropped — send again.",
+                "LINK_UNAVAILABLE": "Couldn't connect — check both machines are online.",
+                "TARGET_CHANGED": "The target changed — send again.",
+                "SOURCE_CHANGED": "Files changed while sending — send again.",
+                "VERIFY_FAILED": "Files didn't match — nothing was saved.",
+                "DISK_SPACE_EXHAUSTED": "The receiving machine is out of disk space.",
+                "SECRET_PATH_REJECTED": "That location is protected and can't be written to."
+            }
+        },
         "projectTransfer": {
             "sectionTitle": "Project file transfer",
             "sectionDescription": "Send files between your own machines. Bytes travel directly peer-to-peer and arrive in a new folder; nothing is ever overwritten.",
@@ -4429,7 +4472,17 @@
             "needsUpdate": "This machine needs an update before it can manage driver permissions.",
             "saveFailed": "Could not save the permission. The previous setting was restored.",
             "empty": "No driver on this machine asks for permissions yet. The computer-use driver is not installed on this machine yet.",
-            "needsApproval": "This driver is waiting for your approval. Open the Inbox to activate it.",
+            "needsApproval": "This driver is waiting for your approval. Approve it here to turn it on.",
+            "needsApprovalNoRequest": "Turn on a permission below first. That creates the approval request, which you can then approve here.",
+            "approveAndEnable": "Approve and enable",
+            "approveNeedsGrant": "Turn on at least one permission to approve.",
+            "approveFailed": "Could not approve the driver. It stays off.",
+            "providersPointer": "Drivers are enabled per machine: open the machine's Providers tab, choose DRIVER, and set permissions and approve there.",
+            "activation": {
+                "ready": "Ready",
+                "needs_approval": "Waiting for approval",
+                "disabled": "Off"
+            },
             "platformUnsupported": "This driver is not supported on this machine's operating system, so its permissions cannot be changed.",
             "osHint": "Before it works: on macOS, grant Screen Recording and Accessibility in System Settings to the program that runs the daemon. On Windows, the daemon has to run in the signed-in desktop session. On Linux, only X11 is supported (Wayland is not yet) and xdotool plus maim or scrot must be installed.",
             "warning": {
@@ -4450,17 +4503,6 @@
                     "description": "Run commands as the user who runs the daemon, outside the worker's private home folder."
                 }
             }
-        },
-        "remoteProjectAttach": {
-            "sectionTitle": "Remote project attach",
-            "sectionDescription": "Owner-only switch per machine for cross-machine project attachment (allowRemoteProjectAttach). Default off.",
-            "bothMachinesNote": "Both the source and target machines must have this enabled before attaching a project across machines.",
-            "rowDescription": "Allow this machine to participate in remote project attach (allowRemoteProjectAttach).",
-            "noMachines": "No machines connected.",
-            "statusOn": "On",
-            "statusOff": "Off",
-            "statusOffline": "Offline",
-            "saveFailed": "Could not update remote project attach setting."
         }
     },
     "historyModal": {

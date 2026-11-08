@@ -11,6 +11,7 @@ import { mintWorkerTaskToken, revokeWorkerTaskToken } from '../../src/mesh/worke
 import { drainWorkerMailboxForTask } from '../../src/mesh/worker-mailbox.js';
 import { isWorkerMcpDaemonVerb } from '../../src/standalone-mcp-auth.js';
 import { parseStagedList } from '../../../web-core/src/components/dashboard/assistant-staged.js';
+import { mintWorkerSessionBind } from '../../src/mesh/worker-mcp-isolation.js';
 import { cleanupTempDir, resetMeshRuntimeStore } from '../helpers/temp-cleanup.js';
 
 let dir: string, packageDir: string, token: string;
@@ -61,6 +62,22 @@ describe('driver command boundaries', () => {
         expect(await run('driver_invoke', { type: 'browser', sessionId: worker.sessionId, meshId: worker.meshId })).toMatchObject({ code: 'worker_credential_required' });
         expect(spy).not.toHaveBeenCalled(); revokeWorkerTaskToken(token);
         expect(await run('driver_invoke', { token, type: 'browser', action: 'echo' })).toMatchObject({ code: 'worker_credential_required' });
+    });
+    it('a remote worker (task owned by another daemon) is verified by the owner and the action runs locally', async () => {
+        revokeWorkerTaskToken(token);
+        const r = { meshId: 'remote-mesh', taskId: 'remote-task', sessionId: 'remote-session', nodeId: 'remote-node' };
+        const settings = { meshNodeFor: r.meshId, meshNodeId: r.nodeId, meshActiveTaskId: r.taskId, meshActiveAttemptId: 'remote-attempt',
+            meshActiveAttemptGeneration: 0, meshCoordinatorDaemonId: 'owner-daemon' };
+        (deps.instanceManager as any).getInstance = (id: string) => id === r.sessionId ? { getState: () => ({ settings }) } : undefined;
+        const bind = mintWorkerSessionBind({ meshId: r.meshId, sessionId: r.sessionId, nodeId: r.nodeId }).bind;
+        const verify = vi.fn(async (_d: string, cmd: string) => cmd === 'driver_worker_identity_forwarded'
+            ? { success: true, identity: { ...r, attemptId: 'remote-attempt', generation: 0 } } : { success: false });
+        (deps as any).dispatchMeshCommand = verify;
+        const res: any = await run('driver_invoke', { bind, type: 'browser', action: 'echo', args: {} });
+        expect(verify).toHaveBeenCalledWith('owner-daemon', 'driver_worker_identity_forwarded', expect.not.objectContaining({ bind }));
+        expect(res.code).not.toBe('worker_credential_required');
+        expect(await run('driver_invoke', { bind: 'wsb_forged', type: 'browser', action: 'echo' })).toMatchObject({ code: 'worker_credential_required' });
+        expect(verify).toHaveBeenCalledTimes(1);
     });
     it.each(['ipc', 'standalone'])('answers driver_list over %s without an instance', async source => {
         expect(await run('driver_list', {}, source)).toMatchObject({ success: true, drivers: [{ type: 'browser', state: 'ready' }] });

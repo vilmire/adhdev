@@ -4273,6 +4273,49 @@
             "descriptionOn": "Las llamadas a herramientas, la salida del terminal y el razonamiento se muestran entre los mensajes.",
             "descriptionOff": "Solo se muestra la conversación. Las llamadas a herramientas, la salida del terminal y el razonamiento permanecen ocultos."
         },
+        "fileTransfer": {
+            "title": "Transferencia de archivos",
+            "description": "Mueve archivos de proyecto entre tus propias máquinas.",
+            "intro": "Los archivos van directo de una máquina a otra, cifrados de extremo a extremo. Los secretos (.env, claves, .git) nunca se envían.",
+            "sendFiles": "Enviar archivos",
+            "saveFailed": "No se pudo guardar el ajuste.",
+            "noMachines": "No hay máquinas conectadas.",
+            "offline": "Sin conexión",
+            "columns": {
+                "machine": "Máquina",
+                "attach": "Conexión remota de proyectos",
+                "relay": "Relé si no hay conexión directa",
+                "agents": "Los agentes pueden enviar carpetas nuevas sin preguntar"
+            },
+            "tips": {
+                "attach": "Permite que esta máquina participe cuando se conecta un proyecto desde otra máquina. Ambas máquinas deben tenerlo activado.",
+                "relay": "Si dos máquinas no pueden conectarse directamente, reintenta a través de un relé cifrado (500 MB por transferencia, 2 GB por máquina al día). Ambas máquinas deben tenerlo activado.",
+                "agents": "Permite que el coordinador o el asistente envíe archivos a una carpeta nueva sin preguntarte. Lo que sobrescriba archivos siempre pregunta. Ambas máquinas deben tenerlo activado."
+            },
+            "history": {
+                "title": "Transferencias recientes",
+                "showAll": "Ver todas ({{count}})",
+                "showLess": "Ver menos",
+                "details": "Detalles: {{code}}"
+            },
+            "reasons": {
+                "PREVIEW_EXPIRED": "La vista previa caducó — envía de nuevo.",
+                "CONSENT_EXPIRED": "La aprobación caducó — envía de nuevo.",
+                "DIRECT_UNAVAILABLE": "Sin conexión directa — activa el relé.",
+                "RELAY_LIMIT_EXCEEDED": "Límite del relé alcanzado — inténtalo mañana.",
+                "CANCELLED": "Cancelada.",
+                "PEER_CANCELLED": "Cancelada en la otra máquina.",
+                "PEER_REFUSED": "La otra máquina la rechazó.",
+                "PEER_UNREACHABLE": "La otra máquina está sin conexión.",
+                "LINK_LOST": "Se cortó la conexión — envía de nuevo.",
+                "LINK_UNAVAILABLE": "No se pudo conectar — comprueba que ambas máquinas estén en línea.",
+                "TARGET_CHANGED": "El destino cambió — envía de nuevo.",
+                "SOURCE_CHANGED": "Los archivos cambiaron durante el envío — envía de nuevo.",
+                "VERIFY_FAILED": "Los archivos no coincidían — no se guardó nada.",
+                "DISK_SPACE_EXHAUSTED": "A la máquina receptora no le queda espacio en disco.",
+                "SECRET_PATH_REJECTED": "Esa ubicación está protegida y no se puede escribir."
+            }
+        },
         "projectTransfer": {
             "sectionTitle": "Transferencia de archivos de proyecto",
             "sectionDescription": "Envía archivos entre tus propias máquinas. Los bytes viajan directamente punto a punto y llegan a una carpeta nueva; nunca se sobrescribe nada.",
@@ -4432,7 +4475,17 @@
             "needsUpdate": "Esta máquina necesita una actualización para gestionar los permisos de los controladores.",
             "saveFailed": "No se pudo guardar el permiso. Se restauró el ajuste anterior.",
             "empty": "Ningún controlador de esta máquina pide permisos todavía. El controlador de uso del ordenador aún no está instalado en esta máquina.",
-            "needsApproval": "Este controlador espera tu aprobación. Aprúebalo en la Bandeja para activarlo.",
+            "needsApproval": "Este controlador espera tu aprobación. Apruébalo aquí para activarlo.",
+            "needsApprovalNoRequest": "Activa primero un permiso abajo. Eso crea la solicitud de aprobación, que podrás aprobar aquí.",
+            "approveAndEnable": "Aprobar y activar",
+            "approveNeedsGrant": "Activa al menos un permiso para aprobar.",
+            "approveFailed": "No se pudo aprobar el controlador. Sigue desactivado.",
+            "providersPointer": "Los controladores se activan por máquina: abre la pestaña Proveedores de la máquina, elige DRIVER y ajusta los permisos y aprueba allí.",
+            "activation": {
+                "ready": "Listo",
+                "needs_approval": "Esperando aprobación",
+                "disabled": "Desactivado"
+            },
             "platformUnsupported": "Este controlador no es compatible con el sistema operativo de esta máquina, así que no se pueden cambiar sus permisos.",
             "osHint": "Antes de usarlo: en macOS, concede Grabación de pantalla y Accesibilidad en Ajustes del Sistema al programa que ejecuta el demonio. En Windows, el demonio debe ejecutarse en la sesión de escritorio con la sesión iniciada. En Linux solo se admite X11 (Wayland aún no) y deben estar instalados xdotool y maim o scrot.",
             "warning": {
@@ -4453,17 +4506,6 @@
                     "description": "Ejecuta comandos como el usuario que ejecuta el demonio, fuera de la carpeta personal privada del worker."
                 }
             }
-        },
-        "remoteProjectAttach": {
-            "sectionTitle": "Conexión remota de proyectos",
-            "sectionDescription": "Interruptor exclusivo del propietario por máquina para conectar proyectos entre máquinas (allowRemoteProjectAttach). Desactivado por defecto.",
-            "bothMachinesNote": "Tanto la máquina de origen como la de destino deben tener esta opción activada para conectar un proyecto entre máquinas.",
-            "rowDescription": "Permitir que esta máquina participe en la conexión remota de proyectos (allowRemoteProjectAttach).",
-            "noMachines": "No hay máquinas conectadas.",
-            "statusOn": "Activado",
-            "statusOff": "Desactivado",
-            "statusOffline": "Sin conexión",
-            "saveFailed": "No se pudo actualizar el ajuste de conexión remota de proyectos."
         }
     },
     "historyModal": {

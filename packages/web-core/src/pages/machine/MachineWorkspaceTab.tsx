@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next'
+import { SendFilesButton } from '../../components/settings/FileTransferCard'
 import ManagedWorkspacesSection from './ManagedWorkspacesSection'
 import type { useMachineActions } from './useMachineActions'
 import type {
@@ -27,8 +28,9 @@ export default function MachineWorkspaceTab({
     const { t } = useTranslation('common')
     return (
         <div className="flex flex-col flex-1 min-w-0 h-full">
-            <div className="flex flex-col gap-1 pb-4 border-b border-border-subtle mb-4">
+            <div className="flex items-center justify-between gap-2 pb-4 border-b border-border-subtle mb-4">
                 <div className="text-lg font-semibold text-text-primary">{t('machine.managedWorkspaces.title')}</div>
+                {sendDaemonCommand && <SendFilesButton initialFromId={machineId} size="sm" />}
             </div>
 
             {sendDaemonCommand && (

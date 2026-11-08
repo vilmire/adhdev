@@ -78396,18 +78396,18 @@ ${env2.envelopes.join("\n\n")}${tail}`;
     function readAcceptedOutput(store5, taskId) {
       const version2 = store5.db.prepare("SELECT version FROM mesh_task_outputs WHERE task_id = ? ORDER BY version DESC LIMIT 1").get(taskId);
       if (!version2) return null;
-      let cache3 = outputs.get(store5.db);
-      if (!cache3) {
-        cache3 = /* @__PURE__ */ new Map();
-        outputs.set(store5.db, cache3);
+      let cache4 = outputs.get(store5.db);
+      if (!cache4) {
+        cache4 = /* @__PURE__ */ new Map();
+        outputs.set(store5.db, cache4);
       }
-      const cached5 = cache3.get(taskId);
+      const cached5 = cache4.get(taskId);
       if (cached5?.version === version2.version) return cached5.envelope;
       const output = store5.getLatestTaskOutput(taskId);
       if (!output) throw new Error("lifetime_output_version_disappeared");
       const envelope = JSON.parse(output.envelopeJson);
-      if (cache3.size >= 2048) cache3.delete(cache3.keys().next().value);
-      cache3.set(taskId, { version: output.version, envelope });
+      if (cache4.size >= 2048) cache4.delete(cache4.keys().next().value);
+      cache4.set(taskId, { version: output.version, envelope });
       return envelope;
     }
     var indexed;
@@ -108888,11 +108888,11 @@ ${cleanBody}`;
         String(snapshot.messageUpdatedAt)
       ].join("|");
     }
-    function shouldEmitRecentReadDebugLog(cache3, snapshot) {
+    function shouldEmitRecentReadDebugLog(cache4, snapshot) {
       const nextSignature = buildRecentReadDebugSignature(snapshot);
-      const previousSignature = cache3.get(snapshot.sessionId);
+      const previousSignature = cache4.get(snapshot.sessionId);
       if (previousSignature === nextSignature) return false;
-      cache3.set(snapshot.sessionId, nextSignature);
+      cache4.set(snapshot.sessionId, nextSignature);
       return true;
     }
     function buildDetectedIdeInfos(detectedIdes, cdpManagers) {
@@ -120762,487 +120762,1215 @@ ${body}`;
         current = null;
       }
     });
-    var import_node_fs322;
-    var import_node_path26;
-    var ID3;
-    var TYPE;
-    var DriverGrantStore;
-    var init_grant_store = __esm2({
-      "src/drivers/grant-store.ts"() {
+    function schema2(db3) {
+      db3.exec("CREATE TABLE IF NOT EXISTS worker_bridge_prepared(credential_hash TEXT NOT NULL,delivery_id TEXT NOT NULL,claim_json TEXT NOT NULL,PRIMARY KEY(credential_hash,delivery_id))");
+    }
+    function key5(credential) {
+      const value = credential.bind ?? credential.token;
+      return typeof value === "string" && value ? (0, import_node_crypto37.createHash)("sha256").update(value).digest("hex") : "";
+    }
+    function rememberPreparedDelivery(db3, credential, claim) {
+      schema2(db3);
+      if (!key5(credential) || normalizeWorkerDeliveryId(claim.deliveryId) !== claim.deliveryId || !Number.isSafeInteger(claim.reportedAtMs) || !Number.isSafeInteger(claim.generation) || claim.generation < 0 || ![claim.meshId, claim.taskId, claim.attemptId, claim.sessionId, claim.nodeId, claim.ownerDaemonId].every((v) => typeof v === "string" && !!v)) throw new Error("worker_protocol_provenance_required");
+      const prior = readPreparedDelivery(db3, credential, claim.deliveryId);
+      if (prior && stableBridgeJson(prior) !== stableBridgeJson(claim)) throw new Error("worker_delivery_identity_conflict");
+      db3.prepare("INSERT OR IGNORE INTO worker_bridge_prepared VALUES (?,?,?)").run(key5(credential), claim.deliveryId, stableBridgeJson(claim));
+      return claim;
+    }
+    function readPreparedDelivery(db3, credential, deliveryId) {
+      schema2(db3);
+      const row2 = db3.prepare("SELECT claim_json FROM worker_bridge_prepared WHERE credential_hash=? AND delivery_id=?").get(key5(credential), String(deliveryId));
+      return row2 ? JSON.parse(row2.claim_json) : null;
+    }
+    function validatePreparedDelivery(db3, args) {
+      const saved = readPreparedDelivery(db3, args, args.deliveryId);
+      return saved && saved.reportedAtMs === args.reportedAtMs && stableBridgeJson(saved) === stableBridgeJson(args.prepared) ? saved : null;
+    }
+    var import_node_crypto37;
+    var init_worker_bridge_prepared = __esm2({
+      "src/mesh/worker-bridge-prepared.ts"() {
         "use strict";
-        import_node_fs322 = require("fs");
-        import_node_path26 = require("path");
-        init_config();
-        init_store_guards();
-        ID3 = /^[a-z][a-z0-9_]*$/;
-        TYPE = /^[a-z][a-z0-9-]*$/;
-        DriverGrantStore = class {
-          path;
-          now;
-          constructor(opts = {}) {
-            this.path = (0, import_node_path26.join)(opts.configDir ?? getConfigDir2(), "drivers", "grants.json");
-            this.now = opts.now ?? (() => /* @__PURE__ */ new Date());
-          }
-          /** Throws when the file exists but is unreadable or malformed. */
-          load() {
-            let raw;
-            try {
-              raw = (0, import_node_fs322.readFileSync)(this.path, "utf8");
-            } catch (error) {
-              if (error.code === "ENOENT") return { version: 1, grants: {} };
-              throw error;
-            }
-            const doc = JSON.parse(raw);
-            const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
-            if (doc?.version !== 1 || !isObj(doc.grants)) throw new Error("Invalid driver grant store");
-            for (const [type2, byId] of Object.entries(doc.grants)) {
-              if (!TYPE.test(type2) || !isObj(byId)) throw new Error("Invalid driver grant store");
-              for (const [id4, rec8] of Object.entries(byId)) {
-                if (!ID3.test(id4) || !isObj(rec8) || typeof rec8.granted !== "boolean" || !Number.isFinite(Date.parse(String(rec8.updatedAt)))) {
-                  throw new Error("Invalid driver grant store");
-                }
-              }
-            }
-            return doc;
-          }
-          /** True when the store can be read (or does not exist yet). */
-          isHealthy() {
-            try {
-              this.load();
-              return true;
-            } catch {
-              return false;
-            }
-          }
-          isGranted(type2, grantId) {
-            try {
-              return this.load().grants[type2]?.[grantId]?.granted === true;
-            } catch {
-              return false;
-            }
-          }
-          /** Granted state for the given ids; unknown ids and any read failure are false. */
-          snapshot(type2, grantIds) {
-            let byId;
-            try {
-              byId = this.load().grants[type2];
-            } catch {
-              byId = void 0;
-            }
-            return Object.fromEntries(grantIds.map((id4) => [id4, byId?.[id4]?.granted === true]));
-          }
-          /** Throws on a corrupt store instead of overwriting it. */
-          set(type2, changes) {
-            if (!TYPE.test(type2)) throw new Error("Invalid driver type");
-            for (const id4 of Object.keys(changes)) if (!ID3.test(id4)) throw new Error("Invalid grant id");
-            const doc = this.load();
-            const updatedAt = this.now().toISOString();
-            const byId = { ...doc.grants[type2] ?? {} };
-            for (const [id4, granted] of Object.entries(changes)) byId[id4] = { granted, updatedAt };
-            writeFileAtomic600(this.path, JSON.stringify({ version: 1, grants: { ...doc.grants, [type2]: byId } }, null, 2));
-          }
-        };
+        import_node_crypto37 = require("crypto");
+        init_worker_report_idempotency();
+        init_worker_bridge();
       }
     });
-    var DriverMcpError;
-    var init_mcp_client = __esm2({
-      "src/drivers/mcp-client.ts"() {
+    function isRouterInternalArgKey(key7) {
+      return key7.startsWith(ROUTER_INTERNAL_ARG_PREFIX);
+    }
+    function stripRouterInternalArgs(args) {
+      if (!args || typeof args !== "object" || Array.isArray(args)) return args;
+      const out = {};
+      for (const [key7, value] of Object.entries(args)) {
+        if (isRouterInternalArgKey(key7)) continue;
+        out[key7] = value;
+      }
+      return out;
+    }
+    var ROUTER_INTERNAL_ARG_PREFIX;
+    var init_router_internal_args = __esm2({
+      "src/commands/router-internal-args.ts"() {
         "use strict";
-        DriverMcpError = class extends Error {
-          constructor(code, message) {
-            super(message);
-            this.code = code;
-            this.name = "DriverMcpError";
-          }
-        };
+        ROUTER_INTERNAL_ARG_PREFIX = "_";
       }
     });
-    function createSdkDriverClient(child, options) {
-      const sdk = new import_client.Client({ name: "adhdev-driver-client", version: "1.0.0" }, { capabilities: {} });
-      const transport = new ManagedStdioTransport(child);
-      const calls = /* @__PURE__ */ new Map();
-      let closing = false;
-      let sequence = 0;
-      sdk.onerror = (error) => {
-        if (!closing) options.onFailure(error);
+    function meshTaskAttachments(history) {
+      return history ?? [];
+    }
+    function pushMeshTaskAttachment(history, attachment) {
+      history.push(attachment);
+      if (history.length > MESH_TASK_ATTACHMENT_HISTORY_CAP) {
+        const dropped = history.shift();
+        return { droppedTaskId: dropped?.taskId };
+      }
+      return {};
+    }
+    function popCompletedMeshTaskAttachment(history) {
+      if (history.length === 0) return void 0;
+      history.shift();
+      return history[0];
+    }
+    function resolveCompletingTaskId(history) {
+      return history.length > 0 ? history[0].taskId : void 0;
+    }
+    function mergePendingMeshTaskAttachment(rest, pending) {
+      if (!pending) return rest;
+      return {
+        ...rest,
+        meshActiveTaskId: pending.taskId,
+        ...pending.attemptId ? { meshActiveAttemptId: pending.attemptId } : {},
+        ...typeof pending.dispatchNonce === "number" ? { meshActiveDispatchNonce: pending.dispatchNonce } : {}
       };
-      sdk.onclose = () => {
-        if (!closing) options.onFailure(new DriverMcpError("connection_closed", "Driver connection closed"));
+    }
+    var MESH_TASK_ATTACHMENT_HISTORY_CAP;
+    var init_mesh_task_attachment = __esm2({
+      "src/providers/mesh-task-attachment.ts"() {
+        "use strict";
+        MESH_TASK_ATTACHMENT_HISTORY_CAP = 8;
+      }
+    });
+    function nativeMeshAssignmentMeta(settings2) {
+      const ref2 = currentMeshAttemptRef(settings2);
+      const assignment = ref2 && settings2.meshNodeFor && settings2.meshNodeId && settings2.meshActiveTaskId && settings2.meshCoordinatorDaemonId ? {
+        meshId: settings2.meshNodeFor,
+        nodeId: settings2.meshNodeId,
+        taskId: settings2.meshActiveTaskId,
+        attemptId: ref2.attemptId,
+        generation: ref2.generation,
+        dispatchNonce: settings2.meshActiveDispatchNonce ?? 0,
+        ownerDaemonId: settings2.meshCoordinatorDaemonId
+      } : null;
+      return { meshCoordinatorDaemonId: settings2.meshCoordinatorDaemonId ?? null, [PERSISTED_ATTEMPT_REF_META_KEY]: ref2, meshActiveAssignment: assignment };
+    }
+    function captureMeshAssignment(host) {
+      const settings2 = Object.fromEntries(Object.entries(host.settings ?? {}).filter(([key7]) => key7.startsWith("mesh")));
+      return JSON.parse(JSON.stringify({ settings: settings2, injectedAt: host.meshTaskInjectedAt, history: host.meshTaskAttachmentHistory }));
+    }
+    function restoreMeshAssignment(host, snapshot) {
+      host.settings = { ...Object.fromEntries(Object.entries(host.settings ?? {}).filter(([key7]) => !key7.startsWith("mesh"))), ...snapshot.settings };
+      host.meshTaskInjectedAt = snapshot.injectedAt;
+      host.meshTaskAttachmentHistory = snapshot.history;
+      host.adapter.updateRuntimeSettings?.(host.settings);
+      host.adapter.updateRuntimeMeta?.(nativeMeshAssignmentMeta(host.settings));
+    }
+    function turnInFlight(host) {
+      if (!("generatingStartedAt" in host) && !("completedDebouncePending" in host) && !("generatingDebouncePending" in host)) return true;
+      return typeof host.generatingStartedAt === "number" && host.generatingStartedAt !== 0 || host.completedDebouncePending !== null && host.completedDebouncePending !== void 0 || host.generatingDebouncePending !== null && host.generatingDebouncePending !== void 0;
+    }
+    function recordMeshTaskAttachment(host, attachment) {
+      host.meshTaskAttachmentHistory = meshTaskAttachments(host.meshTaskAttachmentHistory);
+      const history = host.meshTaskAttachmentHistory;
+      const existing = history.find((entry) => entry.taskId === attachment.taskId);
+      if (existing) {
+        const sameAttempt = !attachment.attemptId || existing.attemptId === attachment.attemptId;
+        if (attachment.attemptId) existing.attemptId = attachment.attemptId;
+        if (typeof attachment.dispatchNonce === "number") existing.dispatchNonce = attachment.dispatchNonce;
+        if (!sameAttempt) existing.injectedAt = attachment.injectedAt;
+        return;
+      }
+      if (history.length > 0 && !turnInFlight(host)) {
+        const dropped = history.splice(0, history.length).map((entry) => entry.taskId);
+        LOG.info("MeshTaskAttach", `[${host.instanceId}] idle re-stamp to task ${attachment.taskId} \u2014 dropped stale attachment(s) ${dropped.join(", ")}`);
+      }
+      const { droppedTaskId } = pushMeshTaskAttachment(history, attachment);
+      if (droppedTaskId) LOG.warn("MeshTaskAttach", `[${host.instanceId}] turn-aware attachment history exceeded cap \u2014 dropped task ${droppedTaskId}.`);
+    }
+    function attachMeshAssignment(host, assignment) {
+      if (!assignment?.meshId) return;
+      const previousTaskId = typeof host.settings?.meshActiveTaskId === "string" ? host.settings.meshActiveTaskId : "";
+      const previousAttemptRef = attemptRefKey(host.settings);
+      const taskChanged = !!(assignment.taskId && assignment.taskId.trim() && previousTaskId && previousTaskId !== assignment.taskId);
+      if (assignment.taskId && assignment.taskId.trim()) {
+        host.meshTaskInjectedAt = Date.now();
+        if (isWorkerMcpEnabled()) recordMeshTaskAttachment(host, { taskId: assignment.taskId, attemptId: assignment.attemptId, dispatchNonce: assignment.dispatchNonce, injectedAt: host.meshTaskInjectedAt });
+      }
+      host.settings = {
+        ...host.settings,
+        meshNodeFor: assignment.meshId,
+        // WTCLAIM (A): track the bound node id under BOTH the active marker
+        // (meshNodeId, cleared on detach) and a sticky marker (meshLastNodeId,
+        // preserved across detach). The sticky marker lets a detached but still
+        // coordinator-owned session be re-picked ONLY for the SAME node it served
+        // — never auto-adopted for a sibling node (e.g. a cloned worktree) that
+        // shares this daemon. See isMeshOwnedDelegateSession's post-detach gate.
+        ...assignment.nodeId ? { meshNodeId: assignment.nodeId, meshLastNodeId: assignment.nodeId } : {},
+        ...assignment.taskId ? { meshActiveTaskId: assignment.taskId } : {},
+        // REDRIVE-DUP: task-level dispatch nonce, echoed on generating_started so the
+        // coordinator can reject a stale (reclaimed) dispatch. Cleared with meshActiveTaskId
+        // on detach so a subsequent unrelated turn never re-echoes a prior task's nonce.
+        ...typeof assignment.dispatchNonce === "number" ? { meshActiveDispatchNonce: assignment.dispatchNonce } : {},
+        // TURN-LEDGER (Stage 5): the opaque attempt identity for this dispatch, echoed
+        // on lifecycle events so the coordinator's reducer correlates ACKs/completion
+        // proposals to (taskId, attemptId, session). Cleared with meshActiveTaskId on
+        // detach so a later unrelated turn never re-echoes a prior attempt.
+        ...assignment.attemptId ? { meshActiveAttemptId: assignment.attemptId } : {},
+        // C4/C5: the attempt's ledger generation (absent → 0 in currentAttemptRef).
+        // A new assignment without one must not inherit the previous attempt's.
+        ...assignment.attemptId && typeof assignment.attemptGeneration === "number" ? { meshActiveAttemptGeneration: assignment.attemptGeneration } : {},
+        ...assignment.coordinatorDaemonId ? { meshCoordinatorDaemonId: assignment.coordinatorDaemonId } : {},
+        // Session-level routing anchor: the originating coordinator session, so this
+        // worker's completion events route back to the exact session that dispatched it.
+        ...assignment.coordinatorSessionId ? { meshCoordinatorSessionId: assignment.coordinatorSessionId } : {}
       };
-      const normalize8 = (error) => {
-        if (error instanceof DriverMcpError) return error;
-        const e = error;
-        if (e?.code === -32001) return new DriverMcpError("timeout", e.message ?? "Driver request timed out");
-        if (e?.code === -32e3) return new DriverMcpError("connection_closed", e.message ?? "Driver connection closed");
-        return error instanceof Error ? error : new Error(String(error));
+      if (assignment.attemptId && typeof assignment.attemptGeneration !== "number") delete host.settings.meshActiveAttemptGeneration;
+      if (taskChanged && !assignment.attemptId) {
+        delete host.settings.meshActiveAttemptId;
+        delete host.settings.meshActiveAttemptGeneration;
+      }
+      if (taskChanged && typeof assignment.dispatchNonce !== "number") delete host.settings.meshActiveDispatchNonce;
+      host.adapter.updateRuntimeSettings?.(host.settings);
+      const meta2 = {
+        ...assignment.coordinatorDaemonId ? { meshCoordinatorDaemonId: assignment.coordinatorDaemonId } : {},
+        ...persistedAttemptRefMeta(host.settings, previousAttemptRef),
+        ...nativeMeshAssignmentMeta(host.settings)
       };
-      const client = {
-        async listTools() {
-          const tools = [];
-          let cursor;
-          do {
-            const page = await sdk.listTools(cursor ? { cursor } : void 0, { timeout: options.requestTimeoutMs }).catch((error) => {
-              throw normalize8(error);
-            });
-            tools.push(...page.tools);
-            cursor = page.nextCursor;
-          } while (cursor);
-          return tools;
-        },
-        callTool(name, args, signal) {
-          const id4 = `driver-call-${++sequence}`;
-          const controller = new AbortController();
-          const abort = () => controller.abort(new DriverMcpError("cancelled", "Driver call cancelled"));
-          calls.set(id4, controller);
-          signal?.addEventListener("abort", abort, { once: true });
-          if (signal?.aborted) abort();
-          const promise = sdk.callTool(
-            { name, arguments: args },
-            void 0,
-            { signal: controller.signal, timeout: options.requestTimeoutMs }
-          ).catch((error) => {
-            throw controller.signal.aborted ? controller.signal.reason : normalize8(error);
-          }).finally(() => {
-            calls.delete(id4);
-            signal?.removeEventListener("abort", abort);
-          });
-          return Object.assign(promise, { id: id4 });
-        },
-        cancel(id4) {
-          calls.get(id4)?.abort(new DriverMcpError("cancelled", "Driver call cancelled"));
-        },
-        async close() {
-          closing = true;
-          try {
-            await sdk.close();
-          } finally {
-            await options.stopProcess();
-          }
+      if (Object.keys(meta2).length > 0) {
+        try {
+          host.adapter.updateRuntimeMeta?.(meta2);
+        } catch {
         }
+      }
+    }
+    function attemptRefKey(settings2) {
+      const ref2 = currentMeshAttemptRef(settings2);
+      return ref2 ? `${ref2.attemptId}#${ref2.generation}` : "";
+    }
+    function persistedAttemptRefMeta(settings2, previousKey) {
+      if (attemptRefKey(settings2) === previousKey) return {};
+      return { [PERSISTED_ATTEMPT_REF_META_KEY]: currentMeshAttemptRef(settings2) };
+    }
+    function persistAttemptRefChange(host, previousKey) {
+      const meta2 = persistedAttemptRefMeta(host.settings, previousKey);
+      if (Object.keys(meta2).length === 0) return;
+      try {
+        host.adapter.updateRuntimeMeta?.({ ...meta2, ...nativeMeshAssignmentMeta(host.settings) });
+      } catch {
+      }
+    }
+    function currentMeshAttemptRef(settings2) {
+      const attemptId = settings2?.meshActiveAttemptId;
+      if (typeof attemptId !== "string" || !attemptId.trim()) return null;
+      const generation = settings2?.meshActiveAttemptGeneration;
+      return { attemptId, generation: typeof generation === "number" && Number.isInteger(generation) && generation >= 0 ? generation : 0 };
+    }
+    function currentMeshDispatchMessageId(settings2) {
+      const taskId = typeof settings2?.meshActiveTaskId === "string" ? settings2.meshActiveTaskId.trim() : "";
+      if (!taskId) return null;
+      const nonce = settings2?.meshActiveDispatchNonce;
+      return `task:${taskId}:n${typeof nonce === "number" ? nonce : 0}`;
+    }
+    function canReportMeshSubmitVerdict(host, messageId, attemptRef) {
+      const expected = currentMeshDispatchMessageId(host.settings);
+      return !!expected && messageId === expected && !!host.turnEvidencePort && typeof host.settings?.meshActiveAttemptId === "string" && host.settings.meshActiveAttemptId === attemptRef;
+    }
+    function reportMeshSubmitUnconfirmed(host, messageId, firstWrittenAt) {
+      const port = host.turnEvidencePort;
+      const expected = currentMeshDispatchMessageId(host.settings);
+      if (!expected || messageId !== expected || !port) return false;
+      const attemptRef = currentMeshAttemptRef(host.settings);
+      const taskId = String(host.settings.meshActiveTaskId);
+      const tag = `[${host.instanceId}] dispatch ${messageId} proven unconfirmed`;
+      const sameDispatch = () => {
+        const ref2 = currentMeshAttemptRef(host.settings);
+        return currentMeshDispatchMessageId(host.settings) === messageId && host.turnEvidencePort === port && ref2?.attemptId === attemptRef?.attemptId && ref2?.generation === attemptRef?.generation;
       };
-      return { client, connect: () => sdk.connect(transport, { timeout: options.startupTimeoutMs }).catch((error) => {
-        throw normalize8(error);
-      }) };
-    }
-    function primeDriverMcpSdk() {
-      new import_client.Client({ name: "adhdev-driver-boot-check", version: "1.0.0" }, { capabilities: {} });
-    }
-    var import_client;
-    var import_stdio3;
-    var MAX_DRIVER_MESSAGE_BYTES;
-    var ManagedStdioTransport;
-    var init_mcp_client_sdk = __esm2({
-      "src/drivers/mcp-client-sdk.ts"() {
-        "use strict";
-        import_client = require("@modelcontextprotocol/sdk/client/index.js");
-        import_stdio3 = require("@modelcontextprotocol/sdk/shared/stdio.js");
-        init_mcp_client();
-        MAX_DRIVER_MESSAGE_BYTES = 8 * 1024 * 1024;
-        ManagedStdioTransport = class {
-          constructor(child) {
-            this.child = child;
-          }
-          onclose;
-          onerror;
-          onmessage;
-          buffer = new import_stdio3.ReadBuffer({ maxBufferSize: MAX_DRIVER_MESSAGE_BYTES });
-          closed = false;
-          async start() {
-            if (!this.child.stdin || !this.child.stdout) throw new Error("Missing driver stdio pipes");
-            this.child.stdout.on("data", this.onData);
-            this.child.stdout.on("error", this.onError);
-            this.child.stdin.on("error", this.onError);
-            this.child.on("close", this.onClose);
-          }
-          onData = (chunk) => {
-            if (this.closed) return;
-            try {
-              this.buffer.append(chunk);
-              for (let message = this.buffer.readMessage(); message; message = this.buffer.readMessage()) this.onmessage?.(message);
-            } catch (error) {
-              this.onerror?.(error instanceof Error ? error : new Error(String(error)));
-            }
-          };
-          onError = (error) => {
-            if (!this.closed) this.onerror?.(error);
-          };
-          onClose = () => {
-            void this.close();
-          };
-          async send(message) {
-            if (this.closed || !this.child.stdin?.writable) throw new DriverMcpError("connection_closed", "Driver stdio is closed");
-            await new Promise((resolve77, reject) => this.child.stdin.write((0, import_stdio3.serializeMessage)(message), (error) => error ? reject(error) : resolve77()));
-          }
-          async close() {
-            if (this.closed) return;
-            this.closed = true;
-            this.child.stdout?.off("data", this.onData);
-            this.child.stdout?.off("error", this.onError);
-            this.child.stdin?.off("error", this.onError);
-            this.child.off("close", this.onClose);
-            this.buffer.clear();
-            this.onclose?.();
-          }
-        };
-      }
-    });
-    function buildDriverEnv(runtime2, source2 = process.env) {
-      const normalize8 = (key7) => process.platform === "win32" ? key7.toUpperCase() : key7;
-      const allowed = new Set([...BASE_ENV, ...runtime2.env ?? []].map(normalize8));
-      return (0, import_session_host_core.sanitizeSpawnEnv)(Object.fromEntries(Object.entries(source2).filter(([key7]) => allowed.has(normalize8(key7)))));
-    }
-    async function resolvePackagePath(value, packageDir) {
-      if (!packageDir || !value || value.startsWith("-") || (0, import_node_path27.isAbsolute)(value)) return value;
-      const isExplicitRelative = value.startsWith("./") || value.startsWith(".\\");
-      const candidate = (0, import_node_path27.resolve)(packageDir, value);
-      const rel = (0, import_node_path27.relative)(packageDir, candidate);
-      if (rel.startsWith("..") || (0, import_node_path27.isAbsolute)(rel)) return value;
-      if (isExplicitRelative) return candidate;
-      try {
-        await (0, import_promises9.access)(candidate);
-        return candidate;
-      } catch {
-        return value;
-      }
-    }
-    var import_promises9;
-    var import_node_path27;
-    var BASE_ENV;
-    var ManagedMcpProcess;
-    var init_managed_mcp_process = __esm2({
-      "src/drivers/managed-mcp-process.ts"() {
-        "use strict";
-        import_promises9 = require("fs/promises");
-        import_node_path27 = require("path");
-        init_hidden_spawn();
-        init_spawn_env();
-        init_mcp_client_sdk();
-        init_mcp_client();
-        BASE_ENV = /* @__PURE__ */ new Set(["PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP", "APPDATA", "LOCALAPPDATA", "LANG", "LC_ALL"]);
-        ManagedMcpProcess = class {
-          constructor(runtime2, options) {
-            this.runtime = runtime2;
-            this.options = options;
-          }
-          state = "stopped";
-          failure = null;
-          child = null;
-          sdkClient = null;
-          starting = null;
-          stopping = null;
-          idleTimer = null;
-          exited = Promise.resolve();
-          active = 0;
-          get pid() {
-            return this.child?.pid;
-          }
-          start() {
-            if (this.state === "failed") return Promise.reject(this.failure ?? new DriverMcpError("failed", "Driver failed"));
-            if (this.state === "running") return Promise.resolve();
-            if (this.state === "starting") return this.starting;
-            this.state = "starting";
-            this.starting = this.startInternal();
-            return this.starting;
-          }
-          async startInternal() {
-            const startupTimeoutMs = this.runtime.startupTimeoutMs ?? 15e3;
-            try {
-              if (this.stopping) await this.stopping;
-              this.stopping = null;
-              if (this.state !== "starting") throw new DriverMcpError("connection_closed", "Driver start was cancelled");
-              if (this.runtime.platforms && !this.runtime.platforms.includes(process.platform)) throw new Error("Driver platform is unsupported");
-              await (0, import_promises9.mkdir)(this.options.cwd, { recursive: true });
-              const command = await resolvePackagePath(this.runtime.command, this.options.packageDir);
-              const args = await Promise.all((this.runtime.args ?? []).map((arg) => resolvePackagePath(arg, this.options.packageDir)));
-              if (this.state !== "starting") throw new DriverMcpError("connection_closed", "Driver start was cancelled");
-              const env2 = buildDriverEnv(this.runtime, this.options.env);
-              if (this.options.packageDir) {
-                env2.ADHDEV_DRIVER_PACKAGE_DIR = this.options.packageDir;
-                env2.ADHDEV_DRIVER_STATE_DIR = this.options.cwd;
-              }
-              const child = hiddenSpawn(command, args, {
-                cwd: this.options.cwd,
-                env: env2,
-                stdio: ["pipe", "pipe", "pipe"],
-                shell: false,
-                detached: process.platform !== "win32"
-              });
-              this.child = child;
-              this.exited = new Promise((resolve77) => child.once("close", () => {
-                resolve77();
-                if (this.child === child && !this.stopping && this.state !== "stopped") this.fail(new DriverMcpError("connection_closed", "Driver process exited"));
-              }));
-              child.on("error", (error) => this.fail(error));
-              child.stderr?.on("data", () => {
-              });
-              child.stdin?.on("error", (error) => {
-                if (!this.stopping) this.fail(error);
-              });
-              child.stdout?.on("error", (error) => {
-                if (!this.stopping) this.fail(error);
-              });
-              const adapter = createSdkDriverClient(child, {
-                startupTimeoutMs,
-                requestTimeoutMs: this.options.requestTimeoutMs ?? 3e4,
-                onFailure: (error) => this.fail(error),
-                stopProcess: () => this.stopProcess()
-              });
-              this.sdkClient = adapter.client;
-              let timer;
-              try {
-                await Promise.race([adapter.connect(), new Promise((_, reject) => {
-                  timer = setTimeout(() => reject(new DriverMcpError("timeout", "Driver startup timed out")), startupTimeoutMs);
-                })]);
-              } finally {
-                clearTimeout(timer);
-              }
-              if (this.state !== "starting") throw this.failure ?? new Error("Driver stopped during startup");
-              this.state = "running";
-              this.armIdle();
-            } catch (error) {
-              const failure8 = error instanceof Error ? error : new Error(String(error));
-              this.fail(failure8);
-              await this.close();
-              throw this.failure ?? failure8;
-            }
-          }
-          fail(error) {
-            if (this.state === "failed" || this.state === "stopped") return;
-            this.state = "failed";
-            this.failure = error;
-            this.clearIdle();
-            void this.close().catch(() => {
-            });
-          }
-          clearIdle() {
-            if (this.idleTimer) clearTimeout(this.idleTimer);
-            this.idleTimer = null;
-          }
-          armIdle() {
-            this.clearIdle();
-            if (this.state === "running" && this.active === 0) {
-              this.idleTimer = setTimeout(() => {
-                void this.close().catch((error) => this.fail(error));
-              }, this.runtime.idleStopMs ?? 6e5);
-              this.idleTimer.unref();
-            }
-          }
-          requireClient() {
-            if (this.state !== "running" || !this.sdkClient) throw this.failure ?? new DriverMcpError("connection_closed", "Driver is not running");
-            this.clearIdle();
-            return this.sdkClient;
-          }
-          async listTools() {
-            const client = this.requireClient();
-            this.active++;
-            try {
-              return await client.listTools();
-            } finally {
-              this.active--;
-              this.armIdle();
-            }
-          }
-          callTool(name, args, signal) {
-            const client = this.requireClient();
-            this.active++;
-            const call2 = client.callTool(name, args, signal);
-            const promise = call2.finally(() => {
-              this.active--;
-              this.armIdle();
-            });
-            return Object.assign(promise, { id: call2.id });
-          }
-          cancel(id4) {
-            this.sdkClient?.cancel(id4);
-          }
-          async close() {
-            this.clearIdle();
-            if (this.state !== "failed") this.state = "stopped";
-            const client = this.sdkClient;
-            this.sdkClient = null;
-            if (client) await client.close();
-            else await this.stopProcess();
-          }
-          stopProcess() {
-            if (this.stopping) return this.stopping;
-            const child = this.child;
-            if (!child) return Promise.resolve();
-            this.stopping = (async () => {
-              const signal = async (name) => {
-                if (child.exitCode !== null || child.signalCode !== null) return;
-                try {
-                  if (process.platform !== "win32" && child.pid) process.kill(-child.pid, name);
-                  else if (child.pid) {
-                    await new Promise((resolve77) => {
-                      const killer = hiddenSpawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
-                      killer.once("error", () => {
-                        child.kill(name);
-                        resolve77();
-                      });
-                      killer.once("close", () => resolve77());
-                    });
-                  } else child.kill(name);
-                } catch {
-                }
-              };
-              const wait = async (ms3) => {
-                let timer;
-                try {
-                  await Promise.race([this.exited, new Promise((resolve77) => {
-                    timer = setTimeout(resolve77, ms3);
-                  })]);
-                } finally {
-                  clearTimeout(timer);
-                }
-              };
-              child.stdin?.end();
-              await signal("SIGTERM");
-              await wait(2e3);
-              await signal("SIGKILL");
-              await this.exited;
-              if (this.child === child) this.child = null;
-            })();
-            return this.stopping;
-          }
-        };
-      }
-    });
-    async function readDriverInputSchema(cwd, schemaPath) {
-      try {
-        const root = await (0, import_promises10.realpath)(cwd);
-        const file = await (0, import_promises10.realpath)((0, import_node_path28.resolve)(root, schemaPath));
-        const rel = (0, import_node_path28.relative)(root, file);
-        if (!rel || rel === ".." || rel.startsWith("../") || rel.startsWith("..\\") || (0, import_node_path28.isAbsolute)(rel)) return null;
-        const schema22 = JSON.parse(await (0, import_promises10.readFile)(file, "utf8"));
-        return schema22 && typeof schema22 === "object" && !Array.isArray(schema22) ? schema22 : null;
-      } catch {
-        return null;
-      }
-    }
-    async function validateDriverArgs(cwd, schemaPath, args) {
-      if (!args || typeof args !== "object" || Array.isArray(args)) return false;
-      if (!schemaPath) return true;
-      try {
-        const schema22 = await readDriverInputSchema(cwd, schemaPath);
-        if (!schema22) return false;
-        const ajv = new import_ajv.default({ strict: false, allErrors: true, validateFormats: true });
-        (0, import_ajv_formats2.default)(ajv);
-        return ajv.compile(schema22)(args) === true;
-      } catch {
+      const envelope = { sessionId: host.instanceId, observedBy: "cli_fsm", source: "input_service", ...attemptRef ? { attemptRef } : { taskId } };
+      const fail16 = () => {
+        LOG.warn("MeshTaskAttach", `${tag} \u2014 reporting dispatch_failed(submit_unconfirmed)${attemptRef ? ` for attempt ${attemptRef.attemptId} g${attemptRef.generation}` : ""}`);
+        emitDispatchFailed(port, { ...envelope, workerAbsent: false, reason: "submit_unconfirmed" });
+      };
+      if (!port.confirmConsumption || !(Number.isFinite(firstWrittenAt) && firstWrittenAt > 0)) {
+        LOG.warn("MeshTaskAttach", `${tag} \u2014 consumption check unavailable; quarantining without dispatch_failed reclaim`);
         return false;
       }
+      void port.confirmConsumption(host.instanceId, firstWrittenAt, { messageId }).then(
+        (check) => check,
+        () => "unknown"
+      ).then((check) => {
+        if (!sameDispatch()) {
+          LOG.info("MeshTaskAttach", `${tag} \u2014 the dispatch moved on during the consumption read; not reported`);
+          return;
+        }
+        if (check === "consumed") {
+          LOG.warn("MeshTaskAttach", `${tag} \u2014 but its transcript shows agent activity since the first write: the prompt was consumed; reporting turn_started, not a failure`);
+          emitTurnStarted(port, { ...envelope, retro: true });
+          return;
+        }
+        if (check !== "not_consumed") {
+          LOG.warn("MeshTaskAttach", `${tag} \u2014 non-consumption unproven (${check}); quarantining without dispatch_failed reclaim`);
+          return;
+        }
+        fail16();
+      });
+      return true;
     }
-    var import_promises10;
-    var import_node_path28;
-    var import_ajv;
-    var import_ajv_formats2;
-    var init_input_schema = __esm2({
-      "src/drivers/input-schema.ts"() {
+    function releaseMeshAttemptRef(host, attemptId) {
+      if (!attemptId || host.settings?.meshActiveAttemptId !== attemptId) return false;
+      const previousAttemptRef = attemptRefKey(host.settings);
+      const { meshActiveAttemptId, meshActiveAttemptGeneration, ...rest } = host.settings;
+      void meshActiveAttemptId;
+      void meshActiveAttemptGeneration;
+      host.settings = rest;
+      host.adapter.updateRuntimeSettings?.(host.settings);
+      persistAttemptRefChange(host, previousAttemptRef);
+      LOG.info("MeshDispatch", `[${host.instanceId}] released attempt ref ${attemptId}`);
+      return true;
+    }
+    function detachMeshAssignment(host) {
+      const pending = isWorkerMcpEnabled() ? popCompletedMeshTaskAttachment(meshTaskAttachments(host.meshTaskAttachmentHistory)) : void 0;
+      if (!host.settings.meshNodeFor && !host.settings.meshActiveTaskId && !host.settings.meshNodeId) return;
+      const previousAttemptRef = attemptRefKey(host.settings);
+      if (host.settings.launchedByCoordinator === true) {
+        if (!host.settings.meshActiveTaskId) return;
+        const { meshActiveTaskId: meshActiveTaskId2, meshActiveDispatchNonce: meshActiveDispatchNonce2, meshActiveAttemptId: meshActiveAttemptId2, meshActiveAttemptGeneration: meshActiveAttemptGeneration2, ...rest2 } = host.settings;
+        void meshActiveTaskId2;
+        void meshActiveDispatchNonce2;
+        void meshActiveAttemptId2;
+        void meshActiveAttemptGeneration2;
+        host.settings = mergePendingMeshTaskAttachment(rest2, pending);
+        host.adapter.updateRuntimeSettings?.(host.settings);
+        persistAttemptRefChange(host, previousAttemptRef);
+        return;
+      }
+      const { meshNodeFor, meshNodeId, meshActiveTaskId, meshActiveDispatchNonce, meshActiveAttemptId, meshActiveAttemptGeneration, ...rest } = host.settings;
+      void meshNodeFor;
+      void meshActiveTaskId;
+      void meshActiveDispatchNonce;
+      void meshActiveAttemptId;
+      void meshActiveAttemptGeneration;
+      const lastNodeId = typeof meshNodeId === "string" && meshNodeId.trim() ? meshNodeId.trim() : typeof rest.meshLastNodeId === "string" && rest.meshLastNodeId.trim() ? rest.meshLastNodeId.trim() : void 0;
+      host.settings = lastNodeId ? { ...rest, meshLastNodeId: lastNodeId } : rest;
+      host.adapter.updateRuntimeSettings?.(host.settings);
+      persistAttemptRefChange(host, previousAttemptRef);
+    }
+    var PERSISTED_ATTEMPT_REF_META_KEY;
+    var init_cli_provider_mesh_assignment = __esm2({
+      "src/providers/cli-provider-mesh-assignment.ts"() {
         "use strict";
-        import_promises10 = require("fs/promises");
-        import_node_path28 = require("path");
-        import_ajv = __toESM2(require_ajv());
-        import_ajv_formats2 = __toESM2(require_dist2());
+        init_logger();
+        init_runtime_defaults();
+        init_turn_evidence_port();
+        init_mesh_task_attachment();
+        PERSISTED_ATTEMPT_REF_META_KEY = "meshActiveAttemptRef";
+      }
+    });
+    function projectHotChatSessionStatesFromProviderState(state2) {
+      const project2 = (item) => ({
+        id: item.instanceId,
+        status: item.activeChat?.status || item.status,
+        unread: item.unread,
+        inboxBucket: item.inboxBucket,
+        lastMessageAt: item.lastMessageAt ?? item.activeChat?.lastMessageAt,
+        runtimeLifecycle: item.runtime?.lifecycle ?? null,
+        runtimeSurfaceKind: item.runtime?.surfaceKind,
+        runtimeRestoredFromStorage: item.runtime?.restoredFromStorage === true,
+        runtimeRecoveryState: item.runtime?.recoveryState ?? null
+      });
+      if (state2.category === "ide") {
+        return [project2(state2), ...state2.extensions.map(project2)];
+      }
+      return [project2(state2)];
+    }
+    function liveWorkingStatus(state2) {
+      const status = (typeof state2.status === "string" ? state2.status : "").toLowerCase();
+      if (LIVE_WORKING_STATUSES.has(status)) return status;
+      const chatStatus = (typeof state2.activeChat?.status === "string" ? state2.activeChat.status : "").toLowerCase();
+      return LIVE_WORKING_STATUSES.has(chatStatus) ? chatStatus : "";
+    }
+    var LIVE_WORKING_STATUSES;
+    var ProviderInstanceManager;
+    var init_provider_instance_manager = __esm2({
+      "src/providers/provider-instance-manager.ts"() {
+        "use strict";
+        init_logger();
+        LIVE_WORKING_STATUSES = /* @__PURE__ */ new Set(["generating", "waiting_approval", "waiting_choice", "starting", "streaming", "working", "no_progress", "long_generating"]);
+        ProviderInstanceManager = class {
+          instances = /* @__PURE__ */ new Map();
+          tickTimer = null;
+          tickInterval = 5e3;
+          // default 5seconds
+          bus = null;
+          sessionEventPort = null;
+          turnEvidencePort = null;
+          // ─── Instance manage ──────────────────────────────
+          /**
+          * Instance add and initialize
+          */
+          async addInstance(id4, instance, context2) {
+            if (this.instances.has(id4)) {
+              LOG.warn("InstanceMgr", `[InstanceManager] Instance ${id4} already exists, disposing old one`);
+              this.instances.get(id4).dispose();
+            }
+            this.instances.set(id4, instance);
+            await instance.init({
+              ...context2,
+              ...this.sessionEventPort ? { lifecycle: this.sessionEventPort } : {},
+              ...this.turnEvidencePort ? { turnEvidence: this.turnEvidencePort } : {},
+              emitProviderEvent: (event) => this.emitProviderEvent(instance.type, id4, event)
+            });
+          }
+          /**
+          * Instance remove
+          */
+          removeInstance(id4) {
+            const instance = this.instances.get(id4);
+            if (instance) {
+              instance.dispose();
+              this.instances.delete(id4);
+            }
+          }
+          removeByCategory(category, options = {}) {
+            const dispose2 = options.dispose !== false;
+            let removed = 0;
+            for (const [id4, instance] of this.instances) {
+              if (instance.category !== category) continue;
+              if (dispose2) {
+                try {
+                  instance.dispose();
+                } catch {
+                }
+              }
+              this.instances.delete(id4);
+              removed += 1;
+            }
+            return removed;
+          }
+          /**
+          * Import by Instance ID
+          */
+          getInstance(id4) {
+            return this.instances.get(id4);
+          }
+          /**
+          * Per-category Instance list
+          */
+          getByCategory(category) {
+            return [...this.instances.values()].filter((i) => i.category === category);
+          }
+          /**
+          * All Instance count
+          */
+          get size() {
+            return this.instances.size;
+          }
+          /**
+          * All Instance IDs (for iteration without exposing the private Map)
+          */
+          listInstanceIds() {
+            return [...this.instances.keys()];
+          }
+          // ─── State collect ────────────────────────────────
+          /**
+          * all Instance's current status collect. Provider events do not ride this
+          * drain any more: every instance delivers them through its lifecycle port at
+          * push time (wiring-unification B5).
+          */
+          collectAllStates() {
+            const states = [];
+            for (const [id4, instance] of this.instances) {
+              try {
+                const state2 = instance.getState();
+                if (state2.category === "cli") {
+                  const launch = this.sessionEventPort?.launchRecord?.(state2.instanceId);
+                  if (launch) state2.launch = launch;
+                }
+                states.push(state2);
+              } catch (e) {
+                LOG.warn("InstanceMgr", `[InstanceManager] Failed to collect state from ${id4}: ${e.message}`);
+              }
+            }
+            return states;
+          }
+          collectHotChatSessionStates() {
+            const sessions = [];
+            for (const [id4, instance] of this.instances) {
+              try {
+                const projected = instance.getHotChatSessionState?.();
+                if (Array.isArray(projected)) {
+                  sessions.push(...projected.filter((session) => !!session?.id));
+                  continue;
+                }
+                if (projected?.id) {
+                  sessions.push(projected);
+                  continue;
+                }
+                const state2 = instance.getState();
+                sessions.push(...projectHotChatSessionStatesFromProviderState(state2));
+              } catch (e) {
+                LOG.warn("InstanceMgr", `[InstanceManager] Failed to collect hot chat metadata from ${id4}: ${e.message}`);
+              }
+            }
+            return sessions;
+          }
+          /**
+          * Per-category status collect
+          */
+          collectStatesByCategory(category) {
+            return this.collectAllStates().filter((s2) => s2.category === category);
+          }
+          // ─── Tick engine ─────────────────────────────────
+          /**
+          * Start tick — periodically call all Instance.onTick() call
+          */
+          startTicking(intervalMs) {
+            if (this.tickTimer) return;
+            this.tickInterval = intervalMs || this.tickInterval;
+            this.tickTimer = setInterval(async () => {
+              const now = Date.now();
+              for (const [id4, instance] of this.instances) {
+                try {
+                  instance.checkMeshWorkerStall?.(now);
+                } catch (e) {
+                  LOG.warn("InstanceMgr", `[InstanceManager] Mesh stall check failed for ${id4}: ${e.message}`);
+                }
+                try {
+                  await instance.onTick();
+                } catch (e) {
+                  LOG.warn("InstanceMgr", `[InstanceManager] Tick failed for ${id4}: ${e.message}`);
+                }
+              }
+            }, this.tickInterval);
+          }
+          /**
+          * Stop tick
+          */
+          stopTicking() {
+            if (this.tickTimer) {
+              clearInterval(this.tickTimer);
+              this.tickTimer = null;
+            }
+          }
+          // ─── event ────────────────────────────────────
+          /**
+           * Forward every provider event to the lifecycle bus as the transitional
+           * `provider_event` (wiring-unification B1). Pass null to detach.
+           */
+          attachBus(bus) {
+            this.bus = bus;
+          }
+          /**
+           * Port injected as `InstanceContext.lifecycle` into instances added from now
+           * on, and handed to already-live instances through their optional setter.
+           */
+          setSessionEventPort(port) {
+            this.sessionEventPort = port;
+            for (const [id4, instance] of this.instances) {
+              try {
+                instance.setSessionEventPort?.(port);
+              } catch (e) {
+                LOG.warn("InstanceMgr", `[InstanceManager] setSessionEventPort failed for ${id4}: ${e?.message ?? e}`);
+              }
+            }
+          }
+          /**
+           * Port injected as `InstanceContext.turnEvidence` into instances added from
+           * now on, and handed to already-live instances through their optional
+           * setter (wiring-unification C5, mirrors `setSessionEventPort`).
+           */
+          setTurnEvidencePort(port) {
+            this.turnEvidencePort = port;
+            for (const [id4, instance] of this.instances) {
+              try {
+                instance.setTurnEvidencePort?.(port);
+              } catch (e) {
+                LOG.warn("InstanceMgr", `[InstanceManager] setTurnEvidencePort failed for ${id4}: ${e?.message ?? e}`);
+              }
+            }
+          }
+          /**
+           * Publish one enriched provider event on the bus (the transitional
+           * `provider_event`). Every consumer is a bus subscriber since B5 — the
+           * status-event emitter, mesh forwarding, quota refresh, dev SSE — each
+           * isolated in its own try/catch by the bus itself.
+           */
+          dispatchProviderEvent(payload) {
+            if (!this.bus) return;
+            const sessionId = typeof payload.targetSessionId === "string" && payload.targetSessionId ? payload.targetSessionId : String(payload.instanceId ?? "");
+            this.bus.emit({ kind: "provider_event", sessionId, at: Date.now(), event: payload });
+          }
+          emitProviderEvent(providerType, instanceId, event) {
+            const payload = {
+              ...event,
+              providerType,
+              instanceId: typeof event.instanceId === "string" && event.instanceId.trim() ? event.instanceId : instanceId,
+              targetSessionId: typeof event.targetSessionId === "string" && event.targetSessionId.trim() ? event.targetSessionId : instanceId
+            };
+            this.dispatchProviderEvent(payload);
+          }
+          /**
+          * Forward event to specific Instance
+          */
+          sendEvent(id4, event, data) {
+            this.instances.get(id4)?.onEvent(event, data);
+          }
+          /**
+          * Broadcast event to all Instances
+          */
+          broadcast(event, data) {
+            for (const instance of this.instances.values()) {
+              instance.onEvent(event, data);
+            }
+          }
+          /**
+           * Update settings for all instances of a given provider type.
+           * Called when user changes settings from dashboard.
+           */
+          updateInstanceSettings(providerType, settings2) {
+            let updated = 0;
+            for (const instance of this.instances.values()) {
+              if (instance.type === providerType && typeof instance.updateSettings === "function") {
+                instance.updateSettings(settings2);
+                updated++;
+              }
+            }
+            return updated;
+          }
+          /** Stamp a mesh assignment on a single instance (used by mesh_send_task
+           *  --direct so the worker's completion event has a coordinator routing
+           *  marker in state.settings). Returns `{ stamped: true }` when the stamp was
+           *  applied, or `{ stamped: false, reason }` when it was refused — the instance
+           *  was missing / has no attach method, or the DOUBLE-DISPATCH idempotence guard
+           *  fired (the same task is already running on another live session here).
+           *
+           *  DUP-CLAIM-REBIND: when the guard fires, the id of the live session that already
+           *  holds the task is returned as `holderSessionId`. The coordinator needs it to
+           *  REBIND its turn-ledger attempt onto the real worker instead of cancelling the
+           *  attempt — the guard already resolved that instance, so surfacing it here keeps
+           *  the caller from having to parse it back out of an error string. */
+          attachMeshAssignmentToInstance(instanceId, assignment) {
+            const inst = this.instances.get(instanceId);
+            if (!inst || typeof inst.attachMeshAssignment !== "function") {
+              LOG.warn("MeshDispatch", `attachMeshAssignment skipped: instance ${instanceId} ${inst ? "has no attach method" : "not found"}`);
+              return { stamped: false, reason: inst ? "instance_has_no_attach_method" : "instance_not_found" };
+            }
+            if (assignment.taskId) {
+              const conflict = this.findLiveWorkingTaskHolder(assignment.meshId, assignment.taskId, instanceId);
+              if (conflict) {
+                LOG.warn("MeshDispatch", `attachMeshAssignment refused: task ${assignment.taskId} (mesh ${assignment.meshId}) is already being worked by live session ${conflict} \u2014 skipping duplicate stamp on ${instanceId}`);
+                return { stamped: false, reason: "task_already_stamped_on_live_instance", holderSessionId: conflict };
+              }
+            }
+            if (assignment.taskId) {
+              const busy2 = this.readBusyWithOtherTask(inst, assignment.taskId);
+              if (busy2) {
+                LOG.warn("MeshDispatch", `attachMeshAssignment refused on ${instanceId}: session is busy (${busy2.status}) with task ${busy2.currentTaskId} attempt ${busy2.currentAttemptId || "?"} \u2014 not stamping incoming task ${assignment.taskId} attempt ${assignment.attemptId || "?"}`);
+                return {
+                  stamped: false,
+                  reason: "session_busy_with_task",
+                  currentTaskId: busy2.currentTaskId,
+                  ...busy2.currentAttemptId ? { currentAttemptId: busy2.currentAttemptId } : {}
+                };
+              }
+            }
+            inst.attachMeshAssignment(assignment);
+            LOG.info("MeshDispatch", `stamped mesh assignment on ${instanceId}: mesh=${assignment.meshId} node=${assignment.nodeId || ""} task=${assignment.taskId || ""} attempt=${assignment.attemptId || "?"}${typeof assignment.attemptGeneration === "number" ? `/g${assignment.attemptGeneration}` : ""} coordinator=${assignment.coordinatorDaemonId || ""}`);
+            return { stamped: true };
+          }
+          /**
+           * DOUBLE-DISPATCH support: the id of another LIVE, actively-working instance that already
+           * holds (meshId, taskId), or null. "Live working" = stamped with this exact mesh+task AND
+           * currently mid-turn / booting toward it (generating / waiting on approval-or-choice /
+           * starting) — NOT idle, stopped, or errored. A stale/dead/idle holder is deliberately
+           * ignored so a legitimate re-dispatch (e.g. after a dispatch failure) is never blocked.
+           * The instance being stamped (excludeInstanceId) is skipped so re-stamping the same
+           * session stays idempotent. O(n) over instances — the count is small.
+           */
+          findLiveWorkingTaskHolder(meshId, taskId, excludeInstanceId) {
+            for (const [id4, inst] of this.instances) {
+              if (id4 === excludeInstanceId) continue;
+              let state2;
+              try {
+                state2 = inst.getState();
+              } catch {
+                continue;
+              }
+              const settings2 = state2.settings || {};
+              if (settings2.meshNodeFor !== meshId) continue;
+              if (settings2.meshActiveTaskId !== taskId) continue;
+              if (liveWorkingStatus(state2)) return id4;
+            }
+            return null;
+          }
+          /**
+           * SESSION-BUSY support: when `inst` is stamped with a task OTHER than `incomingTaskId`
+           * and is still working it (the same mid-turn / booting status set the DOUBLE-DISPATCH
+           * guard uses — one busy definition for both stamp guards), the task + attempt it is
+           * working. Null when the instance is free to take the new stamp: no current task, the
+           * same task, or not working (idle / stopped / error — a stale stamp left by a missed
+           * detach must not wedge the session forever).
+           */
+          readBusyWithOtherTask(inst, incomingTaskId) {
+            let state2;
+            try {
+              state2 = inst.getState();
+            } catch {
+              return null;
+            }
+            const settings2 = state2.settings || {};
+            const currentTaskId = typeof settings2.meshActiveTaskId === "string" ? settings2.meshActiveTaskId.trim() : "";
+            if (!currentTaskId || currentTaskId === incomingTaskId.trim()) return null;
+            const status = liveWorkingStatus(state2);
+            if (!status) return null;
+            const currentAttemptId = typeof settings2.meshActiveAttemptId === "string" && settings2.meshActiveAttemptId.trim() ? settings2.meshActiveAttemptId.trim() : void 0;
+            return { currentTaskId, ...currentAttemptId ? { currentAttemptId } : {}, status };
+          }
+          /** Clear a mesh assignment after the dispatched task reaches a terminal
+           *  state (generating_completed / stopped / failed). */
+          detachMeshAssignmentFromInstance(instanceId) {
+            const inst = this.instances.get(instanceId);
+            if (!inst || typeof inst.detachMeshAssignment !== "function") return false;
+            inst.detachMeshAssignment();
+            return true;
+          }
+          refreshProviderDefinitions(resolveProvider) {
+            let refreshed = 0;
+            for (const instance of this.instances.values()) {
+              if (typeof instance.refreshProviderDefinition !== "function") continue;
+              const provider = resolveProvider(instance.type);
+              if (!provider || typeof provider !== "object") continue;
+              instance.refreshProviderDefinition(provider);
+              refreshed += 1;
+            }
+            return refreshed;
+          }
+          // ─── cleanup ──────────────────────────────────────
+          /**
+          * All terminate
+          */
+          disposeAll() {
+            this.stopTicking();
+            for (const instance of this.instances.values()) {
+              try {
+                instance.dispose();
+              } catch {
+              }
+            }
+            this.instances.clear();
+          }
+        };
+      }
+    });
+    function journal(create = false) {
+      const db3 = MeshRuntimeStore.getInstance().db;
+      if (create) db3.exec("CREATE TABLE IF NOT EXISTS mesh_holder_attaches (operation_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, identity_json TEXT NOT NULL, snapshot_json TEXT NOT NULL, phase TEXT NOT NULL, prepared_json TEXT NOT NULL, runtime_json TEXT NOT NULL, boot_nonce TEXT NOT NULL)");
+      return db3;
+    }
+    function hasJournal() {
+      return !!journal().prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mesh_holder_attaches'").get();
+    }
+    function runtime(instance) {
+      const m = instance.getAdapter()?.getRuntimeMetadata?.();
+      if (m?.runtimeId !== instance.instanceId || typeof m.runtimeKey !== "string" || !m.runtimeKey || !Number.isSafeInteger(m.osPid) || Number(m.osPid) <= 0 || !Number.isSafeInteger(m.startedAt) || Number(m.startedAt) <= 0) return "";
+      return JSON.stringify([m.runtimeId, m.runtimeKey, m.osPid, m.startedAt]);
+    }
+    function meta(snapshot) {
+      return nativeMeshAssignmentMeta(snapshot.settings);
+    }
+    function isHolderAttachPending(sessionId) {
+      return hasJournal() && !!journal().prepare("SELECT 1 FROM mesh_holder_attaches WHERE session_id=? AND phase IN ('preparing','prepared','rollback_pending','checkpoint_pending')").get(sessionId);
+    }
+    function recoverHolderAttachRollback(instance) {
+      if (!hasJournal() || !instance?.captureMeshAssignment || !instance.restoreMeshAssignment) return;
+      const rows = journal().prepare("SELECT * FROM mesh_holder_attaches WHERE session_id=? AND phase='rollback_pending'").all(instance.instanceId);
+      for (const row2 of rows) {
+        if (!runtime(instance) || runtime(instance) !== row2.runtime_json) continue;
+        const current5 = instance.getState().settings, before = JSON.parse(row2.snapshot_json);
+        const prepared = JSON.parse(row2.prepared_json);
+        if (current5?.assistant || current5?.meshCoordinatorFor || current5?.meshNodeFor !== before.settings.meshNodeFor || current5?.meshNodeId !== before.settings.meshNodeId || typeof current5?.meshCoordinatorDaemonId !== "string" || !daemonIdsEquivalent5(current5.meshCoordinatorDaemonId, before.settings.meshCoordinatorDaemonId) || (current5?.meshActiveDispatchNonce ?? 0) > Math.max(before.settings.meshActiveDispatchNonce ?? 0, prepared.settings.meshActiveDispatchNonce ?? 0) || current5?.meshActiveTaskId && current5.meshActiveTaskId !== before.settings.meshActiveTaskId || current5?.meshActiveAttemptId && current5.meshActiveAttemptId !== before.settings.meshActiveAttemptId || ![before.settings.meshActiveAttemptGeneration ?? 0, prepared.settings.meshActiveAttemptGeneration ?? 0].includes(current5?.meshActiveAttemptGeneration ?? 0)) continue;
+        if (JSON.stringify(instance.captureMeshAssignment()) !== row2.snapshot_json) instance.restoreMeshAssignment(before);
+      }
+    }
+    async function reconcileMeshHolder(host, args) {
+      const mc = args.meshContext, op = args.holderReconcile;
+      const refuse11 = (reason) => ({ success: false, code: "mesh_holder_attach_refused", reason });
+      if (!mc?.meshId || !mc.taskId || !mc.nodeId || !mc.attemptId || !Number.isSafeInteger(mc.attemptGeneration) || mc.attemptGeneration < 0 || !Number.isSafeInteger(mc.dispatchNonce) || mc.dispatchNonce < 0 || !mc.coordinatorDaemonId || !args.targetSessionId || !op?.operationId || op.operationId.length > 512 || !["prepare", "commit", "rollback"].includes(op.phase)) return refuse11("identity_required");
+      const instance = host.deps.getInstanceManager()?.getInstance(args.targetSessionId);
+      if (!instance?.captureMeshAssignment || !instance.restoreMeshAssignment) return refuse11("holder_unavailable");
+      if (!runtime(instance) || !instance.getAdapter()?.verifyRuntimeMeta) return refuse11("native_attach_ack_unavailable");
+      const launch = host.deps.getSessionRegistry?.()?.get(args.targetSessionId)?.launch;
+      if (launch?.launchedBy === "assistant" || launch?.roleLaunch || isWriterStopPending(args.targetSessionId)) return refuse11("protected_or_stopping_holder");
+      const db3 = journal(true), identity5 = JSON.stringify([args.targetSessionId, args.agentType, mc]);
+      const row2 = db3.prepare("SELECT * FROM mesh_holder_attaches WHERE operation_id=?").get(op.operationId);
+      if (row2 && row2.identity_json !== identity5) return refuse11("operation_identity_changed");
+      recoverHolderAttachRollback(instance);
+      const state2 = instance.getState(), s2 = state2.settings;
+      if (instance.getAdapter()?.cliType !== args.agentType || op.phase === "prepare" && !liveWorkingStatus(state2)) return refuse11("holder_not_currently_working");
+      if (s2?.assistant || s2?.meshCoordinatorFor || s2?.meshNodeFor !== mc.meshId || !pinnedMeshNodeIdMatches(s2?.meshNodeId, mc.nodeId) || s2?.meshActiveTaskId !== mc.taskId && !(row2 && row2.boot_nonce !== BOOT && !s2?.meshActiveTaskId) || s2?.meshActiveAttemptId !== mc.attemptId || typeof s2?.meshCoordinatorDaemonId !== "string" || !daemonIdsEquivalent5(s2.meshCoordinatorDaemonId, mc.coordinatorDaemonId) || (s2.meshActiveAttemptGeneration ?? 0) > mc.attemptGeneration || (s2.meshActiveDispatchNonce ?? 0) > mc.dispatchNonce) return refuse11("foreign_or_stale_holder");
+      const current5 = () => {
+        const v = instance.getState().settings;
+        return v?.meshActiveTaskId === mc.taskId && v?.meshActiveAttemptId === mc.attemptId && (v?.meshActiveAttemptGeneration ?? 0) === mc.attemptGeneration && v?.meshActiveDispatchNonce === mc.dispatchNonce;
+      };
+      const verify3 = async (snapshot) => {
+        try {
+          return await instance.getAdapter()?.verifyRuntimeMeta?.(meta(snapshot)) === true;
+        } catch {
+          return false;
+        }
+      };
+      const proof = () => ({ success: true, attached: true, operationId: op.operationId, sessionId: args.targetSessionId, ...mc });
+      if (op.phase === "prepare") {
+        if (row2) {
+          if (!["preparing", "prepared"].includes(row2.phase) || runtime(instance) !== row2.runtime_json) return refuse11("prepare_no_longer_current");
+          if (row2.boot_nonce !== BOOT && !current5() && await verify3(JSON.parse(row2.prepared_json))) {
+            instance.attachMeshAssignment({ ...mc, meshId: mc.meshId });
+            db3.prepare("UPDATE mesh_holder_attaches SET prepared_json=?,boot_nonce=? WHERE operation_id=?").run(JSON.stringify(instance.captureMeshAssignment()), BOOT, op.operationId);
+          }
+          const snapshot = instance.captureMeshAssignment();
+          const owns = row2.boot_nonce !== BOOT || JSON.stringify(snapshot) === row2.prepared_json;
+          return current5() && owns && await verify3(snapshot) ? proof() : refuse11("native_attach_unconfirmed");
+        }
+        const before = instance.captureMeshAssignment();
+        let prepared;
+        try {
+          db3.transaction(() => {
+            const stamped = host.deps.getInstanceManager().attachMeshAssignmentToInstance(args.targetSessionId, { ...mc, meshId: mc.meshId });
+            if (!stamped.stamped || !current5()) throw new Error("holder_attach_failed");
+            prepared = instance.captureMeshAssignment();
+            db3.prepare("INSERT INTO mesh_holder_attaches VALUES (?,?,?,?,?,?,?,?)").run(op.operationId, args.targetSessionId, identity5, JSON.stringify(before), "preparing", JSON.stringify(prepared), runtime(instance), BOOT);
+          }).immediate();
+          if (!await verify3(prepared) || !current5() || JSON.stringify(instance.captureMeshAssignment()) !== JSON.stringify(prepared)) throw new Error("native_attach_unconfirmed");
+          db3.prepare("UPDATE mesh_holder_attaches SET phase='prepared' WHERE operation_id=?").run(op.operationId);
+          return proof();
+        } catch {
+          if (!prepared || JSON.stringify(instance.captureMeshAssignment()) === JSON.stringify(prepared)) {
+            instance.restoreMeshAssignment(before);
+            if (prepared) db3.prepare("UPDATE mesh_holder_attaches SET phase=? WHERE operation_id=?").run(await verify3(before) ? "rolled_back" : "rollback_pending", op.operationId);
+          }
+          return refuse11("holder_attach_failed_checkpoint_pending");
+        }
+      }
+      if (!row2 || !["prepared", "preparing", "committed"].includes(row2.phase) || !current5() || runtime(instance) !== row2.runtime_json || row2.boot_nonce === BOOT && JSON.stringify(instance.captureMeshAssignment()) !== row2.prepared_json) return refuse11("late_claim_changed");
+      if (op.phase === "rollback") {
+        if (row2.phase === "committed") return refuse11("already_committed");
+        const before = JSON.parse(row2.snapshot_json);
+        instance.restoreMeshAssignment(before);
+        const confirmed = await verify3(before);
+        db3.prepare("UPDATE mesh_holder_attaches SET phase=? WHERE operation_id=?").run(confirmed ? "rolled_back" : "rollback_pending", op.operationId);
+        return { success: confirmed, rolledBack: confirmed };
+      }
+      if (!await verify3(instance.captureMeshAssignment())) return refuse11("native_attach_unconfirmed");
+      db3.prepare("UPDATE mesh_holder_attaches SET phase='committed' WHERE operation_id=?").run(op.operationId);
+      return { success: true, committed: true };
+    }
+    var import_node_crypto38;
+    var BOOT;
+    var init_mesh_holder_attach = __esm2({
+      "src/commands/mesh-holder-attach.ts"() {
+        "use strict";
+        init_mesh_pinned_node_identity();
+        import_node_crypto38 = require("crypto");
+        init_dist();
+        init_mesh_runtime_store();
+        init_cli_provider_mesh_assignment();
+        init_provider_instance_manager();
+        init_mesh_writer_stop_journal();
+        BOOT = (0, import_node_crypto38.randomUUID)();
+      }
+    });
+    var worker_report_validation_exports = {};
+    __export2(worker_report_validation_exports, {
+      WORKER_ARTIFACT_IDS_MAX: () => WORKER_ARTIFACT_IDS_MAX,
+      WORKER_BLOCKERS_MAX: () => WORKER_BLOCKERS_MAX,
+      WORKER_FOLLOW_UPS_MAX: () => WORKER_FOLLOW_UPS_MAX,
+      WORKER_GUIDANCE_MAX_CHARS: () => WORKER_GUIDANCE_MAX_CHARS,
+      WORKER_INTENT_MAX_CHARS: () => WORKER_INTENT_MAX_CHARS,
+      WORKER_LIST_ITEM_MAX_CHARS: () => WORKER_LIST_ITEM_MAX_CHARS,
+      WORKER_SUMMARY_MAX_CHARS: () => WORKER_SUMMARY_MAX_CHARS,
+      WORKER_TOUCHED_FILES_MAX: () => WORKER_TOUCHED_FILES_MAX,
+      validateWorkerCompletionReport: () => validateWorkerCompletionReport
+    });
+    function validateWorkerCompletionReport(raw) {
+      const errors = [];
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        return { errors: [{ field: "", message: "report must be an object" }] };
+      }
+      const input = raw;
+      const KNOWN = /* @__PURE__ */ new Set(["outcome", "summary", "handoffNotes", "touchedFiles", "branchState", "blockers", "decisionsNeeded", "commits", "artifactIds", "review", "findingResponses", "testsRun"]);
+      for (const key7 of Object.keys(input)) {
+        if (!KNOWN.has(key7)) {
+          errors.push({ field: key7, message: `unknown field '${key7}' (expected one of: ${[...KNOWN].join(", ")})` });
+        }
+      }
+      const outcome = input.outcome;
+      if (!isWorkerReportOutcome2(outcome)) {
+        errors.push({ field: "outcome", message: `outcome must be one of ${WORKER_REPORT_OUTCOMES2.map((o) => `'${o}'`).join(" | ")}` });
+      }
+      const summary = typeof input.summary === "string" ? input.summary.trim() : "";
+      if (!summary) {
+        errors.push({ field: "summary", message: "summary is required and must be a non-empty string" });
+      } else if (summary.length > WORKER_SUMMARY_MAX_CHARS) {
+        errors.push({
+          field: "summary",
+          message: `summary is ${summary.length} chars, over the ${WORKER_SUMMARY_MAX_CHARS} limit \u2014 shorten it rather than relying on truncation`
+        });
+      }
+      const touchedFiles = validateStringList2(input.touchedFiles, "touchedFiles", WORKER_TOUCHED_FILES_MAX, errors);
+      const blockers = validateStringList2(input.blockers, "blockers", WORKER_BLOCKERS_MAX, errors);
+      if (input.branchState !== void 0 && !WORKER_BRANCH_STATES2.includes(input.branchState)) {
+        errors.push({
+          field: "branchState",
+          message: `branchState must be one of: ${WORKER_BRANCH_STATES2.join(", ")}`
+        });
+      }
+      let decisionsNeeded;
+      if (input.decisionsNeeded !== void 0) {
+        const raw2 = input.decisionsNeeded;
+        if (!Array.isArray(raw2)) {
+          errors.push({ field: "decisionsNeeded", message: "decisionsNeeded must be an array of {question, context?, options?, recommended?, urgency?} objects" });
+        } else if (raw2.length > WORKER_DECISIONS_NEEDED_MAX) {
+          errors.push({ field: "decisionsNeeded", message: `decisionsNeeded has ${raw2.length} entries, over the ${WORKER_DECISIONS_NEEDED_MAX} limit \u2014 report the most important ones` });
+        } else {
+          const ok = [];
+          for (const entry of raw2) {
+            const n = entry && typeof entry === "object" && !Array.isArray(entry) ? normalizeMissionItemInput({ ...entry, kind: "decision" }) : null;
+            if (!n || "error" in n) {
+              errors.push({ field: "decisionsNeeded", message: "each decision needs a non-empty `question`" });
+              ok.length = 0;
+              break;
+            }
+            ok.push(entry);
+          }
+          if (ok.length) decisionsNeeded = ok;
+        }
+      }
+      let commits;
+      if (input.commits !== void 0) {
+        const normalized = normalizeReportCommits(input.commits);
+        if (!normalized) errors.push({ field: "commits", message: "commits must be an array of git SHA strings (7\u201364 hex chars)" });
+        else if (normalized.length > WORKER_COMMITS_MAX) errors.push({ field: "commits", message: `commits has ${normalized.length} entries, over the ${WORKER_COMMITS_MAX} limit` });
+        else if (normalized.length) commits = normalized;
+      }
+      let artifactIds;
+      if (input.artifactIds !== void 0) {
+        const raw2 = input.artifactIds;
+        const ids = Array.isArray(raw2) ? raw2.map((v) => typeof v === "string" ? v.trim() : "") : null;
+        if (!ids || ids.some((id4) => !id4 || id4.length > 200)) errors.push({ field: "artifactIds", message: "artifactIds must be an array of artifact id strings (art_*, \u2264200 chars each)" });
+        else if (ids.length > WORKER_ARTIFACT_IDS_MAX) errors.push({ field: "artifactIds", message: `artifactIds has ${ids.length} entries, over the ${WORKER_ARTIFACT_IDS_MAX} limit` });
+        else if (ids.length) artifactIds = [...new Set(ids)];
+      }
+      let review;
+      if (input.review !== void 0) {
+        const r = validateReviewReport(input.review, { round: 1 });
+        if (r.errors.length) for (const e of r.errors) errors.push(e);
+        else review = r.report;
+      }
+      let findingResponses;
+      if (input.findingResponses !== void 0) {
+        const r = validateFindingResponses(input.findingResponses);
+        if (r.errors.length) for (const e of r.errors) errors.push(e);
+        else findingResponses = r.responses;
+      }
+      let handoffNotes;
+      if (input.handoffNotes !== void 0) {
+        const notes = input.handoffNotes;
+        if (!notes || typeof notes !== "object" || Array.isArray(notes)) {
+          errors.push({ field: "handoffNotes", message: "handoffNotes must be an object" });
+        } else {
+          const n = notes;
+          const KNOWN_NOTES = /* @__PURE__ */ new Set(["intent", "conflictGuidance", "touchedFiles", "followUps"]);
+          for (const key7 of Object.keys(n)) {
+            if (!KNOWN_NOTES.has(key7)) {
+              errors.push({ field: `handoffNotes.${key7}`, message: `unknown field '${key7}'` });
+            }
+          }
+          const intent = typeof n.intent === "string" ? n.intent.trim() : "";
+          if (!intent) {
+            errors.push({ field: "handoffNotes.intent", message: "intent is required \u2014 it is the part a diff cannot convey" });
+          } else if (intent.length > WORKER_INTENT_MAX_CHARS) {
+            errors.push({ field: "handoffNotes.intent", message: `intent is over the ${WORKER_INTENT_MAX_CHARS} char limit` });
+          }
+          let guidance;
+          if (n.conflictGuidance !== void 0) {
+            if (typeof n.conflictGuidance !== "string") {
+              errors.push({ field: "handoffNotes.conflictGuidance", message: "conflictGuidance must be a string" });
+            } else if (n.conflictGuidance.trim().length > WORKER_GUIDANCE_MAX_CHARS) {
+              errors.push({ field: "handoffNotes.conflictGuidance", message: `conflictGuidance is over the ${WORKER_GUIDANCE_MAX_CHARS} char limit` });
+            } else {
+              guidance = n.conflictGuidance.trim() || void 0;
+            }
+          }
+          const noteFiles = validateStringList2(n.touchedFiles, "handoffNotes.touchedFiles", WORKER_TOUCHED_FILES_MAX, errors);
+          if (n.touchedFiles === void 0) {
+            errors.push({
+              field: "handoffNotes.touchedFiles",
+              message: "touchedFiles is required \u2014 it is what matches this note to future work (use [] on a read-only task)"
+            });
+          }
+          const followUps = validateStringList2(n.followUps, "handoffNotes.followUps", WORKER_FOLLOW_UPS_MAX, errors);
+          if (intent && noteFiles) {
+            handoffNotes = {
+              intent,
+              ...guidance ? { conflictGuidance: guidance } : {},
+              touchedFiles: noteFiles,
+              ...followUps?.length ? { followUps } : {}
+            };
+          }
+        }
+      }
+      const testsRun = validateTestsRun2(input.testsRun, errors);
+      if (errors.length) return { errors };
+      return {
+        report: {
+          outcome,
+          summary,
+          ...handoffNotes ? { handoffNotes } : {},
+          // ★Preserve an EXPLICIT empty array rather than collapsing it to
+          // "absent" on `.length`. `touchedFiles: []` is the worker's statement
+          // "I changed nothing", and checkReportAgainstTaskMode (below) must be
+          // able to tell that apart from the key never being sent at all — that
+          // distinction is what requirement (2) of the invalid_for_task_mode fix
+          // depends on. `undefined` in, `undefined` out; `[]` or non-empty in,
+          // that array out.
+          ...touchedFiles !== void 0 ? { touchedFiles } : {},
+          ...input.branchState ? { branchState: input.branchState } : {},
+          ...blockers?.length ? { blockers } : {},
+          ...decisionsNeeded ? { decisionsNeeded } : {},
+          ...commits ? { commits } : {},
+          ...artifactIds ? { artifactIds } : {},
+          ...review ? { review } : {},
+          ...findingResponses?.length ? { findingResponses } : {},
+          ...testsRun?.length ? { testsRun } : {}
+        },
+        errors: []
+      };
+    }
+    function validateStringList2(value, field3, max, errors) {
+      if (value === void 0) return void 0;
+      if (!Array.isArray(value)) {
+        errors.push({ field: field3, message: `${field3} must be an array of strings` });
+        return void 0;
+      }
+      if (value.length > max) {
+        errors.push({ field: field3, message: `${field3} has ${value.length} entries, over the ${max} limit` });
+        return void 0;
+      }
+      const out = [];
+      for (const item of value) {
+        if (typeof item !== "string") {
+          errors.push({ field: field3, message: `${field3} must contain only strings` });
+          return void 0;
+        }
+        const trimmed3 = item.trim();
+        if (!trimmed3) continue;
+        if (trimmed3.length > WORKER_LIST_ITEM_MAX_CHARS) {
+          errors.push({ field: field3, message: `${field3} contains an entry over the ${WORKER_LIST_ITEM_MAX_CHARS} char limit` });
+          return void 0;
+        }
+        out.push(trimmed3);
+      }
+      return out;
+    }
+    function validateTestsRun2(value, errors) {
+      if (value === void 0) return void 0;
+      if (!Array.isArray(value)) {
+        errors.push({ field: "testsRun", message: "testsRun must be an array" });
+        return void 0;
+      }
+      if (value.length > LIGHT_TESTS_RUN_MAX) {
+        errors.push({ field: "testsRun", message: `testsRun has ${value.length} entries, over the ${LIGHT_TESTS_RUN_MAX} limit` });
+        return void 0;
+      }
+      const out = [];
+      value.forEach((raw, i) => {
+        const where = `testsRun[${i}]`;
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+          errors.push({ field: where, message: "must be an object {command, exit}" });
+          return;
+        }
+        const t = raw;
+        for (const key7 of Object.keys(t)) if (!["command", "exit", "passed", "failed", "note"].includes(key7)) errors.push({ field: `${where}.${key7}`, message: `unknown field '${key7}'` });
+        const command = typeof t.command === "string" ? t.command.trim() : "";
+        if (!command || command.length > 500) errors.push({ field: `${where}.command`, message: "command must be a non-empty string of at most 500 chars" });
+        if (typeof t.exit !== "number" || !Number.isInteger(t.exit)) errors.push({ field: `${where}.exit`, message: "exit must be an integer" });
+        for (const k of ["passed", "failed"]) {
+          if (t[k] !== void 0 && (typeof t[k] !== "number" || !Number.isInteger(t[k]) || t[k] < 0)) errors.push({ field: `${where}.${k}`, message: `${k} must be a non-negative integer` });
+        }
+        if (t.note !== void 0 && (typeof t.note !== "string" || t.note.length > 500)) errors.push({ field: `${where}.note`, message: "note must be a string of at most 500 chars" });
+        if (command && typeof t.exit === "number") {
+          out.push({ command, exit: t.exit, ...typeof t.passed === "number" ? { passed: t.passed } : {}, ...typeof t.failed === "number" ? { failed: t.failed } : {}, ...typeof t.note === "string" && t.note ? { note: t.note } : {} });
+        }
+      });
+      return out;
+    }
+    var WORKER_SUMMARY_MAX_CHARS;
+    var WORKER_INTENT_MAX_CHARS;
+    var WORKER_GUIDANCE_MAX_CHARS;
+    var WORKER_TOUCHED_FILES_MAX;
+    var WORKER_ARTIFACT_IDS_MAX;
+    var WORKER_LIST_ITEM_MAX_CHARS;
+    var WORKER_BLOCKERS_MAX;
+    var WORKER_FOLLOW_UPS_MAX;
+    var init_worker_report_validation = __esm2({
+      "src/mesh/worker-report-validation.ts"() {
+        "use strict";
+        init_dist();
+        WORKER_SUMMARY_MAX_CHARS = WORKER_REPORT_SUMMARY_MAX_CHARS2;
+        WORKER_INTENT_MAX_CHARS = 4e3;
+        WORKER_GUIDANCE_MAX_CHARS = 4e3;
+        WORKER_TOUCHED_FILES_MAX = 200;
+        WORKER_ARTIFACT_IDS_MAX = 24;
+        WORKER_LIST_ITEM_MAX_CHARS = 500;
+        WORKER_BLOCKERS_MAX = 50;
+        WORKER_FOLLOW_UPS_MAX = 50;
+      }
+    });
+    function trimString22(value) {
+      return typeof value === "string" ? value.trim() : "";
+    }
+    function hasWorkerCredentialInput(args) {
+      const rawBind = args?.bind;
+      const rawToken = args?.token;
+      return typeof rawBind === "string" && rawBind.trim().length > 0 || typeof rawToken === "string" && rawToken.trim().length > 0 || rawBind !== void 0 && rawBind !== null || rawToken !== void 0 && rawToken !== null;
+    }
+    function verifyArtifactCommandIngress(args, mode) {
+      if (!args || typeof args !== "object" || Array.isArray(args)) {
+        return {
+          ok: false,
+          result: {
+            success: false,
+            code: "COMMAND_SOURCE_REJECTED",
+            error: "Artifact command requires a valid object arguments reference"
+          }
+        };
+      }
+      const recordArgs = args;
+      const routerIngress = readRouterCommandIngress(recordArgs);
+      const mcp = readAuthenticatedMcpCommand(recordArgs, routerIngress?.command ?? "");
+      if (mcp.present && (!mcp.valid || routerIngress && routerIngress.source !== "ipc")) {
+        return {
+          ok: false,
+          result: { success: false, code: "COMMAND_SOURCE_REJECTED", error: "Artifact MCP command authority is invalid, changed, or revoked" }
+        };
+      }
+      const expectedOwnerSource = routerIngress?.source === "p2p" || routerIngress?.source === "standalone" ? routerIngress.source : void 0;
+      const ownerTrusted = isTrustedOwnerIngress(recordArgs, expectedOwnerSource);
+      if (mcp.valid && !hasWorkerCredentialInput(recordArgs) && (trimString22(recordArgs.taskId) || trimString22(recordArgs.attemptId) || trimString22(recordArgs.nodeId))) {
+        return {
+          ok: false,
+          result: { success: false, code: "artifact_session_mismatch", error: "Internal MCP credential does not establish worker task/attempt/node authority" }
+        };
+      }
+      if (hasRevokedTrustedOwnerIngress(recordArgs, expectedOwnerSource) || routerIngress?.hasRevokedOwnerProof) {
+        return {
+          ok: false,
+          result: {
+            success: false,
+            code: "COMMAND_SOURCE_REJECTED",
+            error: "Artifact command rejected: owner ingress proof is missing, invalid, or revoked"
+          }
+        };
+      }
+      if (!ownerTrusted && (routerIngress?.hasForgedProvenanceFields || "ownerVerified" in recordArgs || "_ownerVerified" in recordArgs || "source" in recordArgs || COMMAND_SOURCE_ARG in recordArgs)) {
+        return {
+          ok: false,
+          result: {
+            success: false,
+            code: "COMMAND_SOURCE_REJECTED",
+            error: "Artifact command rejected: forged provenance fields in command payload"
+          }
+        };
+      }
+      if (!routerIngress && !ownerTrusted && "_interactionId" in recordArgs) {
+        return {
+          ok: false,
+          result: {
+            success: false,
+            code: "COMMAND_SOURCE_REJECTED",
+            error: "Artifact command rejected: cloned router arguments missing live provenance"
+          }
+        };
+      }
+      if (routerIngress) {
+        if (routerIngress.source !== "p2p" && routerIngress.source !== "standalone" && routerIngress.source !== "ipc") {
+          return {
+            ok: false,
+            result: {
+              success: false,
+              code: "COMMAND_SOURCE_REJECTED",
+              error: `Artifact command is not accepted from source '${routerIngress.source}'`
+            }
+          };
+        }
+        if (routerIngress.inProcess === true) {
+          return {
+            ok: false,
+            result: {
+              success: false,
+              code: "COMMAND_SOURCE_REJECTED",
+              error: "Artifact command rejected: in-process dispatch is not an authorized ingress"
+            }
+          };
+        }
+        if ((routerIngress.source === "p2p" || routerIngress.source === "standalone") && !ownerTrusted) {
+          return {
+            ok: false,
+            result: {
+              success: false,
+              code: "COMMAND_SOURCE_REJECTED",
+              error: `Artifact command on '${routerIngress.source}' requires verified owner ingress`
+            }
+          };
+        }
+        if (routerIngress.source === "ipc" && routerIngress.ownerVerified === false) {
+          return {
+            ok: false,
+            result: {
+              success: false,
+              code: "COMMAND_SOURCE_REJECTED",
+              error: "Artifact command rejected: downgraded unverified owner ingress"
+            }
+          };
+        }
+        if (routerIngress.source === "ipc" && !ownerTrusted && !hasWorkerCredentialInput(recordArgs)) {
+          if (mode === "fetch" && !mcp.valid) {
+            return {
+              ok: false,
+              result: {
+                success: false,
+                code: "COMMAND_SOURCE_REJECTED",
+                error: "Artifact fetch/read over IPC requires verified owner, worker credential, or authenticated MCP scope"
+              }
+            };
+          }
+          if (mode === "list" && !mcp.valid) {
+            return {
+              ok: false,
+              result: {
+                success: false,
+                code: "COMMAND_SOURCE_REJECTED",
+                error: "Artifact list over IPC requires verified owner, worker credential, or authenticated MCP scope"
+              }
+            };
+          }
+        }
+      }
+      return { ok: true, recordArgs, ownerTrusted };
+    }
+    var init_artifact_command_ingress = __esm2({
+      "src/commands/med-family/artifact-command-ingress.ts"() {
+        "use strict";
+        init_command_args();
+        init_mcp_command_ingress();
       }
     });
     function maxBase64EncodedBytes(rawBytes) {
@@ -121413,710 +122141,2220 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         ORIGIN_FETCH_CHUNK_BYTES = 16 * 1024;
       }
     });
-    function sniffImageMime(b) {
-      if (b.length >= 8 && b.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return "image/png";
-      if (b.length >= 3 && b[0] === 255 && b[1] === 216 && b[2] === 255) return "image/jpeg";
-      if (b.length >= 6) {
-        const head = b.subarray(0, 6).toString("latin1");
-        if (head === "GIF87a" || head === "GIF89a") return "image/gif";
+    function assertNotSecretPath(candidatePathOrRel) {
+      if (typeof candidatePathOrRel !== "string" || !candidatePathOrRel) {
+        return;
       }
-      if (b.length >= 12 && b.subarray(0, 4).toString("latin1") === "RIFF" && b.subarray(8, 12).toString("latin1") === "WEBP") return "image/webp";
-      return null;
-    }
-    function decodeDriverImage(block3) {
-      const data = typeof block3.data === "string" ? block3.data : "";
-      if (!data) return refuse3("image_invalid", "Image block has no base64 data");
-      if (Math.floor(data.length * 3 / 4) > MAX_ARTIFACT_BYTES + 3) return refuse3("artifact_too_large", `Image exceeds ${MAX_ARTIFACT_BYTES} bytes`);
-      if (data.length % 4 !== 0 || !BASE64.test(data)) return refuse3("image_invalid", "Image data is not canonical base64");
-      const declared = typeof block3.mimeType === "string" ? block3.mimeType.split(";")[0].trim().toLowerCase() : "";
-      if (!IMAGE_EXT[declared]) return refuse3("unsupported_mime_or_kind", `Image mime "${declared || "(none)"}" is not an allowed artifact type`);
-      const bytes = Buffer.from(data, "base64");
-      if (bytes.length > MAX_ARTIFACT_BYTES) return refuse3("artifact_too_large", `Image exceeds ${MAX_ARTIFACT_BYTES} bytes`);
-      const sniffed = sniffImageMime(bytes);
-      if (sniffed !== declared) return refuse3("mime_mismatch", `Image bytes are ${sniffed ?? "not a supported image"}, declared ${declared}`);
-      return { bytes, mime: declared };
-    }
-    function prepareDir(workspaceRoot, invocationId) {
-      const root = (0, import_node_fs33.realpathSync)(workspaceRoot);
-      const parts = [".adhdev", "driver-results", invocationId];
-      let current5 = root;
-      for (const part of parts) {
-        current5 = (0, import_node_path29.join)(current5, part);
-        let stat2;
-        try {
-          stat2 = (0, import_node_fs33.lstatSync)(current5);
-        } catch {
-          stat2 = null;
-        }
-        if (!stat2) (0, import_node_fs33.mkdirSync)(current5, { mode: 448 });
-        else if (stat2.isSymbolicLink() || !stat2.isDirectory()) return refuse3("unsafe_path", "Driver results directory is not a plain directory");
-      }
-      if ((0, import_node_fs33.realpathSync)(current5) !== current5 || !current5.startsWith(root + import_node_path29.sep)) return refuse3("unsafe_path", "Driver results directory escapes the workspace");
-      ensureLocalGitExclude(root, (0, import_node_path29.join)(root, ...parts.slice(0, 2)), "driver results");
-      return { abs: current5, rel: parts.join("/") };
-    }
-    async function writeAndRegister(sink2, invocationId, file, bytes, spec) {
-      const dir = prepareDir(sink2.workspaceRoot, invocationId);
-      const abs = (0, import_node_path29.join)(dir.abs, file);
-      (0, import_node_fs33.writeFileSync)(abs, bytes, { flag: "wx", mode: 384 });
-      try {
-        const relPath = `${dir.rel}/${file}`;
-        return { ...await sink2.register({ relPath, ...spec }), relPath };
-      } catch (error) {
-        try {
-          (0, import_node_fs33.unlinkSync)(abs);
-        } catch {
-        }
-        throw error;
-      }
-    }
-    async function captureDriverArtifacts(input) {
-      const { result, identity: identity5, invocationId, title, port } = input;
-      const artifacts = [];
-      let artifactError;
-      const note2 = (error) => {
-        artifactError ??= error;
-      };
-      let sink2;
-      const getSink = async () => {
-        if (sink2 !== void 0) return sink2;
-        try {
-          sink2 = port ? await port.resolve(identity5) : null;
-        } catch (error) {
-          note2(errorOf(error));
-          sink2 = null;
-        }
-        if (!sink2) note2({ code: "artifact_unavailable", message: "No trusted workspace is available for this worker; result returned inline" });
-        return sink2;
-      };
-      let seq2 = 0;
-      const content = [];
-      for (const block3 of Array.isArray(result.content) ? result.content : []) {
-        const b = block3;
-        if (!b || b.type !== "image") {
-          content.push(block3);
-          continue;
-        }
-        const approxBytes = typeof b.data === "string" ? Math.floor(b.data.length * 3 / 4) : 0;
-        const mime = typeof b.mimeType === "string" ? b.mimeType.split(";")[0].trim().toLowerCase().slice(0, 40) : void 0;
-        const omitted = (error) => {
-          note2(error);
-          content.push({ type: "image", omitted: true, code: error.code, ...mime ? { mime } : {}, sizeBytes: approxBytes });
-        };
-        if (artifacts.length >= MAX_DRIVER_ARTIFACTS_PER_CALL) {
-          omitted({ code: "too_many_artifacts", message: `At most ${MAX_DRIVER_ARTIFACTS_PER_CALL} artifacts per call` });
-          continue;
-        }
-        try {
-          const decoded = decodeDriverImage(b);
-          const target2 = await getSink();
-          if (!target2) {
-            omitted(artifactError ?? { code: "artifact_unavailable", message: "artifact registration unavailable" });
-            continue;
+      const normalized = candidatePathOrRel.replace(/\\/g, "/");
+      const segments = normalized.split("/").filter(Boolean);
+      for (const seg of segments) {
+        for (const pattern of SECRET_BASENAME_PATTERNS) {
+          if (pattern.test(seg)) {
+            throw new ArtifactGuardError(
+              "secret_file_refused",
+              `Artifact path "${candidatePathOrRel}" matches secret filename pattern and is refused (secret_file_refused)`
+            );
           }
-          const registered = await writeAndRegister(
-            target2,
-            invocationId,
-            `image-${++seq2}.${IMAGE_EXT[decoded.mime]}`,
-            decoded.bytes,
-            { kind: "image", mime: decoded.mime, title }
-          );
-          artifacts.push({ type: "image", artifactId: registered.artifactId, digest: digestOf(registered.sha256), relPath: registered.relPath });
-          content.push({ type: "image", artifactId: registered.artifactId, relPath: registered.relPath, mime: decoded.mime, sizeBytes: registered.sizeBytes, sha256: registered.sha256 });
-        } catch (error) {
-          omitted(errorOf(error));
         }
       }
-      let output = { ...result, content };
-      const json2 = JSON.stringify(output);
-      if (json2.length <= DRIVER_INLINE_CAP) return { output, artifacts, ...artifactError ? { artifactError } : {} };
-      const textOnly = !result.structuredContent && content.every((c) => c?.type === "text" && typeof c.text === "string");
-      const full = textOnly ? content.map((c) => c.text).join("\n") : json2;
-      const bytes = Buffer.from(full, "utf8");
-      const stored = (extra) => ({ truncated: true, text: full.slice(0, DRIVER_PREVIEW_CHARS), ...extra });
-      const cutOff = (extra) => ({ truncated: true, text: json2.slice(0, DRIVER_INLINE_CAP), ...extra });
-      try {
-        if (artifacts.length >= MAX_DRIVER_ARTIFACTS_PER_CALL) refuse3("too_many_artifacts", `At most ${MAX_DRIVER_ARTIFACTS_PER_CALL} artifacts per call`);
-        if (bytes.length > MAX_ARTIFACT_BYTES) refuse3("artifact_too_large", `Result is ${bytes.length} bytes; the artifact limit is ${MAX_ARTIFACT_BYTES}`);
-        const target2 = await getSink();
-        if (!target2) throw new DriverArtifactRefusal("artifact_unavailable", "artifact registration unavailable");
-        const kind = textOnly ? "text" : "json";
-        const registered = await writeAndRegister(
-          target2,
-          invocationId,
-          textOnly ? "result.txt" : "result.json",
-          bytes,
-          { kind, mime: textOnly ? "text/plain" : "application/json", title }
+    }
+    function redactSecretLines(text10) {
+      let redactedLines = 0;
+      const out = text10.split("\n").map((line) => {
+        if (!containsEncodedOrRawSecret(line, SECRET_CONTENT_PATTERNS)) return line;
+        redactedLines++;
+        const lead = /^[+\- ]/.test(line) ? line[0] : "";
+        return `${lead}[line redacted: matched a secret or token pattern]`;
+      });
+      return { text: out.join("\n"), redactedLines };
+    }
+    function assertNotSecretContent(buffer, _kind) {
+      if (buffer.byteLength === 0) {
+        return;
+      }
+      const text10 = buffer.toString("utf8");
+      if (containsEncodedOrRawSecret(text10, SECRET_CONTENT_PATTERNS)) {
+        throw new ArtifactGuardError(
+          "secret_file_refused",
+          "Artifact content matches a secret or token pattern and is refused (secret_file_refused)"
         );
-        artifacts.push({ type: kind, artifactId: registered.artifactId, digest: digestOf(registered.sha256), relPath: registered.relPath });
-        output = stored({ artifactId: registered.artifactId, relPath: registered.relPath, sizeBytes: registered.sizeBytes, sha256: registered.sha256 });
-      } catch (error) {
-        const e = errorOf(error);
-        note2(e);
-        output = cutOff({ note: `Result exceeded ${DRIVER_INLINE_CAP} characters and could not be stored as an artifact (${e.code}); the rest is cut off.` });
       }
-      return { output, artifacts, ...artifactError ? { artifactError } : {} };
     }
-    var import_node_fs33;
-    var import_node_path29;
-    var DRIVER_INLINE_CAP;
-    var DRIVER_PREVIEW_CHARS;
-    var MAX_DRIVER_ARTIFACTS_PER_CALL;
-    var IMAGE_EXT;
-    var BASE64;
-    var DriverArtifactRefusal;
-    var refuse3;
-    var digestOf;
-    var errorOf;
-    var init_driver_artifacts = __esm2({
-      "src/drivers/driver-artifacts.ts"() {
+    function isUncPath(raw) {
+      return raw.startsWith("\\\\") || raw.startsWith("//");
+    }
+    function isStrictSubpath(realRoot, targetPath) {
+      const rel = path92.relative(realRoot, targetPath);
+      if (!rel || rel === ".") {
+        return false;
+      }
+      if (rel === ".." || rel.startsWith(`..${path92.sep}`) || rel.startsWith("../") || path92.isAbsolute(rel)) {
+        return false;
+      }
+      return true;
+    }
+    function normalizeOptions2(declaredKindOrOptions) {
+      if (!declaredKindOrOptions) {
+        return {};
+      }
+      if (typeof declaredKindOrOptions === "string") {
+        return { declaredKind: declaredKindOrOptions };
+      }
+      return declaredKindOrOptions;
+    }
+    function sanitizeArtifactTitle(rawTitle, fallbackFilename) {
+      const cleanFallback = fallbackFilename.replace(/[\u0000-\u001F\u007F]+/g, "").trim() || "artifact";
+      if (typeof rawTitle !== "string") {
+        return cleanFallback;
+      }
+      const cleaned = rawTitle.replace(/[\r\n\t]+/g, " ").replace(/[\u0000-\u001F\u007F]+/g, "").trim();
+      if (!cleaned) {
+        return cleanFallback;
+      }
+      const codePoints2 = Array.from(cleaned);
+      if (codePoints2.length <= MAX_TITLE_CHARS) {
+        return cleaned;
+      }
+      return codePoints2.slice(0, MAX_TITLE_CHARS).join("");
+    }
+    function extractUtf8Preview(buffer, maxChars = MAX_PREVIEW_TEXT_CHARS) {
+      if (buffer.byteLength === 0 || maxChars <= 0) {
+        return "";
+      }
+      const maxSliceBytes = Math.min(buffer.byteLength, maxChars * 4 + 4);
+      const slice = buffer.subarray(0, maxSliceBytes);
+      const decoded = slice.toString("utf8");
+      const codePoints2 = Array.from(decoded).slice(0, maxChars);
+      while (codePoints2.length > 0 && codePoints2.join("").length > maxChars) {
+        codePoints2.pop();
+      }
+      return codePoints2.join("");
+    }
+    function validateExtensionKindAndMime(candidatePath, realTargetPath, options) {
+      const candidateExt = path92.extname(candidatePath).toLowerCase();
+      const realExt = path92.extname(realTargetPath).toLowerCase();
+      const candidateSpec = ARTIFACT_EXTENSION_MAP[candidateExt];
+      const realSpec = ARTIFACT_EXTENSION_MAP[realExt];
+      if (!candidateSpec || !realSpec) {
+        throw new ArtifactGuardError(
+          "unsupported_mime_or_kind",
+          `Unsupported artifact file extension "${candidateExt || realExt || "(none)"}" (unsupported_mime_or_kind)`
+        );
+      }
+      if (candidateSpec.kind !== realSpec.kind || candidateSpec.mime !== realSpec.mime) {
+        throw new ArtifactGuardError(
+          "unsupported_mime_or_kind",
+          `Symlink extension "${candidateExt}" does not match target extension "${realExt}" (unsupported_mime_or_kind)`
+        );
+      }
+      const { kind, mime: canonicalMime } = realSpec;
+      if (options.declaredKind !== void 0) {
+        if (!ARTIFACT_KINDS.includes(options.declaredKind) || options.declaredKind !== kind) {
+          throw new ArtifactGuardError(
+            "unsupported_mime_or_kind",
+            `Declared kind "${options.declaredKind}" does not match file kind "${kind}" (unsupported_mime_or_kind)`
+          );
+        }
+      }
+      let resolvedMime = canonicalMime;
+      if (options.declaredMime !== void 0) {
+        const normalizedMime = options.declaredMime.split(";")[0]?.trim().toLowerCase() ?? "";
+        const allowedMimes = MIME_BY_KIND[kind];
+        if (!normalizedMime || normalizedMime === "image/svg+xml" || normalizedMime === "text/html" || normalizedMime === "application/xhtml+xml" || !allowedMimes.includes(normalizedMime) || kind === "image" && normalizedMime !== canonicalMime) {
+          throw new ArtifactGuardError(
+            "unsupported_mime_or_kind",
+            `Declared MIME "${options.declaredMime}" is not allowed for kind "${kind}" (unsupported_mime_or_kind)`
+          );
+        }
+        resolvedMime = normalizedMime;
+      }
+      return { kind, mime: resolvedMime };
+    }
+    function resolveCanonicalWorkspaceRoot(workspaceRoot) {
+      if (typeof workspaceRoot !== "string" || workspaceRoot.trim().length === 0 || workspaceRoot.includes("\0")) {
+        throw new ArtifactGuardError(
+          "invalid_workspace_root",
+          "Workspace root must be a non-empty valid directory path (invalid_workspace_root)"
+        );
+      }
+      if (isUncPath(workspaceRoot)) {
+        throw new ArtifactGuardError(
+          "invalid_workspace_root",
+          "UNC workspace roots are not allowed (invalid_workspace_root)"
+        );
+      }
+      const resolvedWorkspaceInput = path92.resolve(workspaceRoot);
+      let realWorkspaceRoot;
+      try {
+        realWorkspaceRoot = fs83.realpathSync(resolvedWorkspaceInput);
+        const st = fs83.statSync(realWorkspaceRoot);
+        if (!st.isDirectory()) {
+          throw new ArtifactGuardError(
+            "invalid_workspace_root",
+            "Workspace root is not a directory (invalid_workspace_root)"
+          );
+        }
+      } catch (err2) {
+        if (err2 instanceof ArtifactGuardError) {
+          throw err2;
+        }
+        throw new ArtifactGuardError(
+          "invalid_workspace_root",
+          `Workspace root cannot be resolved: ${err2.message} (invalid_workspace_root)`
+        );
+      }
+      return { realWorkspaceRoot, resolvedWorkspaceInput };
+    }
+    function resolveCandidateWithinWorkspace(realWorkspaceRoot, resolvedWorkspaceInput, rawPath) {
+      if (typeof rawPath !== "string" || rawPath.trim().length === 0 || rawPath.includes("\0")) {
+        throw new ArtifactGuardError(
+          "path_outside_workspace",
+          "Artifact path must be a non-empty string without null bytes (path_outside_workspace)"
+        );
+      }
+      if (isUncPath(rawPath)) {
+        throw new ArtifactGuardError(
+          "path_outside_workspace",
+          "UNC artifact paths are not allowed (path_outside_workspace)"
+        );
+      }
+      if (process.platform !== "win32" && /^[a-zA-Z]:[\\/]/.test(rawPath)) {
+        throw new ArtifactGuardError(
+          "path_outside_workspace",
+          "Windows drive-letter paths are not allowed on POSIX (path_outside_workspace)"
+        );
+      }
+      let candidatePath;
+      if (path92.isAbsolute(rawPath)) {
+        const normalizedAbs = path92.resolve(rawPath.replace(/[\\/]+/g, path92.sep));
+        if (normalizedAbs === realWorkspaceRoot || normalizedAbs === resolvedWorkspaceInput) {
+          throw new ArtifactGuardError(
+            "not_a_regular_file",
+            "Target path is the workspace root directory (not_a_regular_file)"
+          );
+        }
+        if (isStrictSubpath(realWorkspaceRoot, normalizedAbs)) {
+          candidatePath = normalizedAbs;
+        } else if (isStrictSubpath(resolvedWorkspaceInput, normalizedAbs)) {
+          const relFromInput = path92.relative(resolvedWorkspaceInput, normalizedAbs);
+          candidatePath = path92.resolve(realWorkspaceRoot, relFromInput);
+        } else {
+          throw new ArtifactGuardError(
+            "path_outside_workspace",
+            `Artifact path "${rawPath}" is outside workspace root (path_outside_workspace)`
+          );
+        }
+      } else {
+        const normalizedRelInput = rawPath.replace(/[\\/]+/g, path92.sep);
+        candidatePath = path92.resolve(realWorkspaceRoot, normalizedRelInput);
+        if (candidatePath === realWorkspaceRoot) {
+          throw new ArtifactGuardError(
+            "not_a_regular_file",
+            "Target path resolves to workspace root directory (not_a_regular_file)"
+          );
+        }
+        if (!isStrictSubpath(realWorkspaceRoot, candidatePath)) {
+          throw new ArtifactGuardError(
+            "path_outside_workspace",
+            `Relative path "${rawPath}" escapes workspace root (path_outside_workspace)`
+          );
+        }
+      }
+      const lexicalRel = path92.relative(realWorkspaceRoot, candidatePath);
+      if (!isStrictSubpath(realWorkspaceRoot, candidatePath)) {
+        throw new ArtifactGuardError(
+          "path_outside_workspace",
+          `Resolved path "${rawPath}" escapes workspace root (path_outside_workspace)`
+        );
+      }
+      const segments = lexicalRel.split(path92.sep);
+      for (const seg of segments) {
+        if (!seg || seg === "." || seg === ".." || WINDOWS_RESERVED_NAME_RE.test(seg)) {
+          throw new ArtifactGuardError(
+            "path_outside_workspace",
+            `Invalid or reserved path segment "${seg}" in artifact path (path_outside_workspace)`
+          );
+        }
+      }
+      return { candidatePath, lexicalRel };
+    }
+    function verifyAncestorAndTargetContainment(realWorkspaceRoot, candidatePath, lexicalRel) {
+      const segments = lexicalRel.split(path92.sep);
+      let currentPath = realWorkspaceRoot;
+      for (let i = 0; i < segments.length; i++) {
+        currentPath = path92.join(currentPath, segments[i]);
+        let entryLstat;
+        try {
+          entryLstat = fs83.lstatSync(currentPath);
+        } catch (err2) {
+          const code = err2.code;
+          if (code === "ENOENT" || code === "ENOTDIR") {
+            throw new ArtifactGuardError(
+              "artifact_not_found",
+              `Artifact file not found: ${lexicalRel} (artifact_not_found)`
+            );
+          }
+          throw new ArtifactGuardError(
+            "path_outside_workspace",
+            `Cannot stat artifact path component: ${err2.message} (path_outside_workspace)`
+          );
+        }
+        if (entryLstat.isSymbolicLink()) {
+          let resolvedLink;
+          try {
+            resolvedLink = fs83.realpathSync(currentPath);
+          } catch {
+            throw new ArtifactGuardError(
+              "path_outside_workspace",
+              `Symlink at "${segments.slice(0, i + 1).join("/")}" cannot be resolved inside workspace (path_outside_workspace)`
+            );
+          }
+          if (!isStrictSubpath(realWorkspaceRoot, resolvedLink)) {
+            throw new ArtifactGuardError(
+              "path_outside_workspace",
+              `Symlink at "${segments.slice(0, i + 1).join("/")}" escapes workspace root (path_outside_workspace)`
+            );
+          }
+        }
+      }
+      let realTargetPath;
+      try {
+        realTargetPath = fs83.realpathSync(candidatePath);
+      } catch (err2) {
+        const code = err2.code;
+        if (code === "ENOENT") {
+          throw new ArtifactGuardError(
+            "artifact_not_found",
+            `Artifact file not found: ${lexicalRel} (artifact_not_found)`
+          );
+        }
+        throw new ArtifactGuardError(
+          "path_outside_workspace",
+          `Cannot resolve canonical artifact path: ${err2.message} (path_outside_workspace)`
+        );
+      }
+      if (!isStrictSubpath(realWorkspaceRoot, realTargetPath)) {
+        throw new ArtifactGuardError(
+          "path_outside_workspace",
+          `Canonical target "${realTargetPath}" escapes workspace root (path_outside_workspace)`
+        );
+      }
+      let targetLstat;
+      try {
+        targetLstat = fs83.lstatSync(realTargetPath);
+      } catch (err2) {
+        const code = err2.code;
+        if (code === "ENOENT") {
+          throw new ArtifactGuardError(
+            "artifact_not_found",
+            `Artifact target disappeared: ${lexicalRel} (artifact_not_found)`
+          );
+        }
+        throw new ArtifactGuardError(
+          "path_outside_workspace",
+          `Cannot lstat canonical target: ${err2.message} (path_outside_workspace)`
+        );
+      }
+      if (targetLstat.isSymbolicLink()) {
+        throw new ArtifactGuardError(
+          "path_outside_workspace",
+          "Canonical target unexpectedly remained a symbolic link (path_outside_workspace)"
+        );
+      }
+      if (!targetLstat.isFile()) {
+        throw new ArtifactGuardError(
+          "not_a_regular_file",
+          `Artifact target "${lexicalRel}" is not a regular file (not_a_regular_file)`
+        );
+      }
+      if (targetLstat.nlink > 1) {
+        throw new ArtifactGuardError(
+          "path_outside_workspace",
+          `Hard-linked regular files (nlink=${targetLstat.nlink}) are refused for "${lexicalRel}" (path_outside_workspace)`
+        );
+      }
+      if (targetLstat.size > MAX_ARTIFACT_BYTES) {
+        throw new ArtifactGuardError(
+          "artifact_too_large",
+          `Artifact size ${targetLstat.size} exceeds limit of ${MAX_ARTIFACT_BYTES} bytes (artifact_too_large)`
+        );
+      }
+      return { realTargetPath, targetLstat };
+    }
+    function readVerifiedArtifactFile(workspaceRoot, rawPath, declaredKindOrOptions) {
+      const options = normalizeOptions2(declaredKindOrOptions);
+      const expectedPinnedRoot = typeof options.pinnedCanonicalWorkspaceRoot === "string" && options.pinnedCanonicalWorkspaceRoot.trim().length > 0 ? path92.resolve(options.pinnedCanonicalWorkspaceRoot) : null;
+      const { realWorkspaceRoot, resolvedWorkspaceInput } = resolveCanonicalWorkspaceRoot(workspaceRoot);
+      if (expectedPinnedRoot !== null && realWorkspaceRoot !== expectedPinnedRoot) {
+        throw new ArtifactGuardError(
+          "path_outside_workspace",
+          "Canonical workspace root changed from pinned workspace root before read (path_outside_workspace)"
+        );
+      }
+      const { candidatePath, lexicalRel } = resolveCandidateWithinWorkspace(
+        realWorkspaceRoot,
+        resolvedWorkspaceInput,
+        rawPath
+      );
+      const { realTargetPath, targetLstat } = verifyAncestorAndTargetContainment(
+        realWorkspaceRoot,
+        candidatePath,
+        lexicalRel
+      );
+      assertNotSecretPath(rawPath);
+      assertNotSecretPath(lexicalRel);
+      assertNotSecretPath(path92.relative(realWorkspaceRoot, realTargetPath));
+      const { kind, mime } = validateExtensionKindAndMime(candidatePath, realTargetPath, options);
+      let rootLstat;
+      try {
+        rootLstat = fs83.lstatSync(realWorkspaceRoot);
+      } catch {
+        throw new ArtifactGuardError(
+          "invalid_workspace_root",
+          "Canonical workspace root is inaccessible (invalid_workspace_root)"
+        );
+      }
+      if (rootLstat.isSymbolicLink() || !rootLstat.isDirectory() || expectedPinnedRoot !== null && realWorkspaceRoot !== expectedPinnedRoot) {
+        throw new ArtifactGuardError(
+          "path_outside_workspace",
+          "Canonical workspace root is not a regular directory (path_outside_workspace)"
+        );
+      }
+      options._testHooks?.beforeOpen?.();
+      const openFlags = fs83.constants.O_RDONLY | (fs83.constants.O_NOFOLLOW ?? 0);
+      let fd;
+      try {
+        fd = fs83.openSync(realTargetPath, openFlags);
+      } catch (err2) {
+        const code = err2.code;
+        if (code === "ELOOP" || code === "EMLINK") {
+          throw new ArtifactGuardError(
+            "path_outside_workspace",
+            "Target was swapped with a symbolic link before open (path_outside_workspace)"
+          );
+        }
+        if (code === "EISDIR") {
+          throw new ArtifactGuardError(
+            "not_a_regular_file",
+            "Target is a directory, not a regular file (not_a_regular_file)"
+          );
+        }
+        if (code === "ENOENT") {
+          throw new ArtifactGuardError(
+            "artifact_not_found",
+            `Artifact file disappeared before open: ${lexicalRel} (artifact_not_found)`
+          );
+        }
+        throw new ArtifactGuardError(
+          "path_outside_workspace",
+          `Failed to open artifact file safely: ${err2.message} (path_outside_workspace)`
+        );
+      }
+      let buffer;
+      try {
+        const fdStat = fs83.fstatSync(fd);
+        if (!fdStat.isFile()) {
+          throw new ArtifactGuardError(
+            "not_a_regular_file",
+            "Opened descriptor is not a regular file (not_a_regular_file)"
+          );
+        }
+        if (fdStat.nlink > 1) {
+          throw new ArtifactGuardError(
+            "path_outside_workspace",
+            `Opened descriptor has multiple hard links (nlink=${fdStat.nlink}) (path_outside_workspace)`
+          );
+        }
+        if (fdStat.dev !== targetLstat.dev || fdStat.ino !== targetLstat.ino) {
+          throw new ArtifactGuardError(
+            "path_outside_workspace",
+            "File inode/device changed between lstat and open (path_outside_workspace)"
+          );
+        }
+        if (fdStat.size > MAX_ARTIFACT_BYTES) {
+          throw new ArtifactGuardError(
+            "artifact_too_large",
+            `Artifact size ${fdStat.size} exceeds limit of ${MAX_ARTIFACT_BYTES} bytes (artifact_too_large)`
+          );
+        }
+        options._testHooks?.afterStatBeforeRead?.();
+        const chunks = [];
+        let totalBytes = 0;
+        let position = 0;
+        const scratch = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES2, Math.max(1, fdStat.size + 1)));
+        while (true) {
+          const bytesRead = fs83.readSync(fd, scratch, 0, scratch.byteLength, position);
+          if (bytesRead <= 0) {
+            break;
+          }
+          totalBytes += bytesRead;
+          position += bytesRead;
+          if (totalBytes > MAX_ARTIFACT_BYTES) {
+            throw new ArtifactGuardError(
+              "artifact_too_large",
+              `Artifact grew beyond ${MAX_ARTIFACT_BYTES} bytes during read (artifact_too_large)`
+            );
+          }
+          chunks.push(Buffer.from(scratch.subarray(0, bytesRead)));
+        }
+        const postFdStat = fs83.fstatSync(fd);
+        if (!postFdStat.isFile()) {
+          throw new ArtifactGuardError(
+            "not_a_regular_file",
+            "Descriptor ceased to be a regular file after read (not_a_regular_file)"
+          );
+        }
+        if (postFdStat.nlink > 1) {
+          throw new ArtifactGuardError(
+            "path_outside_workspace",
+            `Descriptor acquired additional hard links during read (nlink=${postFdStat.nlink}) (path_outside_workspace)`
+          );
+        }
+        if (postFdStat.size > MAX_ARTIFACT_BYTES) {
+          throw new ArtifactGuardError(
+            "artifact_too_large",
+            `Artifact size ${postFdStat.size} exceeds limit of ${MAX_ARTIFACT_BYTES} bytes after read (artifact_too_large)`
+          );
+        }
+        let postRootReal;
+        let postRootLstat;
+        let postRealTarget;
+        let postTargetLstat;
+        try {
+          postRootLstat = fs83.lstatSync(realWorkspaceRoot);
+          postRootReal = fs83.realpathSync(realWorkspaceRoot);
+          postRealTarget = fs83.realpathSync(candidatePath);
+          postTargetLstat = fs83.lstatSync(postRealTarget);
+        } catch {
+          throw new ArtifactGuardError(
+            "path_outside_workspace",
+            "Artifact path or workspace root was removed or replaced during read (path_outside_workspace)"
+          );
+        }
+        if (postRootLstat.isSymbolicLink() || !postRootLstat.isDirectory() || postRootReal !== realWorkspaceRoot || postRootLstat.dev !== rootLstat.dev || postRootLstat.ino !== rootLstat.ino || !isStrictSubpath(realWorkspaceRoot, postRealTarget) || postTargetLstat.isSymbolicLink() || !postTargetLstat.isFile() || postTargetLstat.nlink > 1 || postTargetLstat.dev !== fdStat.dev || postTargetLstat.ino !== fdStat.ino) {
+          throw new ArtifactGuardError(
+            "path_outside_workspace",
+            "Artifact path escaped workspace or changed inode during read (path_outside_workspace)"
+          );
+        }
+        buffer = chunks.length === 0 ? Buffer.alloc(0) : Buffer.concat(chunks, totalBytes);
+      } finally {
+        try {
+          fs83.closeSync(fd);
+        } catch {
+        }
+      }
+      assertNotSecretContent(buffer, kind);
+      const sha2563 = crypto11.createHash("sha256").update(buffer).digest("hex");
+      const relPath = lexicalRel.split(path92.sep).join("/");
+      const filename = path92.posix.basename(relPath);
+      const title = sanitizeArtifactTitle(options.title, filename);
+      const previewText = kind === "image" ? null : extractUtf8Preview(buffer, MAX_PREVIEW_TEXT_CHARS);
+      return {
+        workspaceRoot: realWorkspaceRoot,
+        absPath: realTargetPath,
+        relPath,
+        filename,
+        title,
+        kind,
+        mime,
+        sizeBytes: buffer.byteLength,
+        sha256: sha2563,
+        previewText,
+        buffer
+      };
+    }
+    function resolveArtifactFile(workspaceRoot, rawPath, declaredKindOrOptions) {
+      const { buffer: _buffer, ...metadata } = readVerifiedArtifactFile(
+        workspaceRoot,
+        rawPath,
+        declaredKindOrOptions
+      );
+      return metadata;
+    }
+    var crypto11;
+    var fs83;
+    var path92;
+    var READ_CHUNK_BYTES2;
+    var MAX_TITLE_CHARS;
+    var WINDOWS_RESERVED_NAME_RE;
+    var SECRET_BASENAME_PATTERNS;
+    var SECRET_CONTENT_PATTERNS;
+    var init_artifact_path_guard = __esm2({
+      "src/artifacts/artifact-path-guard.ts"() {
         "use strict";
-        import_node_fs33 = require("fs");
-        import_node_path29 = require("path");
+        crypto11 = __toESM2(require("crypto"));
+        fs83 = __toESM2(require("fs"));
+        path92 = __toESM2(require("path"));
+        init_credential_redactor();
         init_types6();
-        init_git_local_exclude();
-        DRIVER_INLINE_CAP = 64e3;
-        DRIVER_PREVIEW_CHARS = 4e3;
-        MAX_DRIVER_ARTIFACTS_PER_CALL = 8;
-        IMAGE_EXT = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" };
-        BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
-        DriverArtifactRefusal = class extends Error {
-          constructor(code, message) {
-            super(message);
-            this.code = code;
-          }
-        };
-        refuse3 = (code, message) => {
-          throw new DriverArtifactRefusal(code, message);
-        };
-        digestOf = (hex) => `sha256:${hex}`;
-        errorOf = (error) => error instanceof DriverArtifactRefusal ? { code: error.code, message: error.message } : {
-          code: error?.code && typeof error.code === "string" ? error.code : "artifact_register_failed",
-          message: error instanceof Error ? error.message : String(error)
-        };
+        READ_CHUNK_BYTES2 = 64 * 1024;
+        MAX_TITLE_CHARS = 200;
+        WINDOWS_RESERVED_NAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+        SECRET_BASENAME_PATTERNS = [
+          /^\.env/i,
+          /\.pem$/i,
+          /\.key$/i,
+          /\.p12$/i,
+          /\.pfx$/i,
+          /\.kdbx$/i,
+          /^id_(rsa|ed25519|ecdsa|dsa)/i,
+          /^\.npmrc$/i,
+          /^\.pypirc$/i,
+          /^\.netrc$/i,
+          /^credentials\.json$/i,
+          /^client_secret.*\.json$/i
+        ];
+        SECRET_CONTENT_PATTERNS = [
+          /-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----/,
+          /\bsk-(?:ant-|proj-|live-|test-)?[A-Za-z0-9_-]{16,}\b/,
+          /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{16,}\b/,
+          /\bgithub_pat_[A-Za-z0-9_]{16,}\b/,
+          /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/,
+          /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/,
+          /\bAIza[0-9A-Za-z_-]{35}\b/,
+          /\b(?:adk|adm|shr|wtk|wtt|wsb)_[A-Za-z0-9_-]{12,}\b/,
+          /\bmcp_sess_[A-Za-z0-9_-]{8,}\b/,
+          /\bADHDEV_MCP_SESSION_CREDENTIAL\b/,
+          /\bmcpSessionCredential(?:\s*(?<![=!<>])[:=](?![=>])|["']\s*:(?![=>]))\s*(?:(["'])(?!\[REDACTED|\$\{)(?:[^\s"'`\\]{6,}|[^\s"'`\\]*\u2026[^\s"'`\\]*)\1|(?![\"'])(?!\[REDACTED)(?:mcp_sess_|[A-Za-z0-9_~+/-]*[0-9][A-Za-z0-9_~+/-]*)[A-Za-z0-9_~+/-]{5,}={0,2}(?=$|[\s,;}\]&'"]))/i,
+          /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/,
+          /\b(?:[A-Z0-9_]*?(?:API_KEY|SECRET_KEY|ACCESS_TOKEN|AUTH_TOKEN|PRIVATE_KEY|CLIENT_SECRET|SESSION_CREDENTIAL))(?:\s*(?<![=!<>])[:=](?![=>])|["']\s*:(?![=>]))\s*(?:(["'])(?!\[REDACTED|\$\{)(?:[^\s"'`\\]{8,}|[^\s"'`\\]*\u2026[^\s"'`\\]*)\1|(?![\"'])(?!\[REDACTED)(?:mcp_sess_|sk-|gh[pousr]_|github_pat_|xox[baprs]-|AKIA|ASIA|AIza|eyJ|(?:adk|adm|adp|shr|wtk|wtt|wsb)_|[A-Za-z0-9_~+/-]*[0-9][A-Za-z0-9_~+/-]*)[A-Za-z0-9_~+/-]{8,}={0,2}(?=$|[\s,;}\]&'"]))/i
+        ];
       }
     });
-    function actionAllowedByPolicy(policy, type2, action2) {
-      if (!policy) return false;
-      if (!Object.hasOwn(policy, type2)) return true;
-      const entry = policy[type2];
-      return Array.isArray(entry?.actions) && entry.actions.includes(action2);
+    function unwrapDatabase(input) {
+      if (input && typeof input === "object" && "db" in input && input.db && typeof input.db.prepare === "function") {
+        return input.db;
+      }
+      if (input && typeof input === "object" && typeof input.prepare === "function") {
+        return input;
+      }
+      throw new TypeError("Invalid ArtifactStoreDatabase: expected SQLite database with prepare() and exec()");
     }
-    var import_node_crypto37;
-    var import_node_os9;
-    var import_node_path30;
-    var refused2;
-    var LEASE_MS;
-    var DriverService;
-    var init_driver_service = __esm2({
-      "src/drivers/driver-service.ts"() {
-        "use strict";
-        import_node_crypto37 = require("crypto");
-        import_node_os9 = require("os");
-        import_node_path30 = require("path");
-        init_managed_mcp_process();
-        init_risk_class();
-        init_input_schema();
-        init_driver_artifacts();
-        init_logger();
-        refused2 = (code) => ({ success: false, code });
-        LEASE_MS = 30 * 6e4;
-        DriverService = class {
-          constructor(ports) {
-            this.ports = ports;
-            this.now = ports.now ?? Date.now;
-            this.unsubscribe = ports.bus?.on("terminated", (event) => {
-              for (const [key7, lease] of this.leases) if (lease.sessionId === event.sessionId) this.leases.delete(key7);
-            }, { name: "driver-leases" });
-          }
-          closed = false;
-          instances = /* @__PURE__ */ new Map();
-          leases = /* @__PURE__ */ new Map();
-          records = [];
-          now;
-          unsubscribe;
-          read(type2) {
-            try {
-              return this.ports.readCurrent(type2);
-            } catch {
-              return null;
-            }
-          }
-          runtimeDirFor(installed2) {
-            const baseDir = (0, import_node_path30.dirname)(this.ports.activations.path);
-            const candidate = (0, import_node_path30.join)(baseDir, "runtime", installed2.module.type);
-            const rel = (0, import_node_path30.relative)((0, import_node_path30.resolve)(installed2.cwd), (0, import_node_path30.resolve)(candidate));
-            if (!rel || !rel.startsWith("..") && !(0, import_node_path30.isAbsolute)(rel)) {
-              return (0, import_node_path30.join)((0, import_node_os9.tmpdir)(), "adhdev-driver-runtime", installed2.module.type);
-            }
-            return candidate;
-          }
-          async describe(type2) {
-            const installed2 = this.read(type2);
-            if (!installed2) {
-              const previous = this.instances.get(type2);
-              if (previous) {
-                previous.state = "removed";
-                await previous.process?.close();
-              }
-              return refused2("driver_not_installed");
-            }
-            const { module: module22, treeDigest } = installed2;
-            let instance = this.instances.get(type2);
-            if (instance && instance.digest !== treeDigest) {
-              await instance.process?.close();
-              instance = void 0;
-            }
-            if (!instance) {
-              instance = { digest: treeDigest, state: "validated" };
-              this.instances.set(type2, instance);
-            }
-            let prepared;
-            try {
-              prepared = this.ports.activationStaging.prepare(module22, treeDigest, this.ports.activations);
-            } catch {
-              return refused2("activation_unavailable");
-            }
-            if (prepared.state !== "ready") {
-              await instance.process?.close();
-              instance.process = void 0;
-              instance.state = "installed";
-            } else if (instance.process) {
-              instance.state = instance.process?.state === "failed" ? "failed" : instance.process.state === "stopped" ? "stopped" : "running";
-            } else instance.state = "ready";
-            return {
-              success: true,
-              type: type2,
-              name: module22.name,
-              providerVersion: module22.providerVersion,
-              ...module22.publisher ? { publisher: module22.publisher } : {},
-              state: instance.state,
-              treeDigest,
-              actions: await Promise.all(module22.actions.map(async (action2) => ({
-                ...action2,
-                ...action2.inputSchema ? { inputSchema: await readDriverInputSchema(installed2.cwd, action2.inputSchema) } : {}
-              }))),
-              resources: module22.resources ?? [],
-              declaredAccess: module22.declaredAccess ?? {},
-              ...deriveDriverRiskClass(module22),
-              leases: (module22.resources ?? []).map((r) => ({ key: r.key, ...this.leases.get(JSON.stringify([type2, r.key])) })),
-              ..."stagedId" in prepared ? { stagedId: prepared.stagedId } : {}
-            };
-          }
-          async list() {
-            const modules = this.ports.registry.getByCategory("driver");
-            const types2 = new Set(modules.map((m) => m.type));
-            for (const [type2, instance] of this.instances) if (!types2.has(type2)) {
-              await instance.process?.close();
-              instance.state = "removed";
-            }
-            return { success: true, drivers: await Promise.all(modules.map((m) => this.describe(m.type))) };
-          }
-          async setEnabled(type2, enabled) {
-            const installed2 = this.read(type2);
-            if (!installed2) return refused2("driver_not_installed");
-            if (enabled && installed2.module._sourceTrust !== "trusted") {
-              if (this.ports.activations.isDisabled(type2)) this.ports.activations.clearDisabled(type2);
-              const stagedId = this.ports.activationStaging.write(installed2.module, installed2.treeDigest);
-              return { success: true, state: "installed", stagedId };
-            }
-            this.ports.activations.setDisabled(installed2.module, installed2.treeDigest, !enabled);
-            return this.describe(type2);
-          }
-          grantsEntry(installed2) {
-            const { module: module22, treeDigest } = installed2;
-            if (!module22.grants?.length) return null;
-            let activation;
-            try {
-              activation = this.ports.activations.isDisabled(module22.type) ? "disabled" : this.ports.activations.isReady(module22.type, treeDigest) ? "ready" : "needs_approval";
-            } catch {
-              activation = "disabled";
-            }
-            let stagedId;
-            if (activation === "needs_approval") {
-              try {
-                stagedId = this.ports.activationStaging.list().find((r) => r.type === module22.type && r.treeDigest === treeDigest)?.id;
-              } catch {
-              }
-            }
-            const state2 = this.ports.grants?.snapshot(module22.type, module22.grants.map((g3) => g3.id)) ?? {};
-            return {
-              type: module22.type,
-              name: module22.name,
-              providerVersion: module22.providerVersion,
-              activation,
-              ...stagedId ? { stagedId } : {},
-              platformSupported: !module22.runtime.platforms || module22.runtime.platforms.includes(process.platform),
-              grants: module22.grants.map((g3) => ({ id: g3.id, title: g3.title, description: g3.description ?? "", granted: state2[g3.id] === true }))
-            };
-          }
-          /** Drivers that declare `grants[]`, with their current checkbox state. No side effects. */
-          getGrants() {
-            const drivers = [];
-            for (const m of this.ports.registry.getByCategory("driver")) {
-              const installed2 = this.read(m.type);
-              const entry = installed2 ? this.grantsEntry(installed2) : null;
-              if (entry) drivers.push(entry);
-            }
-            return { success: true, drivers };
-          }
-          /** Owner-only (the command layer restricts sources). Unknown ids are rejected before anything is written. */
-          setGrants(type2, changes) {
-            const installed2 = this.read(type2);
-            if (!installed2) return refused2("driver_not_installed");
-            const declared = new Set((installed2.module.grants ?? []).map((g3) => g3.id));
-            if (!declared.size || !this.ports.grants || !changes || typeof changes !== "object" || Array.isArray(changes)) return refused2("invalid_arguments");
-            const entries3 = Object.entries(changes);
-            if (!entries3.length || entries3.some(([id4, v]) => !declared.has(id4) || typeof v !== "boolean")) return refused2("invalid_arguments");
-            try {
-              this.ports.grants.set(type2, Object.fromEntries(entries3));
-            } catch {
-              return refused2("grants_unavailable");
-            }
-            const { module: module22, treeDigest } = installed2;
-            if (entries3.some(([, v]) => v === true) && !this.ports.activations.isReady(type2, treeDigest)) {
-              try {
-                if (module22._sourceTrust === "trusted") this.ports.activations.setDisabled(module22, treeDigest, false);
-                else {
-                  if (this.ports.activations.isDisabled(type2)) this.ports.activations.clearDisabled(type2);
-                  this.ports.activationStaging.write(module22, treeDigest);
-                }
-              } catch {
-                return refused2("activation_unavailable");
-              }
-            }
-            const entry = this.grantsEntry(installed2);
-            return { success: true, ...entry ?? {} };
-          }
-          async invoke(identity5, input) {
-            if (!identity5?.sessionId || !identity5.meshId || !identity5.taskId) return refused2("worker_credential_required");
-            if (input.target !== void 0 && input.target !== "local") return refused2("unsupported");
-            const caller = {
-              meshId: identity5.meshId,
-              taskId: identity5.taskId,
-              sessionId: identity5.sessionId,
-              ...identity5.attemptId ? { attemptId: identity5.attemptId } : {},
-              ...identity5.nodeId ? { nodeId: identity5.nodeId } : {}
-            };
-            return this.execute(caller, input);
-          }
-          async execute(identity5, input, approval) {
-            const installed2 = this.read(input.type);
-            if (!installed2) return refused2("driver_not_approved");
-            if (approval && this.now() >= approval.expiresAt) return refused2("expired");
-            if (approval && installed2.treeDigest !== approval.digest) return refused2("stale");
-            try {
-              this.ports.activationStaging.prepare(installed2.module, installed2.treeDigest, this.ports.activations);
-            } catch {
-              return refused2("driver_not_approved");
-            }
-            if (!this.ports.activations.isReady(input.type, installed2.treeDigest)) return refused2("driver_not_approved");
-            const policy = await this.ports.policy(identity5.meshId).catch(() => void 0);
-            const action2 = installed2.module.actions.find((a) => a.id === input.action);
-            if (!action2 || !actionAllowedByPolicy(policy, input.type, input.action)) return refused2("driver_not_allowed_for_mesh");
-            const grantRequired = () => action2.grant && !this.ports.grants?.isGranted(input.type, action2.grant) ? { ...refused2("driver_grant_required"), grant: action2.grant } : null;
-            const denied = grantRequired();
-            if (denied) return denied;
-            if (action2.risk === "destructive" && !approval) {
-              const staged = this.ports.actions.write({
-                type: input.type,
-                action: input.action,
-                args: input.args ?? {},
-                activationDigest: installed2.treeDigest,
-                requester: identity5,
-                ...input.resourceKey !== void 0 ? { resourceKey: input.resourceKey } : {}
-              });
-              return { ...refused2("owner_approval_required"), stagedId: staged.id, expiresAt: staged.expiresAt };
-            }
-            const resources = installed2.module.resources ?? [];
-            if (input.resourceKey !== void 0 && !resources.some((r) => r.key === input.resourceKey)) return refused2("invalid_arguments");
-            const resourceKeys = action2.lease === false ? [] : resources.filter((r) => input.resourceKey === void 0 || r.key === input.resourceKey).map((r) => r.key);
-            const keys2 = resourceKeys.map((key7) => JSON.stringify([input.type, key7]));
-            for (const key7 of keys2) {
-              const lease = this.leases.get(key7);
-              if (lease && lease.expiresAt > this.now() && lease.sessionId !== identity5.sessionId) return refused2("lease_held");
-            }
-            const added = [];
-            for (const key7 of keys2) {
-              if (this.leases.get(key7)?.sessionId !== identity5.sessionId) added.push(key7);
-              this.leases.set(key7, { sessionId: identity5.sessionId, expiresAt: this.now() + LEASE_MS });
-            }
-            const releaseNew = () => {
-              for (const key7 of added) if (this.leases.get(key7)?.sessionId === identity5.sessionId) this.leases.delete(key7);
-            };
-            if (!await validateDriverArgs(installed2.cwd, action2.inputSchema, input.args ?? {})) {
-              releaseNew();
-              return refused2("invalid_arguments");
-            }
-            const current5 = this.read(input.type);
-            if (current5?.treeDigest !== installed2.treeDigest || !this.ports.activations.isReady(input.type, installed2.treeDigest)) {
-              releaseNew();
-              return refused2("driver_not_approved");
-            }
-            const latest = await this.ports.policy(identity5.meshId).catch(() => void 0);
-            if (!actionAllowedByPolicy(latest, input.type, input.action)) {
-              releaseNew();
-              return refused2("driver_not_allowed_for_mesh");
-            }
-            if (this.read(input.type)?.treeDigest !== installed2.treeDigest || !this.ports.activations.isReady(input.type, installed2.treeDigest)) {
-              releaseNew();
-              return refused2("driver_not_approved");
-            }
-            const deniedLate = grantRequired();
-            if (deniedLate) {
-              releaseNew();
-              return deniedLate;
-            }
-            if (keys2.some((key7) => this.leases.get(key7)?.sessionId !== identity5.sessionId)) {
-              releaseNew();
-              return refused2("lease_held");
-            }
-            if (approval && this.now() >= approval.expiresAt) {
-              releaseNew();
-              return refused2("expired");
-            }
-            if (this.closed) {
-              releaseNew();
-              return refused2("driver_stopped");
-            }
-            let instance = this.instances.get(input.type);
-            if (instance && instance.digest !== installed2.treeDigest) {
-              await instance.process?.close();
-              if (this.instances.get(input.type) === instance) this.instances.delete(input.type);
-              return this.execute(identity5, input, approval);
-            }
-            if (!instance) {
-              instance = { digest: installed2.treeDigest, state: "approved" };
-              this.instances.set(input.type, instance);
-            }
-            const record8 = {
-              invocationId: (0, import_node_crypto37.randomUUID)(),
-              driverType: input.type,
-              action: input.action,
-              activationDigest: installed2.treeDigest,
-              resourceKeys,
-              startedAt: this.now(),
-              status: "running",
-              caller: approval ? { kind: "owner", source: approval.source, stagedRequestId: approval.id, resolvedAt: this.now() } : { kind: "worker", ...identity5 }
-            };
-            this.records.push(record8);
-            if (this.records.length > 100) this.records.shift();
-            try {
-              instance.process ??= this.ports.createProcess?.(installed2) ?? new ManagedMcpProcess(installed2.module.runtime, {
-                cwd: this.runtimeDirFor(installed2),
-                packageDir: installed2.cwd,
-                ...installed2.module.runtime.requestTimeoutMs !== void 0 ? { requestTimeoutMs: installed2.module.runtime.requestTimeoutMs } : {}
-              });
-              await instance.process.start();
-              instance.state = "running";
-              const output = await instance.process.callTool(action2.tool, input.args ?? {});
-              record8.status = output.isError ? "failed" : "completed";
-              const captured = await captureDriverArtifacts({
-                result: output,
-                identity: identity5,
-                invocationId: record8.invocationId,
-                title: `${input.type}.${input.action}`,
-                ...this.ports.artifacts ? { port: this.ports.artifacts } : {}
-              }).catch((error) => ({
-                output: { truncated: true, note: "Result could not be processed for artifact registration" },
-                artifacts: [],
-                artifactError: { code: "artifact_register_failed", message: error instanceof Error ? error.message : String(error) }
-              }));
-              record8.output = captured.output;
-              if (captured.artifacts.length) record8.artifacts = captured.artifacts;
-              if (captured.artifactError) record8.artifactError = captured.artifactError;
-              return {
-                success: !output.isError,
-                invocationId: record8.invocationId,
-                status: record8.status,
-                output: record8.output,
-                ...captured.artifacts.length ? { artifacts: captured.artifacts } : {},
-                ...captured.artifactError ? { artifactError: captured.artifactError } : {}
-              };
-            } catch (error) {
-              instance.state = instance.process?.state === "failed" ? "failed" : "stopped";
-              record8.status = "failed";
-              record8.error = error instanceof Error ? error.message : String(error);
-              return { ...refused2("driver_execution_failed"), invocationId: record8.invocationId, error: record8.error };
-            } finally {
-              record8.completedAt = this.now();
-              LOG.info("Driver", `[driver] invoke type=${input.type} action=${input.action} risk=${action2.risk} caller=${approval ? "owner" : "worker"} status=${record8.status} artifacts=${record8.artifacts?.length ?? 0} ms=${record8.completedAt - record8.startedAt}`);
-            }
-          }
-          async resolveAction(id4, decision, source2) {
-            if (!["p2p", "ws", "standalone"].includes(source2)) return refused2("COMMAND_SOURCE_REJECTED");
-            const pending = this.ports.actions.read(id4);
-            const claim = this.ports.actions.claim(id4, pending ? this.read(pending.type)?.treeDigest : void 0, decision);
-            if ("code" in claim) {
-              const result2 = { success: claim.code === "discarded", code: claim.code, result: claim.code, stagedId: id4 };
-              if (pending?.status === "pending" && ["expired", "stale", "discarded"].includes(claim.code)) {
-                return { ...result2, delivery: this.relay(pending.requester, result2) };
-              }
-              return result2;
-            }
-            const r = claim.record;
-            let result;
-            try {
-              result = await this.execute(r.requester, r, { source: source2, id: id4, digest: r.activationDigest, expiresAt: r.expiresAt });
-            } catch {
-              result = refused2("driver_execution_failed");
-            }
-            const delivery = this.relay(r.requester, { ...result, stagedId: id4 });
-            return { ...result, stagedId: id4, delivery };
-          }
-          relay(identity5, result) {
-            try {
-              return this.ports.relay(identity5, result);
-            } catch {
-              return { ok: false, error: "mailbox_unavailable" };
-            }
-          }
-          stagedActions() {
-            return this.ports.actions.list();
-          }
-          invocations() {
-            return structuredClone(this.records);
-          }
-          async close() {
-            this.closed = true;
-            this.unsubscribe?.();
-            this.leases.clear();
-            await Promise.all([...this.instances.values()].map((i) => i.process?.close()));
-          }
-        };
+    function rowToArtifactRecord(row2) {
+      return {
+        artifactId: row2.artifact_id,
+        sessionId: row2.session_id,
+        taskId: row2.task_id ?? null,
+        ...row2.mesh_id != null ? { meshId: row2.mesh_id } : {},
+        ...row2.mission_id != null ? { missionId: row2.mission_id } : {},
+        ...row2.producer_role != null ? { producerRole: row2.producer_role } : {},
+        ...row2.origin_daemon_id != null ? { originDaemonId: row2.origin_daemon_id } : {},
+        workspaceRoot: row2.workspace_root,
+        relPath: row2.rel_path,
+        kind: row2.kind,
+        mime: row2.mime,
+        title: row2.title,
+        sizeBytes: row2.size_bytes,
+        sha256: row2.sha256,
+        previewText: row2.preview_text ?? null,
+        createdAt: row2.created_at,
+        updatedAt: row2.updated_at
+      };
+    }
+    function generateArtifactId() {
+      return `art_${crypto12.randomBytes(8).toString("hex")}`;
+    }
+    function ensureArtifactStoreSchema(dbInput) {
+      const db3 = unwrapDatabase(dbInput);
+      db3.exec(SESSION_ARTIFACTS_SCHEMA_DDL);
+      const cols = new Set(
+        db3.prepare(`PRAGMA table_info(session_artifacts)`).all().map(
+          (r) => r.name
+        )
+      );
+      for (const col of ["mesh_id", "mission_id", "producer_role", "origin_daemon_id"]) {
+        if (!cols.has(col)) {
+          db3.exec(`ALTER TABLE session_artifacts ADD COLUMN ${col} TEXT`);
+        }
       }
-    });
-    var import_node_crypto38;
-    var import_node_fs34;
-    var import_node_path31;
-    var ID4;
-    var DRIVER_ACTION_TTL_MS;
-    var DriverActionStaging;
-    var init_staged_action = __esm2({
-      "src/drivers/staged-action.ts"() {
+      db3.exec(SESSION_ARTIFACTS_SHARING_INDEXES_DDL);
+    }
+    function runInImmediateTransaction(db3, fn) {
+      if (typeof db3.transaction === "function") {
+        const tx2 = db3.transaction(fn);
+        if (typeof tx2.immediate === "function") {
+          return tx2.immediate();
+        }
+        return tx2();
+      }
+      db3.exec("BEGIN IMMEDIATE");
+      try {
+        const result = fn();
+        db3.exec("COMMIT");
+        return result;
+      } catch (err2) {
+        try {
+          db3.exec("ROLLBACK");
+        } catch {
+        }
+        throw err2;
+      }
+    }
+    function newestWindowSql(filteredSelect) {
+      return `SELECT * FROM (${filteredSelect}
+                 ORDER BY created_at DESC, window_rowid DESC
+                 LIMIT ?)
+             ORDER BY created_at ASC, window_rowid ASC`;
+    }
+    function registerSessionArtifact(storeOrDb, input) {
+      const store5 = storeOrDb instanceof ArtifactStore ? storeOrDb : new ArtifactStore(storeOrDb);
+      return store5.register(input);
+    }
+    function verifyAndReadArtifactBuffer(record8, options) {
+      if (options?.sessionId !== void 0 && record8.sessionId !== options.sessionId) {
+        throw new ArtifactGuardError(
+          "artifact_session_mismatch",
+          `Artifact "${record8.artifactId}" does not belong to session "${options.sessionId}" (artifact_session_mismatch)`
+        );
+      }
+      const pinnedCanonicalRoot = path93.resolve(record8.workspaceRoot);
+      let storedRootLstat;
+      let currentRealStoredRoot;
+      try {
+        storedRootLstat = fs84.lstatSync(pinnedCanonicalRoot);
+        currentRealStoredRoot = fs84.realpathSync(pinnedCanonicalRoot);
+      } catch {
+        throw new ArtifactGuardError(
+          "path_outside_workspace",
+          "Stored canonical workspace root is missing or inaccessible (path_outside_workspace)"
+        );
+      }
+      if (storedRootLstat.isSymbolicLink() || !storedRootLstat.isDirectory() || currentRealStoredRoot !== pinnedCanonicalRoot) {
+        throw new ArtifactGuardError(
+          "path_outside_workspace",
+          "Stored canonical workspace root was redirected or replaced by a symbolic link (path_outside_workspace)"
+        );
+      }
+      if (options?.trustedWorkspaceRoot !== void 0) {
+        let realTrustedRoot;
+        try {
+          realTrustedRoot = fs84.realpathSync(options.trustedWorkspaceRoot);
+        } catch {
+          throw new ArtifactGuardError(
+            "invalid_workspace_root",
+            "Trusted workspace root cannot be resolved (invalid_workspace_root)"
+          );
+        }
+        if (realTrustedRoot !== pinnedCanonicalRoot) {
+          throw new ArtifactGuardError(
+            "path_outside_workspace",
+            "Artifact workspace root does not match trusted workspace root (path_outside_workspace)"
+          );
+        }
+      }
+      return readVerifiedArtifactFile(pinnedCanonicalRoot, record8.relPath, {
+        declaredKind: record8.kind,
+        declaredMime: record8.mime,
+        title: record8.title,
+        pinnedCanonicalWorkspaceRoot: pinnedCanonicalRoot,
+        _testHooks: options?._testHooks
+      });
+    }
+    function readArtifactRecordPaged(record8, options) {
+      const verified = verifyAndReadArtifactBuffer(record8, options);
+      const encoding = record8.kind === "image" ? "base64" : "utf8";
+      const rawTotalBytes = verified.buffer.byteLength;
+      const rawOffsetOpt = typeof options?.offset === "number" ? options.offset : typeof options?.pageOffset === "number" ? options.pageOffset : void 0;
+      const requestedOffset = typeof rawOffsetOpt === "number" && Number.isFinite(rawOffsetOpt) && rawOffsetOpt >= 0 ? Math.trunc(rawOffsetOpt) : 0;
+      const requestedLimit = typeof options?.limit === "number" && Number.isFinite(options.limit) && options.limit > 0 ? Math.min(Math.trunc(options.limit), MAX_ARTIFACT_MCP_PAGE_BYTES) : MAX_ARTIFACT_MCP_PAGE_BYTES;
+      const safeOffset = Math.min(requestedOffset, rawTotalBytes);
+      const endOffset = Math.min(safeOffset + requestedLimit, rawTotalBytes);
+      const slice = verified.buffer.subarray(safeOffset, endOffset);
+      const pageBytes = slice.byteLength;
+      const hasMore = endOffset < rawTotalBytes;
+      const nextOffset = hasMore ? endOffset : null;
+      const content = encoding === "base64" ? slice.toString("base64") : slice.toString("utf8");
+      const sha256Changed = verified.sha256 !== record8.sha256;
+      return {
+        artifactId: record8.artifactId,
+        sessionId: record8.sessionId,
+        relPath: record8.relPath,
+        kind: record8.kind,
+        mime: record8.mime,
+        title: record8.title,
+        content,
+        encoding,
+        sizeBytes: verified.sizeBytes,
+        totalBytes: rawTotalBytes,
+        offset: safeOffset,
+        pageBytes,
+        hasMore,
+        nextOffset,
+        sha256: verified.sha256,
+        registeredSha256: record8.sha256,
+        sha256Changed,
+        hashChanged: sha256Changed
+      };
+    }
+    var crypto12;
+    var fs84;
+    var path93;
+    var SESSION_ARTIFACTS_SCHEMA_DDL;
+    var SESSION_ARTIFACTS_SHARING_INDEXES_DDL;
+    var ArtifactStore;
+    var init_artifact_store = __esm2({
+      "src/artifacts/artifact-store.ts"() {
         "use strict";
-        import_node_crypto38 = require("crypto");
-        import_node_fs34 = require("fs");
-        import_node_path31 = require("path");
-        init_config();
-        init_store_guards();
-        ID4 = /^driver-action-[a-f0-9-]+$/;
-        DRIVER_ACTION_TTL_MS = 30 * 6e4;
-        DriverActionStaging = class {
-          constructor(configDir = getConfigDir2(), now = Date.now) {
-            this.now = now;
-            this.dir = (0, import_node_path31.join)(configDir, "assistant", "staged");
+        crypto12 = __toESM2(require("crypto"));
+        fs84 = __toESM2(require("fs"));
+        path93 = __toESM2(require("path"));
+        init_artifact_path_guard();
+        init_types6();
+        SESSION_ARTIFACTS_SCHEMA_DDL = `
+    CREATE TABLE IF NOT EXISTS session_artifacts (
+        artifact_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        task_id TEXT,
+        mesh_id TEXT,
+        mission_id TEXT,
+        producer_role TEXT,
+        origin_daemon_id TEXT,
+        workspace_root TEXT NOT NULL,
+        rel_path TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        mime TEXT NOT NULL,
+        title TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        sha256 TEXT NOT NULL,
+        preview_text TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_session_artifacts_unique_path
+        ON session_artifacts(session_id, rel_path);
+
+    CREATE INDEX IF NOT EXISTS idx_session_artifacts_session
+        ON session_artifacts(session_id, created_at);
+`;
+        SESSION_ARTIFACTS_SHARING_INDEXES_DDL = `
+    CREATE INDEX IF NOT EXISTS idx_session_artifacts_mesh
+        ON session_artifacts(mesh_id, created_at);
+
+    CREATE INDEX IF NOT EXISTS idx_session_artifacts_mission
+        ON session_artifacts(mission_id, created_at);
+`;
+        ArtifactStore = class {
+          db;
+          constructor(dbInput) {
+            this.db = unwrapDatabase(dbInput);
+            ensureArtifactStoreSchema(this.db);
           }
-          dir;
-          save(record8) {
-            writeFileAtomic600((0, import_node_path31.join)(this.dir, `${record8.id}.json`), JSON.stringify(record8, null, 2) + "\n");
-          }
-          write(input) {
-            const record8 = {
-              ...structuredClone(input),
-              kind: "driver_action_request",
-              id: `driver-action-${(0, import_node_crypto38.randomUUID)()}`,
-              requesterTaskId: input.requester.taskId,
-              createdAt: this.now(),
-              expiresAt: this.now() + DRIVER_ACTION_TTL_MS,
-              status: "pending"
-            };
-            this.save(record8);
-            return record8;
-          }
-          read(id4) {
-            if (!ID4.test(id4)) return null;
-            try {
-              const r = JSON.parse((0, import_node_fs34.readFileSync)((0, import_node_path31.join)(this.dir, `${id4}.json`), "utf8"));
-              return r.kind === "driver_action_request" && r.id === id4 && typeof r.type === "string" && typeof r.action === "string" && r.args && typeof r.args === "object" && !Array.isArray(r.args) && /^sha256:[a-f0-9]{64}$/.test(r.activationDigest) && !!r.requester?.sessionId && !!r.requester.meshId && r.requester.taskId === r.requesterTaskId && Number.isFinite(r.expiresAt) && r.expiresAt === r.createdAt + DRIVER_ACTION_TTL_MS ? r : null;
-            } catch {
-              return null;
+          /**
+           * Register or update a workspace file as a session artifact.
+           *
+           * - Re-registering the same `(sessionId, relPath)` retains the existing
+           *   `artifactId` (`art_<16hex>`) and `createdAt`, updates `sizeBytes`, `sha256`,
+           *   `previewText`, `title`, `mime`, `kind`, and `updatedAt`, and reports
+           *   `isUpdate: true`.
+           * - Enforces `MAX_ARTIFACTS_PER_SESSION = 50` on NEW records per session;
+           *   updates to an already-registered `(sessionId, relPath)` at cap 50 remain valid.
+           */
+          register(input) {
+            if (typeof input?.sessionId !== "string" || input.sessionId.trim().length === 0) {
+              throw new Error("sessionId must be a non-empty string");
             }
-          }
-          list() {
-            if (!(0, import_node_fs34.existsSync)(this.dir)) return [];
-            return (0, import_node_fs34.readdirSync)(this.dir).filter((f) => f.endsWith(".json")).flatMap((f) => {
-              const r = this.read(f.slice(0, -5));
-              if (!r || r.status !== "pending") return [];
-              if (r.expiresAt <= this.now()) {
-                this.finish(r, "expired");
-                return [];
+            const sessionId = input.sessionId.trim();
+            const rawPath = input.path ?? input.relPath ?? input.rawPath ?? input.filePath ?? "";
+            const declaredKind = input.declaredKind ?? input.kind;
+            const declaredMime = input.declaredMime ?? input.mime;
+            const prePriorRootRow = this.db.prepare(
+              `SELECT workspace_root FROM session_artifacts WHERE session_id = ? LIMIT 1`
+            ).get(sessionId);
+            const resolved = resolveArtifactFile(input.workspaceRoot, rawPath, {
+              declaredKind,
+              declaredMime,
+              title: input.title,
+              pinnedCanonicalWorkspaceRoot: prePriorRootRow ? path93.resolve(prePriorRootRow.workspace_root) : void 0,
+              _testHooks: input._testHooks
+            });
+            const now = typeof input.now === "number" && Number.isFinite(input.now) ? Math.trunc(input.now) : Date.now();
+            const meshId = typeof input.meshId === "string" && input.meshId.trim() ? input.meshId.trim() : null;
+            const missionId = typeof input.missionId === "string" && input.missionId.trim() ? input.missionId.trim() : null;
+            const producerRole = typeof input.producerRole === "string" && input.producerRole.trim() ? input.producerRole.trim() : null;
+            const originDaemonId = typeof input.originDaemonId === "string" && input.originDaemonId.trim() ? input.originDaemonId.trim() : null;
+            return runInImmediateTransaction(this.db, () => {
+              if (now >= 1e11) {
+                this.pruneExpired(now, ARTIFACT_RETENTION_MS, 1e11);
               }
-              return [r];
+              const priorRootRow = this.db.prepare(
+                `SELECT workspace_root FROM session_artifacts WHERE session_id = ? LIMIT 1`
+              ).get(sessionId);
+              if (priorRootRow) {
+                const pinnedSessionRoot = path93.resolve(priorRootRow.workspace_root);
+                let currentPinnedReal = null;
+                try {
+                  const rootLstat = fs84.lstatSync(pinnedSessionRoot);
+                  if (!rootLstat.isSymbolicLink() && rootLstat.isDirectory()) {
+                    currentPinnedReal = fs84.realpathSync(pinnedSessionRoot);
+                  }
+                } catch {
+                  currentPinnedReal = null;
+                }
+                if (currentPinnedReal !== pinnedSessionRoot || resolved.workspaceRoot !== pinnedSessionRoot) {
+                  throw new ArtifactGuardError(
+                    "path_outside_workspace",
+                    "Session canonical workspace root was redirected or replaced (path_outside_workspace)"
+                  );
+                }
+              }
+              const existing = this.db.prepare(
+                `SELECT * FROM session_artifacts WHERE session_id = ? AND rel_path = ?`
+              ).get(sessionId, resolved.relPath);
+              if (existing) {
+                const updatedAt = Math.max(now, existing.updated_at + 1);
+                const nextTaskId = input.taskId !== void 0 ? input.taskId ?? null : existing.task_id;
+                const nextMeshId = meshId ?? existing.mesh_id ?? null;
+                const nextMissionId = missionId ?? existing.mission_id ?? null;
+                const nextProducerRole = producerRole ?? existing.producer_role ?? null;
+                const nextOriginDaemonId = originDaemonId ?? existing.origin_daemon_id ?? null;
+                const nextTitle = input.title !== void 0 && input.title.trim().length > 0 ? resolved.title : existing.title || resolved.title;
+                this.db.prepare(
+                  `UPDATE session_artifacts
+                         SET task_id = ?,
+                             mesh_id = ?,
+                             mission_id = ?,
+                             producer_role = ?,
+                             origin_daemon_id = ?,
+                             workspace_root = ?,
+                             kind = ?,
+                             mime = ?,
+                             title = ?,
+                             size_bytes = ?,
+                             sha256 = ?,
+                             preview_text = ?,
+                             updated_at = ?
+                         WHERE artifact_id = ?`
+                ).run(
+                  nextTaskId,
+                  nextMeshId,
+                  nextMissionId,
+                  nextProducerRole,
+                  nextOriginDaemonId,
+                  resolved.workspaceRoot,
+                  resolved.kind,
+                  resolved.mime,
+                  nextTitle,
+                  resolved.sizeBytes,
+                  resolved.sha256,
+                  resolved.previewText,
+                  updatedAt,
+                  existing.artifact_id
+                );
+                const record9 = {
+                  artifactId: existing.artifact_id,
+                  sessionId,
+                  taskId: nextTaskId ?? null,
+                  ...nextMeshId != null ? { meshId: nextMeshId } : {},
+                  ...nextMissionId != null ? { missionId: nextMissionId } : {},
+                  ...nextProducerRole != null ? { producerRole: nextProducerRole } : {},
+                  ...nextOriginDaemonId != null ? { originDaemonId: nextOriginDaemonId } : {},
+                  workspaceRoot: resolved.workspaceRoot,
+                  relPath: resolved.relPath,
+                  kind: resolved.kind,
+                  mime: resolved.mime,
+                  title: nextTitle,
+                  sizeBytes: resolved.sizeBytes,
+                  sha256: resolved.sha256,
+                  previewText: resolved.previewText,
+                  createdAt: existing.created_at,
+                  updatedAt
+                };
+                return {
+                  record: record9,
+                  isUpdate: true,
+                  attachment: toChatAttachmentMeta(record9)
+                };
+              }
+              const countRow = this.db.prepare(
+                `SELECT COUNT(*) AS count FROM session_artifacts WHERE session_id = ?`
+              ).get(sessionId);
+              const currentCount = countRow?.count ?? 0;
+              if (currentCount >= MAX_ARTIFACTS_PER_SESSION) {
+                throw new ArtifactGuardError(
+                  "session_artifact_limit_reached",
+                  `Session "${sessionId}" has reached the maximum of ${MAX_ARTIFACTS_PER_SESSION} artifacts (session_artifact_limit_reached)`
+                );
+              }
+              if (missionId) {
+                const missionCountRow = this.db.prepare(
+                  `SELECT COUNT(*) AS count FROM session_artifacts WHERE mission_id = ?`
+                ).get(missionId);
+                if ((missionCountRow?.count ?? 0) >= MAX_ARTIFACTS_PER_MISSION) {
+                  throw new ArtifactGuardError(
+                    "mission_artifact_limit_exceeded",
+                    `Mission "${missionId}" has reached the maximum of ${MAX_ARTIFACTS_PER_MISSION} artifacts (mission_artifact_limit_exceeded)`
+                  );
+                }
+              }
+              if (meshId) {
+                const meshCountRow = this.db.prepare(
+                  `SELECT COUNT(*) AS count FROM session_artifacts WHERE mesh_id = ?`
+                ).get(meshId);
+                if ((meshCountRow?.count ?? 0) >= MAX_ARTIFACTS_PER_MESH) {
+                  throw new ArtifactGuardError(
+                    "mesh_artifact_limit_exceeded",
+                    `Mesh "${meshId}" has reached the maximum of ${MAX_ARTIFACTS_PER_MESH} artifacts (mesh_artifact_limit_exceeded)`
+                  );
+                }
+              }
+              let artifactId = generateArtifactId();
+              while (this.db.prepare(
+                `SELECT 1 AS one FROM session_artifacts WHERE artifact_id = ?`
+              ).get(artifactId)) {
+                artifactId = generateArtifactId();
+              }
+              const taskId = input.taskId ?? null;
+              this.db.prepare(
+                `INSERT INTO session_artifacts (
+                        artifact_id,
+                        session_id,
+                        task_id,
+                        mesh_id,
+                        mission_id,
+                        producer_role,
+                        origin_daemon_id,
+                        workspace_root,
+                        rel_path,
+                        kind,
+                        mime,
+                        title,
+                        size_bytes,
+                        sha256,
+                        preview_text,
+                        created_at,
+                        updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+              ).run(
+                artifactId,
+                sessionId,
+                taskId,
+                meshId,
+                missionId,
+                producerRole,
+                originDaemonId,
+                resolved.workspaceRoot,
+                resolved.relPath,
+                resolved.kind,
+                resolved.mime,
+                resolved.title,
+                resolved.sizeBytes,
+                resolved.sha256,
+                resolved.previewText,
+                now,
+                now
+              );
+              const record8 = {
+                artifactId,
+                sessionId,
+                taskId,
+                ...meshId != null ? { meshId } : {},
+                ...missionId != null ? { missionId } : {},
+                ...producerRole != null ? { producerRole } : {},
+                ...originDaemonId != null ? { originDaemonId } : {},
+                workspaceRoot: resolved.workspaceRoot,
+                relPath: resolved.relPath,
+                kind: resolved.kind,
+                mime: resolved.mime,
+                title: resolved.title,
+                sizeBytes: resolved.sizeBytes,
+                sha256: resolved.sha256,
+                previewText: resolved.previewText,
+                createdAt: now,
+                updatedAt: now
+              };
+              return {
+                record: record8,
+                isUpdate: false,
+                attachment: toChatAttachmentMeta(record8)
+              };
             });
           }
-          finish(record8, status) {
-            this.save({ ...record8, status });
+          /** Alias for `register`. */
+          registerArtifact(input) {
+            return this.register(input);
           }
-          /** No await between pending check and durable consume: concurrent resolves cannot replay. */
-          claim(id4, digest7, decision) {
-            const r = this.read(id4);
-            if (!r) return { code: "staged_not_found" };
-            if (r.status !== "pending") return { code: r.status === "expired" || r.status === "stale" ? r.status : "already_resolved" };
-            if (decision === "discard") {
-              this.finish(r, "discarded");
-              return { code: "discarded" };
+          /** Alias for `register`. */
+          upsert(input) {
+            return this.register(input);
+          }
+          /** Retrieve a single artifact record by `artifactId`. */
+          get(artifactId) {
+            if (typeof artifactId !== "string" || !artifactId) {
+              return null;
             }
-            if (this.now() >= r.expiresAt) {
-              this.finish(r, "expired");
-              return { code: "expired" };
+            const row2 = this.db.prepare(
+              `SELECT * FROM session_artifacts WHERE artifact_id = ?`
+            ).get(artifactId);
+            return row2 ? rowToArtifactRecord(row2) : null;
+          }
+          /** Alias for `get`. */
+          getArtifact(artifactId) {
+            return this.get(artifactId);
+          }
+          /** Alias for `get`. */
+          getById(artifactId) {
+            return this.get(artifactId);
+          }
+          /** Retrieve a single artifact record by `(sessionId, relPath)`. */
+          getByPath(sessionId, relPath) {
+            if (typeof sessionId !== "string" || typeof relPath !== "string") {
+              return null;
             }
-            if (r.activationDigest !== digest7) {
-              this.finish(r, "stale");
-              return { code: "stale" };
+            const normalizedRel = relPath.replace(/\\/g, "/").replace(/^\.\//, "");
+            const row2 = this.db.prepare(
+              `SELECT * FROM session_artifacts WHERE session_id = ? AND rel_path = ?`
+            ).get(sessionId, normalizedRel);
+            return row2 ? rowToArtifactRecord(row2) : null;
+          }
+          /** List artifacts for a session in deterministic creation order. */
+          listBySession(sessionId, options) {
+            if (typeof sessionId !== "string" || !sessionId) {
+              return [];
             }
-            this.finish(r, "consumed");
-            return { record: r };
+            const rawLimit = options?.limit;
+            const limit = typeof rawLimit === "number" && Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.trunc(rawLimit), MAX_ARTIFACTS_PER_SESSION) : MAX_ARTIFACTS_PER_SESSION;
+            const rows = this.db.prepare(
+              `SELECT * FROM session_artifacts
+                 WHERE session_id = ?
+                 ORDER BY created_at ASC, rowid ASC
+                 LIMIT ?`
+            ).all(sessionId, limit);
+            return rows.map(rowToArtifactRecord);
+          }
+          /** Alias for `listBySession`. */
+          listSessionArtifacts(sessionId, options) {
+            return this.listBySession(sessionId, options);
+          }
+          /** Alias for `listBySession`. */
+          listArtifacts(sessionId, options) {
+            return this.listBySession(sessionId, options);
+          }
+          /** Count registered artifacts for a session. */
+          countBySession(sessionId) {
+            if (typeof sessionId !== "string" || !sessionId) {
+              return 0;
+            }
+            const row2 = this.db.prepare(
+              `SELECT COUNT(*) AS count FROM session_artifacts WHERE session_id = ?`
+            ).get(sessionId);
+            return row2?.count ?? 0;
+          }
+          /** Delete all artifact metadata rows for a session. */
+          deleteBySession(sessionId) {
+            if (typeof sessionId !== "string" || !sessionId) {
+              return 0;
+            }
+            const res = this.db.prepare(`DELETE FROM session_artifacts WHERE session_id = ?`).run(sessionId);
+            return res.changes;
+          }
+          /**
+           * Upsert a metadata-only record forwarded from a remote worker daemon
+           * (`artifact_index_forwarded`). Never opens the remote path locally; instead
+           * persists `origin_daemon_id` so subsequent reads fetch over P2P from the
+           * origin daemon.
+           */
+          upsertForwarded(input) {
+            const artifactId = typeof input?.artifactId === "string" ? input.artifactId.trim() : "";
+            const sessionId = typeof input?.sessionId === "string" ? input.sessionId.trim() : "";
+            const originDaemonId = typeof input?.originDaemonId === "string" ? input.originDaemonId.trim() : "";
+            const workspaceRoot = typeof input?.workspaceRoot === "string" ? input.workspaceRoot.trim() : "";
+            const rawRel = typeof input?.relPath === "string" ? input.relPath.trim() : "";
+            if (!/^art_[0-9a-f]{16}$/.test(artifactId)) {
+              throw new Error(`Invalid forwarded artifactId "${artifactId}"`);
+            }
+            if (!sessionId || !originDaemonId || !workspaceRoot || !rawRel) {
+              throw new Error("Forwarded artifact metadata requires sessionId, originDaemonId, workspaceRoot, and relPath");
+            }
+            const relPath = rawRel.replace(/\\/g, "/").replace(/^\.\//, "");
+            assertNotSecretPath(relPath);
+            if (relPath.startsWith("/") || relPath === ".." || relPath.startsWith("../") || relPath.includes("/../")) {
+              throw new ArtifactGuardError(
+                "path_outside_workspace",
+                `Forwarded relPath "${relPath}" is invalid (path_outside_workspace)`
+              );
+            }
+            const kind = input.kind;
+            if (!ARTIFACT_KINDS.includes(kind)) {
+              throw new ArtifactGuardError(
+                "unsupported_mime_or_kind",
+                `Unsupported forwarded artifact kind "${String(kind)}" (unsupported_mime_or_kind)`
+              );
+            }
+            const mime = typeof input.mime === "string" ? input.mime.trim().toLowerCase() : "";
+            if (!MIME_BY_KIND[kind]?.includes(mime)) {
+              throw new ArtifactGuardError(
+                "unsupported_mime_or_kind",
+                `Unsupported forwarded artifact mime "${mime}" for kind "${kind}" (unsupported_mime_or_kind)`
+              );
+            }
+            const sizeBytes = Math.trunc(Number(input.sizeBytes));
+            if (!Number.isFinite(sizeBytes) || sizeBytes < 0 || sizeBytes > MAX_ARTIFACT_BYTES) {
+              throw new ArtifactGuardError(
+                "artifact_too_large",
+                `Forwarded artifact size ${sizeBytes} exceeds ${MAX_ARTIFACT_BYTES} bytes (artifact_too_large)`
+              );
+            }
+            const sha2563 = typeof input.sha256 === "string" ? input.sha256.trim().toLowerCase() : "";
+            if (!/^[0-9a-f]{64}$/.test(sha2563)) {
+              throw new Error("Forwarded artifact sha256 must be 64 lowercase hex characters");
+            }
+            const filename = path93.posix.basename(relPath) || relPath;
+            const title = sanitizeArtifactTitle(input.title ?? void 0, filename);
+            const previewText = typeof input.previewText === "string" ? Array.from(input.previewText).slice(0, MAX_PREVIEW_TEXT_CHARS).join("") : null;
+            if (typeof input.previewText === "string" && input.previewText.length > 0) {
+              assertNotSecretContent(Buffer.from(input.previewText, "utf8"), kind);
+            }
+            if (previewText) assertNotSecretContent(Buffer.from(previewText, "utf8"), kind);
+            const now = Date.now();
+            const maxClockSkewMs = 6e4;
+            const maxAllowedTimestamp = now + maxClockSkewMs;
+            const rawCreatedAt = typeof input.createdAt === "number" && Number.isFinite(input.createdAt) && input.createdAt > 0 ? Math.trunc(input.createdAt) : now;
+            const createdAt = Math.min(rawCreatedAt, maxAllowedTimestamp);
+            const rawUpdatedAt = typeof input.updatedAt === "number" && Number.isFinite(input.updatedAt) && input.updatedAt > 0 ? Math.trunc(input.updatedAt) : createdAt;
+            const updatedAt = Math.max(createdAt, Math.min(rawUpdatedAt, maxAllowedTimestamp));
+            const taskId = typeof input.taskId === "string" && input.taskId.trim() ? input.taskId.trim() : null;
+            const meshId = typeof input.meshId === "string" && input.meshId.trim() ? input.meshId.trim() : null;
+            const missionId = typeof input.missionId === "string" && input.missionId.trim() ? input.missionId.trim() : null;
+            const producerRole = typeof input.producerRole === "string" && input.producerRole.trim() ? input.producerRole.trim() : "worker";
+            return runInImmediateTransaction(this.db, () => {
+              if (now >= 1e11) this.pruneExpired(now, ARTIFACT_RETENTION_MS, 1e11);
+              const existing = this.db.prepare(`SELECT * FROM session_artifacts WHERE session_id = ? AND rel_path = ?`).get(sessionId, relPath);
+              if (existing) {
+                const nextUpdatedAt = Math.max(updatedAt, existing.updated_at);
+                this.db.prepare(
+                  `UPDATE session_artifacts
+                         SET task_id = ?, mesh_id = ?, mission_id = ?, producer_role = ?, origin_daemon_id = ?,
+                             workspace_root = ?, kind = ?, mime = ?, title = ?, size_bytes = ?, sha256 = ?,
+                             preview_text = ?, updated_at = ?
+                         WHERE artifact_id = ?`
+                ).run(
+                  taskId ?? existing.task_id,
+                  meshId ?? existing.mesh_id ?? null,
+                  missionId ?? existing.mission_id ?? null,
+                  producerRole ?? existing.producer_role ?? null,
+                  originDaemonId,
+                  workspaceRoot,
+                  kind,
+                  mime,
+                  title,
+                  sizeBytes,
+                  sha2563,
+                  previewText,
+                  nextUpdatedAt,
+                  existing.artifact_id
+                );
+                const record9 = {
+                  artifactId: existing.artifact_id,
+                  sessionId,
+                  taskId: taskId ?? existing.task_id ?? null,
+                  ...meshId ?? existing.mesh_id ? { meshId: meshId ?? existing.mesh_id } : {},
+                  ...missionId ?? existing.mission_id ? { missionId: missionId ?? existing.mission_id } : {},
+                  ...producerRole ?? existing.producer_role ? { producerRole: producerRole ?? existing.producer_role } : {},
+                  originDaemonId,
+                  workspaceRoot,
+                  relPath,
+                  kind,
+                  mime,
+                  title,
+                  sizeBytes,
+                  sha256: sha2563,
+                  previewText,
+                  createdAt: existing.created_at,
+                  updatedAt: nextUpdatedAt
+                };
+                return {
+                  record: record9,
+                  isUpdate: true,
+                  attachment: toChatAttachmentMeta(record9)
+                };
+              }
+              const countRow = this.db.prepare(
+                `SELECT COUNT(*) AS count FROM session_artifacts WHERE session_id = ?`
+              ).get(sessionId);
+              if ((countRow?.count ?? 0) >= MAX_ARTIFACTS_PER_SESSION) {
+                throw new ArtifactGuardError(
+                  "session_artifact_limit_reached",
+                  `Session "${sessionId}" has reached the maximum of ${MAX_ARTIFACTS_PER_SESSION} artifacts (session_artifact_limit_reached)`
+                );
+              }
+              if (missionId) {
+                const missionCountRow = this.db.prepare(
+                  `SELECT COUNT(*) AS count FROM session_artifacts WHERE mission_id = ?`
+                ).get(missionId);
+                if ((missionCountRow?.count ?? 0) >= MAX_ARTIFACTS_PER_MISSION) {
+                  throw new ArtifactGuardError(
+                    "mission_artifact_limit_exceeded",
+                    `Mission "${missionId}" has reached the maximum of ${MAX_ARTIFACTS_PER_MISSION} artifacts (mission_artifact_limit_exceeded)`
+                  );
+                }
+              }
+              if (meshId) {
+                const meshCountRow = this.db.prepare(
+                  `SELECT COUNT(*) AS count FROM session_artifacts WHERE mesh_id = ?`
+                ).get(meshId);
+                if ((meshCountRow?.count ?? 0) >= MAX_ARTIFACTS_PER_MESH) {
+                  throw new ArtifactGuardError(
+                    "mesh_artifact_limit_exceeded",
+                    `Mesh "${meshId}" has reached the maximum of ${MAX_ARTIFACTS_PER_MESH} artifacts (mesh_artifact_limit_exceeded)`
+                  );
+                }
+              }
+              this.db.prepare(
+                `INSERT INTO session_artifacts (
+                        artifact_id,
+                        session_id,
+                        task_id,
+                        mesh_id,
+                        mission_id,
+                        producer_role,
+                        origin_daemon_id,
+                        workspace_root,
+                        rel_path,
+                        kind,
+                        mime,
+                        title,
+                        size_bytes,
+                        sha256,
+                        preview_text,
+                        created_at,
+                        updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+              ).run(
+                artifactId,
+                sessionId,
+                taskId,
+                meshId,
+                missionId,
+                producerRole,
+                originDaemonId,
+                workspaceRoot,
+                relPath,
+                kind,
+                mime,
+                title,
+                sizeBytes,
+                sha2563,
+                previewText,
+                createdAt,
+                updatedAt
+              );
+              const record8 = {
+                artifactId,
+                sessionId,
+                taskId,
+                ...meshId != null ? { meshId } : {},
+                ...missionId != null ? { missionId } : {},
+                ...producerRole != null ? { producerRole } : {},
+                originDaemonId,
+                workspaceRoot,
+                relPath,
+                kind,
+                mime,
+                title,
+                sizeBytes,
+                sha256: sha2563,
+                previewText,
+                createdAt,
+                updatedAt
+              };
+              return {
+                record: record8,
+                isUpdate: false,
+                attachment: toChatAttachmentMeta(record8)
+              };
+            });
+          }
+          /** Alias for `upsertForwarded`. */
+          upsertForwardedArtifact(input) {
+            return this.upsertForwarded(input);
+          }
+          /**
+           * List artifacts across a mesh (optionally filtered by sessionId or missionId).
+           * A `limit` keeps the newest records; the result stays in creation order.
+           */
+          listByMesh(meshId, options) {
+            if (typeof meshId !== "string" || !meshId.trim()) {
+              return [];
+            }
+            const rawLimit = options?.limit;
+            const limit = typeof rawLimit === "number" && Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.trunc(rawLimit), MAX_ARTIFACTS_PER_MESH) : MAX_ARTIFACTS_PER_MESH;
+            const clauses = ["mesh_id = ?"];
+            const params = [meshId.trim()];
+            if (typeof options?.sessionId === "string" && options.sessionId.trim()) {
+              clauses.push("session_id = ?");
+              params.push(options.sessionId.trim());
+            }
+            if (typeof options?.missionId === "string" && options.missionId.trim()) {
+              clauses.push("mission_id = ?");
+              params.push(options.missionId.trim());
+            }
+            params.push(limit);
+            const rows = this.db.prepare(
+              newestWindowSql(`SELECT rowid AS window_rowid, * FROM session_artifacts
+                 WHERE ${clauses.join(" AND ")}`)
+            ).all(...params);
+            return rows.map(rowToArtifactRecord);
+          }
+          /**
+           * List artifacts in a mission (optionally restricted to an allowlist of artifactIds for OD-4).
+           * A `limit` keeps the newest records; the result stays in creation order.
+           */
+          listByMission(missionId, options) {
+            if (typeof missionId !== "string" || !missionId.trim()) {
+              return [];
+            }
+            const meshFilter = typeof options?.meshId === "string" && options.meshId.trim() ? options.meshId.trim() : "";
+            const meshClause = meshFilter ? " AND mesh_id = ?" : "";
+            const meshParams = meshFilter ? [meshFilter] : [];
+            const rawLimit = options?.limit;
+            const limit = typeof rawLimit === "number" && Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.trunc(rawLimit), MAX_ARTIFACTS_PER_MISSION) : MAX_ARTIFACTS_PER_MISSION;
+            if (options?.artifactIds !== void 0) {
+              const ids = options.artifactIds.filter((id4) => typeof id4 === "string" && id4.trim().length > 0);
+              if (ids.length === 0) {
+                return [];
+              }
+              const placeholders = ids.map(() => "?").join(", ");
+              const rows2 = this.db.prepare(
+                newestWindowSql(`SELECT rowid AS window_rowid, * FROM session_artifacts
+                     WHERE mission_id = ?${meshClause} AND artifact_id IN (${placeholders})`)
+              ).all(missionId.trim(), ...meshParams, ...ids, limit);
+              return rows2.map(rowToArtifactRecord);
+            }
+            const rows = this.db.prepare(
+              newestWindowSql(`SELECT rowid AS window_rowid, * FROM session_artifacts
+                 WHERE mission_id = ?${meshClause}`)
+            ).all(missionId.trim(), ...meshParams, limit);
+            return rows.map(rowToArtifactRecord);
+          }
+          /**
+           * Prune artifact metadata rows older than `retentionMs` (default 30 days, OD-7).
+           */
+          pruneExpired(now = Date.now(), retentionMs = ARTIFACT_RETENTION_MS, minTimestamp = 0) {
+            const cutoff = Math.trunc(now) - Math.trunc(retentionMs);
+            const res = this.db.prepare(
+              `DELETE FROM session_artifacts WHERE updated_at >= ? AND updated_at < ?`
+            ).run(minTimestamp, cutoff);
+            return res.changes;
+          }
+          /**
+           * Read and page an artifact's content at 256 KiB boundaries (OD-7).
+           */
+          readArtifactContent(artifactId, options) {
+            const record8 = this.get(artifactId);
+            if (!record8) {
+              throw new ArtifactGuardError(
+                "artifact_not_found",
+                `Artifact "${artifactId}" not found (artifact_not_found)`
+              );
+            }
+            return readArtifactRecordPaged(record8, options);
+          }
+          /**
+           * Re-validate and read the artifact file from disk at fetch time.
+           *
+           * Re-checks canonical workspace root, symlink/traversal containment,
+           * regular-file status, extension/kind/MIME allowlist, and 4 MiB size cap
+           * via descriptor-verified bounded reads, returning `encoding: 'utf8'` for
+           * text kinds and `encoding: 'base64'` for images, plus `sha256Changed`
+           * (`hashChanged`) comparing current bytes against the registered `sha256`.
+           */
+          fetchArtifactContent(artifactId, options) {
+            const record8 = this.get(artifactId);
+            if (!record8) {
+              throw new ArtifactGuardError(
+                "artifact_not_found",
+                `Artifact "${artifactId}" not found (artifact_not_found)`
+              );
+            }
+            const verified = verifyAndReadArtifactBuffer(record8, options);
+            const encoding = record8.kind === "image" ? "base64" : "utf8";
+            const content = encoding === "base64" ? verified.buffer.toString("base64") : verified.buffer.toString("utf8");
+            const sha256Changed = verified.sha256 !== record8.sha256;
+            return {
+              artifactId: record8.artifactId,
+              sessionId: record8.sessionId,
+              relPath: record8.relPath,
+              kind: record8.kind,
+              mime: record8.mime,
+              title: record8.title,
+              content,
+              encoding,
+              sizeBytes: verified.sizeBytes,
+              sha256: verified.sha256,
+              registeredSha256: record8.sha256,
+              sha256Changed,
+              hashChanged: sha256Changed
+            };
+          }
+          /** Alias for `fetchArtifactContent`. */
+          fetchContent(artifactId, options) {
+            return this.fetchArtifactContent(artifactId, options);
           }
         };
       }
     });
-    function computeDriverTreeDigest(dir) {
-      if (!(0, import_node_fs35.lstatSync)(dir).isDirectory() || (0, import_node_fs35.lstatSync)(dir).isSymbolicLink()) throw new Error("Invalid driver directory");
-      const files = [];
-      const walk = (sub) => {
-        for (const entry of (0, import_node_fs35.readdirSync)((0, import_node_path32.join)(dir, sub), { withFileTypes: true })) {
-          const rel = sub ? `${sub}/${entry.name}` : entry.name;
-          if (entry.isDirectory()) walk(rel);
-          else if (entry.isFile()) files.push(rel);
-          else throw new Error("Non-regular driver tree entry");
-        }
-      };
-      walk("");
-      if (!files.length) throw new Error("Empty driver tree");
-      const hash3 = (0, import_node_crypto39.createHash)("sha256");
-      for (const rel of files.sort()) {
-        const bytes = (0, import_node_fs35.readFileSync)((0, import_node_path32.join)(dir, rel));
-        hash3.update(`driver/${(0, import_node_path32.basename)(dir)}/${rel}\0${bytes.length}\0`).update(bytes);
-      }
-      return `sha256:${hash3.digest("hex")}`;
-    }
-    function readInstalledDriver(loader2, type2) {
-      const meta2 = loader2.getMeta(type2);
-      const dir = loader2.findProviderDir(type2);
-      if (meta2?.category !== "driver" || !dir) return null;
-      const digest7 = computeDriverTreeDigest(dir);
-      let raw;
-      try {
-        raw = (0, import_node_fs35.readFileSync)((0, import_node_path32.join)(dir, "provider.v1.json"), "utf8");
-      } catch (error) {
-        if (error.code !== "ENOENT") throw error;
-        raw = (0, import_node_fs35.readFileSync)((0, import_node_path32.join)(dir, "provider.json"), "utf8");
-      }
-      const module22 = JSON.parse(raw);
-      if (!validateDriverProviderManifest(module22).ok || module22.type !== type2 || digest7 !== computeDriverTreeDigest(dir)) return null;
-      return { module: { ...module22, _sourceTrust: meta2._sourceTrust }, treeDigest: digest7 };
-    }
-    var import_node_crypto39;
-    var import_node_fs35;
-    var import_node_path32;
-    var init_installed_driver = __esm2({
-      "src/drivers/installed-driver.ts"() {
+    var init_artifacts = __esm2({
+      "src/artifacts/index.ts"() {
         "use strict";
-        import_node_crypto39 = require("crypto");
-        import_node_fs35 = require("fs");
-        import_node_path32 = require("path");
-        init_manifest();
+        init_types6();
+        init_artifact_path_guard();
+        init_artifact_store();
+      }
+    });
+    var assistant_registry_exports = {};
+    __export2(assistant_registry_exports, {
+      ASSISTANT_REGISTRY_FILE: () => ASSISTANT_REGISTRY_FILE,
+      ASSISTANT_REVIEW_HISTORY_MS: () => ASSISTANT_REVIEW_HISTORY_MS,
+      AssistantRegistry: () => AssistantRegistry,
+      BUSY_INPUT_MODES: () => BUSY_INPUT_MODES,
+      DEFAULT_BUSY_INPUT_MODE: () => DEFAULT_BUSY_INPUT_MODE,
+      busyInputModeToSendPolicy: () => busyInputModeToSendPolicy,
+      findAssistantRestoreRecord: () => findAssistantRestoreRecord,
+      getAssistantRegistry: () => getAssistantRegistry,
+      isLocalOwnerBindingRefusalCode: () => isLocalOwnerBindingRefusalCode,
+      matchesAssistantRestore: () => matchesAssistantRestore,
+      normalizeAssistantOwnerBinding: () => normalizeAssistantOwnerBinding,
+      normalizeAssistantRegistryEntry: () => normalizeAssistantRegistryEntry,
+      normalizeFollowedRemoteProjectEntry: () => normalizeFollowedRemoteProjectEntry,
+      setAssistantRegistryForTests: () => setAssistantRegistryForTests,
+      subscribeAssistantRegistry: () => subscribeAssistantRegistry
+    });
+    function busyInputModeToSendPolicy(mode) {
+      switch (mode) {
+        case "interrupt":
+          return { mode: "interrupt" };
+        case "steer":
+          return { mode: "send_now" };
+        default:
+          return { mode: "queue" };
+      }
+    }
+    function normalizeQuotaFailover(v) {
+      const o = v;
+      if (!o || typeof o !== "object" || Array.isArray(o)) return void 0;
+      const out = {};
+      if (typeof o.assistant === "string" && QUOTA_FAILOVER_MODES.includes(o.assistant)) out.assistant = o.assistant;
+      if (typeof o.coordinator === "string" && QUOTA_FAILOVER_MODES.includes(o.coordinator)) out.coordinator = o.coordinator;
+      return Object.keys(out).length ? out : void 0;
+    }
+    function normalizeAliases(raw) {
+      const out = {};
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+      for (const [k, v] of Object.entries(raw)) {
+        const alias = k.trim();
+        if (alias && isStr(v)) out[alias] = v;
+      }
+      return out;
+    }
+    function normalizeTurnState(raw) {
+      const r = raw;
+      if (!r || r.state !== "idle" && r.state !== "working" || !isNum(r.at) || !isStr(r.sessionId)) return null;
+      return { state: r.state, at: r.at, sessionId: r.sessionId };
+    }
+    function normalizeReviewAts(raw) {
+      if (!Array.isArray(raw)) return [];
+      return raw.filter(isNum).sort((a, b) => a - b).slice(-REVIEW_HISTORY_MAX);
+    }
+    function normalizeBudget(raw) {
+      const r = raw;
+      if (!r || typeof r !== "object") return void 0;
+      const out = {};
+      if (isNum(r.memory)) out.memory = r.memory;
+      if (isNum(r.user)) out.user = r.user;
+      return Object.keys(out).length ? out : void 0;
+    }
+    function normalizeAssistantOwnerBinding(raw) {
+      const r = raw;
+      if (!r || typeof r !== "object" || Array.isArray(r)) return void 0;
+      if (r.accountSlot !== ASSISTANT_ACCOUNT_SLOT) return void 0;
+      const daemonId = isStr(r.daemonId) ? canonicalDaemonId2(r.daemonId) : null;
+      if (!daemonId) return void 0;
+      if (!isPositiveSafeInt(r.bindingRevision)) return void 0;
+      if (!isStr(r.boundAt)) return void 0;
+      return {
+        accountSlot: ASSISTANT_ACCOUNT_SLOT,
+        daemonId,
+        bindingRevision: r.bindingRevision,
+        boundAt: r.boundAt.trim()
+      };
+    }
+    function isLocalOwnerBindingRefusalCode(code) {
+      return typeof code === "string" && LOCAL_OWNER_BINDING_REFUSAL_CODES.has(code.trim());
+    }
+    function isFollowedState(v) {
+      return v === "followed" || v === "unfollowed" || v === "revoked";
+    }
+    function normalizeFollowedRemoteProjectEntry(raw) {
+      const r = raw;
+      if (!r || typeof r !== "object" || Array.isArray(r)) return null;
+      const hostDaemonId = isStr(r.hostDaemonId) ? canonicalDaemonId2(r.hostDaemonId) : null;
+      const meshId = isStr(r.meshId) ? r.meshId.trim() : "";
+      const name = isStr(r.name) ? r.name.trim() : "";
+      const slug = isStr(r.slug) ? r.slug.trim() : "";
+      if (!hostDaemonId || !meshId || !name || !slug) return null;
+      if (r.accountSlot !== void 0 && r.accountSlot !== ASSISTANT_ACCOUNT_SLOT) return null;
+      if (!isPositiveSafeInt(r.bindingRevision) || !isPositiveSafeInt(r.grantRevision)) return null;
+      if (!isFollowedState(r.state)) return null;
+      const key7 = followedRemoteProjectKey(hostDaemonId, meshId);
+      const followedAt = isStr(r.followedAt) ? r.followedAt.trim() : (/* @__PURE__ */ new Date(0)).toISOString();
+      const updatedAt = isStr(r.updatedAt) ? r.updatedAt.trim() : followedAt;
+      const unfollowedAt = isNum(r.unfollowedAt) || isStr(r.unfollowedAt) ? r.unfollowedAt : void 0;
+      const revokedAt = isNum(r.revokedAt) || isStr(r.revokedAt) ? r.revokedAt : void 0;
+      const revokedReason = isStr(r.revokedReason) ? r.revokedReason.trim() : void 0;
+      const lastErrorCode = isStr(r.lastErrorCode) ? r.lastErrorCode.trim() : void 0;
+      const lastObservedRaw = r.lastObserved;
+      const lastObserved = lastObservedRaw && typeof lastObservedRaw === "object" && isStr(lastObservedRaw.observedAt) ? {
+        observedAt: lastObservedRaw.observedAt.trim(),
+        ...isStr(lastObservedRaw.coordinatorState) ? { coordinatorState: lastObservedRaw.coordinatorState.trim() } : {},
+        ...typeof lastObservedRaw.coordinatorMissing === "boolean" ? { coordinatorMissing: lastObservedRaw.coordinatorMissing } : {},
+        ...isStr(lastObservedRaw.summary) ? { summary: lastObservedRaw.summary.trim().slice(0, 500) } : {}
+      } : void 0;
+      return {
+        key: key7,
+        hostDaemonId,
+        ...isStr(r.hostLabel) ? { hostLabel: r.hostLabel.trim() } : {},
+        meshId,
+        name,
+        slug,
+        sanitizedRepoIdentity: isStr(r.sanitizedRepoIdentity) ? sanitizeRemoteRepoIdentity(r.sanitizedRepoIdentity) : null,
+        accountSlot: ASSISTANT_ACCOUNT_SLOT,
+        bindingRevision: r.bindingRevision,
+        grantRevision: r.grantRevision,
+        ...typeof r.allowCoordinatorLaunch === "boolean" ? { allowCoordinatorLaunch: r.allowCoordinatorLaunch } : {},
+        ...typeof r.allowArtifactRead === "boolean" ? { allowArtifactRead: r.allowArtifactRead } : {},
+        state: r.state,
+        followedAt,
+        updatedAt,
+        ...r.state === "unfollowed" && unfollowedAt !== void 0 ? { unfollowedAt } : {},
+        ...r.state === "revoked" && revokedAt !== void 0 ? { revokedAt } : {},
+        ...r.state === "revoked" && revokedReason ? { revokedReason } : {},
+        ...lastErrorCode ? { lastErrorCode } : {},
+        ...r.lastCursor === null || isStr(r.lastCursor) ? { lastCursor: r.lastCursor } : {},
+        ...r.coordinatorSessionId === null || isStr(r.coordinatorSessionId) ? { coordinatorSessionId: r.coordinatorSessionId } : {},
+        ...lastObserved ? { lastObserved } : {}
+      };
+    }
+    function normalizeFollowedRemoteProjects(raw) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return void 0;
+      const out = {};
+      for (const value of Object.values(raw)) {
+        const entry = normalizeFollowedRemoteProjectEntry(value);
+        if (entry) out[entry.key] = entry;
+      }
+      return Object.keys(out).length > 0 ? out : void 0;
+    }
+    function isLessonTtlDays(v) {
+      return typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 3650;
+    }
+    function normalizeAssistantRegistryEntry(raw) {
+      const r = raw;
+      if (!r || typeof r !== "object" || Array.isArray(r)) return null;
+      if (!isStr(r.cliType) || !isStr(r.workspace) || !isNum(r.createdAt)) return null;
+      const mode = BUSY_INPUT_MODES.includes(r.busyInputMode) ? r.busyInputMode : DEFAULT_BUSY_INPUT_MODE;
+      const budget = normalizeBudget(r.memoryBudget);
+      const reviewAts = normalizeReviewAts(r.reviewAts);
+      const ownerBinding = normalizeAssistantOwnerBinding(r.ownerBinding);
+      const followedRemoteProjects = normalizeFollowedRemoteProjects(r.followedRemoteProjects);
+      return {
+        ...isStr(r.sessionId) && readHostedBindingOwner(r.hostOwner) ? { hostOwner: readHostedBindingOwner(r.hostOwner) } : {},
+        sessionId: isStr(r.sessionId) ? r.sessionId : null,
+        cliType: r.cliType,
+        workspace: r.workspace,
+        ...isStr(r.mcpConfigPath) ? { mcpConfigPath: r.mcpConfigPath } : {},
+        aliases: normalizeAliases(r.aliases),
+        createdAt: r.createdAt,
+        firstRelayAt: isNum(r.firstRelayAt) ? r.firstRelayAt : null,
+        busyInputMode: mode,
+        reviewTurn: r.reviewTurn !== false,
+        executionEnabled: r.executionEnabled !== false,
+        executionRevision: typeof r.executionRevision === "number" && Number.isSafeInteger(r.executionRevision) ? r.executionRevision : 0,
+        lastTurnState: normalizeTurnState(r.lastTurnState),
+        ...budget ? { memoryBudget: budget } : {},
+        ...isLessonTtlDays(r.memoryLessonTtlDays) ? { memoryLessonTtlDays: r.memoryLessonTtlDays } : {},
+        ...reviewAts.length ? { reviewAts } : {},
+        ...r.digestHour === null ? { digestHour: null } : isDigestHour(r.digestHour) ? { digestHour: r.digestHour } : {},
+        ...isNum(r.lastDigestAt) ? { lastDigestAt: r.lastDigestAt } : {},
+        ...normalizeContext(r.lastContext) ? { lastContext: normalizeContext(r.lastContext) } : {},
+        ...ownerBinding ? { ownerBinding } : {},
+        ...followedRemoteProjects ? { followedRemoteProjects } : {},
+        ...normalizeQuotaFailover(r.quotaFailover) ? { quotaFailover: normalizeQuotaFailover(r.quotaFailover) } : {}
+      };
+    }
+    function normalizeContext(v) {
+      const c = v;
+      if (!c || typeof c !== "object") return null;
+      return isStr(c.sessionId) && isStr(c.text) && c.text.length <= 8e3 && isNum(c.at) ? { sessionId: c.sessionId, text: c.text, at: c.at } : null;
+    }
+    function matchesAssistantRestore(entry, record8) {
+      const sid = entry?.sessionId;
+      const rid = record8?.runtimeId;
+      return typeof sid === "string" && sid.length > 0 && typeof rid === "string" && rid === sid;
+    }
+    function findAssistantRestoreRecord(entry, records) {
+      return records.find((r) => matchesAssistantRestore(entry, r)) ?? null;
+    }
+    function getAssistantRegistry() {
+      const expectedPath = (0, import_path36.join)(getConfigDir2(), ASSISTANT_REGISTRY_FILE);
+      if (!sharedRegistry || !sharedRegistryOverridden && sharedRegistry.path !== expectedPath) {
+        sharedRegistry = new AssistantRegistry();
+      }
+      return sharedRegistry;
+    }
+    function setAssistantRegistryForTests(registry) {
+      sharedRegistry = registry;
+      sharedRegistryOverridden = registry !== null;
+    }
+    function subscribeAssistantRegistry(bus, registry) {
+      return bus.on(["terminated", "turn", "registered"], (event) => {
+        if (event.kind === "terminated") {
+          registry.releaseSession(event.sessionId, event.cause);
+          return;
+        }
+        if (event.kind === "registered") {
+          registry.recordTurnState(event.sessionId, "idle", event.at);
+          return;
+        }
+        if (event.phase === "started" || event.phase === "resumed") registry.recordTurnState(event.sessionId, "working", event.at);
+        else if (event.phase === "committed") registry.recordTurnState(event.sessionId, "idle", event.at);
+      }, { name: "assistant.registry" });
+    }
+    var import_fs40;
+    var import_path36;
+    var ASSISTANT_REGISTRY_FILE;
+    var BUSY_INPUT_MODES;
+    var DEFAULT_BUSY_INPUT_MODE;
+    var QUOTA_FAILOVER_MODES;
+    var isDigestHour;
+    var isStr;
+    var isNum;
+    var isPositiveSafeInt;
+    var ASSISTANT_REVIEW_HISTORY_MS;
+    var REVIEW_HISTORY_MAX;
+    var LOCAL_OWNER_BINDING_REFUSAL_CODES;
+    var AssistantRegistry;
+    var sharedRegistry;
+    var sharedRegistryOverridden;
+    var init_assistant_registry = __esm2({
+      "src/assistant/assistant-registry.ts"() {
+        "use strict";
+        init_binding_owner();
+        import_fs40 = require("fs");
+        import_path36 = require("path");
+        init_dist();
+        init_config();
+        init_memory_store();
+        init_store_guards();
+        init_mcp_command_ingress();
+        ASSISTANT_REGISTRY_FILE = "assistant.json";
+        BUSY_INPUT_MODES = ["queue", "interrupt", "steer"];
+        DEFAULT_BUSY_INPUT_MODE = "queue";
+        QUOTA_FAILOVER_MODES = ["notify", "auto", "off"];
+        isDigestHour = (v) => typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 23;
+        isStr = (v) => typeof v === "string" && v.length > 0;
+        isNum = (v) => typeof v === "number" && Number.isFinite(v);
+        isPositiveSafeInt = (v) => typeof v === "number" && Number.isSafeInteger(v) && v >= 1;
+        ASSISTANT_REVIEW_HISTORY_MS = 24 * 60 * 60 * 1e3;
+        REVIEW_HISTORY_MAX = 16;
+        LOCAL_OWNER_BINDING_REFUSAL_CODES = /* @__PURE__ */ new Set([
+          "local_owner_binding_missing",
+          "local_owner_binding_mismatch",
+          "assistant_owner_binding_missing",
+          "assistant_owner_binding_mismatch"
+        ]);
+        AssistantRegistry = class {
+          path;
+          cache;
+          lastReadError = null;
+          constructor(opts = {}) {
+            this.path = (0, import_path36.join)(opts.configDir ?? getConfigDir2(), ASSISTANT_REGISTRY_FILE);
+          }
+          cloneCached() {
+            if (!this.cache) return null;
+            return {
+              ...this.cache,
+              aliases: { ...this.cache.aliases },
+              ...this.cache.reviewAts ? { reviewAts: [...this.cache.reviewAts] } : {},
+              ...this.cache.ownerBinding ? { ownerBinding: { ...this.cache.ownerBinding } } : {},
+              ...this.cache.followedRemoteProjects ? {
+                followedRemoteProjects: Object.fromEntries(
+                  Object.entries(this.cache.followedRemoteProjects).map(([k, v]) => [k, { ...v }])
+                )
+              } : {}
+            };
+          }
+          /** The entry, or null when the assistant was never launched. Corrupt → null (the file is kept aside on the next write). */
+          read() {
+            if (this.cache !== void 0) {
+              return this.cloneCached();
+            }
+            const outcome = this.load();
+            if (outcome.kind === "ok") {
+              this.lastReadError = null;
+              this.cache = outcome.entry;
+              return this.cloneCached();
+            }
+            if (outcome.kind === "unreadable") {
+              this.lastReadError = outcome.error;
+              return null;
+            }
+            this.lastReadError = null;
+            this.cache = null;
+            return null;
+          }
+          /** Drop the in-memory copy (a person edited the file), keeping the previous cache on a transient read error. */
+          reload() {
+            const outcome = this.load();
+            if (outcome.kind === "ok") {
+              this.lastReadError = null;
+              this.cache = outcome.entry;
+              return this.cloneCached();
+            }
+            if (outcome.kind === "unreadable") {
+              this.lastReadError = outcome.error;
+              return this.cache ? this.cloneCached() : null;
+            }
+            this.lastReadError = null;
+            this.cache = null;
+            return null;
+          }
+          memoryBudgets() {
+            return resolveMemoryBudgets(this.read()?.memoryBudget ?? this.loadMemoryBudget());
+          }
+          /**
+           * `launch_assistant` / restore: bind the session, creating the entry on
+           * first launch. A NEW session id resets `lastTurnState` to idle for that
+           * session and hands back the previous one — the restart-note input
+           * (§4.3), which must be read before anything overwrites it. Re-binding
+           * the same id (restore) keeps the state and returns `previous: null`.
+           */
+          bindSession(input) {
+            const prev = this.read();
+            if (!this.cache && this.lastReadError !== null) {
+              throw this.unreadableError();
+            }
+            const preLaunchBudget = prev ? void 0 : this.loadMemoryBudget();
+            const sameSession = !!prev && prev.sessionId === input.sessionId;
+            const at = isNum(input.at) ? input.at : Date.now();
+            const next = {
+              ...prev ?? {
+                aliases: {},
+                createdAt: at,
+                firstRelayAt: null,
+                busyInputMode: DEFAULT_BUSY_INPUT_MODE,
+                reviewTurn: true,
+                executionEnabled: true,
+                executionRevision: 0,
+                lastTurnState: null,
+                ...preLaunchBudget ? { memoryBudget: resolveMemoryBudgets(preLaunchBudget) } : {}
+              },
+              sessionId: input.sessionId,
+              cliType: input.cliType,
+              workspace: input.workspace,
+              hostOwner: input.hostOwner ?? (sameSession ? prev?.hostOwner : void 0)
+            };
+            if (!sameSession) next.lastTurnState = { state: "idle", at, sessionId: input.sessionId };
+            if (input.mcpConfigPath) next.mcpConfigPath = input.mcpConfigPath;
+            else delete next.mcpConfigPath;
+            if (!sameSession && prev?.sessionId) {
+              revokeMcpSessionCredential(prev.sessionId);
+            }
+            ensureMcpSessionCredential({ sessionId: input.sessionId, isCoordinator: false });
+            const entry = this.write(next);
+            return { entry, previous: sameSession ? null : prev?.lastTurnState ?? null };
+          }
+          /** Owner settings. Unknown busy modes are refused rather than coerced. */
+          updateSettings(patch) {
+            const prev = this.read();
+            if (!this.cache && this.lastReadError !== null) {
+              throw this.unreadableError();
+            }
+            if (!prev) return null;
+            if (patch.busyInputMode !== void 0 && !BUSY_INPUT_MODES.includes(patch.busyInputMode)) {
+              throw new Error(`invalid busyInputMode: ${String(patch.busyInputMode)}`);
+            }
+            const next = { ...prev };
+            if (patch.aliases !== void 0) next.aliases = normalizeAliases(patch.aliases);
+            if (patch.busyInputMode !== void 0) next.busyInputMode = patch.busyInputMode;
+            if (patch.executionEnabled !== void 0) {
+              next.executionEnabled = patch.executionEnabled !== false;
+              next.executionRevision = (next.executionRevision ?? 0) + 1;
+            }
+            if (patch.reviewTurn !== void 0) next.reviewTurn = patch.reviewTurn !== false;
+            if (patch.digestHour !== void 0) {
+              if (patch.digestHour !== null && !isDigestHour(patch.digestHour)) throw new Error(`invalid digestHour: ${String(patch.digestHour)}`);
+              next.digestHour = patch.digestHour;
+            }
+            if (patch.memoryLessonTtlDays !== void 0) {
+              if (!isLessonTtlDays(patch.memoryLessonTtlDays)) throw new Error(`invalid memoryLessonTtlDays: ${String(patch.memoryLessonTtlDays)}`);
+              next.memoryLessonTtlDays = patch.memoryLessonTtlDays;
+            }
+            if (patch.quotaFailover !== void 0) {
+              const merged = normalizeQuotaFailover({ ...prev.quotaFailover ?? {}, ...patch.quotaFailover ?? {} });
+              if (merged) next.quotaFailover = merged;
+              else delete next.quotaFailover;
+            }
+            if (patch.memoryBudget !== void 0) {
+              const b = normalizeBudget(patch.memoryBudget);
+              if (b) next.memoryBudget = resolveMemoryBudgets({ ...prev.memoryBudget ?? {}, ...b });
+              else delete next.memoryBudget;
+            }
+            return this.write(next);
+          }
+          /** `turn` / `registered` edge of the bound session (restart note input, §4.3). */
+          recordTurnState(sessionId, state2, at) {
+            const prev = this.read();
+            if (!prev || prev.sessionId !== sessionId) return;
+            if (prev.lastTurnState?.state === state2 && prev.lastTurnState.sessionId === sessionId) return;
+            this.write({ ...prev, lastTurnState: { state: state2, at, sessionId } });
+          }
+          /** First relay delivery; later calls are no-ops. */
+          markFirstRelay(at) {
+            const prev = this.read();
+            if (!prev || prev.firstRelayAt !== null) return;
+            this.write({ ...prev, firstRelayAt: at });
+          }
+          /** An idle review input reached the assistant (§4.10.7). Keeps the last 24 h. */
+          recordReview(at) {
+            const prev = this.read();
+            if (!prev || !isNum(at)) return;
+            const reviewAts = normalizeReviewAts([...prev.reviewAts ?? [], at].filter((t) => at - t < ASSISTANT_REVIEW_HISTORY_MS));
+            this.write({ ...prev, reviewAts });
+          }
+          /** Save the bound session's last exchanges (previous-session note source). */
+          recordContext(sessionId, text10, at) {
+            const prev = this.read();
+            if (!prev || prev.sessionId !== sessionId || !text10 || text10.length > 8e3) return;
+            this.write({ ...prev, lastContext: { sessionId, text: text10, at } });
+          }
+          /** A daily digest was queued (one per local day). */
+          recordDigest(at) {
+            const prev = this.read();
+            if (!prev || !isNum(at)) return;
+            this.write({ ...prev, lastDigestAt: at });
+          }
+          /**
+           * The session left the registry. `daemon_shutdown` keeps the binding (the
+           * runtime is re-attached after restart). Any other cause clears it; the
+           * rest of the entry, `lastTurnState` included, is kept.
+           */
+          releaseSession(sessionId, cause) {
+            if (cause === "daemon_shutdown") return false;
+            const prev = this.read();
+            if (!prev || !prev.sessionId || prev.sessionId !== sessionId) return false;
+            revokeMcpSessionCredential(sessionId);
+            const next = { ...prev, sessionId: null };
+            delete next.mcpConfigPath;
+            delete next.hostOwner;
+            this.write(next);
+            return true;
+          }
+          /**
+           * After the boot-time restore: clear a binding whose runtime is not among
+           * the live hosted runtimes. Callers MUST pass a successful full inventory
+           * and its verified host owner. Foreign or unknown ownership defers pruning.
+           * Returns the cleared sessionId, or null.
+           */
+          pruneAfterRestore(liveRuntimeIds, owner) {
+            const prev = this.reload();
+            if (!prev?.sessionId || !sameHostedBindingOwner(
+              resolveHostedBindingOwner(prev.sessionId, prev.hostOwner, owner, liveRuntimeIds, (0, import_path36.dirname)(this.path)),
+              owner
+            )) return null;
+            if (!prev?.sessionId || liveRuntimeIds.has(prev.sessionId)) return null;
+            const cleared = prev.sessionId;
+            revokeMcpSessionCredential(cleared);
+            const next = { ...prev, sessionId: null };
+            delete next.mcpConfigPath;
+            delete next.hostOwner;
+            this.write(next);
+            return cleared;
+          }
+          /**
+           * Durable local owner-binding receipt for the account-level `personal`
+           * assistant slot on this Mac. Returns null when missing or corrupt.
+           */
+          ownerBinding() {
+            return this.read()?.ownerBinding ?? null;
+          }
+          /**
+           * Verify that the local durable owner-binding receipt exists and matches
+           * this daemon's canonical identity. Never auto-creates a missing receipt:
+           * missing or mismatched receipts fail closed until explicit owner
+           * reconciliation.
+           */
+          verifyLocalOwnerBinding(selfDaemonId) {
+            const canonicalSelf = canonicalDaemonId2(selfDaemonId);
+            if (!canonicalSelf) {
+              return {
+                ok: false,
+                code: "local_owner_binding_missing",
+                error: "Local daemon identity is not available to verify assistant owner binding."
+              };
+            }
+            const binding = this.ownerBinding();
+            if (!binding) {
+              if (this.lastReadError) {
+                const errCode = this.lastReadError.code ?? "EUNREADABLE";
+                return {
+                  ok: false,
+                  code: "local_owner_binding_unreadable",
+                  error: `Local assistant owner binding receipt could not be read (${errCode}: ${this.lastReadError.message}); retry once transient read pressure clears.`
+                };
+              }
+              return {
+                ok: false,
+                code: "local_owner_binding_missing",
+                error: "Local assistant owner binding receipt is missing or corrupt; explicit owner reconciliation is required."
+              };
+            }
+            if (binding.accountSlot !== ASSISTANT_ACCOUNT_SLOT || !daemonIdsEquivalent5(binding.daemonId, canonicalSelf)) {
+              return {
+                ok: false,
+                code: "local_owner_binding_mismatch",
+                error: `Local assistant owner binding receipt is bound to ${binding.daemonId}, not this daemon (${canonicalSelf}); explicit owner reconciliation is required.`
+              };
+            }
+            return { ok: true, receipt: binding, binding };
+          }
+          /**
+           * Explicit owner reconciliation of the local `personal` assistant slot
+           * binding on this Mac. Preserves the existing `bindingRevision` when already
+           * bound to this daemon, or reuses `maxFollowedRevision` across followed
+           * remote projects when the receipt is missing or the bound `daemonId`
+           * changed, unless `opts.bumpRevision` / `opts.forceNewRevision` is true.
+           * Revoked `local_owner_binding_*` followed entries whose `bindingRevision`
+           * matches the resulting receipt are recovered unless
+           * `opts.recoverFollowed === false`; callers that recover must also re-arm
+           * the relay thread and poller (see `ensure_binding`).
+           */
+          reconcileOwnerBinding(selfDaemonId, opts) {
+            const canonicalSelf = canonicalDaemonId2(selfDaemonId);
+            if (!canonicalSelf) {
+              throw new Error(`Invalid selfDaemonId for assistant owner binding: ${String(selfDaemonId)}`);
+            }
+            const optObj = typeof opts === "object" && opts !== null ? opts : void 0;
+            const explicitRevision = typeof opts === "number" ? isPositiveSafeInt(opts) ? opts : void 0 : optObj && isPositiveSafeInt(optObj.bindingRevision) ? optObj.bindingRevision : void 0;
+            const nowIso = optObj?.now ?? (/* @__PURE__ */ new Date()).toISOString();
+            const base = this.ensureBaseEntry(Date.now());
+            const existing = base.ownerBinding;
+            const bump2 = optObj?.bumpRevision === true || optObj?.forceNewRevision === true;
+            const followedEntries = Object.values(base.followedRemoteProjects ?? {});
+            const maxFollowedRevision = followedEntries.reduce(
+              (max, e) => e && isPositiveSafeInt(e.bindingRevision) && e.bindingRevision > max ? e.bindingRevision : max,
+              0
+            );
+            const sameDaemon2 = Boolean(
+              existing && existing.accountSlot === ASSISTANT_ACCOUNT_SLOT && daemonIdsEquivalent5(existing.daemonId, canonicalSelf)
+            );
+            const nextRevision = explicitRevision !== void 0 ? explicitRevision : bump2 ? Math.max(existing?.bindingRevision ?? 0, maxFollowedRevision) + 1 : sameDaemon2 ? existing.bindingRevision : maxFollowedRevision > 0 ? maxFollowedRevision : (existing?.bindingRevision ?? 0) + 1;
+            const revisionChanged = !existing || existing.bindingRevision !== nextRevision;
+            const receipt = sameDaemon2 && !bump2 && !revisionChanged ? existing : {
+              accountSlot: ASSISTANT_ACCOUNT_SLOT,
+              daemonId: canonicalSelf,
+              bindingRevision: nextRevision,
+              boundAt: nowIso
+            };
+            let nextFollowed = base.followedRemoteProjects;
+            if (nextFollowed && optObj?.recoverFollowed !== false) {
+              let recoveredAny = false;
+              const copy = { ...nextFollowed };
+              for (const [k, entry] of Object.entries(copy)) {
+                if (entry.state === "revoked" && isLocalOwnerBindingRefusalCode(entry.revokedReason ?? entry.lastErrorCode) && entry.bindingRevision === receipt.bindingRevision) {
+                  const recovered2 = normalizeFollowedRemoteProjectEntry({
+                    ...entry,
+                    state: "followed",
+                    updatedAt: nowIso,
+                    revokedAt: void 0,
+                    revokedReason: void 0,
+                    lastErrorCode: void 0
+                  });
+                  if (recovered2) {
+                    copy[k] = recovered2;
+                    recoveredAny = true;
+                  }
+                }
+              }
+              if (recoveredAny) nextFollowed = copy;
+            }
+            if (sameDaemon2 && !bump2 && !revisionChanged && nextFollowed === base.followedRemoteProjects) {
+              return existing;
+            }
+            this.write({
+              ...base,
+              ownerBinding: receipt,
+              ...nextFollowed ? { followedRemoteProjects: nextFollowed } : {}
+            });
+            return { ...receipt };
+          }
+          listFollowedRemoteProjects() {
+            const map2 = this.read()?.followedRemoteProjects;
+            if (!map2) return [];
+            return Object.values(map2).sort((a, b) => a.key.localeCompare(b.key));
+          }
+          getFollowedRemoteProject(key7) {
+            const map2 = this.read()?.followedRemoteProjects;
+            if (!map2) return null;
+            return map2[key7] ? { ...map2[key7] } : null;
+          }
+          upsertFollowedRemoteProject(input) {
+            const canonicalHost = canonicalDaemonId2(input.hostDaemonId) ?? input.hostDaemonId;
+            const key7 = input.key || followedRemoteProjectKey(canonicalHost, input.meshId);
+            const current5 = this.read();
+            if (!this.cache && this.lastReadError !== null) {
+              throw this.unreadableError();
+            }
+            const existing = current5?.followedRemoteProjects?.[key7];
+            const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+            const normalized = normalizeFollowedRemoteProjectEntry({
+              ...existing,
+              ...input,
+              key: key7,
+              hostDaemonId: canonicalHost,
+              accountSlot: ASSISTANT_ACCOUNT_SLOT,
+              followedAt: input.followedAt ?? existing?.followedAt ?? nowIso,
+              updatedAt: input.updatedAt ?? nowIso
+            });
+            if (!normalized) {
+              throw new Error("Invalid followed remote project entry");
+            }
+            const base = this.ensureBaseEntry(Date.now());
+            const nextMap = {
+              ...base.followedRemoteProjects ?? {},
+              [normalized.key]: normalized
+            };
+            this.write({ ...base, followedRemoteProjects: nextMap });
+            return { ...normalized };
+          }
+          updateFollowedRemoteProject(key7, patch) {
+            const base = this.read();
+            if (!this.cache && this.lastReadError !== null) {
+              throw this.unreadableError();
+            }
+            const existing = base?.followedRemoteProjects?.[key7];
+            if (!base || !existing) return null;
+            const merged = normalizeFollowedRemoteProjectEntry({
+              ...existing,
+              ...patch,
+              key: existing.key,
+              hostDaemonId: existing.hostDaemonId,
+              meshId: existing.meshId,
+              updatedAt: patch.updatedAt ?? (/* @__PURE__ */ new Date()).toISOString()
+            });
+            if (!merged) return null;
+            const nextMap = {
+              ...base.followedRemoteProjects ?? {},
+              [key7]: merged
+            };
+            this.write({ ...base, followedRemoteProjects: nextMap });
+            return { ...merged };
+          }
+          removeFollowedRemoteProject(key7) {
+            const base = this.read();
+            if (!this.cache && this.lastReadError !== null) {
+              throw this.unreadableError();
+            }
+            if (!base?.followedRemoteProjects?.[key7]) return false;
+            const nextMap = { ...base.followedRemoteProjects };
+            delete nextMap[key7];
+            const next = { ...base };
+            if (Object.keys(nextMap).length > 0) next.followedRemoteProjects = nextMap;
+            else delete next.followedRemoteProjects;
+            this.write(next);
+            return true;
+          }
+          ensureBaseEntry(at) {
+            const prev = this.read();
+            if (!this.cache && this.lastReadError !== null) {
+              throw this.unreadableError();
+            }
+            if (prev) return prev;
+            const preLaunchBudget = this.loadMemoryBudget();
+            return {
+              sessionId: null,
+              cliType: "codex",
+              workspace: (0, import_path36.join)(this.path, ".."),
+              aliases: {},
+              createdAt: at,
+              firstRelayAt: null,
+              busyInputMode: DEFAULT_BUSY_INPUT_MODE,
+              reviewTurn: true,
+              executionEnabled: true,
+              executionRevision: 0,
+              lastTurnState: null,
+              ...preLaunchBudget ? { memoryBudget: resolveMemoryBudgets(preLaunchBudget) } : {}
+            };
+          }
+          unreadableError() {
+            const errCode = this.lastReadError?.code ?? "EUNREADABLE";
+            const msg = this.lastReadError?.message ?? "unreadable";
+            const err2 = new Error(
+              `local_owner_binding_unreadable: Local assistant registry could not be read (${errCode}: ${msg}); refusing to overwrite ${this.path}.`
+            );
+            err2.code = "local_owner_binding_unreadable";
+            if (this.lastReadError) err2.cause = this.lastReadError;
+            return err2;
+          }
+          load() {
+            let raw;
+            try {
+              raw = (0, import_fs40.readFileSync)(this.path, "utf-8");
+            } catch (e) {
+              const err2 = e;
+              if (err2?.code === "ENOENT") return { kind: "missing" };
+              return { kind: "unreadable", error: err2 };
+            }
+            try {
+              const parsed = JSON.parse(raw);
+              const entry = normalizeAssistantRegistryEntry(parsed);
+              return entry ? { kind: "ok", entry } : { kind: "corrupt" };
+            } catch {
+              return { kind: "corrupt" };
+            }
+          }
+          loadMemoryBudget() {
+            if (!(0, import_fs40.existsSync)(this.path)) return void 0;
+            try {
+              const parsed = JSON.parse((0, import_fs40.readFileSync)(this.path, "utf-8"));
+              return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? normalizeBudget(parsed.memoryBudget) : void 0;
+            } catch {
+              return void 0;
+            }
+          }
+          write(entry) {
+            if (!this.cache && this.lastReadError !== null) {
+              throw this.unreadableError();
+            }
+            this.keepCorruptAside();
+            writeFileAtomic600(this.path, `${JSON.stringify(entry, null, 2)}
+`);
+            this.lastReadError = null;
+            this.cache = entry;
+            return this.read();
+          }
+          /** A file that exists and can be read, but does not parse, is renamed rather than overwritten silently. */
+          keepCorruptAside() {
+            let raw;
+            try {
+              raw = (0, import_fs40.readFileSync)(this.path, "utf-8");
+            } catch {
+              return;
+            }
+            try {
+              const parsed = JSON.parse(raw);
+              if (normalizeAssistantRegistryEntry(parsed)) return;
+              if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && normalizeBudget(parsed.memoryBudget)) return;
+            } catch {
+            }
+            try {
+              (0, import_fs40.renameSync)(this.path, `${this.path}.corrupt-${Date.now()}`);
+            } catch {
+            }
+          }
+        };
+        sharedRegistry = null;
+        sharedRegistryOverridden = false;
       }
     });
     function midpoint(a, b) {
@@ -123269,7 +125507,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       }
     });
     function sha1(text10) {
-      return (0, import_node_crypto40.createHash)("sha1").update(text10).digest("base64");
+      return (0, import_node_crypto39.createHash)("sha1").update(text10).digest("base64");
     }
     function headChangeKey(head, text10) {
       const fields = {
@@ -123298,7 +125536,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
     function jcsBytesOf(payload) {
       return utf8Bytes(jcs(payload));
     }
-    var import_node_crypto40;
+    var import_node_crypto39;
     var HEAD_OVERHEAD_BYTES;
     var TRIPWIRE_REWRITE_SHARE;
     var TRIPWIRE_MIN_LIVE;
@@ -123309,7 +125547,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
     var init_transcript_keyed_frame = __esm2({
       "src/seqscribe/transcript-keyed-frame.ts"() {
         "use strict";
-        import_node_crypto40 = require("crypto");
+        import_node_crypto39 = require("crypto");
         init_dist2();
         init_fractional_index();
         init_transcript_keyed_codec();
@@ -124173,7 +126411,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       return env2.ADHDEV_TRANSCRIPT_TRIPWIRE === "throw" || env2.NODE_ENV === "development";
     }
     function newProducerEpoch() {
-      return (0, import_node_crypto41.randomUUID)().replace(/-/g, "").slice(0, 12);
+      return (0, import_node_crypto40.randomUUID)().replace(/-/g, "").slice(0, 12);
     }
     function configureTranscriptProjection(deps) {
       activeService?.dispose();
@@ -124198,8 +126436,8 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
     function markTranscriptPtyOutputActivity(sessionId) {
       activeService?.markPtyOutputActivity(sessionId);
     }
-    var fs83;
-    var import_node_crypto41;
+    var fs85;
+    var import_node_crypto40;
     var MAX_TRACKED_SESSIONS;
     var TRANSCRIPT_PTY_DIRTY_THROTTLE_MS;
     var TRANSCRIPT_STAT_POLL_INTERVAL_MS;
@@ -124208,8 +126446,8 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
     var init_transcript_publisher = __esm2({
       "src/seqscribe/transcript-publisher.ts"() {
         "use strict";
-        fs83 = __toESM2(require("fs"));
-        import_node_crypto41 = require("crypto");
+        fs85 = __toESM2(require("fs"));
+        import_node_crypto40 = require("crypto");
         init_logger();
         init_message_identity_ledger();
         init_transcript_keyed_codec();
@@ -124395,7 +126633,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
               const path144 = this.knownPaths.get(sessionId);
               if (!path144) continue;
               try {
-                const st = fs83.statSync(path144);
+                const st = fs85.statSync(path144);
                 const sig2 = `${st.dev}:${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
                 const lastSig = this.lastSignatures.get(sessionId);
                 if (sig2 !== lastSig) {
@@ -124758,1517 +126996,6 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
           }
         };
         activeService = null;
-      }
-    });
-    function assertNotSecretPath(candidatePathOrRel) {
-      if (typeof candidatePathOrRel !== "string" || !candidatePathOrRel) {
-        return;
-      }
-      const normalized = candidatePathOrRel.replace(/\\/g, "/");
-      const segments = normalized.split("/").filter(Boolean);
-      for (const seg of segments) {
-        for (const pattern of SECRET_BASENAME_PATTERNS) {
-          if (pattern.test(seg)) {
-            throw new ArtifactGuardError(
-              "secret_file_refused",
-              `Artifact path "${candidatePathOrRel}" matches secret filename pattern and is refused (secret_file_refused)`
-            );
-          }
-        }
-      }
-    }
-    function redactSecretLines(text10) {
-      let redactedLines = 0;
-      const out = text10.split("\n").map((line) => {
-        if (!containsEncodedOrRawSecret(line, SECRET_CONTENT_PATTERNS)) return line;
-        redactedLines++;
-        const lead = /^[+\- ]/.test(line) ? line[0] : "";
-        return `${lead}[line redacted: matched a secret or token pattern]`;
-      });
-      return { text: out.join("\n"), redactedLines };
-    }
-    function assertNotSecretContent(buffer, _kind) {
-      if (buffer.byteLength === 0) {
-        return;
-      }
-      const text10 = buffer.toString("utf8");
-      if (containsEncodedOrRawSecret(text10, SECRET_CONTENT_PATTERNS)) {
-        throw new ArtifactGuardError(
-          "secret_file_refused",
-          "Artifact content matches a secret or token pattern and is refused (secret_file_refused)"
-        );
-      }
-    }
-    function isUncPath(raw) {
-      return raw.startsWith("\\\\") || raw.startsWith("//");
-    }
-    function isStrictSubpath(realRoot, targetPath) {
-      const rel = path92.relative(realRoot, targetPath);
-      if (!rel || rel === ".") {
-        return false;
-      }
-      if (rel === ".." || rel.startsWith(`..${path92.sep}`) || rel.startsWith("../") || path92.isAbsolute(rel)) {
-        return false;
-      }
-      return true;
-    }
-    function normalizeOptions2(declaredKindOrOptions) {
-      if (!declaredKindOrOptions) {
-        return {};
-      }
-      if (typeof declaredKindOrOptions === "string") {
-        return { declaredKind: declaredKindOrOptions };
-      }
-      return declaredKindOrOptions;
-    }
-    function sanitizeArtifactTitle(rawTitle, fallbackFilename) {
-      const cleanFallback = fallbackFilename.replace(/[\u0000-\u001F\u007F]+/g, "").trim() || "artifact";
-      if (typeof rawTitle !== "string") {
-        return cleanFallback;
-      }
-      const cleaned = rawTitle.replace(/[\r\n\t]+/g, " ").replace(/[\u0000-\u001F\u007F]+/g, "").trim();
-      if (!cleaned) {
-        return cleanFallback;
-      }
-      const codePoints2 = Array.from(cleaned);
-      if (codePoints2.length <= MAX_TITLE_CHARS) {
-        return cleaned;
-      }
-      return codePoints2.slice(0, MAX_TITLE_CHARS).join("");
-    }
-    function extractUtf8Preview(buffer, maxChars = MAX_PREVIEW_TEXT_CHARS) {
-      if (buffer.byteLength === 0 || maxChars <= 0) {
-        return "";
-      }
-      const maxSliceBytes = Math.min(buffer.byteLength, maxChars * 4 + 4);
-      const slice = buffer.subarray(0, maxSliceBytes);
-      const decoded = slice.toString("utf8");
-      const codePoints2 = Array.from(decoded).slice(0, maxChars);
-      while (codePoints2.length > 0 && codePoints2.join("").length > maxChars) {
-        codePoints2.pop();
-      }
-      return codePoints2.join("");
-    }
-    function validateExtensionKindAndMime(candidatePath, realTargetPath, options) {
-      const candidateExt = path92.extname(candidatePath).toLowerCase();
-      const realExt = path92.extname(realTargetPath).toLowerCase();
-      const candidateSpec = ARTIFACT_EXTENSION_MAP[candidateExt];
-      const realSpec = ARTIFACT_EXTENSION_MAP[realExt];
-      if (!candidateSpec || !realSpec) {
-        throw new ArtifactGuardError(
-          "unsupported_mime_or_kind",
-          `Unsupported artifact file extension "${candidateExt || realExt || "(none)"}" (unsupported_mime_or_kind)`
-        );
-      }
-      if (candidateSpec.kind !== realSpec.kind || candidateSpec.mime !== realSpec.mime) {
-        throw new ArtifactGuardError(
-          "unsupported_mime_or_kind",
-          `Symlink extension "${candidateExt}" does not match target extension "${realExt}" (unsupported_mime_or_kind)`
-        );
-      }
-      const { kind, mime: canonicalMime } = realSpec;
-      if (options.declaredKind !== void 0) {
-        if (!ARTIFACT_KINDS.includes(options.declaredKind) || options.declaredKind !== kind) {
-          throw new ArtifactGuardError(
-            "unsupported_mime_or_kind",
-            `Declared kind "${options.declaredKind}" does not match file kind "${kind}" (unsupported_mime_or_kind)`
-          );
-        }
-      }
-      let resolvedMime = canonicalMime;
-      if (options.declaredMime !== void 0) {
-        const normalizedMime = options.declaredMime.split(";")[0]?.trim().toLowerCase() ?? "";
-        const allowedMimes = MIME_BY_KIND[kind];
-        if (!normalizedMime || normalizedMime === "image/svg+xml" || normalizedMime === "text/html" || normalizedMime === "application/xhtml+xml" || !allowedMimes.includes(normalizedMime) || kind === "image" && normalizedMime !== canonicalMime) {
-          throw new ArtifactGuardError(
-            "unsupported_mime_or_kind",
-            `Declared MIME "${options.declaredMime}" is not allowed for kind "${kind}" (unsupported_mime_or_kind)`
-          );
-        }
-        resolvedMime = normalizedMime;
-      }
-      return { kind, mime: resolvedMime };
-    }
-    function resolveCanonicalWorkspaceRoot(workspaceRoot) {
-      if (typeof workspaceRoot !== "string" || workspaceRoot.trim().length === 0 || workspaceRoot.includes("\0")) {
-        throw new ArtifactGuardError(
-          "invalid_workspace_root",
-          "Workspace root must be a non-empty valid directory path (invalid_workspace_root)"
-        );
-      }
-      if (isUncPath(workspaceRoot)) {
-        throw new ArtifactGuardError(
-          "invalid_workspace_root",
-          "UNC workspace roots are not allowed (invalid_workspace_root)"
-        );
-      }
-      const resolvedWorkspaceInput = path92.resolve(workspaceRoot);
-      let realWorkspaceRoot;
-      try {
-        realWorkspaceRoot = fs84.realpathSync(resolvedWorkspaceInput);
-        const st = fs84.statSync(realWorkspaceRoot);
-        if (!st.isDirectory()) {
-          throw new ArtifactGuardError(
-            "invalid_workspace_root",
-            "Workspace root is not a directory (invalid_workspace_root)"
-          );
-        }
-      } catch (err2) {
-        if (err2 instanceof ArtifactGuardError) {
-          throw err2;
-        }
-        throw new ArtifactGuardError(
-          "invalid_workspace_root",
-          `Workspace root cannot be resolved: ${err2.message} (invalid_workspace_root)`
-        );
-      }
-      return { realWorkspaceRoot, resolvedWorkspaceInput };
-    }
-    function resolveCandidateWithinWorkspace(realWorkspaceRoot, resolvedWorkspaceInput, rawPath) {
-      if (typeof rawPath !== "string" || rawPath.trim().length === 0 || rawPath.includes("\0")) {
-        throw new ArtifactGuardError(
-          "path_outside_workspace",
-          "Artifact path must be a non-empty string without null bytes (path_outside_workspace)"
-        );
-      }
-      if (isUncPath(rawPath)) {
-        throw new ArtifactGuardError(
-          "path_outside_workspace",
-          "UNC artifact paths are not allowed (path_outside_workspace)"
-        );
-      }
-      if (process.platform !== "win32" && /^[a-zA-Z]:[\\/]/.test(rawPath)) {
-        throw new ArtifactGuardError(
-          "path_outside_workspace",
-          "Windows drive-letter paths are not allowed on POSIX (path_outside_workspace)"
-        );
-      }
-      let candidatePath;
-      if (path92.isAbsolute(rawPath)) {
-        const normalizedAbs = path92.resolve(rawPath.replace(/[\\/]+/g, path92.sep));
-        if (normalizedAbs === realWorkspaceRoot || normalizedAbs === resolvedWorkspaceInput) {
-          throw new ArtifactGuardError(
-            "not_a_regular_file",
-            "Target path is the workspace root directory (not_a_regular_file)"
-          );
-        }
-        if (isStrictSubpath(realWorkspaceRoot, normalizedAbs)) {
-          candidatePath = normalizedAbs;
-        } else if (isStrictSubpath(resolvedWorkspaceInput, normalizedAbs)) {
-          const relFromInput = path92.relative(resolvedWorkspaceInput, normalizedAbs);
-          candidatePath = path92.resolve(realWorkspaceRoot, relFromInput);
-        } else {
-          throw new ArtifactGuardError(
-            "path_outside_workspace",
-            `Artifact path "${rawPath}" is outside workspace root (path_outside_workspace)`
-          );
-        }
-      } else {
-        const normalizedRelInput = rawPath.replace(/[\\/]+/g, path92.sep);
-        candidatePath = path92.resolve(realWorkspaceRoot, normalizedRelInput);
-        if (candidatePath === realWorkspaceRoot) {
-          throw new ArtifactGuardError(
-            "not_a_regular_file",
-            "Target path resolves to workspace root directory (not_a_regular_file)"
-          );
-        }
-        if (!isStrictSubpath(realWorkspaceRoot, candidatePath)) {
-          throw new ArtifactGuardError(
-            "path_outside_workspace",
-            `Relative path "${rawPath}" escapes workspace root (path_outside_workspace)`
-          );
-        }
-      }
-      const lexicalRel = path92.relative(realWorkspaceRoot, candidatePath);
-      if (!isStrictSubpath(realWorkspaceRoot, candidatePath)) {
-        throw new ArtifactGuardError(
-          "path_outside_workspace",
-          `Resolved path "${rawPath}" escapes workspace root (path_outside_workspace)`
-        );
-      }
-      const segments = lexicalRel.split(path92.sep);
-      for (const seg of segments) {
-        if (!seg || seg === "." || seg === ".." || WINDOWS_RESERVED_NAME_RE.test(seg)) {
-          throw new ArtifactGuardError(
-            "path_outside_workspace",
-            `Invalid or reserved path segment "${seg}" in artifact path (path_outside_workspace)`
-          );
-        }
-      }
-      return { candidatePath, lexicalRel };
-    }
-    function verifyAncestorAndTargetContainment(realWorkspaceRoot, candidatePath, lexicalRel) {
-      const segments = lexicalRel.split(path92.sep);
-      let currentPath = realWorkspaceRoot;
-      for (let i = 0; i < segments.length; i++) {
-        currentPath = path92.join(currentPath, segments[i]);
-        let entryLstat;
-        try {
-          entryLstat = fs84.lstatSync(currentPath);
-        } catch (err2) {
-          const code = err2.code;
-          if (code === "ENOENT" || code === "ENOTDIR") {
-            throw new ArtifactGuardError(
-              "artifact_not_found",
-              `Artifact file not found: ${lexicalRel} (artifact_not_found)`
-            );
-          }
-          throw new ArtifactGuardError(
-            "path_outside_workspace",
-            `Cannot stat artifact path component: ${err2.message} (path_outside_workspace)`
-          );
-        }
-        if (entryLstat.isSymbolicLink()) {
-          let resolvedLink;
-          try {
-            resolvedLink = fs84.realpathSync(currentPath);
-          } catch {
-            throw new ArtifactGuardError(
-              "path_outside_workspace",
-              `Symlink at "${segments.slice(0, i + 1).join("/")}" cannot be resolved inside workspace (path_outside_workspace)`
-            );
-          }
-          if (!isStrictSubpath(realWorkspaceRoot, resolvedLink)) {
-            throw new ArtifactGuardError(
-              "path_outside_workspace",
-              `Symlink at "${segments.slice(0, i + 1).join("/")}" escapes workspace root (path_outside_workspace)`
-            );
-          }
-        }
-      }
-      let realTargetPath;
-      try {
-        realTargetPath = fs84.realpathSync(candidatePath);
-      } catch (err2) {
-        const code = err2.code;
-        if (code === "ENOENT") {
-          throw new ArtifactGuardError(
-            "artifact_not_found",
-            `Artifact file not found: ${lexicalRel} (artifact_not_found)`
-          );
-        }
-        throw new ArtifactGuardError(
-          "path_outside_workspace",
-          `Cannot resolve canonical artifact path: ${err2.message} (path_outside_workspace)`
-        );
-      }
-      if (!isStrictSubpath(realWorkspaceRoot, realTargetPath)) {
-        throw new ArtifactGuardError(
-          "path_outside_workspace",
-          `Canonical target "${realTargetPath}" escapes workspace root (path_outside_workspace)`
-        );
-      }
-      let targetLstat;
-      try {
-        targetLstat = fs84.lstatSync(realTargetPath);
-      } catch (err2) {
-        const code = err2.code;
-        if (code === "ENOENT") {
-          throw new ArtifactGuardError(
-            "artifact_not_found",
-            `Artifact target disappeared: ${lexicalRel} (artifact_not_found)`
-          );
-        }
-        throw new ArtifactGuardError(
-          "path_outside_workspace",
-          `Cannot lstat canonical target: ${err2.message} (path_outside_workspace)`
-        );
-      }
-      if (targetLstat.isSymbolicLink()) {
-        throw new ArtifactGuardError(
-          "path_outside_workspace",
-          "Canonical target unexpectedly remained a symbolic link (path_outside_workspace)"
-        );
-      }
-      if (!targetLstat.isFile()) {
-        throw new ArtifactGuardError(
-          "not_a_regular_file",
-          `Artifact target "${lexicalRel}" is not a regular file (not_a_regular_file)`
-        );
-      }
-      if (targetLstat.nlink > 1) {
-        throw new ArtifactGuardError(
-          "path_outside_workspace",
-          `Hard-linked regular files (nlink=${targetLstat.nlink}) are refused for "${lexicalRel}" (path_outside_workspace)`
-        );
-      }
-      if (targetLstat.size > MAX_ARTIFACT_BYTES) {
-        throw new ArtifactGuardError(
-          "artifact_too_large",
-          `Artifact size ${targetLstat.size} exceeds limit of ${MAX_ARTIFACT_BYTES} bytes (artifact_too_large)`
-        );
-      }
-      return { realTargetPath, targetLstat };
-    }
-    function readVerifiedArtifactFile(workspaceRoot, rawPath, declaredKindOrOptions) {
-      const options = normalizeOptions2(declaredKindOrOptions);
-      const expectedPinnedRoot = typeof options.pinnedCanonicalWorkspaceRoot === "string" && options.pinnedCanonicalWorkspaceRoot.trim().length > 0 ? path92.resolve(options.pinnedCanonicalWorkspaceRoot) : null;
-      const { realWorkspaceRoot, resolvedWorkspaceInput } = resolveCanonicalWorkspaceRoot(workspaceRoot);
-      if (expectedPinnedRoot !== null && realWorkspaceRoot !== expectedPinnedRoot) {
-        throw new ArtifactGuardError(
-          "path_outside_workspace",
-          "Canonical workspace root changed from pinned workspace root before read (path_outside_workspace)"
-        );
-      }
-      const { candidatePath, lexicalRel } = resolveCandidateWithinWorkspace(
-        realWorkspaceRoot,
-        resolvedWorkspaceInput,
-        rawPath
-      );
-      const { realTargetPath, targetLstat } = verifyAncestorAndTargetContainment(
-        realWorkspaceRoot,
-        candidatePath,
-        lexicalRel
-      );
-      assertNotSecretPath(rawPath);
-      assertNotSecretPath(lexicalRel);
-      assertNotSecretPath(path92.relative(realWorkspaceRoot, realTargetPath));
-      const { kind, mime } = validateExtensionKindAndMime(candidatePath, realTargetPath, options);
-      let rootLstat;
-      try {
-        rootLstat = fs84.lstatSync(realWorkspaceRoot);
-      } catch {
-        throw new ArtifactGuardError(
-          "invalid_workspace_root",
-          "Canonical workspace root is inaccessible (invalid_workspace_root)"
-        );
-      }
-      if (rootLstat.isSymbolicLink() || !rootLstat.isDirectory() || expectedPinnedRoot !== null && realWorkspaceRoot !== expectedPinnedRoot) {
-        throw new ArtifactGuardError(
-          "path_outside_workspace",
-          "Canonical workspace root is not a regular directory (path_outside_workspace)"
-        );
-      }
-      options._testHooks?.beforeOpen?.();
-      const openFlags = fs84.constants.O_RDONLY | (fs84.constants.O_NOFOLLOW ?? 0);
-      let fd;
-      try {
-        fd = fs84.openSync(realTargetPath, openFlags);
-      } catch (err2) {
-        const code = err2.code;
-        if (code === "ELOOP" || code === "EMLINK") {
-          throw new ArtifactGuardError(
-            "path_outside_workspace",
-            "Target was swapped with a symbolic link before open (path_outside_workspace)"
-          );
-        }
-        if (code === "EISDIR") {
-          throw new ArtifactGuardError(
-            "not_a_regular_file",
-            "Target is a directory, not a regular file (not_a_regular_file)"
-          );
-        }
-        if (code === "ENOENT") {
-          throw new ArtifactGuardError(
-            "artifact_not_found",
-            `Artifact file disappeared before open: ${lexicalRel} (artifact_not_found)`
-          );
-        }
-        throw new ArtifactGuardError(
-          "path_outside_workspace",
-          `Failed to open artifact file safely: ${err2.message} (path_outside_workspace)`
-        );
-      }
-      let buffer;
-      try {
-        const fdStat = fs84.fstatSync(fd);
-        if (!fdStat.isFile()) {
-          throw new ArtifactGuardError(
-            "not_a_regular_file",
-            "Opened descriptor is not a regular file (not_a_regular_file)"
-          );
-        }
-        if (fdStat.nlink > 1) {
-          throw new ArtifactGuardError(
-            "path_outside_workspace",
-            `Opened descriptor has multiple hard links (nlink=${fdStat.nlink}) (path_outside_workspace)`
-          );
-        }
-        if (fdStat.dev !== targetLstat.dev || fdStat.ino !== targetLstat.ino) {
-          throw new ArtifactGuardError(
-            "path_outside_workspace",
-            "File inode/device changed between lstat and open (path_outside_workspace)"
-          );
-        }
-        if (fdStat.size > MAX_ARTIFACT_BYTES) {
-          throw new ArtifactGuardError(
-            "artifact_too_large",
-            `Artifact size ${fdStat.size} exceeds limit of ${MAX_ARTIFACT_BYTES} bytes (artifact_too_large)`
-          );
-        }
-        options._testHooks?.afterStatBeforeRead?.();
-        const chunks = [];
-        let totalBytes = 0;
-        let position = 0;
-        const scratch = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES2, Math.max(1, fdStat.size + 1)));
-        while (true) {
-          const bytesRead = fs84.readSync(fd, scratch, 0, scratch.byteLength, position);
-          if (bytesRead <= 0) {
-            break;
-          }
-          totalBytes += bytesRead;
-          position += bytesRead;
-          if (totalBytes > MAX_ARTIFACT_BYTES) {
-            throw new ArtifactGuardError(
-              "artifact_too_large",
-              `Artifact grew beyond ${MAX_ARTIFACT_BYTES} bytes during read (artifact_too_large)`
-            );
-          }
-          chunks.push(Buffer.from(scratch.subarray(0, bytesRead)));
-        }
-        const postFdStat = fs84.fstatSync(fd);
-        if (!postFdStat.isFile()) {
-          throw new ArtifactGuardError(
-            "not_a_regular_file",
-            "Descriptor ceased to be a regular file after read (not_a_regular_file)"
-          );
-        }
-        if (postFdStat.nlink > 1) {
-          throw new ArtifactGuardError(
-            "path_outside_workspace",
-            `Descriptor acquired additional hard links during read (nlink=${postFdStat.nlink}) (path_outside_workspace)`
-          );
-        }
-        if (postFdStat.size > MAX_ARTIFACT_BYTES) {
-          throw new ArtifactGuardError(
-            "artifact_too_large",
-            `Artifact size ${postFdStat.size} exceeds limit of ${MAX_ARTIFACT_BYTES} bytes after read (artifact_too_large)`
-          );
-        }
-        let postRootReal;
-        let postRootLstat;
-        let postRealTarget;
-        let postTargetLstat;
-        try {
-          postRootLstat = fs84.lstatSync(realWorkspaceRoot);
-          postRootReal = fs84.realpathSync(realWorkspaceRoot);
-          postRealTarget = fs84.realpathSync(candidatePath);
-          postTargetLstat = fs84.lstatSync(postRealTarget);
-        } catch {
-          throw new ArtifactGuardError(
-            "path_outside_workspace",
-            "Artifact path or workspace root was removed or replaced during read (path_outside_workspace)"
-          );
-        }
-        if (postRootLstat.isSymbolicLink() || !postRootLstat.isDirectory() || postRootReal !== realWorkspaceRoot || postRootLstat.dev !== rootLstat.dev || postRootLstat.ino !== rootLstat.ino || !isStrictSubpath(realWorkspaceRoot, postRealTarget) || postTargetLstat.isSymbolicLink() || !postTargetLstat.isFile() || postTargetLstat.nlink > 1 || postTargetLstat.dev !== fdStat.dev || postTargetLstat.ino !== fdStat.ino) {
-          throw new ArtifactGuardError(
-            "path_outside_workspace",
-            "Artifact path escaped workspace or changed inode during read (path_outside_workspace)"
-          );
-        }
-        buffer = chunks.length === 0 ? Buffer.alloc(0) : Buffer.concat(chunks, totalBytes);
-      } finally {
-        try {
-          fs84.closeSync(fd);
-        } catch {
-        }
-      }
-      assertNotSecretContent(buffer, kind);
-      const sha2563 = crypto11.createHash("sha256").update(buffer).digest("hex");
-      const relPath = lexicalRel.split(path92.sep).join("/");
-      const filename = path92.posix.basename(relPath);
-      const title = sanitizeArtifactTitle(options.title, filename);
-      const previewText = kind === "image" ? null : extractUtf8Preview(buffer, MAX_PREVIEW_TEXT_CHARS);
-      return {
-        workspaceRoot: realWorkspaceRoot,
-        absPath: realTargetPath,
-        relPath,
-        filename,
-        title,
-        kind,
-        mime,
-        sizeBytes: buffer.byteLength,
-        sha256: sha2563,
-        previewText,
-        buffer
-      };
-    }
-    function resolveArtifactFile(workspaceRoot, rawPath, declaredKindOrOptions) {
-      const { buffer: _buffer, ...metadata } = readVerifiedArtifactFile(
-        workspaceRoot,
-        rawPath,
-        declaredKindOrOptions
-      );
-      return metadata;
-    }
-    var crypto11;
-    var fs84;
-    var path92;
-    var READ_CHUNK_BYTES2;
-    var MAX_TITLE_CHARS;
-    var WINDOWS_RESERVED_NAME_RE;
-    var SECRET_BASENAME_PATTERNS;
-    var SECRET_CONTENT_PATTERNS;
-    var init_artifact_path_guard = __esm2({
-      "src/artifacts/artifact-path-guard.ts"() {
-        "use strict";
-        crypto11 = __toESM2(require("crypto"));
-        fs84 = __toESM2(require("fs"));
-        path92 = __toESM2(require("path"));
-        init_credential_redactor();
-        init_types6();
-        READ_CHUNK_BYTES2 = 64 * 1024;
-        MAX_TITLE_CHARS = 200;
-        WINDOWS_RESERVED_NAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
-        SECRET_BASENAME_PATTERNS = [
-          /^\.env/i,
-          /\.pem$/i,
-          /\.key$/i,
-          /\.p12$/i,
-          /\.pfx$/i,
-          /\.kdbx$/i,
-          /^id_(rsa|ed25519|ecdsa|dsa)/i,
-          /^\.npmrc$/i,
-          /^\.pypirc$/i,
-          /^\.netrc$/i,
-          /^credentials\.json$/i,
-          /^client_secret.*\.json$/i
-        ];
-        SECRET_CONTENT_PATTERNS = [
-          /-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----/,
-          /\bsk-(?:ant-|proj-|live-|test-)?[A-Za-z0-9_-]{16,}\b/,
-          /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{16,}\b/,
-          /\bgithub_pat_[A-Za-z0-9_]{16,}\b/,
-          /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/,
-          /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/,
-          /\bAIza[0-9A-Za-z_-]{35}\b/,
-          /\b(?:adk|adm|shr|wtk|wtt|wsb)_[A-Za-z0-9_-]{12,}\b/,
-          /\bmcp_sess_[A-Za-z0-9_-]{8,}\b/,
-          /\bADHDEV_MCP_SESSION_CREDENTIAL\b/,
-          /\bmcpSessionCredential(?:\s*(?<![=!<>])[:=](?![=>])|["']\s*:(?![=>]))\s*(?:(["'])(?!\[REDACTED|\$\{)(?:[^\s"'`\\]{6,}|[^\s"'`\\]*\u2026[^\s"'`\\]*)\1|(?![\"'])(?!\[REDACTED)(?:mcp_sess_|[A-Za-z0-9_~+/-]*[0-9][A-Za-z0-9_~+/-]*)[A-Za-z0-9_~+/-]{5,}={0,2}(?=$|[\s,;}\]&'"]))/i,
-          /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/,
-          /\b(?:[A-Z0-9_]*?(?:API_KEY|SECRET_KEY|ACCESS_TOKEN|AUTH_TOKEN|PRIVATE_KEY|CLIENT_SECRET|SESSION_CREDENTIAL))(?:\s*(?<![=!<>])[:=](?![=>])|["']\s*:(?![=>]))\s*(?:(["'])(?!\[REDACTED|\$\{)(?:[^\s"'`\\]{8,}|[^\s"'`\\]*\u2026[^\s"'`\\]*)\1|(?![\"'])(?!\[REDACTED)(?:mcp_sess_|sk-|gh[pousr]_|github_pat_|xox[baprs]-|AKIA|ASIA|AIza|eyJ|(?:adk|adm|adp|shr|wtk|wtt|wsb)_|[A-Za-z0-9_~+/-]*[0-9][A-Za-z0-9_~+/-]*)[A-Za-z0-9_~+/-]{8,}={0,2}(?=$|[\s,;}\]&'"]))/i
-        ];
-      }
-    });
-    function unwrapDatabase(input) {
-      if (input && typeof input === "object" && "db" in input && input.db && typeof input.db.prepare === "function") {
-        return input.db;
-      }
-      if (input && typeof input === "object" && typeof input.prepare === "function") {
-        return input;
-      }
-      throw new TypeError("Invalid ArtifactStoreDatabase: expected SQLite database with prepare() and exec()");
-    }
-    function rowToArtifactRecord(row2) {
-      return {
-        artifactId: row2.artifact_id,
-        sessionId: row2.session_id,
-        taskId: row2.task_id ?? null,
-        ...row2.mesh_id != null ? { meshId: row2.mesh_id } : {},
-        ...row2.mission_id != null ? { missionId: row2.mission_id } : {},
-        ...row2.producer_role != null ? { producerRole: row2.producer_role } : {},
-        ...row2.origin_daemon_id != null ? { originDaemonId: row2.origin_daemon_id } : {},
-        workspaceRoot: row2.workspace_root,
-        relPath: row2.rel_path,
-        kind: row2.kind,
-        mime: row2.mime,
-        title: row2.title,
-        sizeBytes: row2.size_bytes,
-        sha256: row2.sha256,
-        previewText: row2.preview_text ?? null,
-        createdAt: row2.created_at,
-        updatedAt: row2.updated_at
-      };
-    }
-    function generateArtifactId() {
-      return `art_${crypto12.randomBytes(8).toString("hex")}`;
-    }
-    function ensureArtifactStoreSchema(dbInput) {
-      const db3 = unwrapDatabase(dbInput);
-      db3.exec(SESSION_ARTIFACTS_SCHEMA_DDL);
-      const cols = new Set(
-        db3.prepare(`PRAGMA table_info(session_artifacts)`).all().map(
-          (r) => r.name
-        )
-      );
-      for (const col of ["mesh_id", "mission_id", "producer_role", "origin_daemon_id"]) {
-        if (!cols.has(col)) {
-          db3.exec(`ALTER TABLE session_artifacts ADD COLUMN ${col} TEXT`);
-        }
-      }
-      db3.exec(SESSION_ARTIFACTS_SHARING_INDEXES_DDL);
-    }
-    function runInImmediateTransaction(db3, fn) {
-      if (typeof db3.transaction === "function") {
-        const tx2 = db3.transaction(fn);
-        if (typeof tx2.immediate === "function") {
-          return tx2.immediate();
-        }
-        return tx2();
-      }
-      db3.exec("BEGIN IMMEDIATE");
-      try {
-        const result = fn();
-        db3.exec("COMMIT");
-        return result;
-      } catch (err2) {
-        try {
-          db3.exec("ROLLBACK");
-        } catch {
-        }
-        throw err2;
-      }
-    }
-    function newestWindowSql(filteredSelect) {
-      return `SELECT * FROM (${filteredSelect}
-                 ORDER BY created_at DESC, window_rowid DESC
-                 LIMIT ?)
-             ORDER BY created_at ASC, window_rowid ASC`;
-    }
-    function registerSessionArtifact(storeOrDb, input) {
-      const store5 = storeOrDb instanceof ArtifactStore ? storeOrDb : new ArtifactStore(storeOrDb);
-      return store5.register(input);
-    }
-    function verifyAndReadArtifactBuffer(record8, options) {
-      if (options?.sessionId !== void 0 && record8.sessionId !== options.sessionId) {
-        throw new ArtifactGuardError(
-          "artifact_session_mismatch",
-          `Artifact "${record8.artifactId}" does not belong to session "${options.sessionId}" (artifact_session_mismatch)`
-        );
-      }
-      const pinnedCanonicalRoot = path93.resolve(record8.workspaceRoot);
-      let storedRootLstat;
-      let currentRealStoredRoot;
-      try {
-        storedRootLstat = fs85.lstatSync(pinnedCanonicalRoot);
-        currentRealStoredRoot = fs85.realpathSync(pinnedCanonicalRoot);
-      } catch {
-        throw new ArtifactGuardError(
-          "path_outside_workspace",
-          "Stored canonical workspace root is missing or inaccessible (path_outside_workspace)"
-        );
-      }
-      if (storedRootLstat.isSymbolicLink() || !storedRootLstat.isDirectory() || currentRealStoredRoot !== pinnedCanonicalRoot) {
-        throw new ArtifactGuardError(
-          "path_outside_workspace",
-          "Stored canonical workspace root was redirected or replaced by a symbolic link (path_outside_workspace)"
-        );
-      }
-      if (options?.trustedWorkspaceRoot !== void 0) {
-        let realTrustedRoot;
-        try {
-          realTrustedRoot = fs85.realpathSync(options.trustedWorkspaceRoot);
-        } catch {
-          throw new ArtifactGuardError(
-            "invalid_workspace_root",
-            "Trusted workspace root cannot be resolved (invalid_workspace_root)"
-          );
-        }
-        if (realTrustedRoot !== pinnedCanonicalRoot) {
-          throw new ArtifactGuardError(
-            "path_outside_workspace",
-            "Artifact workspace root does not match trusted workspace root (path_outside_workspace)"
-          );
-        }
-      }
-      return readVerifiedArtifactFile(pinnedCanonicalRoot, record8.relPath, {
-        declaredKind: record8.kind,
-        declaredMime: record8.mime,
-        title: record8.title,
-        pinnedCanonicalWorkspaceRoot: pinnedCanonicalRoot,
-        _testHooks: options?._testHooks
-      });
-    }
-    function readArtifactRecordPaged(record8, options) {
-      const verified = verifyAndReadArtifactBuffer(record8, options);
-      const encoding = record8.kind === "image" ? "base64" : "utf8";
-      const rawTotalBytes = verified.buffer.byteLength;
-      const rawOffsetOpt = typeof options?.offset === "number" ? options.offset : typeof options?.pageOffset === "number" ? options.pageOffset : void 0;
-      const requestedOffset = typeof rawOffsetOpt === "number" && Number.isFinite(rawOffsetOpt) && rawOffsetOpt >= 0 ? Math.trunc(rawOffsetOpt) : 0;
-      const requestedLimit = typeof options?.limit === "number" && Number.isFinite(options.limit) && options.limit > 0 ? Math.min(Math.trunc(options.limit), MAX_ARTIFACT_MCP_PAGE_BYTES) : MAX_ARTIFACT_MCP_PAGE_BYTES;
-      const safeOffset = Math.min(requestedOffset, rawTotalBytes);
-      const endOffset = Math.min(safeOffset + requestedLimit, rawTotalBytes);
-      const slice = verified.buffer.subarray(safeOffset, endOffset);
-      const pageBytes = slice.byteLength;
-      const hasMore = endOffset < rawTotalBytes;
-      const nextOffset = hasMore ? endOffset : null;
-      const content = encoding === "base64" ? slice.toString("base64") : slice.toString("utf8");
-      const sha256Changed = verified.sha256 !== record8.sha256;
-      return {
-        artifactId: record8.artifactId,
-        sessionId: record8.sessionId,
-        relPath: record8.relPath,
-        kind: record8.kind,
-        mime: record8.mime,
-        title: record8.title,
-        content,
-        encoding,
-        sizeBytes: verified.sizeBytes,
-        totalBytes: rawTotalBytes,
-        offset: safeOffset,
-        pageBytes,
-        hasMore,
-        nextOffset,
-        sha256: verified.sha256,
-        registeredSha256: record8.sha256,
-        sha256Changed,
-        hashChanged: sha256Changed
-      };
-    }
-    var crypto12;
-    var fs85;
-    var path93;
-    var SESSION_ARTIFACTS_SCHEMA_DDL;
-    var SESSION_ARTIFACTS_SHARING_INDEXES_DDL;
-    var ArtifactStore;
-    var init_artifact_store = __esm2({
-      "src/artifacts/artifact-store.ts"() {
-        "use strict";
-        crypto12 = __toESM2(require("crypto"));
-        fs85 = __toESM2(require("fs"));
-        path93 = __toESM2(require("path"));
-        init_artifact_path_guard();
-        init_types6();
-        SESSION_ARTIFACTS_SCHEMA_DDL = `
-    CREATE TABLE IF NOT EXISTS session_artifacts (
-        artifact_id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        task_id TEXT,
-        mesh_id TEXT,
-        mission_id TEXT,
-        producer_role TEXT,
-        origin_daemon_id TEXT,
-        workspace_root TEXT NOT NULL,
-        rel_path TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        mime TEXT NOT NULL,
-        title TEXT NOT NULL,
-        size_bytes INTEGER NOT NULL,
-        sha256 TEXT NOT NULL,
-        preview_text TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-    );
-
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_session_artifacts_unique_path
-        ON session_artifacts(session_id, rel_path);
-
-    CREATE INDEX IF NOT EXISTS idx_session_artifacts_session
-        ON session_artifacts(session_id, created_at);
-`;
-        SESSION_ARTIFACTS_SHARING_INDEXES_DDL = `
-    CREATE INDEX IF NOT EXISTS idx_session_artifacts_mesh
-        ON session_artifacts(mesh_id, created_at);
-
-    CREATE INDEX IF NOT EXISTS idx_session_artifacts_mission
-        ON session_artifacts(mission_id, created_at);
-`;
-        ArtifactStore = class {
-          db;
-          constructor(dbInput) {
-            this.db = unwrapDatabase(dbInput);
-            ensureArtifactStoreSchema(this.db);
-          }
-          /**
-           * Register or update a workspace file as a session artifact.
-           *
-           * - Re-registering the same `(sessionId, relPath)` retains the existing
-           *   `artifactId` (`art_<16hex>`) and `createdAt`, updates `sizeBytes`, `sha256`,
-           *   `previewText`, `title`, `mime`, `kind`, and `updatedAt`, and reports
-           *   `isUpdate: true`.
-           * - Enforces `MAX_ARTIFACTS_PER_SESSION = 50` on NEW records per session;
-           *   updates to an already-registered `(sessionId, relPath)` at cap 50 remain valid.
-           */
-          register(input) {
-            if (typeof input?.sessionId !== "string" || input.sessionId.trim().length === 0) {
-              throw new Error("sessionId must be a non-empty string");
-            }
-            const sessionId = input.sessionId.trim();
-            const rawPath = input.path ?? input.relPath ?? input.rawPath ?? input.filePath ?? "";
-            const declaredKind = input.declaredKind ?? input.kind;
-            const declaredMime = input.declaredMime ?? input.mime;
-            const prePriorRootRow = this.db.prepare(
-              `SELECT workspace_root FROM session_artifacts WHERE session_id = ? LIMIT 1`
-            ).get(sessionId);
-            const resolved = resolveArtifactFile(input.workspaceRoot, rawPath, {
-              declaredKind,
-              declaredMime,
-              title: input.title,
-              pinnedCanonicalWorkspaceRoot: prePriorRootRow ? path93.resolve(prePriorRootRow.workspace_root) : void 0,
-              _testHooks: input._testHooks
-            });
-            const now = typeof input.now === "number" && Number.isFinite(input.now) ? Math.trunc(input.now) : Date.now();
-            const meshId = typeof input.meshId === "string" && input.meshId.trim() ? input.meshId.trim() : null;
-            const missionId = typeof input.missionId === "string" && input.missionId.trim() ? input.missionId.trim() : null;
-            const producerRole = typeof input.producerRole === "string" && input.producerRole.trim() ? input.producerRole.trim() : null;
-            const originDaemonId = typeof input.originDaemonId === "string" && input.originDaemonId.trim() ? input.originDaemonId.trim() : null;
-            return runInImmediateTransaction(this.db, () => {
-              if (now >= 1e11) {
-                this.pruneExpired(now, ARTIFACT_RETENTION_MS, 1e11);
-              }
-              const priorRootRow = this.db.prepare(
-                `SELECT workspace_root FROM session_artifacts WHERE session_id = ? LIMIT 1`
-              ).get(sessionId);
-              if (priorRootRow) {
-                const pinnedSessionRoot = path93.resolve(priorRootRow.workspace_root);
-                let currentPinnedReal = null;
-                try {
-                  const rootLstat = fs85.lstatSync(pinnedSessionRoot);
-                  if (!rootLstat.isSymbolicLink() && rootLstat.isDirectory()) {
-                    currentPinnedReal = fs85.realpathSync(pinnedSessionRoot);
-                  }
-                } catch {
-                  currentPinnedReal = null;
-                }
-                if (currentPinnedReal !== pinnedSessionRoot || resolved.workspaceRoot !== pinnedSessionRoot) {
-                  throw new ArtifactGuardError(
-                    "path_outside_workspace",
-                    "Session canonical workspace root was redirected or replaced (path_outside_workspace)"
-                  );
-                }
-              }
-              const existing = this.db.prepare(
-                `SELECT * FROM session_artifacts WHERE session_id = ? AND rel_path = ?`
-              ).get(sessionId, resolved.relPath);
-              if (existing) {
-                const updatedAt = Math.max(now, existing.updated_at + 1);
-                const nextTaskId = input.taskId !== void 0 ? input.taskId ?? null : existing.task_id;
-                const nextMeshId = meshId ?? existing.mesh_id ?? null;
-                const nextMissionId = missionId ?? existing.mission_id ?? null;
-                const nextProducerRole = producerRole ?? existing.producer_role ?? null;
-                const nextOriginDaemonId = originDaemonId ?? existing.origin_daemon_id ?? null;
-                const nextTitle = input.title !== void 0 && input.title.trim().length > 0 ? resolved.title : existing.title || resolved.title;
-                this.db.prepare(
-                  `UPDATE session_artifacts
-                         SET task_id = ?,
-                             mesh_id = ?,
-                             mission_id = ?,
-                             producer_role = ?,
-                             origin_daemon_id = ?,
-                             workspace_root = ?,
-                             kind = ?,
-                             mime = ?,
-                             title = ?,
-                             size_bytes = ?,
-                             sha256 = ?,
-                             preview_text = ?,
-                             updated_at = ?
-                         WHERE artifact_id = ?`
-                ).run(
-                  nextTaskId,
-                  nextMeshId,
-                  nextMissionId,
-                  nextProducerRole,
-                  nextOriginDaemonId,
-                  resolved.workspaceRoot,
-                  resolved.kind,
-                  resolved.mime,
-                  nextTitle,
-                  resolved.sizeBytes,
-                  resolved.sha256,
-                  resolved.previewText,
-                  updatedAt,
-                  existing.artifact_id
-                );
-                const record9 = {
-                  artifactId: existing.artifact_id,
-                  sessionId,
-                  taskId: nextTaskId ?? null,
-                  ...nextMeshId != null ? { meshId: nextMeshId } : {},
-                  ...nextMissionId != null ? { missionId: nextMissionId } : {},
-                  ...nextProducerRole != null ? { producerRole: nextProducerRole } : {},
-                  ...nextOriginDaemonId != null ? { originDaemonId: nextOriginDaemonId } : {},
-                  workspaceRoot: resolved.workspaceRoot,
-                  relPath: resolved.relPath,
-                  kind: resolved.kind,
-                  mime: resolved.mime,
-                  title: nextTitle,
-                  sizeBytes: resolved.sizeBytes,
-                  sha256: resolved.sha256,
-                  previewText: resolved.previewText,
-                  createdAt: existing.created_at,
-                  updatedAt
-                };
-                return {
-                  record: record9,
-                  isUpdate: true,
-                  attachment: toChatAttachmentMeta(record9)
-                };
-              }
-              const countRow = this.db.prepare(
-                `SELECT COUNT(*) AS count FROM session_artifacts WHERE session_id = ?`
-              ).get(sessionId);
-              const currentCount = countRow?.count ?? 0;
-              if (currentCount >= MAX_ARTIFACTS_PER_SESSION) {
-                throw new ArtifactGuardError(
-                  "session_artifact_limit_reached",
-                  `Session "${sessionId}" has reached the maximum of ${MAX_ARTIFACTS_PER_SESSION} artifacts (session_artifact_limit_reached)`
-                );
-              }
-              if (missionId) {
-                const missionCountRow = this.db.prepare(
-                  `SELECT COUNT(*) AS count FROM session_artifacts WHERE mission_id = ?`
-                ).get(missionId);
-                if ((missionCountRow?.count ?? 0) >= MAX_ARTIFACTS_PER_MISSION) {
-                  throw new ArtifactGuardError(
-                    "mission_artifact_limit_exceeded",
-                    `Mission "${missionId}" has reached the maximum of ${MAX_ARTIFACTS_PER_MISSION} artifacts (mission_artifact_limit_exceeded)`
-                  );
-                }
-              }
-              if (meshId) {
-                const meshCountRow = this.db.prepare(
-                  `SELECT COUNT(*) AS count FROM session_artifacts WHERE mesh_id = ?`
-                ).get(meshId);
-                if ((meshCountRow?.count ?? 0) >= MAX_ARTIFACTS_PER_MESH) {
-                  throw new ArtifactGuardError(
-                    "mesh_artifact_limit_exceeded",
-                    `Mesh "${meshId}" has reached the maximum of ${MAX_ARTIFACTS_PER_MESH} artifacts (mesh_artifact_limit_exceeded)`
-                  );
-                }
-              }
-              let artifactId = generateArtifactId();
-              while (this.db.prepare(
-                `SELECT 1 AS one FROM session_artifacts WHERE artifact_id = ?`
-              ).get(artifactId)) {
-                artifactId = generateArtifactId();
-              }
-              const taskId = input.taskId ?? null;
-              this.db.prepare(
-                `INSERT INTO session_artifacts (
-                        artifact_id,
-                        session_id,
-                        task_id,
-                        mesh_id,
-                        mission_id,
-                        producer_role,
-                        origin_daemon_id,
-                        workspace_root,
-                        rel_path,
-                        kind,
-                        mime,
-                        title,
-                        size_bytes,
-                        sha256,
-                        preview_text,
-                        created_at,
-                        updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-              ).run(
-                artifactId,
-                sessionId,
-                taskId,
-                meshId,
-                missionId,
-                producerRole,
-                originDaemonId,
-                resolved.workspaceRoot,
-                resolved.relPath,
-                resolved.kind,
-                resolved.mime,
-                resolved.title,
-                resolved.sizeBytes,
-                resolved.sha256,
-                resolved.previewText,
-                now,
-                now
-              );
-              const record8 = {
-                artifactId,
-                sessionId,
-                taskId,
-                ...meshId != null ? { meshId } : {},
-                ...missionId != null ? { missionId } : {},
-                ...producerRole != null ? { producerRole } : {},
-                ...originDaemonId != null ? { originDaemonId } : {},
-                workspaceRoot: resolved.workspaceRoot,
-                relPath: resolved.relPath,
-                kind: resolved.kind,
-                mime: resolved.mime,
-                title: resolved.title,
-                sizeBytes: resolved.sizeBytes,
-                sha256: resolved.sha256,
-                previewText: resolved.previewText,
-                createdAt: now,
-                updatedAt: now
-              };
-              return {
-                record: record8,
-                isUpdate: false,
-                attachment: toChatAttachmentMeta(record8)
-              };
-            });
-          }
-          /** Alias for `register`. */
-          registerArtifact(input) {
-            return this.register(input);
-          }
-          /** Alias for `register`. */
-          upsert(input) {
-            return this.register(input);
-          }
-          /** Retrieve a single artifact record by `artifactId`. */
-          get(artifactId) {
-            if (typeof artifactId !== "string" || !artifactId) {
-              return null;
-            }
-            const row2 = this.db.prepare(
-              `SELECT * FROM session_artifacts WHERE artifact_id = ?`
-            ).get(artifactId);
-            return row2 ? rowToArtifactRecord(row2) : null;
-          }
-          /** Alias for `get`. */
-          getArtifact(artifactId) {
-            return this.get(artifactId);
-          }
-          /** Alias for `get`. */
-          getById(artifactId) {
-            return this.get(artifactId);
-          }
-          /** Retrieve a single artifact record by `(sessionId, relPath)`. */
-          getByPath(sessionId, relPath) {
-            if (typeof sessionId !== "string" || typeof relPath !== "string") {
-              return null;
-            }
-            const normalizedRel = relPath.replace(/\\/g, "/").replace(/^\.\//, "");
-            const row2 = this.db.prepare(
-              `SELECT * FROM session_artifacts WHERE session_id = ? AND rel_path = ?`
-            ).get(sessionId, normalizedRel);
-            return row2 ? rowToArtifactRecord(row2) : null;
-          }
-          /** List artifacts for a session in deterministic creation order. */
-          listBySession(sessionId, options) {
-            if (typeof sessionId !== "string" || !sessionId) {
-              return [];
-            }
-            const rawLimit = options?.limit;
-            const limit = typeof rawLimit === "number" && Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.trunc(rawLimit), MAX_ARTIFACTS_PER_SESSION) : MAX_ARTIFACTS_PER_SESSION;
-            const rows = this.db.prepare(
-              `SELECT * FROM session_artifacts
-                 WHERE session_id = ?
-                 ORDER BY created_at ASC, rowid ASC
-                 LIMIT ?`
-            ).all(sessionId, limit);
-            return rows.map(rowToArtifactRecord);
-          }
-          /** Alias for `listBySession`. */
-          listSessionArtifacts(sessionId, options) {
-            return this.listBySession(sessionId, options);
-          }
-          /** Alias for `listBySession`. */
-          listArtifacts(sessionId, options) {
-            return this.listBySession(sessionId, options);
-          }
-          /** Count registered artifacts for a session. */
-          countBySession(sessionId) {
-            if (typeof sessionId !== "string" || !sessionId) {
-              return 0;
-            }
-            const row2 = this.db.prepare(
-              `SELECT COUNT(*) AS count FROM session_artifacts WHERE session_id = ?`
-            ).get(sessionId);
-            return row2?.count ?? 0;
-          }
-          /** Delete all artifact metadata rows for a session. */
-          deleteBySession(sessionId) {
-            if (typeof sessionId !== "string" || !sessionId) {
-              return 0;
-            }
-            const res = this.db.prepare(`DELETE FROM session_artifacts WHERE session_id = ?`).run(sessionId);
-            return res.changes;
-          }
-          /**
-           * Upsert a metadata-only record forwarded from a remote worker daemon
-           * (`artifact_index_forwarded`). Never opens the remote path locally; instead
-           * persists `origin_daemon_id` so subsequent reads fetch over P2P from the
-           * origin daemon.
-           */
-          upsertForwarded(input) {
-            const artifactId = typeof input?.artifactId === "string" ? input.artifactId.trim() : "";
-            const sessionId = typeof input?.sessionId === "string" ? input.sessionId.trim() : "";
-            const originDaemonId = typeof input?.originDaemonId === "string" ? input.originDaemonId.trim() : "";
-            const workspaceRoot = typeof input?.workspaceRoot === "string" ? input.workspaceRoot.trim() : "";
-            const rawRel = typeof input?.relPath === "string" ? input.relPath.trim() : "";
-            if (!/^art_[0-9a-f]{16}$/.test(artifactId)) {
-              throw new Error(`Invalid forwarded artifactId "${artifactId}"`);
-            }
-            if (!sessionId || !originDaemonId || !workspaceRoot || !rawRel) {
-              throw new Error("Forwarded artifact metadata requires sessionId, originDaemonId, workspaceRoot, and relPath");
-            }
-            const relPath = rawRel.replace(/\\/g, "/").replace(/^\.\//, "");
-            assertNotSecretPath(relPath);
-            if (relPath.startsWith("/") || relPath === ".." || relPath.startsWith("../") || relPath.includes("/../")) {
-              throw new ArtifactGuardError(
-                "path_outside_workspace",
-                `Forwarded relPath "${relPath}" is invalid (path_outside_workspace)`
-              );
-            }
-            const kind = input.kind;
-            if (!ARTIFACT_KINDS.includes(kind)) {
-              throw new ArtifactGuardError(
-                "unsupported_mime_or_kind",
-                `Unsupported forwarded artifact kind "${String(kind)}" (unsupported_mime_or_kind)`
-              );
-            }
-            const mime = typeof input.mime === "string" ? input.mime.trim().toLowerCase() : "";
-            if (!MIME_BY_KIND[kind]?.includes(mime)) {
-              throw new ArtifactGuardError(
-                "unsupported_mime_or_kind",
-                `Unsupported forwarded artifact mime "${mime}" for kind "${kind}" (unsupported_mime_or_kind)`
-              );
-            }
-            const sizeBytes = Math.trunc(Number(input.sizeBytes));
-            if (!Number.isFinite(sizeBytes) || sizeBytes < 0 || sizeBytes > MAX_ARTIFACT_BYTES) {
-              throw new ArtifactGuardError(
-                "artifact_too_large",
-                `Forwarded artifact size ${sizeBytes} exceeds ${MAX_ARTIFACT_BYTES} bytes (artifact_too_large)`
-              );
-            }
-            const sha2563 = typeof input.sha256 === "string" ? input.sha256.trim().toLowerCase() : "";
-            if (!/^[0-9a-f]{64}$/.test(sha2563)) {
-              throw new Error("Forwarded artifact sha256 must be 64 lowercase hex characters");
-            }
-            const filename = path93.posix.basename(relPath) || relPath;
-            const title = sanitizeArtifactTitle(input.title ?? void 0, filename);
-            const previewText = typeof input.previewText === "string" ? Array.from(input.previewText).slice(0, MAX_PREVIEW_TEXT_CHARS).join("") : null;
-            if (typeof input.previewText === "string" && input.previewText.length > 0) {
-              assertNotSecretContent(Buffer.from(input.previewText, "utf8"), kind);
-            }
-            if (previewText) assertNotSecretContent(Buffer.from(previewText, "utf8"), kind);
-            const now = Date.now();
-            const maxClockSkewMs = 6e4;
-            const maxAllowedTimestamp = now + maxClockSkewMs;
-            const rawCreatedAt = typeof input.createdAt === "number" && Number.isFinite(input.createdAt) && input.createdAt > 0 ? Math.trunc(input.createdAt) : now;
-            const createdAt = Math.min(rawCreatedAt, maxAllowedTimestamp);
-            const rawUpdatedAt = typeof input.updatedAt === "number" && Number.isFinite(input.updatedAt) && input.updatedAt > 0 ? Math.trunc(input.updatedAt) : createdAt;
-            const updatedAt = Math.max(createdAt, Math.min(rawUpdatedAt, maxAllowedTimestamp));
-            const taskId = typeof input.taskId === "string" && input.taskId.trim() ? input.taskId.trim() : null;
-            const meshId = typeof input.meshId === "string" && input.meshId.trim() ? input.meshId.trim() : null;
-            const missionId = typeof input.missionId === "string" && input.missionId.trim() ? input.missionId.trim() : null;
-            const producerRole = typeof input.producerRole === "string" && input.producerRole.trim() ? input.producerRole.trim() : "worker";
-            return runInImmediateTransaction(this.db, () => {
-              if (now >= 1e11) this.pruneExpired(now, ARTIFACT_RETENTION_MS, 1e11);
-              const existing = this.db.prepare(`SELECT * FROM session_artifacts WHERE session_id = ? AND rel_path = ?`).get(sessionId, relPath);
-              if (existing) {
-                const nextUpdatedAt = Math.max(updatedAt, existing.updated_at);
-                this.db.prepare(
-                  `UPDATE session_artifacts
-                         SET task_id = ?, mesh_id = ?, mission_id = ?, producer_role = ?, origin_daemon_id = ?,
-                             workspace_root = ?, kind = ?, mime = ?, title = ?, size_bytes = ?, sha256 = ?,
-                             preview_text = ?, updated_at = ?
-                         WHERE artifact_id = ?`
-                ).run(
-                  taskId ?? existing.task_id,
-                  meshId ?? existing.mesh_id ?? null,
-                  missionId ?? existing.mission_id ?? null,
-                  producerRole ?? existing.producer_role ?? null,
-                  originDaemonId,
-                  workspaceRoot,
-                  kind,
-                  mime,
-                  title,
-                  sizeBytes,
-                  sha2563,
-                  previewText,
-                  nextUpdatedAt,
-                  existing.artifact_id
-                );
-                const record9 = {
-                  artifactId: existing.artifact_id,
-                  sessionId,
-                  taskId: taskId ?? existing.task_id ?? null,
-                  ...meshId ?? existing.mesh_id ? { meshId: meshId ?? existing.mesh_id } : {},
-                  ...missionId ?? existing.mission_id ? { missionId: missionId ?? existing.mission_id } : {},
-                  ...producerRole ?? existing.producer_role ? { producerRole: producerRole ?? existing.producer_role } : {},
-                  originDaemonId,
-                  workspaceRoot,
-                  relPath,
-                  kind,
-                  mime,
-                  title,
-                  sizeBytes,
-                  sha256: sha2563,
-                  previewText,
-                  createdAt: existing.created_at,
-                  updatedAt: nextUpdatedAt
-                };
-                return {
-                  record: record9,
-                  isUpdate: true,
-                  attachment: toChatAttachmentMeta(record9)
-                };
-              }
-              const countRow = this.db.prepare(
-                `SELECT COUNT(*) AS count FROM session_artifacts WHERE session_id = ?`
-              ).get(sessionId);
-              if ((countRow?.count ?? 0) >= MAX_ARTIFACTS_PER_SESSION) {
-                throw new ArtifactGuardError(
-                  "session_artifact_limit_reached",
-                  `Session "${sessionId}" has reached the maximum of ${MAX_ARTIFACTS_PER_SESSION} artifacts (session_artifact_limit_reached)`
-                );
-              }
-              if (missionId) {
-                const missionCountRow = this.db.prepare(
-                  `SELECT COUNT(*) AS count FROM session_artifacts WHERE mission_id = ?`
-                ).get(missionId);
-                if ((missionCountRow?.count ?? 0) >= MAX_ARTIFACTS_PER_MISSION) {
-                  throw new ArtifactGuardError(
-                    "mission_artifact_limit_exceeded",
-                    `Mission "${missionId}" has reached the maximum of ${MAX_ARTIFACTS_PER_MISSION} artifacts (mission_artifact_limit_exceeded)`
-                  );
-                }
-              }
-              if (meshId) {
-                const meshCountRow = this.db.prepare(
-                  `SELECT COUNT(*) AS count FROM session_artifacts WHERE mesh_id = ?`
-                ).get(meshId);
-                if ((meshCountRow?.count ?? 0) >= MAX_ARTIFACTS_PER_MESH) {
-                  throw new ArtifactGuardError(
-                    "mesh_artifact_limit_exceeded",
-                    `Mesh "${meshId}" has reached the maximum of ${MAX_ARTIFACTS_PER_MESH} artifacts (mesh_artifact_limit_exceeded)`
-                  );
-                }
-              }
-              this.db.prepare(
-                `INSERT INTO session_artifacts (
-                        artifact_id,
-                        session_id,
-                        task_id,
-                        mesh_id,
-                        mission_id,
-                        producer_role,
-                        origin_daemon_id,
-                        workspace_root,
-                        rel_path,
-                        kind,
-                        mime,
-                        title,
-                        size_bytes,
-                        sha256,
-                        preview_text,
-                        created_at,
-                        updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-              ).run(
-                artifactId,
-                sessionId,
-                taskId,
-                meshId,
-                missionId,
-                producerRole,
-                originDaemonId,
-                workspaceRoot,
-                relPath,
-                kind,
-                mime,
-                title,
-                sizeBytes,
-                sha2563,
-                previewText,
-                createdAt,
-                updatedAt
-              );
-              const record8 = {
-                artifactId,
-                sessionId,
-                taskId,
-                ...meshId != null ? { meshId } : {},
-                ...missionId != null ? { missionId } : {},
-                ...producerRole != null ? { producerRole } : {},
-                originDaemonId,
-                workspaceRoot,
-                relPath,
-                kind,
-                mime,
-                title,
-                sizeBytes,
-                sha256: sha2563,
-                previewText,
-                createdAt,
-                updatedAt
-              };
-              return {
-                record: record8,
-                isUpdate: false,
-                attachment: toChatAttachmentMeta(record8)
-              };
-            });
-          }
-          /** Alias for `upsertForwarded`. */
-          upsertForwardedArtifact(input) {
-            return this.upsertForwarded(input);
-          }
-          /**
-           * List artifacts across a mesh (optionally filtered by sessionId or missionId).
-           * A `limit` keeps the newest records; the result stays in creation order.
-           */
-          listByMesh(meshId, options) {
-            if (typeof meshId !== "string" || !meshId.trim()) {
-              return [];
-            }
-            const rawLimit = options?.limit;
-            const limit = typeof rawLimit === "number" && Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.trunc(rawLimit), MAX_ARTIFACTS_PER_MESH) : MAX_ARTIFACTS_PER_MESH;
-            const clauses = ["mesh_id = ?"];
-            const params = [meshId.trim()];
-            if (typeof options?.sessionId === "string" && options.sessionId.trim()) {
-              clauses.push("session_id = ?");
-              params.push(options.sessionId.trim());
-            }
-            if (typeof options?.missionId === "string" && options.missionId.trim()) {
-              clauses.push("mission_id = ?");
-              params.push(options.missionId.trim());
-            }
-            params.push(limit);
-            const rows = this.db.prepare(
-              newestWindowSql(`SELECT rowid AS window_rowid, * FROM session_artifacts
-                 WHERE ${clauses.join(" AND ")}`)
-            ).all(...params);
-            return rows.map(rowToArtifactRecord);
-          }
-          /**
-           * List artifacts in a mission (optionally restricted to an allowlist of artifactIds for OD-4).
-           * A `limit` keeps the newest records; the result stays in creation order.
-           */
-          listByMission(missionId, options) {
-            if (typeof missionId !== "string" || !missionId.trim()) {
-              return [];
-            }
-            const meshFilter = typeof options?.meshId === "string" && options.meshId.trim() ? options.meshId.trim() : "";
-            const meshClause = meshFilter ? " AND mesh_id = ?" : "";
-            const meshParams = meshFilter ? [meshFilter] : [];
-            const rawLimit = options?.limit;
-            const limit = typeof rawLimit === "number" && Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.trunc(rawLimit), MAX_ARTIFACTS_PER_MISSION) : MAX_ARTIFACTS_PER_MISSION;
-            if (options?.artifactIds !== void 0) {
-              const ids = options.artifactIds.filter((id4) => typeof id4 === "string" && id4.trim().length > 0);
-              if (ids.length === 0) {
-                return [];
-              }
-              const placeholders = ids.map(() => "?").join(", ");
-              const rows2 = this.db.prepare(
-                newestWindowSql(`SELECT rowid AS window_rowid, * FROM session_artifacts
-                     WHERE mission_id = ?${meshClause} AND artifact_id IN (${placeholders})`)
-              ).all(missionId.trim(), ...meshParams, ...ids, limit);
-              return rows2.map(rowToArtifactRecord);
-            }
-            const rows = this.db.prepare(
-              newestWindowSql(`SELECT rowid AS window_rowid, * FROM session_artifacts
-                 WHERE mission_id = ?${meshClause}`)
-            ).all(missionId.trim(), ...meshParams, limit);
-            return rows.map(rowToArtifactRecord);
-          }
-          /**
-           * Prune artifact metadata rows older than `retentionMs` (default 30 days, OD-7).
-           */
-          pruneExpired(now = Date.now(), retentionMs = ARTIFACT_RETENTION_MS, minTimestamp = 0) {
-            const cutoff = Math.trunc(now) - Math.trunc(retentionMs);
-            const res = this.db.prepare(
-              `DELETE FROM session_artifacts WHERE updated_at >= ? AND updated_at < ?`
-            ).run(minTimestamp, cutoff);
-            return res.changes;
-          }
-          /**
-           * Read and page an artifact's content at 256 KiB boundaries (OD-7).
-           */
-          readArtifactContent(artifactId, options) {
-            const record8 = this.get(artifactId);
-            if (!record8) {
-              throw new ArtifactGuardError(
-                "artifact_not_found",
-                `Artifact "${artifactId}" not found (artifact_not_found)`
-              );
-            }
-            return readArtifactRecordPaged(record8, options);
-          }
-          /**
-           * Re-validate and read the artifact file from disk at fetch time.
-           *
-           * Re-checks canonical workspace root, symlink/traversal containment,
-           * regular-file status, extension/kind/MIME allowlist, and 4 MiB size cap
-           * via descriptor-verified bounded reads, returning `encoding: 'utf8'` for
-           * text kinds and `encoding: 'base64'` for images, plus `sha256Changed`
-           * (`hashChanged`) comparing current bytes against the registered `sha256`.
-           */
-          fetchArtifactContent(artifactId, options) {
-            const record8 = this.get(artifactId);
-            if (!record8) {
-              throw new ArtifactGuardError(
-                "artifact_not_found",
-                `Artifact "${artifactId}" not found (artifact_not_found)`
-              );
-            }
-            const verified = verifyAndReadArtifactBuffer(record8, options);
-            const encoding = record8.kind === "image" ? "base64" : "utf8";
-            const content = encoding === "base64" ? verified.buffer.toString("base64") : verified.buffer.toString("utf8");
-            const sha256Changed = verified.sha256 !== record8.sha256;
-            return {
-              artifactId: record8.artifactId,
-              sessionId: record8.sessionId,
-              relPath: record8.relPath,
-              kind: record8.kind,
-              mime: record8.mime,
-              title: record8.title,
-              content,
-              encoding,
-              sizeBytes: verified.sizeBytes,
-              sha256: verified.sha256,
-              registeredSha256: record8.sha256,
-              sha256Changed,
-              hashChanged: sha256Changed
-            };
-          }
-          /** Alias for `fetchArtifactContent`. */
-          fetchContent(artifactId, options) {
-            return this.fetchArtifactContent(artifactId, options);
-          }
-        };
-      }
-    });
-    var init_artifacts = __esm2({
-      "src/artifacts/index.ts"() {
-        "use strict";
-        init_types6();
-        init_artifact_path_guard();
-        init_artifact_store();
-      }
-    });
-    function getRuntimeByDepsMap() {
-      const g3 = globalThis;
-      let map2 = g3[ARTIFACT_RUNTIME_BY_DEPS_KEY];
-      if (!map2) {
-        map2 = /* @__PURE__ */ new WeakMap();
-        Object.defineProperty(globalThis, ARTIFACT_RUNTIME_BY_DEPS_KEY, {
-          value: map2,
-          writable: false,
-          enumerable: false,
-          configurable: false
-        });
-      }
-      return map2;
-    }
-    function setArtifactCommandRuntimeForDeps(deps, runtime2) {
-      if (!runtime2) {
-        runtimeByDeps.delete(deps);
-        return;
-      }
-      runtimeByDeps.set(deps, runtime2);
-    }
-    function getMeshRuntimeStore(ctx) {
-      const injected = ctx.deps ? runtimeByDeps.get(ctx.deps)?.meshRuntimeStore : void 0;
-      return injected ?? MeshRuntimeStore.getInstance();
-    }
-    function getArtifactStore(ctx) {
-      if (ctx.deps) {
-        const existing = runtimeByDeps.get(ctx.deps)?.artifactStore;
-        if (existing) return existing;
-      }
-      const meshStore = getMeshRuntimeStore(ctx);
-      const store5 = new ArtifactStore(meshStore.db);
-      if (ctx.deps) {
-        const prev = runtimeByDeps.get(ctx.deps) ?? {};
-        runtimeByDeps.set(ctx.deps, { ...prev, artifactStore: store5 });
-      }
-      return store5;
-    }
-    var ARTIFACT_RUNTIME_BY_DEPS_KEY;
-    var runtimeByDeps;
-    var init_artifact_runtime = __esm2({
-      "src/commands/med-family/artifact-runtime.ts"() {
-        "use strict";
-        init_artifacts();
-        init_mesh_runtime_store();
-        ARTIFACT_RUNTIME_BY_DEPS_KEY = /* @__PURE__ */ Symbol.for("adhdev.daemon-core.artifactCommandRuntimeByDeps");
-        runtimeByDeps = getRuntimeByDepsMap();
       }
     });
     function setInMemoryNonce(nonce, entry) {
@@ -127251,1018 +127978,53 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         retryNotBefore = /* @__PURE__ */ new Map();
       }
     });
-    function meshTaskAttachments(history) {
-      return history ?? [];
-    }
-    function pushMeshTaskAttachment(history, attachment) {
-      history.push(attachment);
-      if (history.length > MESH_TASK_ATTACHMENT_HISTORY_CAP) {
-        const dropped = history.shift();
-        return { droppedTaskId: dropped?.taskId };
+    function getRuntimeByDepsMap() {
+      const g3 = globalThis;
+      let map2 = g3[ARTIFACT_RUNTIME_BY_DEPS_KEY];
+      if (!map2) {
+        map2 = /* @__PURE__ */ new WeakMap();
+        Object.defineProperty(globalThis, ARTIFACT_RUNTIME_BY_DEPS_KEY, {
+          value: map2,
+          writable: false,
+          enumerable: false,
+          configurable: false
+        });
       }
-      return {};
+      return map2;
     }
-    function popCompletedMeshTaskAttachment(history) {
-      if (history.length === 0) return void 0;
-      history.shift();
-      return history[0];
-    }
-    function resolveCompletingTaskId(history) {
-      return history.length > 0 ? history[0].taskId : void 0;
-    }
-    function mergePendingMeshTaskAttachment(rest, pending) {
-      if (!pending) return rest;
-      return {
-        ...rest,
-        meshActiveTaskId: pending.taskId,
-        ...pending.attemptId ? { meshActiveAttemptId: pending.attemptId } : {},
-        ...typeof pending.dispatchNonce === "number" ? { meshActiveDispatchNonce: pending.dispatchNonce } : {}
-      };
-    }
-    var MESH_TASK_ATTACHMENT_HISTORY_CAP;
-    var init_mesh_task_attachment = __esm2({
-      "src/providers/mesh-task-attachment.ts"() {
-        "use strict";
-        MESH_TASK_ATTACHMENT_HISTORY_CAP = 8;
-      }
-    });
-    function nativeMeshAssignmentMeta(settings2) {
-      const ref2 = currentMeshAttemptRef(settings2);
-      const assignment = ref2 && settings2.meshNodeFor && settings2.meshNodeId && settings2.meshActiveTaskId && settings2.meshCoordinatorDaemonId ? {
-        meshId: settings2.meshNodeFor,
-        nodeId: settings2.meshNodeId,
-        taskId: settings2.meshActiveTaskId,
-        attemptId: ref2.attemptId,
-        generation: ref2.generation,
-        dispatchNonce: settings2.meshActiveDispatchNonce ?? 0,
-        ownerDaemonId: settings2.meshCoordinatorDaemonId
-      } : null;
-      return { meshCoordinatorDaemonId: settings2.meshCoordinatorDaemonId ?? null, [PERSISTED_ATTEMPT_REF_META_KEY]: ref2, meshActiveAssignment: assignment };
-    }
-    function captureMeshAssignment(host) {
-      const settings2 = Object.fromEntries(Object.entries(host.settings ?? {}).filter(([key7]) => key7.startsWith("mesh")));
-      return JSON.parse(JSON.stringify({ settings: settings2, injectedAt: host.meshTaskInjectedAt, history: host.meshTaskAttachmentHistory }));
-    }
-    function restoreMeshAssignment(host, snapshot) {
-      host.settings = { ...Object.fromEntries(Object.entries(host.settings ?? {}).filter(([key7]) => !key7.startsWith("mesh"))), ...snapshot.settings };
-      host.meshTaskInjectedAt = snapshot.injectedAt;
-      host.meshTaskAttachmentHistory = snapshot.history;
-      host.adapter.updateRuntimeSettings?.(host.settings);
-      host.adapter.updateRuntimeMeta?.(nativeMeshAssignmentMeta(host.settings));
-    }
-    function turnInFlight(host) {
-      if (!("generatingStartedAt" in host) && !("completedDebouncePending" in host) && !("generatingDebouncePending" in host)) return true;
-      return typeof host.generatingStartedAt === "number" && host.generatingStartedAt !== 0 || host.completedDebouncePending !== null && host.completedDebouncePending !== void 0 || host.generatingDebouncePending !== null && host.generatingDebouncePending !== void 0;
-    }
-    function recordMeshTaskAttachment(host, attachment) {
-      host.meshTaskAttachmentHistory = meshTaskAttachments(host.meshTaskAttachmentHistory);
-      const history = host.meshTaskAttachmentHistory;
-      const existing = history.find((entry) => entry.taskId === attachment.taskId);
-      if (existing) {
-        const sameAttempt = !attachment.attemptId || existing.attemptId === attachment.attemptId;
-        if (attachment.attemptId) existing.attemptId = attachment.attemptId;
-        if (typeof attachment.dispatchNonce === "number") existing.dispatchNonce = attachment.dispatchNonce;
-        if (!sameAttempt) existing.injectedAt = attachment.injectedAt;
+    function setArtifactCommandRuntimeForDeps(deps, runtime2) {
+      if (!runtime2) {
+        runtimeByDeps.delete(deps);
         return;
       }
-      if (history.length > 0 && !turnInFlight(host)) {
-        const dropped = history.splice(0, history.length).map((entry) => entry.taskId);
-        LOG.info("MeshTaskAttach", `[${host.instanceId}] idle re-stamp to task ${attachment.taskId} \u2014 dropped stale attachment(s) ${dropped.join(", ")}`);
+      runtimeByDeps.set(deps, runtime2);
+    }
+    function getMeshRuntimeStore(ctx) {
+      const injected = ctx.deps ? runtimeByDeps.get(ctx.deps)?.meshRuntimeStore : void 0;
+      return injected ?? MeshRuntimeStore.getInstance();
+    }
+    function getArtifactStore(ctx) {
+      if (ctx.deps) {
+        const existing = runtimeByDeps.get(ctx.deps)?.artifactStore;
+        if (existing) return existing;
       }
-      const { droppedTaskId } = pushMeshTaskAttachment(history, attachment);
-      if (droppedTaskId) LOG.warn("MeshTaskAttach", `[${host.instanceId}] turn-aware attachment history exceeded cap \u2014 dropped task ${droppedTaskId}.`);
-    }
-    function attachMeshAssignment(host, assignment) {
-      if (!assignment?.meshId) return;
-      const previousTaskId = typeof host.settings?.meshActiveTaskId === "string" ? host.settings.meshActiveTaskId : "";
-      const previousAttemptRef = attemptRefKey(host.settings);
-      const taskChanged = !!(assignment.taskId && assignment.taskId.trim() && previousTaskId && previousTaskId !== assignment.taskId);
-      if (assignment.taskId && assignment.taskId.trim()) {
-        host.meshTaskInjectedAt = Date.now();
-        if (isWorkerMcpEnabled()) recordMeshTaskAttachment(host, { taskId: assignment.taskId, attemptId: assignment.attemptId, dispatchNonce: assignment.dispatchNonce, injectedAt: host.meshTaskInjectedAt });
+      const meshStore = getMeshRuntimeStore(ctx);
+      const store5 = new ArtifactStore(meshStore.db);
+      if (ctx.deps) {
+        const prev = runtimeByDeps.get(ctx.deps) ?? {};
+        runtimeByDeps.set(ctx.deps, { ...prev, artifactStore: store5 });
       }
-      host.settings = {
-        ...host.settings,
-        meshNodeFor: assignment.meshId,
-        // WTCLAIM (A): track the bound node id under BOTH the active marker
-        // (meshNodeId, cleared on detach) and a sticky marker (meshLastNodeId,
-        // preserved across detach). The sticky marker lets a detached but still
-        // coordinator-owned session be re-picked ONLY for the SAME node it served
-        // — never auto-adopted for a sibling node (e.g. a cloned worktree) that
-        // shares this daemon. See isMeshOwnedDelegateSession's post-detach gate.
-        ...assignment.nodeId ? { meshNodeId: assignment.nodeId, meshLastNodeId: assignment.nodeId } : {},
-        ...assignment.taskId ? { meshActiveTaskId: assignment.taskId } : {},
-        // REDRIVE-DUP: task-level dispatch nonce, echoed on generating_started so the
-        // coordinator can reject a stale (reclaimed) dispatch. Cleared with meshActiveTaskId
-        // on detach so a subsequent unrelated turn never re-echoes a prior task's nonce.
-        ...typeof assignment.dispatchNonce === "number" ? { meshActiveDispatchNonce: assignment.dispatchNonce } : {},
-        // TURN-LEDGER (Stage 5): the opaque attempt identity for this dispatch, echoed
-        // on lifecycle events so the coordinator's reducer correlates ACKs/completion
-        // proposals to (taskId, attemptId, session). Cleared with meshActiveTaskId on
-        // detach so a later unrelated turn never re-echoes a prior attempt.
-        ...assignment.attemptId ? { meshActiveAttemptId: assignment.attemptId } : {},
-        // C4/C5: the attempt's ledger generation (absent → 0 in currentAttemptRef).
-        // A new assignment without one must not inherit the previous attempt's.
-        ...assignment.attemptId && typeof assignment.attemptGeneration === "number" ? { meshActiveAttemptGeneration: assignment.attemptGeneration } : {},
-        ...assignment.coordinatorDaemonId ? { meshCoordinatorDaemonId: assignment.coordinatorDaemonId } : {},
-        // Session-level routing anchor: the originating coordinator session, so this
-        // worker's completion events route back to the exact session that dispatched it.
-        ...assignment.coordinatorSessionId ? { meshCoordinatorSessionId: assignment.coordinatorSessionId } : {}
-      };
-      if (assignment.attemptId && typeof assignment.attemptGeneration !== "number") delete host.settings.meshActiveAttemptGeneration;
-      if (taskChanged && !assignment.attemptId) {
-        delete host.settings.meshActiveAttemptId;
-        delete host.settings.meshActiveAttemptGeneration;
-      }
-      if (taskChanged && typeof assignment.dispatchNonce !== "number") delete host.settings.meshActiveDispatchNonce;
-      host.adapter.updateRuntimeSettings?.(host.settings);
-      const meta2 = {
-        ...assignment.coordinatorDaemonId ? { meshCoordinatorDaemonId: assignment.coordinatorDaemonId } : {},
-        ...persistedAttemptRefMeta(host.settings, previousAttemptRef),
-        ...nativeMeshAssignmentMeta(host.settings)
-      };
-      if (Object.keys(meta2).length > 0) {
-        try {
-          host.adapter.updateRuntimeMeta?.(meta2);
-        } catch {
-        }
-      }
+      return store5;
     }
-    function attemptRefKey(settings2) {
-      const ref2 = currentMeshAttemptRef(settings2);
-      return ref2 ? `${ref2.attemptId}#${ref2.generation}` : "";
-    }
-    function persistedAttemptRefMeta(settings2, previousKey) {
-      if (attemptRefKey(settings2) === previousKey) return {};
-      return { [PERSISTED_ATTEMPT_REF_META_KEY]: currentMeshAttemptRef(settings2) };
-    }
-    function persistAttemptRefChange(host, previousKey) {
-      const meta2 = persistedAttemptRefMeta(host.settings, previousKey);
-      if (Object.keys(meta2).length === 0) return;
-      try {
-        host.adapter.updateRuntimeMeta?.({ ...meta2, ...nativeMeshAssignmentMeta(host.settings) });
-      } catch {
-      }
-    }
-    function currentMeshAttemptRef(settings2) {
-      const attemptId = settings2?.meshActiveAttemptId;
-      if (typeof attemptId !== "string" || !attemptId.trim()) return null;
-      const generation = settings2?.meshActiveAttemptGeneration;
-      return { attemptId, generation: typeof generation === "number" && Number.isInteger(generation) && generation >= 0 ? generation : 0 };
-    }
-    function currentMeshDispatchMessageId(settings2) {
-      const taskId = typeof settings2?.meshActiveTaskId === "string" ? settings2.meshActiveTaskId.trim() : "";
-      if (!taskId) return null;
-      const nonce = settings2?.meshActiveDispatchNonce;
-      return `task:${taskId}:n${typeof nonce === "number" ? nonce : 0}`;
-    }
-    function canReportMeshSubmitVerdict(host, messageId, attemptRef) {
-      const expected = currentMeshDispatchMessageId(host.settings);
-      return !!expected && messageId === expected && !!host.turnEvidencePort && typeof host.settings?.meshActiveAttemptId === "string" && host.settings.meshActiveAttemptId === attemptRef;
-    }
-    function reportMeshSubmitUnconfirmed(host, messageId, firstWrittenAt) {
-      const port = host.turnEvidencePort;
-      const expected = currentMeshDispatchMessageId(host.settings);
-      if (!expected || messageId !== expected || !port) return false;
-      const attemptRef = currentMeshAttemptRef(host.settings);
-      const taskId = String(host.settings.meshActiveTaskId);
-      const tag = `[${host.instanceId}] dispatch ${messageId} proven unconfirmed`;
-      const sameDispatch = () => {
-        const ref2 = currentMeshAttemptRef(host.settings);
-        return currentMeshDispatchMessageId(host.settings) === messageId && host.turnEvidencePort === port && ref2?.attemptId === attemptRef?.attemptId && ref2?.generation === attemptRef?.generation;
-      };
-      const envelope = { sessionId: host.instanceId, observedBy: "cli_fsm", source: "input_service", ...attemptRef ? { attemptRef } : { taskId } };
-      const fail16 = () => {
-        LOG.warn("MeshTaskAttach", `${tag} \u2014 reporting dispatch_failed(submit_unconfirmed)${attemptRef ? ` for attempt ${attemptRef.attemptId} g${attemptRef.generation}` : ""}`);
-        emitDispatchFailed(port, { ...envelope, workerAbsent: false, reason: "submit_unconfirmed" });
-      };
-      if (!port.confirmConsumption || !(Number.isFinite(firstWrittenAt) && firstWrittenAt > 0)) {
-        LOG.warn("MeshTaskAttach", `${tag} \u2014 consumption check unavailable; quarantining without dispatch_failed reclaim`);
-        return false;
-      }
-      void port.confirmConsumption(host.instanceId, firstWrittenAt, { messageId }).then(
-        (check) => check,
-        () => "unknown"
-      ).then((check) => {
-        if (!sameDispatch()) {
-          LOG.info("MeshTaskAttach", `${tag} \u2014 the dispatch moved on during the consumption read; not reported`);
-          return;
-        }
-        if (check === "consumed") {
-          LOG.warn("MeshTaskAttach", `${tag} \u2014 but its transcript shows agent activity since the first write: the prompt was consumed; reporting turn_started, not a failure`);
-          emitTurnStarted(port, { ...envelope, retro: true });
-          return;
-        }
-        if (check !== "not_consumed") {
-          LOG.warn("MeshTaskAttach", `${tag} \u2014 non-consumption unproven (${check}); quarantining without dispatch_failed reclaim`);
-          return;
-        }
-        fail16();
-      });
-      return true;
-    }
-    function releaseMeshAttemptRef(host, attemptId) {
-      if (!attemptId || host.settings?.meshActiveAttemptId !== attemptId) return false;
-      const previousAttemptRef = attemptRefKey(host.settings);
-      const { meshActiveAttemptId, meshActiveAttemptGeneration, ...rest } = host.settings;
-      void meshActiveAttemptId;
-      void meshActiveAttemptGeneration;
-      host.settings = rest;
-      host.adapter.updateRuntimeSettings?.(host.settings);
-      persistAttemptRefChange(host, previousAttemptRef);
-      LOG.info("MeshDispatch", `[${host.instanceId}] released attempt ref ${attemptId}`);
-      return true;
-    }
-    function detachMeshAssignment(host) {
-      const pending = isWorkerMcpEnabled() ? popCompletedMeshTaskAttachment(meshTaskAttachments(host.meshTaskAttachmentHistory)) : void 0;
-      if (!host.settings.meshNodeFor && !host.settings.meshActiveTaskId && !host.settings.meshNodeId) return;
-      const previousAttemptRef = attemptRefKey(host.settings);
-      if (host.settings.launchedByCoordinator === true) {
-        if (!host.settings.meshActiveTaskId) return;
-        const { meshActiveTaskId: meshActiveTaskId2, meshActiveDispatchNonce: meshActiveDispatchNonce2, meshActiveAttemptId: meshActiveAttemptId2, meshActiveAttemptGeneration: meshActiveAttemptGeneration2, ...rest2 } = host.settings;
-        void meshActiveTaskId2;
-        void meshActiveDispatchNonce2;
-        void meshActiveAttemptId2;
-        void meshActiveAttemptGeneration2;
-        host.settings = mergePendingMeshTaskAttachment(rest2, pending);
-        host.adapter.updateRuntimeSettings?.(host.settings);
-        persistAttemptRefChange(host, previousAttemptRef);
-        return;
-      }
-      const { meshNodeFor, meshNodeId, meshActiveTaskId, meshActiveDispatchNonce, meshActiveAttemptId, meshActiveAttemptGeneration, ...rest } = host.settings;
-      void meshNodeFor;
-      void meshActiveTaskId;
-      void meshActiveDispatchNonce;
-      void meshActiveAttemptId;
-      void meshActiveAttemptGeneration;
-      const lastNodeId = typeof meshNodeId === "string" && meshNodeId.trim() ? meshNodeId.trim() : typeof rest.meshLastNodeId === "string" && rest.meshLastNodeId.trim() ? rest.meshLastNodeId.trim() : void 0;
-      host.settings = lastNodeId ? { ...rest, meshLastNodeId: lastNodeId } : rest;
-      host.adapter.updateRuntimeSettings?.(host.settings);
-      persistAttemptRefChange(host, previousAttemptRef);
-    }
-    var PERSISTED_ATTEMPT_REF_META_KEY;
-    var init_cli_provider_mesh_assignment = __esm2({
-      "src/providers/cli-provider-mesh-assignment.ts"() {
+    var ARTIFACT_RUNTIME_BY_DEPS_KEY;
+    var runtimeByDeps;
+    var init_artifact_runtime = __esm2({
+      "src/commands/med-family/artifact-runtime.ts"() {
         "use strict";
-        init_logger();
-        init_runtime_defaults();
-        init_turn_evidence_port();
-        init_mesh_task_attachment();
-        PERSISTED_ATTEMPT_REF_META_KEY = "meshActiveAttemptRef";
-      }
-    });
-    var assistant_registry_exports = {};
-    __export2(assistant_registry_exports, {
-      ASSISTANT_REGISTRY_FILE: () => ASSISTANT_REGISTRY_FILE,
-      ASSISTANT_REVIEW_HISTORY_MS: () => ASSISTANT_REVIEW_HISTORY_MS,
-      AssistantRegistry: () => AssistantRegistry,
-      BUSY_INPUT_MODES: () => BUSY_INPUT_MODES,
-      DEFAULT_BUSY_INPUT_MODE: () => DEFAULT_BUSY_INPUT_MODE,
-      busyInputModeToSendPolicy: () => busyInputModeToSendPolicy,
-      findAssistantRestoreRecord: () => findAssistantRestoreRecord,
-      getAssistantRegistry: () => getAssistantRegistry,
-      isLocalOwnerBindingRefusalCode: () => isLocalOwnerBindingRefusalCode,
-      matchesAssistantRestore: () => matchesAssistantRestore,
-      normalizeAssistantOwnerBinding: () => normalizeAssistantOwnerBinding,
-      normalizeAssistantRegistryEntry: () => normalizeAssistantRegistryEntry,
-      normalizeFollowedRemoteProjectEntry: () => normalizeFollowedRemoteProjectEntry,
-      setAssistantRegistryForTests: () => setAssistantRegistryForTests,
-      subscribeAssistantRegistry: () => subscribeAssistantRegistry
-    });
-    function busyInputModeToSendPolicy(mode) {
-      switch (mode) {
-        case "interrupt":
-          return { mode: "interrupt" };
-        case "steer":
-          return { mode: "send_now" };
-        default:
-          return { mode: "queue" };
-      }
-    }
-    function normalizeQuotaFailover(v) {
-      const o = v;
-      if (!o || typeof o !== "object" || Array.isArray(o)) return void 0;
-      const out = {};
-      if (typeof o.assistant === "string" && QUOTA_FAILOVER_MODES.includes(o.assistant)) out.assistant = o.assistant;
-      if (typeof o.coordinator === "string" && QUOTA_FAILOVER_MODES.includes(o.coordinator)) out.coordinator = o.coordinator;
-      return Object.keys(out).length ? out : void 0;
-    }
-    function normalizeAliases(raw) {
-      const out = {};
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
-      for (const [k, v] of Object.entries(raw)) {
-        const alias = k.trim();
-        if (alias && isStr(v)) out[alias] = v;
-      }
-      return out;
-    }
-    function normalizeTurnState(raw) {
-      const r = raw;
-      if (!r || r.state !== "idle" && r.state !== "working" || !isNum(r.at) || !isStr(r.sessionId)) return null;
-      return { state: r.state, at: r.at, sessionId: r.sessionId };
-    }
-    function normalizeReviewAts(raw) {
-      if (!Array.isArray(raw)) return [];
-      return raw.filter(isNum).sort((a, b) => a - b).slice(-REVIEW_HISTORY_MAX);
-    }
-    function normalizeBudget(raw) {
-      const r = raw;
-      if (!r || typeof r !== "object") return void 0;
-      const out = {};
-      if (isNum(r.memory)) out.memory = r.memory;
-      if (isNum(r.user)) out.user = r.user;
-      return Object.keys(out).length ? out : void 0;
-    }
-    function normalizeAssistantOwnerBinding(raw) {
-      const r = raw;
-      if (!r || typeof r !== "object" || Array.isArray(r)) return void 0;
-      if (r.accountSlot !== ASSISTANT_ACCOUNT_SLOT) return void 0;
-      const daemonId = isStr(r.daemonId) ? canonicalDaemonId2(r.daemonId) : null;
-      if (!daemonId) return void 0;
-      if (!isPositiveSafeInt(r.bindingRevision)) return void 0;
-      if (!isStr(r.boundAt)) return void 0;
-      return {
-        accountSlot: ASSISTANT_ACCOUNT_SLOT,
-        daemonId,
-        bindingRevision: r.bindingRevision,
-        boundAt: r.boundAt.trim()
-      };
-    }
-    function isLocalOwnerBindingRefusalCode(code) {
-      return typeof code === "string" && LOCAL_OWNER_BINDING_REFUSAL_CODES.has(code.trim());
-    }
-    function isFollowedState(v) {
-      return v === "followed" || v === "unfollowed" || v === "revoked";
-    }
-    function normalizeFollowedRemoteProjectEntry(raw) {
-      const r = raw;
-      if (!r || typeof r !== "object" || Array.isArray(r)) return null;
-      const hostDaemonId = isStr(r.hostDaemonId) ? canonicalDaemonId2(r.hostDaemonId) : null;
-      const meshId = isStr(r.meshId) ? r.meshId.trim() : "";
-      const name = isStr(r.name) ? r.name.trim() : "";
-      const slug = isStr(r.slug) ? r.slug.trim() : "";
-      if (!hostDaemonId || !meshId || !name || !slug) return null;
-      if (r.accountSlot !== void 0 && r.accountSlot !== ASSISTANT_ACCOUNT_SLOT) return null;
-      if (!isPositiveSafeInt(r.bindingRevision) || !isPositiveSafeInt(r.grantRevision)) return null;
-      if (!isFollowedState(r.state)) return null;
-      const key7 = followedRemoteProjectKey(hostDaemonId, meshId);
-      const followedAt = isStr(r.followedAt) ? r.followedAt.trim() : (/* @__PURE__ */ new Date(0)).toISOString();
-      const updatedAt = isStr(r.updatedAt) ? r.updatedAt.trim() : followedAt;
-      const unfollowedAt = isNum(r.unfollowedAt) || isStr(r.unfollowedAt) ? r.unfollowedAt : void 0;
-      const revokedAt = isNum(r.revokedAt) || isStr(r.revokedAt) ? r.revokedAt : void 0;
-      const revokedReason = isStr(r.revokedReason) ? r.revokedReason.trim() : void 0;
-      const lastErrorCode = isStr(r.lastErrorCode) ? r.lastErrorCode.trim() : void 0;
-      const lastObservedRaw = r.lastObserved;
-      const lastObserved = lastObservedRaw && typeof lastObservedRaw === "object" && isStr(lastObservedRaw.observedAt) ? {
-        observedAt: lastObservedRaw.observedAt.trim(),
-        ...isStr(lastObservedRaw.coordinatorState) ? { coordinatorState: lastObservedRaw.coordinatorState.trim() } : {},
-        ...typeof lastObservedRaw.coordinatorMissing === "boolean" ? { coordinatorMissing: lastObservedRaw.coordinatorMissing } : {},
-        ...isStr(lastObservedRaw.summary) ? { summary: lastObservedRaw.summary.trim().slice(0, 500) } : {}
-      } : void 0;
-      return {
-        key: key7,
-        hostDaemonId,
-        ...isStr(r.hostLabel) ? { hostLabel: r.hostLabel.trim() } : {},
-        meshId,
-        name,
-        slug,
-        sanitizedRepoIdentity: isStr(r.sanitizedRepoIdentity) ? sanitizeRemoteRepoIdentity(r.sanitizedRepoIdentity) : null,
-        accountSlot: ASSISTANT_ACCOUNT_SLOT,
-        bindingRevision: r.bindingRevision,
-        grantRevision: r.grantRevision,
-        ...typeof r.allowCoordinatorLaunch === "boolean" ? { allowCoordinatorLaunch: r.allowCoordinatorLaunch } : {},
-        ...typeof r.allowArtifactRead === "boolean" ? { allowArtifactRead: r.allowArtifactRead } : {},
-        state: r.state,
-        followedAt,
-        updatedAt,
-        ...r.state === "unfollowed" && unfollowedAt !== void 0 ? { unfollowedAt } : {},
-        ...r.state === "revoked" && revokedAt !== void 0 ? { revokedAt } : {},
-        ...r.state === "revoked" && revokedReason ? { revokedReason } : {},
-        ...lastErrorCode ? { lastErrorCode } : {},
-        ...r.lastCursor === null || isStr(r.lastCursor) ? { lastCursor: r.lastCursor } : {},
-        ...r.coordinatorSessionId === null || isStr(r.coordinatorSessionId) ? { coordinatorSessionId: r.coordinatorSessionId } : {},
-        ...lastObserved ? { lastObserved } : {}
-      };
-    }
-    function normalizeFollowedRemoteProjects(raw) {
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return void 0;
-      const out = {};
-      for (const value of Object.values(raw)) {
-        const entry = normalizeFollowedRemoteProjectEntry(value);
-        if (entry) out[entry.key] = entry;
-      }
-      return Object.keys(out).length > 0 ? out : void 0;
-    }
-    function isLessonTtlDays(v) {
-      return typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 3650;
-    }
-    function normalizeAssistantRegistryEntry(raw) {
-      const r = raw;
-      if (!r || typeof r !== "object" || Array.isArray(r)) return null;
-      if (!isStr(r.cliType) || !isStr(r.workspace) || !isNum(r.createdAt)) return null;
-      const mode = BUSY_INPUT_MODES.includes(r.busyInputMode) ? r.busyInputMode : DEFAULT_BUSY_INPUT_MODE;
-      const budget = normalizeBudget(r.memoryBudget);
-      const reviewAts = normalizeReviewAts(r.reviewAts);
-      const ownerBinding = normalizeAssistantOwnerBinding(r.ownerBinding);
-      const followedRemoteProjects = normalizeFollowedRemoteProjects(r.followedRemoteProjects);
-      return {
-        ...isStr(r.sessionId) && readHostedBindingOwner(r.hostOwner) ? { hostOwner: readHostedBindingOwner(r.hostOwner) } : {},
-        sessionId: isStr(r.sessionId) ? r.sessionId : null,
-        cliType: r.cliType,
-        workspace: r.workspace,
-        ...isStr(r.mcpConfigPath) ? { mcpConfigPath: r.mcpConfigPath } : {},
-        aliases: normalizeAliases(r.aliases),
-        createdAt: r.createdAt,
-        firstRelayAt: isNum(r.firstRelayAt) ? r.firstRelayAt : null,
-        busyInputMode: mode,
-        reviewTurn: r.reviewTurn !== false,
-        executionEnabled: r.executionEnabled !== false,
-        executionRevision: typeof r.executionRevision === "number" && Number.isSafeInteger(r.executionRevision) ? r.executionRevision : 0,
-        lastTurnState: normalizeTurnState(r.lastTurnState),
-        ...budget ? { memoryBudget: budget } : {},
-        ...isLessonTtlDays(r.memoryLessonTtlDays) ? { memoryLessonTtlDays: r.memoryLessonTtlDays } : {},
-        ...reviewAts.length ? { reviewAts } : {},
-        ...r.digestHour === null ? { digestHour: null } : isDigestHour(r.digestHour) ? { digestHour: r.digestHour } : {},
-        ...isNum(r.lastDigestAt) ? { lastDigestAt: r.lastDigestAt } : {},
-        ...normalizeContext(r.lastContext) ? { lastContext: normalizeContext(r.lastContext) } : {},
-        ...ownerBinding ? { ownerBinding } : {},
-        ...followedRemoteProjects ? { followedRemoteProjects } : {},
-        ...normalizeQuotaFailover(r.quotaFailover) ? { quotaFailover: normalizeQuotaFailover(r.quotaFailover) } : {}
-      };
-    }
-    function normalizeContext(v) {
-      const c = v;
-      if (!c || typeof c !== "object") return null;
-      return isStr(c.sessionId) && isStr(c.text) && c.text.length <= 8e3 && isNum(c.at) ? { sessionId: c.sessionId, text: c.text, at: c.at } : null;
-    }
-    function matchesAssistantRestore(entry, record8) {
-      const sid = entry?.sessionId;
-      const rid = record8?.runtimeId;
-      return typeof sid === "string" && sid.length > 0 && typeof rid === "string" && rid === sid;
-    }
-    function findAssistantRestoreRecord(entry, records) {
-      return records.find((r) => matchesAssistantRestore(entry, r)) ?? null;
-    }
-    function getAssistantRegistry() {
-      const expectedPath = (0, import_path36.join)(getConfigDir2(), ASSISTANT_REGISTRY_FILE);
-      if (!sharedRegistry || !sharedRegistryOverridden && sharedRegistry.path !== expectedPath) {
-        sharedRegistry = new AssistantRegistry();
-      }
-      return sharedRegistry;
-    }
-    function setAssistantRegistryForTests(registry) {
-      sharedRegistry = registry;
-      sharedRegistryOverridden = registry !== null;
-    }
-    function subscribeAssistantRegistry(bus, registry) {
-      return bus.on(["terminated", "turn", "registered"], (event) => {
-        if (event.kind === "terminated") {
-          registry.releaseSession(event.sessionId, event.cause);
-          return;
-        }
-        if (event.kind === "registered") {
-          registry.recordTurnState(event.sessionId, "idle", event.at);
-          return;
-        }
-        if (event.phase === "started" || event.phase === "resumed") registry.recordTurnState(event.sessionId, "working", event.at);
-        else if (event.phase === "committed") registry.recordTurnState(event.sessionId, "idle", event.at);
-      }, { name: "assistant.registry" });
-    }
-    var import_fs40;
-    var import_path36;
-    var ASSISTANT_REGISTRY_FILE;
-    var BUSY_INPUT_MODES;
-    var DEFAULT_BUSY_INPUT_MODE;
-    var QUOTA_FAILOVER_MODES;
-    var isDigestHour;
-    var isStr;
-    var isNum;
-    var isPositiveSafeInt;
-    var ASSISTANT_REVIEW_HISTORY_MS;
-    var REVIEW_HISTORY_MAX;
-    var LOCAL_OWNER_BINDING_REFUSAL_CODES;
-    var AssistantRegistry;
-    var sharedRegistry;
-    var sharedRegistryOverridden;
-    var init_assistant_registry = __esm2({
-      "src/assistant/assistant-registry.ts"() {
-        "use strict";
-        init_binding_owner();
-        import_fs40 = require("fs");
-        import_path36 = require("path");
-        init_dist();
-        init_config();
-        init_memory_store();
-        init_store_guards();
-        init_mcp_command_ingress();
-        ASSISTANT_REGISTRY_FILE = "assistant.json";
-        BUSY_INPUT_MODES = ["queue", "interrupt", "steer"];
-        DEFAULT_BUSY_INPUT_MODE = "queue";
-        QUOTA_FAILOVER_MODES = ["notify", "auto", "off"];
-        isDigestHour = (v) => typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 23;
-        isStr = (v) => typeof v === "string" && v.length > 0;
-        isNum = (v) => typeof v === "number" && Number.isFinite(v);
-        isPositiveSafeInt = (v) => typeof v === "number" && Number.isSafeInteger(v) && v >= 1;
-        ASSISTANT_REVIEW_HISTORY_MS = 24 * 60 * 60 * 1e3;
-        REVIEW_HISTORY_MAX = 16;
-        LOCAL_OWNER_BINDING_REFUSAL_CODES = /* @__PURE__ */ new Set([
-          "local_owner_binding_missing",
-          "local_owner_binding_mismatch",
-          "assistant_owner_binding_missing",
-          "assistant_owner_binding_mismatch"
-        ]);
-        AssistantRegistry = class {
-          path;
-          cache;
-          lastReadError = null;
-          constructor(opts = {}) {
-            this.path = (0, import_path36.join)(opts.configDir ?? getConfigDir2(), ASSISTANT_REGISTRY_FILE);
-          }
-          cloneCached() {
-            if (!this.cache) return null;
-            return {
-              ...this.cache,
-              aliases: { ...this.cache.aliases },
-              ...this.cache.reviewAts ? { reviewAts: [...this.cache.reviewAts] } : {},
-              ...this.cache.ownerBinding ? { ownerBinding: { ...this.cache.ownerBinding } } : {},
-              ...this.cache.followedRemoteProjects ? {
-                followedRemoteProjects: Object.fromEntries(
-                  Object.entries(this.cache.followedRemoteProjects).map(([k, v]) => [k, { ...v }])
-                )
-              } : {}
-            };
-          }
-          /** The entry, or null when the assistant was never launched. Corrupt → null (the file is kept aside on the next write). */
-          read() {
-            if (this.cache !== void 0) {
-              return this.cloneCached();
-            }
-            const outcome = this.load();
-            if (outcome.kind === "ok") {
-              this.lastReadError = null;
-              this.cache = outcome.entry;
-              return this.cloneCached();
-            }
-            if (outcome.kind === "unreadable") {
-              this.lastReadError = outcome.error;
-              return null;
-            }
-            this.lastReadError = null;
-            this.cache = null;
-            return null;
-          }
-          /** Drop the in-memory copy (a person edited the file), keeping the previous cache on a transient read error. */
-          reload() {
-            const outcome = this.load();
-            if (outcome.kind === "ok") {
-              this.lastReadError = null;
-              this.cache = outcome.entry;
-              return this.cloneCached();
-            }
-            if (outcome.kind === "unreadable") {
-              this.lastReadError = outcome.error;
-              return this.cache ? this.cloneCached() : null;
-            }
-            this.lastReadError = null;
-            this.cache = null;
-            return null;
-          }
-          memoryBudgets() {
-            return resolveMemoryBudgets(this.read()?.memoryBudget ?? this.loadMemoryBudget());
-          }
-          /**
-           * `launch_assistant` / restore: bind the session, creating the entry on
-           * first launch. A NEW session id resets `lastTurnState` to idle for that
-           * session and hands back the previous one — the restart-note input
-           * (§4.3), which must be read before anything overwrites it. Re-binding
-           * the same id (restore) keeps the state and returns `previous: null`.
-           */
-          bindSession(input) {
-            const prev = this.read();
-            if (!this.cache && this.lastReadError !== null) {
-              throw this.unreadableError();
-            }
-            const preLaunchBudget = prev ? void 0 : this.loadMemoryBudget();
-            const sameSession = !!prev && prev.sessionId === input.sessionId;
-            const at = isNum(input.at) ? input.at : Date.now();
-            const next = {
-              ...prev ?? {
-                aliases: {},
-                createdAt: at,
-                firstRelayAt: null,
-                busyInputMode: DEFAULT_BUSY_INPUT_MODE,
-                reviewTurn: true,
-                executionEnabled: true,
-                executionRevision: 0,
-                lastTurnState: null,
-                ...preLaunchBudget ? { memoryBudget: resolveMemoryBudgets(preLaunchBudget) } : {}
-              },
-              sessionId: input.sessionId,
-              cliType: input.cliType,
-              workspace: input.workspace,
-              hostOwner: input.hostOwner ?? (sameSession ? prev?.hostOwner : void 0)
-            };
-            if (!sameSession) next.lastTurnState = { state: "idle", at, sessionId: input.sessionId };
-            if (input.mcpConfigPath) next.mcpConfigPath = input.mcpConfigPath;
-            else delete next.mcpConfigPath;
-            if (!sameSession && prev?.sessionId) {
-              revokeMcpSessionCredential(prev.sessionId);
-            }
-            ensureMcpSessionCredential({ sessionId: input.sessionId, isCoordinator: false });
-            const entry = this.write(next);
-            return { entry, previous: sameSession ? null : prev?.lastTurnState ?? null };
-          }
-          /** Owner settings. Unknown busy modes are refused rather than coerced. */
-          updateSettings(patch) {
-            const prev = this.read();
-            if (!this.cache && this.lastReadError !== null) {
-              throw this.unreadableError();
-            }
-            if (!prev) return null;
-            if (patch.busyInputMode !== void 0 && !BUSY_INPUT_MODES.includes(patch.busyInputMode)) {
-              throw new Error(`invalid busyInputMode: ${String(patch.busyInputMode)}`);
-            }
-            const next = { ...prev };
-            if (patch.aliases !== void 0) next.aliases = normalizeAliases(patch.aliases);
-            if (patch.busyInputMode !== void 0) next.busyInputMode = patch.busyInputMode;
-            if (patch.executionEnabled !== void 0) {
-              next.executionEnabled = patch.executionEnabled !== false;
-              next.executionRevision = (next.executionRevision ?? 0) + 1;
-            }
-            if (patch.reviewTurn !== void 0) next.reviewTurn = patch.reviewTurn !== false;
-            if (patch.digestHour !== void 0) {
-              if (patch.digestHour !== null && !isDigestHour(patch.digestHour)) throw new Error(`invalid digestHour: ${String(patch.digestHour)}`);
-              next.digestHour = patch.digestHour;
-            }
-            if (patch.memoryLessonTtlDays !== void 0) {
-              if (!isLessonTtlDays(patch.memoryLessonTtlDays)) throw new Error(`invalid memoryLessonTtlDays: ${String(patch.memoryLessonTtlDays)}`);
-              next.memoryLessonTtlDays = patch.memoryLessonTtlDays;
-            }
-            if (patch.quotaFailover !== void 0) {
-              const merged = normalizeQuotaFailover({ ...prev.quotaFailover ?? {}, ...patch.quotaFailover ?? {} });
-              if (merged) next.quotaFailover = merged;
-              else delete next.quotaFailover;
-            }
-            if (patch.memoryBudget !== void 0) {
-              const b = normalizeBudget(patch.memoryBudget);
-              if (b) next.memoryBudget = resolveMemoryBudgets({ ...prev.memoryBudget ?? {}, ...b });
-              else delete next.memoryBudget;
-            }
-            return this.write(next);
-          }
-          /** `turn` / `registered` edge of the bound session (restart note input, §4.3). */
-          recordTurnState(sessionId, state2, at) {
-            const prev = this.read();
-            if (!prev || prev.sessionId !== sessionId) return;
-            if (prev.lastTurnState?.state === state2 && prev.lastTurnState.sessionId === sessionId) return;
-            this.write({ ...prev, lastTurnState: { state: state2, at, sessionId } });
-          }
-          /** First relay delivery; later calls are no-ops. */
-          markFirstRelay(at) {
-            const prev = this.read();
-            if (!prev || prev.firstRelayAt !== null) return;
-            this.write({ ...prev, firstRelayAt: at });
-          }
-          /** An idle review input reached the assistant (§4.10.7). Keeps the last 24 h. */
-          recordReview(at) {
-            const prev = this.read();
-            if (!prev || !isNum(at)) return;
-            const reviewAts = normalizeReviewAts([...prev.reviewAts ?? [], at].filter((t) => at - t < ASSISTANT_REVIEW_HISTORY_MS));
-            this.write({ ...prev, reviewAts });
-          }
-          /** Save the bound session's last exchanges (previous-session note source). */
-          recordContext(sessionId, text10, at) {
-            const prev = this.read();
-            if (!prev || prev.sessionId !== sessionId || !text10 || text10.length > 8e3) return;
-            this.write({ ...prev, lastContext: { sessionId, text: text10, at } });
-          }
-          /** A daily digest was queued (one per local day). */
-          recordDigest(at) {
-            const prev = this.read();
-            if (!prev || !isNum(at)) return;
-            this.write({ ...prev, lastDigestAt: at });
-          }
-          /**
-           * The session left the registry. `daemon_shutdown` keeps the binding (the
-           * runtime is re-attached after restart). Any other cause clears it; the
-           * rest of the entry, `lastTurnState` included, is kept.
-           */
-          releaseSession(sessionId, cause) {
-            if (cause === "daemon_shutdown") return false;
-            const prev = this.read();
-            if (!prev || !prev.sessionId || prev.sessionId !== sessionId) return false;
-            revokeMcpSessionCredential(sessionId);
-            const next = { ...prev, sessionId: null };
-            delete next.mcpConfigPath;
-            delete next.hostOwner;
-            this.write(next);
-            return true;
-          }
-          /**
-           * After the boot-time restore: clear a binding whose runtime is not among
-           * the live hosted runtimes. Callers MUST pass a successful full inventory
-           * and its verified host owner. Foreign or unknown ownership defers pruning.
-           * Returns the cleared sessionId, or null.
-           */
-          pruneAfterRestore(liveRuntimeIds, owner) {
-            const prev = this.reload();
-            if (!prev?.sessionId || !sameHostedBindingOwner(
-              resolveHostedBindingOwner(prev.sessionId, prev.hostOwner, owner, liveRuntimeIds, (0, import_path36.dirname)(this.path)),
-              owner
-            )) return null;
-            if (!prev?.sessionId || liveRuntimeIds.has(prev.sessionId)) return null;
-            const cleared = prev.sessionId;
-            revokeMcpSessionCredential(cleared);
-            const next = { ...prev, sessionId: null };
-            delete next.mcpConfigPath;
-            delete next.hostOwner;
-            this.write(next);
-            return cleared;
-          }
-          /**
-           * Durable local owner-binding receipt for the account-level `personal`
-           * assistant slot on this Mac. Returns null when missing or corrupt.
-           */
-          ownerBinding() {
-            return this.read()?.ownerBinding ?? null;
-          }
-          /**
-           * Verify that the local durable owner-binding receipt exists and matches
-           * this daemon's canonical identity. Never auto-creates a missing receipt:
-           * missing or mismatched receipts fail closed until explicit owner
-           * reconciliation.
-           */
-          verifyLocalOwnerBinding(selfDaemonId) {
-            const canonicalSelf = canonicalDaemonId2(selfDaemonId);
-            if (!canonicalSelf) {
-              return {
-                ok: false,
-                code: "local_owner_binding_missing",
-                error: "Local daemon identity is not available to verify assistant owner binding."
-              };
-            }
-            const binding = this.ownerBinding();
-            if (!binding) {
-              if (this.lastReadError) {
-                const errCode = this.lastReadError.code ?? "EUNREADABLE";
-                return {
-                  ok: false,
-                  code: "local_owner_binding_unreadable",
-                  error: `Local assistant owner binding receipt could not be read (${errCode}: ${this.lastReadError.message}); retry once transient read pressure clears.`
-                };
-              }
-              return {
-                ok: false,
-                code: "local_owner_binding_missing",
-                error: "Local assistant owner binding receipt is missing or corrupt; explicit owner reconciliation is required."
-              };
-            }
-            if (binding.accountSlot !== ASSISTANT_ACCOUNT_SLOT || !daemonIdsEquivalent5(binding.daemonId, canonicalSelf)) {
-              return {
-                ok: false,
-                code: "local_owner_binding_mismatch",
-                error: `Local assistant owner binding receipt is bound to ${binding.daemonId}, not this daemon (${canonicalSelf}); explicit owner reconciliation is required.`
-              };
-            }
-            return { ok: true, receipt: binding, binding };
-          }
-          /**
-           * Explicit owner reconciliation of the local `personal` assistant slot
-           * binding on this Mac. Preserves the existing `bindingRevision` when already
-           * bound to this daemon, or reuses `maxFollowedRevision` across followed
-           * remote projects when the receipt is missing or the bound `daemonId`
-           * changed, unless `opts.bumpRevision` / `opts.forceNewRevision` is true.
-           * Revoked `local_owner_binding_*` followed entries whose `bindingRevision`
-           * matches the resulting receipt are recovered unless
-           * `opts.recoverFollowed === false`; callers that recover must also re-arm
-           * the relay thread and poller (see `ensure_binding`).
-           */
-          reconcileOwnerBinding(selfDaemonId, opts) {
-            const canonicalSelf = canonicalDaemonId2(selfDaemonId);
-            if (!canonicalSelf) {
-              throw new Error(`Invalid selfDaemonId for assistant owner binding: ${String(selfDaemonId)}`);
-            }
-            const optObj = typeof opts === "object" && opts !== null ? opts : void 0;
-            const explicitRevision = typeof opts === "number" ? isPositiveSafeInt(opts) ? opts : void 0 : optObj && isPositiveSafeInt(optObj.bindingRevision) ? optObj.bindingRevision : void 0;
-            const nowIso = optObj?.now ?? (/* @__PURE__ */ new Date()).toISOString();
-            const base = this.ensureBaseEntry(Date.now());
-            const existing = base.ownerBinding;
-            const bump2 = optObj?.bumpRevision === true || optObj?.forceNewRevision === true;
-            const followedEntries = Object.values(base.followedRemoteProjects ?? {});
-            const maxFollowedRevision = followedEntries.reduce(
-              (max, e) => e && isPositiveSafeInt(e.bindingRevision) && e.bindingRevision > max ? e.bindingRevision : max,
-              0
-            );
-            const sameDaemon2 = Boolean(
-              existing && existing.accountSlot === ASSISTANT_ACCOUNT_SLOT && daemonIdsEquivalent5(existing.daemonId, canonicalSelf)
-            );
-            const nextRevision = explicitRevision !== void 0 ? explicitRevision : bump2 ? Math.max(existing?.bindingRevision ?? 0, maxFollowedRevision) + 1 : sameDaemon2 ? existing.bindingRevision : maxFollowedRevision > 0 ? maxFollowedRevision : (existing?.bindingRevision ?? 0) + 1;
-            const revisionChanged = !existing || existing.bindingRevision !== nextRevision;
-            const receipt = sameDaemon2 && !bump2 && !revisionChanged ? existing : {
-              accountSlot: ASSISTANT_ACCOUNT_SLOT,
-              daemonId: canonicalSelf,
-              bindingRevision: nextRevision,
-              boundAt: nowIso
-            };
-            let nextFollowed = base.followedRemoteProjects;
-            if (nextFollowed && optObj?.recoverFollowed !== false) {
-              let recoveredAny = false;
-              const copy = { ...nextFollowed };
-              for (const [k, entry] of Object.entries(copy)) {
-                if (entry.state === "revoked" && isLocalOwnerBindingRefusalCode(entry.revokedReason ?? entry.lastErrorCode) && entry.bindingRevision === receipt.bindingRevision) {
-                  const recovered2 = normalizeFollowedRemoteProjectEntry({
-                    ...entry,
-                    state: "followed",
-                    updatedAt: nowIso,
-                    revokedAt: void 0,
-                    revokedReason: void 0,
-                    lastErrorCode: void 0
-                  });
-                  if (recovered2) {
-                    copy[k] = recovered2;
-                    recoveredAny = true;
-                  }
-                }
-              }
-              if (recoveredAny) nextFollowed = copy;
-            }
-            if (sameDaemon2 && !bump2 && !revisionChanged && nextFollowed === base.followedRemoteProjects) {
-              return existing;
-            }
-            this.write({
-              ...base,
-              ownerBinding: receipt,
-              ...nextFollowed ? { followedRemoteProjects: nextFollowed } : {}
-            });
-            return { ...receipt };
-          }
-          listFollowedRemoteProjects() {
-            const map2 = this.read()?.followedRemoteProjects;
-            if (!map2) return [];
-            return Object.values(map2).sort((a, b) => a.key.localeCompare(b.key));
-          }
-          getFollowedRemoteProject(key7) {
-            const map2 = this.read()?.followedRemoteProjects;
-            if (!map2) return null;
-            return map2[key7] ? { ...map2[key7] } : null;
-          }
-          upsertFollowedRemoteProject(input) {
-            const canonicalHost = canonicalDaemonId2(input.hostDaemonId) ?? input.hostDaemonId;
-            const key7 = input.key || followedRemoteProjectKey(canonicalHost, input.meshId);
-            const current5 = this.read();
-            if (!this.cache && this.lastReadError !== null) {
-              throw this.unreadableError();
-            }
-            const existing = current5?.followedRemoteProjects?.[key7];
-            const nowIso = (/* @__PURE__ */ new Date()).toISOString();
-            const normalized = normalizeFollowedRemoteProjectEntry({
-              ...existing,
-              ...input,
-              key: key7,
-              hostDaemonId: canonicalHost,
-              accountSlot: ASSISTANT_ACCOUNT_SLOT,
-              followedAt: input.followedAt ?? existing?.followedAt ?? nowIso,
-              updatedAt: input.updatedAt ?? nowIso
-            });
-            if (!normalized) {
-              throw new Error("Invalid followed remote project entry");
-            }
-            const base = this.ensureBaseEntry(Date.now());
-            const nextMap = {
-              ...base.followedRemoteProjects ?? {},
-              [normalized.key]: normalized
-            };
-            this.write({ ...base, followedRemoteProjects: nextMap });
-            return { ...normalized };
-          }
-          updateFollowedRemoteProject(key7, patch) {
-            const base = this.read();
-            if (!this.cache && this.lastReadError !== null) {
-              throw this.unreadableError();
-            }
-            const existing = base?.followedRemoteProjects?.[key7];
-            if (!base || !existing) return null;
-            const merged = normalizeFollowedRemoteProjectEntry({
-              ...existing,
-              ...patch,
-              key: existing.key,
-              hostDaemonId: existing.hostDaemonId,
-              meshId: existing.meshId,
-              updatedAt: patch.updatedAt ?? (/* @__PURE__ */ new Date()).toISOString()
-            });
-            if (!merged) return null;
-            const nextMap = {
-              ...base.followedRemoteProjects ?? {},
-              [key7]: merged
-            };
-            this.write({ ...base, followedRemoteProjects: nextMap });
-            return { ...merged };
-          }
-          removeFollowedRemoteProject(key7) {
-            const base = this.read();
-            if (!this.cache && this.lastReadError !== null) {
-              throw this.unreadableError();
-            }
-            if (!base?.followedRemoteProjects?.[key7]) return false;
-            const nextMap = { ...base.followedRemoteProjects };
-            delete nextMap[key7];
-            const next = { ...base };
-            if (Object.keys(nextMap).length > 0) next.followedRemoteProjects = nextMap;
-            else delete next.followedRemoteProjects;
-            this.write(next);
-            return true;
-          }
-          ensureBaseEntry(at) {
-            const prev = this.read();
-            if (!this.cache && this.lastReadError !== null) {
-              throw this.unreadableError();
-            }
-            if (prev) return prev;
-            const preLaunchBudget = this.loadMemoryBudget();
-            return {
-              sessionId: null,
-              cliType: "codex",
-              workspace: (0, import_path36.join)(this.path, ".."),
-              aliases: {},
-              createdAt: at,
-              firstRelayAt: null,
-              busyInputMode: DEFAULT_BUSY_INPUT_MODE,
-              reviewTurn: true,
-              executionEnabled: true,
-              executionRevision: 0,
-              lastTurnState: null,
-              ...preLaunchBudget ? { memoryBudget: resolveMemoryBudgets(preLaunchBudget) } : {}
-            };
-          }
-          unreadableError() {
-            const errCode = this.lastReadError?.code ?? "EUNREADABLE";
-            const msg = this.lastReadError?.message ?? "unreadable";
-            const err2 = new Error(
-              `local_owner_binding_unreadable: Local assistant registry could not be read (${errCode}: ${msg}); refusing to overwrite ${this.path}.`
-            );
-            err2.code = "local_owner_binding_unreadable";
-            if (this.lastReadError) err2.cause = this.lastReadError;
-            return err2;
-          }
-          load() {
-            let raw;
-            try {
-              raw = (0, import_fs40.readFileSync)(this.path, "utf-8");
-            } catch (e) {
-              const err2 = e;
-              if (err2?.code === "ENOENT") return { kind: "missing" };
-              return { kind: "unreadable", error: err2 };
-            }
-            try {
-              const parsed = JSON.parse(raw);
-              const entry = normalizeAssistantRegistryEntry(parsed);
-              return entry ? { kind: "ok", entry } : { kind: "corrupt" };
-            } catch {
-              return { kind: "corrupt" };
-            }
-          }
-          loadMemoryBudget() {
-            if (!(0, import_fs40.existsSync)(this.path)) return void 0;
-            try {
-              const parsed = JSON.parse((0, import_fs40.readFileSync)(this.path, "utf-8"));
-              return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? normalizeBudget(parsed.memoryBudget) : void 0;
-            } catch {
-              return void 0;
-            }
-          }
-          write(entry) {
-            if (!this.cache && this.lastReadError !== null) {
-              throw this.unreadableError();
-            }
-            this.keepCorruptAside();
-            writeFileAtomic600(this.path, `${JSON.stringify(entry, null, 2)}
-`);
-            this.lastReadError = null;
-            this.cache = entry;
-            return this.read();
-          }
-          /** A file that exists and can be read, but does not parse, is renamed rather than overwritten silently. */
-          keepCorruptAside() {
-            let raw;
-            try {
-              raw = (0, import_fs40.readFileSync)(this.path, "utf-8");
-            } catch {
-              return;
-            }
-            try {
-              const parsed = JSON.parse(raw);
-              if (normalizeAssistantRegistryEntry(parsed)) return;
-              if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && normalizeBudget(parsed.memoryBudget)) return;
-            } catch {
-            }
-            try {
-              (0, import_fs40.renameSync)(this.path, `${this.path}.corrupt-${Date.now()}`);
-            } catch {
-            }
-          }
-        };
-        sharedRegistry = null;
-        sharedRegistryOverridden = false;
+        init_artifacts();
+        init_mesh_runtime_store();
+        ARTIFACT_RUNTIME_BY_DEPS_KEY = /* @__PURE__ */ Symbol.for("adhdev.daemon-core.artifactCommandRuntimeByDeps");
+        runtimeByDeps = getRuntimeByDepsMap();
       }
     });
     function isSameBoundMesh2(recordMeshId, taskMeshId) {
@@ -128270,7 +128032,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       const b = (taskMeshId ?? "").trim();
       return a.length > 0 && a === b;
     }
-    function trimString22(value) {
+    function trimString3(value) {
       return typeof value === "string" ? value.trim() : "";
     }
     async function resolveRegisteredSessionWorkspace(ctx, sessionId, opts) {
@@ -128280,29 +128042,29 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       let title = null;
       const regTarget = ctx.deps?.sessionRegistry?.get?.(sessionId);
       if (regTarget) {
-        if (trimString22(regTarget.workspace)) {
-          sessionWorkspace = trimString22(regTarget.workspace);
+        if (trimString3(regTarget.workspace)) {
+          sessionWorkspace = trimString3(regTarget.workspace);
         }
-        if (trimString22(regTarget.providerType)) {
-          providerType = trimString22(regTarget.providerType);
+        if (trimString3(regTarget.providerType)) {
+          providerType = trimString3(regTarget.providerType);
         }
       }
       const instMgr = ctx.deps?.instanceManager;
       const inst = instMgr?.getInstance?.(sessionId) ?? instMgr?.get?.(sessionId);
       if (inst) {
-        const instWorkspace = trimString22(inst.workspace) || trimString22(inst.getWorkspace?.()) || trimString22(inst.settings?.workspace);
+        const instWorkspace = trimString3(inst.workspace) || trimString3(inst.getWorkspace?.()) || trimString3(inst.settings?.workspace);
         if (!sessionWorkspace && instWorkspace) {
           sessionWorkspace = instWorkspace;
         }
-        const instProvider = trimString22(inst.providerType) || trimString22(inst.type);
+        const instProvider = trimString3(inst.providerType) || trimString3(inst.type);
         if (providerType === "unknown" && instProvider) {
           providerType = instProvider;
         }
-        const instStatus = trimString22(inst.status) || trimString22(inst.getStatus?.());
+        const instStatus = trimString3(inst.status) || trimString3(inst.getStatus?.());
         if (instStatus) {
           status = instStatus;
         }
-        const instTitle = trimString22(inst.title) || trimString22(inst.settings?.title);
+        const instTitle = trimString3(inst.title) || trimString3(inst.settings?.title);
         if (instTitle) {
           title = instTitle;
         }
@@ -128310,31 +128072,31 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       const cliMgr = ctx.deps?.cliManager;
       const cliSession = cliMgr?.getSessionByConversationId?.(sessionId) ?? cliMgr?.getSession?.(sessionId);
       if (cliSession) {
-        const cliWorkspace = trimString22(cliSession.workspace) || trimString22(cliSession.cwd);
+        const cliWorkspace = trimString3(cliSession.workspace) || trimString3(cliSession.cwd);
         if (!sessionWorkspace && cliWorkspace) {
           sessionWorkspace = cliWorkspace;
         }
-        const cliProvider = trimString22(cliSession.cliType) || trimString22(cliSession.providerType);
+        const cliProvider = trimString3(cliSession.cliType) || trimString3(cliSession.providerType);
         if (providerType === "unknown" && cliProvider) {
           providerType = cliProvider;
         }
       }
       if (!sessionWorkspace) {
         const coord = getCoordinatorForSession(sessionId);
-        if (coord && trimString22(coord.workspace)) {
-          sessionWorkspace = trimString22(coord.workspace);
-          if (providerType === "unknown" && trimString22(coord.cliType)) {
-            providerType = trimString22(coord.cliType);
+        if (coord && trimString3(coord.workspace)) {
+          sessionWorkspace = trimString3(coord.workspace);
+          if (providerType === "unknown" && trimString3(coord.cliType)) {
+            providerType = trimString3(coord.cliType);
           }
         }
       }
       if (!sessionWorkspace) {
         try {
           const assistantEntry = getAssistantRegistry().read();
-          if (assistantEntry && assistantEntry.sessionId && sessionIdsEquivalent(assistantEntry.sessionId, sessionId) && trimString22(assistantEntry.workspace)) {
-            sessionWorkspace = trimString22(assistantEntry.workspace);
-            if (providerType === "unknown" && trimString22(assistantEntry.cliType)) {
-              providerType = trimString22(assistantEntry.cliType);
+          if (assistantEntry && assistantEntry.sessionId && sessionIdsEquivalent(assistantEntry.sessionId, sessionId) && trimString3(assistantEntry.workspace)) {
+            sessionWorkspace = trimString3(assistantEntry.workspace);
+            if (providerType === "unknown" && trimString3(assistantEntry.cliType)) {
+              providerType = trimString3(assistantEntry.cliType);
             }
           }
         } catch {
@@ -128342,19 +128104,19 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       }
       let nodeWorkspaceRoot = null;
       if (opts?.allowTrustedWorkerFallback) {
-        const meshId = trimString22(opts.meshId);
-        const nodeId = trimString22(opts.nodeId);
-        const taskId = trimString22(opts.taskId);
+        const meshId = trimString3(opts.meshId);
+        const nodeId = trimString3(opts.nodeId);
+        const taskId = trimString3(opts.taskId);
         if (meshId) {
           try {
             const meshStore = getMeshRuntimeStore(ctx);
             if (taskId) {
               const queueEntry = meshStore.findQueueEntryById(meshId, taskId);
-              const assignedSession = trimString22(queueEntry?.assignedSessionId);
-              const queueStatus = trimString22(queueEntry?.status);
+              const assignedSession = trimString3(queueEntry?.assignedSessionId);
+              const queueStatus = trimString3(queueEntry?.status);
               if (queueEntry && (!queueStatus || queueStatus === "assigned") && (!assignedSession || sessionIdsEquivalent(assignedSession, sessionId))) {
                 const queuePayload = queueEntry?.payload ?? {};
-                const queueWs = trimString22(queueEntry?.worktreePath) || trimString22(queueEntry?.workspace) || trimString22(queueEntry?.workspaceRoot) || trimString22(queuePayload.worktreePath) || trimString22(queuePayload.workspace) || trimString22(queuePayload.workspaceRoot);
+                const queueWs = trimString3(queueEntry?.worktreePath) || trimString3(queueEntry?.workspace) || trimString3(queueEntry?.workspaceRoot) || trimString3(queuePayload.worktreePath) || trimString3(queuePayload.workspace) || trimString3(queuePayload.workspaceRoot);
                 if (queueWs) {
                   nodeWorkspaceRoot = queueWs;
                 }
@@ -128368,9 +128130,9 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
               const resolvedMesh = cmdRes?.mesh ?? cmdRes ?? ctx.getCachedInlineMesh?.(meshId);
               const nodes = Array.isArray(resolvedMesh?.nodes) ? resolvedMesh.nodes : [];
               const matchedNode = nodes.find(
-                (n) => trimString22(n?.id) === nodeId || trimString22(n?.nodeId) === nodeId
+                (n) => trimString3(n?.id) === nodeId || trimString3(n?.nodeId) === nodeId
               );
-              const nodeWs = trimString22(matchedNode?.workspace) || trimString22(matchedNode?.worktreePath);
+              const nodeWs = trimString3(matchedNode?.workspace) || trimString3(matchedNode?.worktreePath);
               if (nodeWs) {
                 nodeWorkspaceRoot = nodeWs;
               }
@@ -128382,18 +128144,18 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       if (!sessionWorkspace && !nodeWorkspaceRoot && opts?.allowStoredArtifactWorkspaceFallback) {
         try {
           const store5 = getArtifactStore(ctx);
-          const targetArtifactId = trimString22(opts.artifactId);
+          const targetArtifactId = trimString3(opts.artifactId);
           if (targetArtifactId) {
             const rec8 = store5.get(targetArtifactId);
-            if (rec8 && sessionIdsEquivalent(rec8.sessionId, sessionId) && trimString22(rec8.workspaceRoot)) {
-              sessionWorkspace = trimString22(rec8.workspaceRoot);
+            if (rec8 && sessionIdsEquivalent(rec8.sessionId, sessionId) && trimString3(rec8.workspaceRoot)) {
+              sessionWorkspace = trimString3(rec8.workspaceRoot);
               status = "stopped";
             }
           }
           if (!sessionWorkspace && sessionId) {
             const existing = store5.listBySession(sessionId, { limit: 1 });
-            if (existing.length > 0 && trimString22(existing[0].workspaceRoot)) {
-              sessionWorkspace = trimString22(existing[0].workspaceRoot);
+            if (existing.length > 0 && trimString3(existing[0].workspaceRoot)) {
+              sessionWorkspace = trimString3(existing[0].workspaceRoot);
               status = "stopped";
             }
           }
@@ -128442,7 +128204,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         try {
           const queueHeads = meshStore.getQueueHeads?.(meshId) ?? [];
           if (Array.isArray(queueHeads) && queueHeads.some(
-            (entry) => sessionIdsEquivalent(trimString22(entry?.assignedSessionId), sessionId)
+            (entry) => sessionIdsEquivalent(trimString3(entry?.assignedSessionId), sessionId)
           )) {
             return true;
           }
@@ -128452,21 +128214,21 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       const matchesMeshNodes = (mesh) => {
         if (!mesh || !Array.isArray(mesh.nodes)) return false;
         return mesh.nodes.some((node) => {
-          const nodeSid = trimString22(node?.sessionId);
-          const activeSid = trimString22(node?.activeSessionId);
-          const coordSid = trimString22(node?.coordinatorSessionId);
+          const nodeSid = trimString3(node?.sessionId);
+          const activeSid = trimString3(node?.activeSessionId);
+          const coordSid = trimString3(node?.coordinatorSessionId);
           if (nodeSid && sessionIdsEquivalent(nodeSid, sessionId) || activeSid && sessionIdsEquivalent(activeSid, sessionId) || coordSid && sessionIdsEquivalent(coordSid, sessionId)) {
             return true;
           }
           const sessions = Array.isArray(node?.sessions) ? node.sessions : [];
           if (sessions.some(
-            (s2) => sessionIdsEquivalent(trimString22(typeof s2 === "string" ? s2 : s2?.sessionId), sessionId)
+            (s2) => sessionIdsEquivalent(trimString3(typeof s2 === "string" ? s2 : s2?.sessionId), sessionId)
           )) {
             return true;
           }
           const delegated = Array.isArray(node?.delegatedSessions) ? node.delegatedSessions : [];
           return delegated.some(
-            (s2) => sessionIdsEquivalent(trimString22(typeof s2 === "string" ? s2 : s2?.sessionId), sessionId)
+            (s2) => sessionIdsEquivalent(trimString3(typeof s2 === "string" ? s2 : s2?.sessionId), sessionId)
           );
         });
       };
@@ -128495,13 +128257,13 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         const state2 = inst?.getState?.() ?? inst;
         const settings2 = state2?.settings && typeof state2.settings === "object" ? state2.settings : void 0;
         if (!settings2) return null;
-        const meshId = trimString22(settings2.meshNodeFor);
-        const ownerDaemonId = trimString22(settings2.meshCoordinatorDaemonId);
+        const meshId = trimString3(settings2.meshNodeFor);
+        const ownerDaemonId = trimString3(settings2.meshCoordinatorDaemonId);
         const attemptRef = currentMeshAttemptRef(settings2);
-        const attemptId = attemptRef?.attemptId || trimString22(settings2.meshActiveAttemptId) || trimString22(settings2.meshAttemptId);
+        const attemptId = attemptRef?.attemptId || trimString3(settings2.meshActiveAttemptId) || trimString3(settings2.meshAttemptId);
         const generation = attemptRef?.generation ?? (typeof settings2.meshActiveAttemptGeneration === "number" && Number.isSafeInteger(settings2.meshActiveAttemptGeneration) ? settings2.meshActiveAttemptGeneration : typeof settings2.meshAttemptGeneration === "number" && Number.isSafeInteger(settings2.meshAttemptGeneration) ? settings2.meshAttemptGeneration : void 0);
-        const taskId = trimString22(settings2.meshActiveTaskId) || trimString22(settings2.meshTaskId);
-        const nodeId = trimString22(settings2.meshNodeId) || trimString22(settings2.meshLastNodeId);
+        const taskId = trimString3(settings2.meshActiveTaskId) || trimString3(settings2.meshTaskId);
+        const nodeId = trimString3(settings2.meshNodeId) || trimString3(settings2.meshLastNodeId);
         return {
           meshId,
           ownerDaemonId,
@@ -128515,7 +128277,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       }
     }
     async function resolveRemoteWorkerForArtifact(ctx, credential) {
-      const selfDaemonId = trimString22(ctx.deps?.statusInstanceId);
+      const selfDaemonId = trimString3(ctx.deps?.statusInstanceId);
       if (!selfDaemonId) return null;
       const binding = verifyWorkerSessionBind(credential.bind);
       const directToken = verifyWorkerTaskToken(credential.token);
@@ -128537,20 +128299,20 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       const resolveMeshHostOwner = (meshId, sessionId, nodeId) => {
         const mesh = resolvedMeshRecord ?? ctx.getCachedInlineMesh?.(meshId);
         if (!mesh) return null;
-        const hostDaemonId = trimString22(mesh?.meshHost?.hostDaemonId) || trimString22(mesh?.hostDaemonId);
+        const hostDaemonId = trimString3(mesh?.meshHost?.hostDaemonId) || trimString3(mesh?.hostDaemonId);
         if (!hostDaemonId || daemonIdsEquivalent5(hostDaemonId, selfDaemonId)) return null;
         const nodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
         const matchedNode = nodes.find((n) => {
-          if (nodeId && (meshNodeIdMatches7(n, nodeId) || trimString22(n?.id) === nodeId || trimString22(n?.nodeId) === nodeId)) {
+          if (nodeId && (meshNodeIdMatches7(n, nodeId) || trimString3(n?.id) === nodeId || trimString3(n?.nodeId) === nodeId)) {
             return true;
           }
-          const activeSid = trimString22(n?.activeSessionId) || trimString22(n?.sessionId);
+          const activeSid = trimString3(n?.activeSessionId) || trimString3(n?.sessionId);
           return Boolean(activeSid && sessionIdsEquivalent(activeSid, sessionId));
         });
         if (!matchedNode) return null;
-        const nodeDaemon = readMeshNodeDaemonId(matchedNode) || trimString22(matchedNode?.daemonId);
+        const nodeDaemon = readMeshNodeDaemonId(matchedNode) || trimString3(matchedNode?.daemonId);
         if (nodeDaemon && !daemonIdsEquivalent5(nodeDaemon, selfDaemonId)) return null;
-        const resolvedNodeId = trimString22(matchedNode?.id) || trimString22(matchedNode?.nodeId) || nodeId;
+        const resolvedNodeId = trimString3(matchedNode?.id) || trimString3(matchedNode?.nodeId) || nodeId;
         const raw = readWorkerAssignmentStamp(ctx, sessionId);
         return {
           meshId,
@@ -128598,8 +128360,8 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             }
           };
         }
-        const missionId = trimString22(scopeAns.missionId) || null;
-        const inputArtifactIds = Array.isArray(scopeAns.inputArtifactIds) ? scopeAns.inputArtifactIds.map((id4) => trimString22(id4)).filter((id4) => id4.length > 0) : [];
+        const missionId = trimString3(scopeAns.missionId) || null;
+        const inputArtifactIds = Array.isArray(scopeAns.inputArtifactIds) ? scopeAns.inputArtifactIds.map((id4) => trimString3(id4)).filter((id4) => id4.length > 0) : [];
         const inputArtifacts = Array.isArray(scopeAns.inputArtifacts) ? scopeAns.inputArtifacts.filter((a) => a && typeof a === "object") : [];
         const requestedArtifact = scopeAns.requestedArtifact && typeof scopeAns.requestedArtifact === "object" ? scopeAns.requestedArtifact : null;
         const originFetchGrant = scopeAns.originFetchGrant && typeof scopeAns.originFetchGrant === "object" ? scopeAns.originFetchGrant : null;
@@ -128634,7 +128396,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         const taskEntry = authority.meshId && authority.taskId ? meshStore.findQueueEntryById(authority.meshId, authority.taskId) : null;
         const taskPayload = taskEntry?.payload ?? {};
         const rawInputIds = Array.isArray(taskEntry?.inputArtifactIds) ? taskEntry.inputArtifactIds : Array.isArray(taskPayload.inputArtifactIds) ? taskPayload.inputArtifactIds : authority.remoteInputArtifactIds ?? [];
-        const allowedIds = new Set(rawInputIds.map((id4) => trimString22(id4)).filter((id4) => id4.length > 0));
+        const allowedIds = new Set(rawInputIds.map((id4) => trimString3(id4)).filter((id4) => id4.length > 0));
         const sameMesh = isSameBoundMesh2(record8.meshId, authority.meshId);
         if (!sameMesh || !allowedIds.has(artifactId)) {
           return {
@@ -128693,7 +128455,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       const seen2 = new Set(own2.map((rec8) => rec8.artifactId));
       const merged = [...own2];
       for (const rawId of rawInputIds) {
-        const id4 = trimString22(rawId);
+        const id4 = trimString3(rawId);
         if (!id4 || seen2.has(id4)) continue;
         const record8 = store5.get(id4) ?? remoteArtifactById.get(id4);
         if (!record8) continue;
@@ -128708,7 +128470,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
     }
     async function fetchArtifactFromOriginDaemon(ctx, authority, record8, args, isReadCommand) {
       const artifactId = record8.artifactId;
-      const originDaemonId = trimString22(record8.originDaemonId) || trimString22(authority.hostDaemonId);
+      const originDaemonId = trimString3(record8.originDaemonId) || trimString3(authority.hostDaemonId);
       if (!originDaemonId || !ctx.deps?.dispatchMeshCommand) {
         return {
           success: false,
@@ -128717,7 +128479,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         };
       }
       let originFetchGrant = authority.originFetchGrant;
-      let effectiveAttemptId = trimString22(authority.remoteClaim?.attemptId) || trimString22(originFetchGrant?.requesterAttemptId);
+      let effectiveAttemptId = trimString3(authority.remoteClaim?.attemptId) || trimString3(originFetchGrant?.requesterAttemptId);
       if (!originFetchGrant && authority.producerRole === "worker" && authority.originDaemonId && authority.taskId) {
         const meshIdForGrant = record8.meshId || authority.meshId || "";
         const latestAttempt = meshIdForGrant ? getMeshRuntimeStore(ctx).turnStore().findLatestAttemptForTask(meshIdForGrant, authority.taskId) : null;
@@ -128735,7 +128497,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
           });
         }
       }
-      const requesterTaskId = authority.taskId || trimString22(originFetchGrant?.requesterTaskId);
+      const requesterTaskId = authority.taskId || trimString3(originFetchGrant?.requesterTaskId);
       let rawOrigin;
       try {
         rawOrigin = await ctx.deps.dispatchMeshCommand(
@@ -128849,7 +128611,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       };
     }
     function meshFromHostRecord(meshId) {
-      const hostDaemonId = trimString22(readMeshHostRecord(meshId)?.hostDaemonId);
+      const hostDaemonId = trimString3(readMeshHostRecord(meshId)?.hostDaemonId);
       return hostDaemonId ? { meshHost: { hostDaemonId }, nodes: [] } : null;
     }
     var handleArtifactIndexForwarded;
@@ -128873,14 +128635,14 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         init_artifact_origin_grant();
         handleArtifactIndexForwarded = async (ctx, args) => {
           const senderDaemonId = readMeshSender(args);
-          const meshId = trimString22(args?.meshId);
-          const sessionId = trimString22(args?.sessionId);
-          const taskId = trimString22(args?.taskId) || void 0;
-          const attemptId = trimString22(args?.attemptId) || void 0;
+          const meshId = trimString3(args?.meshId);
+          const sessionId = trimString3(args?.sessionId);
+          const taskId = trimString3(args?.taskId) || void 0;
+          const attemptId = trimString3(args?.attemptId) || void 0;
           const generation = typeof args?.generation === "number" && Number.isSafeInteger(args.generation) ? args.generation : void 0;
           const resolveScopeOnly = args?.resolveScopeOnly === true;
           const rawArtifact = args?.artifact && typeof args.artifact === "object" && !Array.isArray(args.artifact) ? args.artifact : null;
-          if (!meshId || !sessionId || !resolveScopeOnly && (!rawArtifact || !trimString22(rawArtifact.artifactId))) {
+          if (!meshId || !sessionId || !resolveScopeOnly && (!rawArtifact || !trimString3(rawArtifact.artifactId))) {
             return {
               success: false,
               code: "invalid_arguments",
@@ -128898,11 +128660,11 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
           }
           const nodeDaemonId = (nodeId) => {
             const node = nodes.find(
-              (n) => meshNodeIdMatches7(n, nodeId) || trimString22(n?.id) === nodeId || trimString22(n?.nodeId) === nodeId
+              (n) => meshNodeIdMatches7(n, nodeId) || trimString3(n?.id) === nodeId || trimString3(n?.nodeId) === nodeId
             );
-            return node ? readMeshNodeDaemonId(node) || trimString22(node?.daemonId) : void 0;
+            return node ? readMeshNodeDaemonId(node) || trimString3(node?.daemonId) : void 0;
           };
-          const selfDaemonId = trimString22(ctx.deps?.statusInstanceId);
+          const selfDaemonId = trimString3(ctx.deps?.statusInstanceId);
           const isSelfDaemon = selfDaemonId ? (d) => daemonIdsEquivalent5(d, selfDaemonId) : void 0;
           const resolved = resolveForwardedWorkerIdentity(
             {
@@ -128948,7 +128710,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
                 error: `Worker task "${ownerIdentity.taskId}" has no active queue assignment on host (unauthenticated)`
               };
             }
-            const queueStatus = trimString22(queueEntry.status);
+            const queueStatus = trimString3(queueEntry.status);
             if (queueStatus && queueStatus !== "assigned") {
               return {
                 success: false,
@@ -128956,7 +128718,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
                 error: `Task "${ownerIdentity.taskId}" is not in assigned state on host (stale_attempt)`
               };
             }
-            const assignedSession = trimString22(queueEntry.assignedSessionId);
+            const assignedSession = trimString3(queueEntry.assignedSessionId);
             if (assignedSession && !sessionIdsEquivalent(assignedSession, ownerIdentity.sessionId)) {
               return {
                 success: false,
@@ -128965,18 +128727,18 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
               };
             }
             const queuePayload = queueEntry.payload ?? {};
-            const missionId = trimString22(queueEntry.missionId) || trimString22(queuePayload.missionId) || null;
+            const missionId = trimString3(queueEntry.missionId) || trimString3(queuePayload.missionId) || null;
             const store5 = getArtifactStore(ctx);
             if (resolveScopeOnly) {
               const rawInputIds = Array.isArray(queueEntry.inputArtifactIds) ? queueEntry.inputArtifactIds : Array.isArray(queuePayload.inputArtifactIds) ? queuePayload.inputArtifactIds : [];
-              const inputArtifactIds = rawInputIds.map((id4) => trimString22(id4)).filter((id4) => id4.length > 0);
+              const inputArtifactIds = rawInputIds.map((id4) => trimString3(id4)).filter((id4) => id4.length > 0);
               const resolveRecMission = (rec8) => {
-                const direct = trimString22(rec8.missionId);
+                const direct = trimString3(rec8.missionId);
                 if (direct) return direct;
                 if (!rec8.taskId) return "";
                 try {
                   const pe = meshStore.findQueueEntryById(rec8.meshId || meshId, rec8.taskId);
-                  return trimString22(pe?.missionId) || trimString22(pe?.payload?.missionId);
+                  return trimString3(pe?.missionId) || trimString3(pe?.payload?.missionId);
                 } catch {
                   return "";
                 }
@@ -128997,7 +128759,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
                 }
               }
               let requestedArtifact = null;
-              const reqArtifactId = trimString22(args?.artifactId);
+              const reqArtifactId = trimString3(args?.artifactId);
               if (reqArtifactId) {
                 const reqRec = store5.get(reqArtifactId);
                 if (!reqRec) {
@@ -129043,19 +128805,19 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             const rawUpdated = Number(rawArtifact.updatedAt);
             const clampedUpdatedAt = Number.isFinite(rawUpdated) && rawUpdated > 0 ? Math.max(clampedCreatedAt, Math.min(Math.trunc(rawUpdated), maxForwardedTimestamp)) : clampedCreatedAt;
             const upserted = store5.upsertForwardedArtifact({
-              artifactId: trimString22(rawArtifact.artifactId),
+              artifactId: trimString3(rawArtifact.artifactId),
               sessionId: ownerIdentity.sessionId,
               taskId: ownerIdentity.taskId,
               meshId,
               missionId,
               producerRole: "worker",
               originDaemonId: senderDaemonId,
-              workspaceRoot: trimString22(rawArtifact.workspaceRoot),
-              relPath: trimString22(rawArtifact.relPath),
-              kind: trimString22(rawArtifact.kind),
-              mime: trimString22(rawArtifact.mime),
+              workspaceRoot: trimString3(rawArtifact.workspaceRoot),
+              relPath: trimString3(rawArtifact.relPath),
+              kind: trimString3(rawArtifact.kind),
+              mime: trimString3(rawArtifact.mime),
               sizeBytes: Number(rawArtifact.sizeBytes) || 0,
-              sha256: trimString22(rawArtifact.sha256),
+              sha256: trimString3(rawArtifact.sha256),
               title: typeof rawArtifact.title === "string" ? rawArtifact.title : null,
               previewText: typeof rawArtifact.previewText === "string" ? rawArtifact.previewText : null,
               createdAt: clampedCreatedAt,
@@ -129079,7 +128841,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
           if (!senderDaemonId) {
             return { success: false, code: "unauthenticated", error: "artifact_fetch_origin requires an authenticated mesh peer sender" };
           }
-          const artifactId = trimString22(args?.artifactId) || trimString22(args?.id);
+          const artifactId = trimString3(args?.artifactId) || trimString3(args?.id);
           if (!artifactId) {
             return { success: false, code: "invalid_arguments", error: "artifactId is required" };
           }
@@ -129089,12 +128851,12 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             if (!record8) {
               return { success: false, code: "artifact_not_found", error: `Artifact not found on origin daemon: ${artifactId} (artifact_not_found)` };
             }
-            const ownDaemonId = trimString22(ctx.deps?.statusInstanceId);
-            const recordOrigin = trimString22(record8.originDaemonId);
+            const ownDaemonId = trimString3(ctx.deps?.statusInstanceId);
+            const recordOrigin = trimString3(record8.originDaemonId);
             if (!ownDaemonId || recordOrigin && !daemonIdsEquivalent5(recordOrigin, ownDaemonId)) {
               return { success: false, code: "artifact_not_found", error: `Artifact not found on origin daemon: ${artifactId} (artifact_not_found)` };
             }
-            const reqMeshId = trimString22(args?.meshId);
+            const reqMeshId = trimString3(args?.meshId);
             if (reqMeshId && record8.meshId && record8.meshId !== reqMeshId) {
               return { success: false, code: "artifact_session_mismatch", error: `Artifact "${artifactId}" does not belong to mesh "${reqMeshId}" (artifact_session_mismatch)` };
             }
@@ -129107,18 +128869,18 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             if (!meshObj) {
               return { success: false, code: "unauthenticated", error: `Mesh "${meshIdToVerify}" is not available to authorize origin fetch (unauthenticated)` };
             }
-            const hostDaemonId = trimString22(meshObj?.meshHost?.hostDaemonId) || trimString22(meshObj?.hostDaemonId);
+            const hostDaemonId = trimString3(meshObj?.meshHost?.hostDaemonId) || trimString3(meshObj?.hostDaemonId);
             const nodes = Array.isArray(meshObj?.nodes) ? meshObj.nodes : [];
-            const requesterRole = trimString22(args?.requesterRole);
+            const requesterRole = trimString3(args?.requesterRole);
             const presentsHostGrant = requesterRole === "worker" && Boolean(args?.originFetchGrant);
             const isKnownPeer = presentsHostGrant || hostDaemonId && daemonIdsEquivalent5(hostDaemonId, senderDaemonId) || nodes.some((n) => {
-              const nd = readMeshNodeDaemonId(n) || trimString22(n?.daemonId);
+              const nd = readMeshNodeDaemonId(n) || trimString3(n?.daemonId);
               return Boolean(nd && daemonIdsEquivalent5(nd, senderDaemonId));
             });
             if (!isKnownPeer) {
               return { success: false, code: "unauthenticated", error: `Sender daemon "${senderDaemonId}" is not an authorized member of mesh "${meshIdToVerify}"` };
             }
-            const selfDaemonId = trimString22(ctx.deps?.statusInstanceId);
+            const selfDaemonId = trimString3(ctx.deps?.statusInstanceId);
             const isSelfHost = Boolean(hostDaemonId && selfDaemonId && daemonIdsEquivalent5(hostDaemonId, selfDaemonId));
             const isSenderHost = Boolean(hostDaemonId && daemonIdsEquivalent5(hostDaemonId, senderDaemonId));
             if (!isSelfHost && presentsHostGrant && hostDaemonId) {
@@ -129140,7 +128902,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
               if (denial) return denial;
             }
             const boundArtifactId = record8.artifactId;
-            const rawMode = trimString22(args?.mode);
+            const rawMode = trimString3(args?.mode);
             const mode = rawMode === "fetch" ? "fetch" : rawMode === "read" || args?.asChunks === true || typeof args?.offset === "number" || typeof args?.pageOffset === "number" || typeof args?.limit === "number" ? "read" : "fetch";
             if (mode === "read") {
               const readOffset = typeof args?.offset === "number" ? args.offset : typeof args?.pageOffset === "number" ? args.pageOffset : void 0;
@@ -129203,311 +128965,6 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             return handleArtifactError(err2);
           }
         };
-      }
-    });
-    function createDriverArtifactPort(ctx) {
-      return {
-        async resolve(identity5) {
-          const meshStore = getMeshRuntimeStore(ctx);
-          const queueEntry = meshStore.findQueueEntryById(identity5.meshId, identity5.taskId);
-          if (!queueEntry && !meshStore.findAssignedBySession(identity5.meshId, identity5.sessionId)) return null;
-          const resolved = await resolveRegisteredSessionWorkspace(ctx, identity5.sessionId, {
-            meshId: identity5.meshId,
-            nodeId: identity5.nodeId,
-            taskId: identity5.taskId,
-            allowTrustedWorkerFallback: true,
-            allowStoredArtifactWorkspaceFallback: false
-          });
-          if (!resolved.workspaceRoot) return null;
-          const workspace = canon3(resolved.workspaceRoot);
-          if (!workspace) return null;
-          if (resolved.nodeWorkspaceRoot && canon3(resolved.nodeWorkspaceRoot) !== workspace) return null;
-          const missionId = text2(queueEntry?.missionId) || text2(queueEntry?.payload?.missionId) || null;
-          const store5 = getArtifactStore(ctx);
-          return {
-            workspaceRoot: workspace,
-            async register(input) {
-              const registered = store5.register({
-                sessionId: identity5.sessionId,
-                taskId: identity5.taskId,
-                meshId: identity5.meshId,
-                missionId,
-                producerRole: "worker",
-                originDaemonId: text2(ctx.deps?.statusInstanceId) || null,
-                workspaceRoot: workspace,
-                path: input.relPath,
-                declaredKind: input.kind,
-                declaredMime: input.mime,
-                title: input.title
-              });
-              await publishSessionArtifactBubble(identity5.sessionId, {
-                attachment: registered.attachment,
-                providerType: resolved.providerType,
-                status: resolved.status,
-                title: resolved.title,
-                forceUpsert: true
-              }).catch(() => null);
-              return { artifactId: registered.record.artifactId, sha256: registered.record.sha256, sizeBytes: registered.record.sizeBytes };
-            }
-          };
-        }
-      };
-    }
-    var import_node_fs36;
-    var text2;
-    var canon3;
-    var init_driver_artifact_port = __esm2({
-      "src/commands/med-family/driver-artifact-port.ts"() {
-        "use strict";
-        import_node_fs36 = require("fs");
-        init_transcript_publisher();
-        init_artifact_runtime();
-        init_artifact_sharing();
-        text2 = (v) => typeof v === "string" ? v.trim() : "";
-        canon3 = (p) => {
-          try {
-            return (0, import_node_fs36.realpathSync)(p);
-          } catch {
-            return null;
-          }
-        };
-      }
-    });
-    function getDriverService(ctx) {
-      const existing = services.get(ctx.deps);
-      if (existing) return existing;
-      const assistant = getAssistantServices();
-      if (!assistant.driverActivations || !assistant.driverStaging) throw new Error("Driver activation services unavailable");
-      const service = new DriverService({
-        registry: ctx.deps.providerLoader,
-        activations: assistant.driverActivations,
-        activationStaging: assistant.driverStaging,
-        actions: new DriverActionStaging(),
-        grants: new DriverGrantStore({ configDir: (0, import_node_path33.dirname)((0, import_node_path33.dirname)(assistant.driverActivations.path)) }),
-        bus: ctx.deps.bus,
-        artifacts: createDriverArtifactPort(ctx),
-        readCurrent: (type2) => {
-          const current5 = readInstalledDriver(ctx.deps.providerLoader, type2);
-          const cwd = ctx.deps.providerLoader.findProviderDir(type2);
-          return current5 && cwd ? { ...current5, cwd } : null;
-        },
-        policy: async (meshId) => {
-          const mesh = (await ctx.getMeshForCommand(meshId))?.mesh;
-          return mesh ? mesh.policy?.drivers ?? {} : void 0;
-        },
-        relay: (identity5, result) => {
-          const text10 = JSON.stringify({ kind: "driver_action_result", ...result });
-          return depositWorkerMailboxMessage({
-            meshId: identity5.meshId,
-            taskId: identity5.taskId,
-            text: text10.length <= 2e3 ? text10 : JSON.stringify({
-              kind: "driver_action_result",
-              stagedId: result.stagedId,
-              invocationId: result.invocationId,
-              success: result.success,
-              code: result.code,
-              truncated: true,
-              ...Array.isArray(result.artifacts) ? { artifacts: result.artifacts } : {}
-            })
-          });
-        }
-      });
-      services.set(ctx.deps, service);
-      return service;
-    }
-    async function closeDriverService(deps) {
-      const service = services.get(deps);
-      services.delete(deps);
-      await service?.close();
-    }
-    var import_node_path33;
-    var services;
-    var driverHandlers;
-    var driverSpecs;
-    var init_drivers = __esm2({
-      "src/commands/med-family/drivers.ts"() {
-        "use strict";
-        init_command_registry();
-        init_assistant_services();
-        init_worker_report();
-        init_worker_mailbox();
-        import_node_path33 = require("path");
-        init_grant_store();
-        init_driver_service();
-        init_staged_action();
-        init_installed_driver();
-        init_driver_artifact_port();
-        services = /* @__PURE__ */ new WeakMap();
-        driverHandlers = {
-          driver_list: async (ctx) => getDriverService(ctx).list(),
-          driver_describe: async (ctx, args) => getDriverService(ctx).describe(String(args?.type ?? "")),
-          driver_invoke: async (ctx, args) => {
-            const identity5 = resolveWorkerIdentity({ token: args?.token, bind: args?.bind });
-            if (!identity5) return { success: false, code: "worker_credential_required" };
-            return getDriverService(ctx).invoke(identity5, {
-              type: String(args?.type ?? ""),
-              action: String(args?.action ?? ""),
-              args: args?.args,
-              resourceKey: args?.resourceKey,
-              target: args?.target
-            });
-          },
-          driver_set_enabled: async (ctx, args) => {
-            if (typeof args?.enabled !== "boolean" || typeof args?.type !== "string") return { success: false, code: "invalid_arguments" };
-            return getDriverService(ctx).setEnabled(args.type, args.enabled);
-          },
-          // Owner-only permission checkboxes. Read has no side effects; write may activate or stage the driver.
-          driver_grants_get: async (ctx) => getDriverService(ctx).getGrants(),
-          driver_grants_set: async (ctx, args) => {
-            if (typeof args?.type !== "string") return { success: false, code: "invalid_arguments" };
-            return getDriverService(ctx).setGrants(args.type, args.grants);
-          }
-        };
-        driverSpecs = defineCommandSpecs("med", driverHandlers, {
-          driver_set_enabled: { sources: ["p2p", "ws", "standalone"] },
-          // No 'ws': a compromised server must not be able to turn on desktop control.
-          driver_grants_get: { sources: ["p2p", "standalone"] },
-          driver_grants_set: { sources: ["p2p", "standalone"] }
-        }, { sources: ["ipc", "standalone"] });
-      }
-    });
-    function trimString3(value) {
-      return typeof value === "string" ? value.trim() : "";
-    }
-    function hasWorkerCredentialInput(args) {
-      const rawBind = args?.bind;
-      const rawToken = args?.token;
-      return typeof rawBind === "string" && rawBind.trim().length > 0 || typeof rawToken === "string" && rawToken.trim().length > 0 || rawBind !== void 0 && rawBind !== null || rawToken !== void 0 && rawToken !== null;
-    }
-    function verifyArtifactCommandIngress(args, mode) {
-      if (!args || typeof args !== "object" || Array.isArray(args)) {
-        return {
-          ok: false,
-          result: {
-            success: false,
-            code: "COMMAND_SOURCE_REJECTED",
-            error: "Artifact command requires a valid object arguments reference"
-          }
-        };
-      }
-      const recordArgs = args;
-      const routerIngress = readRouterCommandIngress(recordArgs);
-      const mcp = readAuthenticatedMcpCommand(recordArgs, routerIngress?.command ?? "");
-      if (mcp.present && (!mcp.valid || routerIngress && routerIngress.source !== "ipc")) {
-        return {
-          ok: false,
-          result: { success: false, code: "COMMAND_SOURCE_REJECTED", error: "Artifact MCP command authority is invalid, changed, or revoked" }
-        };
-      }
-      const expectedOwnerSource = routerIngress?.source === "p2p" || routerIngress?.source === "standalone" ? routerIngress.source : void 0;
-      const ownerTrusted = isTrustedOwnerIngress(recordArgs, expectedOwnerSource);
-      if (mcp.valid && !hasWorkerCredentialInput(recordArgs) && (trimString3(recordArgs.taskId) || trimString3(recordArgs.attemptId) || trimString3(recordArgs.nodeId))) {
-        return {
-          ok: false,
-          result: { success: false, code: "artifact_session_mismatch", error: "Internal MCP credential does not establish worker task/attempt/node authority" }
-        };
-      }
-      if (hasRevokedTrustedOwnerIngress(recordArgs, expectedOwnerSource) || routerIngress?.hasRevokedOwnerProof) {
-        return {
-          ok: false,
-          result: {
-            success: false,
-            code: "COMMAND_SOURCE_REJECTED",
-            error: "Artifact command rejected: owner ingress proof is missing, invalid, or revoked"
-          }
-        };
-      }
-      if (!ownerTrusted && (routerIngress?.hasForgedProvenanceFields || "ownerVerified" in recordArgs || "_ownerVerified" in recordArgs || "source" in recordArgs || COMMAND_SOURCE_ARG in recordArgs)) {
-        return {
-          ok: false,
-          result: {
-            success: false,
-            code: "COMMAND_SOURCE_REJECTED",
-            error: "Artifact command rejected: forged provenance fields in command payload"
-          }
-        };
-      }
-      if (!routerIngress && !ownerTrusted && "_interactionId" in recordArgs) {
-        return {
-          ok: false,
-          result: {
-            success: false,
-            code: "COMMAND_SOURCE_REJECTED",
-            error: "Artifact command rejected: cloned router arguments missing live provenance"
-          }
-        };
-      }
-      if (routerIngress) {
-        if (routerIngress.source !== "p2p" && routerIngress.source !== "standalone" && routerIngress.source !== "ipc") {
-          return {
-            ok: false,
-            result: {
-              success: false,
-              code: "COMMAND_SOURCE_REJECTED",
-              error: `Artifact command is not accepted from source '${routerIngress.source}'`
-            }
-          };
-        }
-        if (routerIngress.inProcess === true) {
-          return {
-            ok: false,
-            result: {
-              success: false,
-              code: "COMMAND_SOURCE_REJECTED",
-              error: "Artifact command rejected: in-process dispatch is not an authorized ingress"
-            }
-          };
-        }
-        if ((routerIngress.source === "p2p" || routerIngress.source === "standalone") && !ownerTrusted) {
-          return {
-            ok: false,
-            result: {
-              success: false,
-              code: "COMMAND_SOURCE_REJECTED",
-              error: `Artifact command on '${routerIngress.source}' requires verified owner ingress`
-            }
-          };
-        }
-        if (routerIngress.source === "ipc" && routerIngress.ownerVerified === false) {
-          return {
-            ok: false,
-            result: {
-              success: false,
-              code: "COMMAND_SOURCE_REJECTED",
-              error: "Artifact command rejected: downgraded unverified owner ingress"
-            }
-          };
-        }
-        if (routerIngress.source === "ipc" && !ownerTrusted && !hasWorkerCredentialInput(recordArgs)) {
-          if (mode === "fetch" && !mcp.valid) {
-            return {
-              ok: false,
-              result: {
-                success: false,
-                code: "COMMAND_SOURCE_REJECTED",
-                error: "Artifact fetch/read over IPC requires verified owner, worker credential, or authenticated MCP scope"
-              }
-            };
-          }
-          if (mode === "list" && !mcp.valid) {
-            return {
-              ok: false,
-              result: {
-                success: false,
-                code: "COMMAND_SOURCE_REJECTED",
-                error: "Artifact list over IPC requires verified owner, worker credential, or authenticated MCP scope"
-              }
-            };
-          }
-        }
-      }
-      return { ok: true, recordArgs, ownerTrusted };
-    }
-    var init_artifact_command_ingress = __esm2({
-      "src/commands/med-family/artifact-command-ingress.ts"() {
-        "use strict";
-        init_command_args();
-        init_mcp_command_ingress();
       }
     });
     function str9(value) {
@@ -130492,6 +129949,2121 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         );
       }
     });
+    var worker_report_exports2 = {};
+    __export2(worker_report_exports2, {
+      CLAIM_KEYS: () => CLAIM_KEYS,
+      MESH_SENDER_DAEMON_ID_ARG: () => MESH_SENDER_DAEMON_ID_ARG,
+      WORKER_PROGRESS_FORWARD_COMMAND: () => WORKER_PROGRESS_FORWARD_COMMAND,
+      WORKER_REFUSAL_FORWARD_COMMAND: () => WORKER_REFUSAL_FORWARD_COMMAND,
+      WORKER_REPORT_FORWARD_COMMAND: () => WORKER_REPORT_FORWARD_COMMAND,
+      decodeForwardedClaim: () => decodeForwardedClaim,
+      decodeForwardedWorkerProgress: () => decodeForwardedWorkerProgress,
+      decodeForwardedWorkerReport: () => decodeForwardedWorkerReport,
+      findLocalWorkerOfRemoteTask: () => findLocalWorkerOfRemoteTask,
+      logLocalWorkerRefusal: () => logLocalWorkerRefusal,
+      ownerRosterNodeDaemonLookup: () => ownerRosterNodeDaemonLookup,
+      resolveRemoteWorker: () => resolveRemoteWorker,
+      selfDaemonPredicate: () => selfDaemonPredicate,
+      toProgressResponse: () => toProgressResponse,
+      toReportResponse: () => toReportResponse,
+      workerReportHandlers: () => workerReportHandlers,
+      workerReportSpecs: () => workerReportSpecs
+    });
+    function readNonEmpty3(value) {
+      return typeof value === "string" ? value.trim() : "";
+    }
+    function assignmentStampReader(ctx) {
+      return (sessionId) => {
+        let settings2;
+        try {
+          const instance = ctx?.deps?.instanceManager?.getInstance?.(sessionId);
+          if (instance) recoverHolderAttachRollback(instance);
+          const state2 = instance?.getState?.();
+          settings2 = state2?.settings && typeof state2.settings === "object" ? state2.settings : void 0;
+        } catch {
+          return null;
+        }
+        if (!settings2) return null;
+        const meshId = readNonEmpty3(settings2.meshNodeFor);
+        const ownerDaemonId = readNonEmpty3(settings2.meshCoordinatorDaemonId);
+        if (!meshId || !ownerDaemonId) return null;
+        const attemptRef = currentMeshAttemptRef(settings2);
+        const taskId = readNonEmpty3(settings2.meshActiveTaskId);
+        const nodeId = readNonEmpty3(settings2.meshNodeId) || readNonEmpty3(settings2.meshLastNodeId);
+        return {
+          meshId,
+          ownerDaemonId,
+          ...taskId ? { taskId } : {},
+          ...attemptRef ? { attemptId: attemptRef.attemptId, generation: attemptRef.generation } : {},
+          ...nodeId ? { nodeId } : {}
+        };
+      };
+    }
+    function findLocalWorkerOfRemoteTask(ctx, meshId, taskId) {
+      const isSelf2 = selfDaemonPredicate(ctx);
+      if (!isSelf2 || !meshId || !taskId) return null;
+      let ids = [];
+      try {
+        ids = ctx?.deps?.instanceManager?.listInstanceIds?.() ?? [];
+      } catch {
+        ids = [];
+      }
+      const read2 = assignmentStampReader(ctx);
+      for (const sessionId of ids) {
+        const stamp2 = read2(sessionId);
+        if (stamp2 && stamp2.meshId === meshId && stamp2.taskId === taskId && !isSelf2(stamp2.ownerDaemonId)) {
+          return { sessionId, ownerDaemonId: stamp2.ownerDaemonId };
+        }
+      }
+      return null;
+    }
+    function selfDaemonPredicate(ctx) {
+      const selfDaemonId = readNonEmpty3(ctx?.deps?.statusInstanceId);
+      return selfDaemonId ? (daemonId) => daemonIdsEquivalent5(daemonId, selfDaemonId) : void 0;
+    }
+    async function resolveRemoteWorker(ctx, args) {
+      const selfDaemonId = readNonEmpty3(ctx?.deps?.statusInstanceId);
+      if (!selfDaemonId) return null;
+      const prepared = validatePreparedDelivery(MeshRuntimeStore.getInstance().db, args ?? {});
+      if (prepared && !daemonIdsEquivalent5(prepared.ownerDaemonId, selfDaemonId)) return prepared;
+      const { resolveRemoteWorkerIdentity: resolveRemoteWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report_forwarded(), worker_report_forwarded_exports));
+      return resolveRemoteWorkerIdentity2({ bind: args?.bind }, {
+        readAssignmentStamp: assignmentStampReader(ctx),
+        isSelfDaemon: (daemonId) => daemonIdsEquivalent5(daemonId, selfDaemonId)
+      });
+    }
+    async function ownerRosterNodeDaemonLookup(ctx, meshId) {
+      let nodes = [];
+      try {
+        const record8 = await ctx?.getMeshForCommand?.(meshId, void 0, { preferInline: true });
+        nodes = Array.isArray(record8?.mesh?.nodes) ? record8.mesh.nodes : [];
+      } catch {
+        nodes = [];
+      }
+      return (nodeId) => {
+        const node = nodes.find((n) => meshNodeIdMatches7(n, nodeId));
+        return node ? readMeshNodeDaemonId(node) : void 0;
+      };
+    }
+    function logLocalWorkerRefusal(what, credential, refusal2, detail) {
+      try {
+        const bind = typeof credential.bind === "string" ? credential.bind.trim() : "";
+        const binding = bind ? verifyWorkerSessionBind(bind) : null;
+        const who = binding ? `session ${binding.sessionId} (mesh ${binding.meshId})` : bind ? `bind ${hashWorkerSessionBind(bind).slice(0, 12)}` : "a caller with no bind";
+        const line = `Local ${what} from ${who} \u2192 refused ${refusal2}${detail ? ` \u2014 ${detail}` : ""}`;
+        if (what === "mailbox drain" && binding && detail?.includes("no assigned task")) LOG.debug("WorkerReport", line);
+        else LOG.warn("WorkerReport", line);
+      } catch {
+      }
+    }
+    function toReportResponse(result) {
+      if (!result.accepted) {
+        return {
+          success: false,
+          error: result.refusal,
+          ...result.detail ? { detail: result.detail } : {},
+          hint: result.refusal === "unauthenticated" ? "No live task is bound to this worker session \u2014 the task may already be terminal or reassigned." : result.refusal === "bind_unknown_after_restart" ? "This daemon does not recognise the worker session bind \u2014 it was issued before a daemon restart that did not carry it over. A retry will not help: put your result in your final message so the coordinator can read it, and say that this worker session must be relaunched (stopped and launched fresh) before it can report again." : result.refusal === "invalid_for_task_mode" ? "Fix the touchedFiles list to match the task mode and call again." : result.refusal === "storage_failed" ? "Nothing was recorded \u2014 call again." : result.refusal === "stale_report" ? "This report was written for an earlier task of this session and can no longer be filed against it; nothing was recorded." : result.refusal === "rejected_by_reducer" && result.detail?.startsWith("checkpoint_pending") ? "The completion is NOT accepted yet: this session's physical writer stop is unconfirmed. Nothing is completed; keep the saved report and let it be re-sent after the stop settles." : "The completion was refused by the turn ledger; the task state is authoritative."
+        };
+      }
+      return {
+        success: true,
+        taskId: result.taskId,
+        ...result.attemptId ? { attemptId: result.attemptId } : {},
+        outcome: result.outcome,
+        duplicate: result.duplicate,
+        handoffNoteRecorded: result.handoffNoteRecorded,
+        // ★F5: carries WHY a note did not persist, so the tool layer can
+        // warn instead of printing the unconditional "stored" line.
+        ...result.handoffNoteError ? { handoffNoteError: result.handoffNoteError } : {},
+        // H1 (path ownership): present only on a declared-but-mismatched report —
+        // evidence, never a refusal (the completion above already committed).
+        ...result.ownedPathsMismatch ? { ownedPathsMismatch: result.ownedPathsMismatch } : {},
+        // F7b: accepted as evidence after the ledger already terminalized the attempt.
+        ...result.late ? { late: true, terminalOutcome: result.late.terminalOutcome } : {}
+      };
+    }
+    async function refuseInvalidReport(ctx, args, errors) {
+      const answer2 = { success: false, error: "invalid_report", validationErrors: errors };
+      try {
+        const { recordRefusedWorkerReport: recordRefusedWorkerReport2, recordRefusedWorkerReportForIdentity: recordRefusedWorkerReportForIdentity2, safeRefusalFields: safeRefusalFields2, hasLocalWorkerIdentity: hasLocalWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
+        const credential = { token: args?.token, bind: args?.bind };
+        const raw = args?.report && typeof args.report === "object" ? args.report : {};
+        const summaryLength = typeof raw.summary === "string" ? raw.summary.trim().length : null;
+        const deliveryId = normalizeWorkerDeliveryId(args?.deliveryId);
+        const fields = errors.map((e) => e.field);
+        const prepared = args?.prepared ? validatePreparedDelivery(MeshRuntimeStore.getInstance().db, args) : null;
+        if (prepared ? !selfDaemonPredicate(ctx)?.(prepared.ownerDaemonId) : !hasLocalWorkerIdentity2(credential, { isSelfDaemon: selfDaemonPredicate(ctx), reportedAtMs: args?.reportedAtMs })) {
+          const remote = await resolveRemoteWorker(ctx, args);
+          if (remote && remote.taskId && remote.attemptId && Number.isInteger(remote.generation)) {
+            const owner = await forwardToOwner(ctx, remote, WORKER_REFUSAL_FORWARD_COMMAND, {
+              generation: remote.generation,
+              fields: safeRefusalFields2(fields),
+              summaryLength,
+              ...deliveryId ? { deliveryId } : {},
+              ...typeof args?.reportedAtMs === "number" ? { reportedAtMs: args.reportedAtMs } : {}
+            }, "report refusal");
+            return { ...answer2, ...owner.receipt ? { receipt: owner.receipt } : { receiptPending: true }, ...owner.error === "worker_protocol_unsupported" || owner.error === "forward_failed" ? { provenanceError: owner.error } : {} };
+          }
+        }
+        if (prepared && daemonIdsEquivalent5(prepared.ownerDaemonId, ctx.deps.statusInstanceId ?? "")) {
+          const db3 = MeshRuntimeStore.getInstance().db, self = bridgeIdentity(ctx.deps.statusInstanceId ?? "", ctx.deps.statusVersion);
+          const handled = commitLocalBridgeDelivery(db3, {
+            protocol: 1,
+            kind: "refusal",
+            senderDaemonId: self.daemonId,
+            senderCommit: self.commit,
+            senderVersion: self.version,
+            ...prepared,
+            payload: { fields: safeRefusalFields2(fields), summaryLength }
+          }, () => {
+            const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(prepared.attemptId);
+            if (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId || attempt.meshId !== prepared.meshId || attempt.taskId !== prepared.taskId || attempt.nodeId !== prepared.nodeId || !daemonIdsEquivalent5(attempt.ownerDaemonId, prepared.ownerDaemonId) || !daemonIdsEquivalent5(attempt.ownerDaemonId, self.daemonId)) return { success: false, error: "stale_report" };
+            const receipt2 = recordRefusedWorkerReportForIdentity2(
+              { token: "", ...prepared },
+              { fields, summaryLength },
+              { generation: prepared.generation, deliveryId: prepared.deliveryId, reportedAtMs: prepared.reportedAtMs }
+            );
+            return receipt2?.recorded ? { ...answer2, receipt: receipt2 } : { success: false, error: "storage_failed", receiptPending: true };
+          });
+          return { ...handled, success: false };
+        }
+        const receipt = recordRefusedWorkerReport2(
+          credential,
+          { fields, summaryLength, outcome: raw.outcome },
+          { isSelfDaemon: selfDaemonPredicate(ctx), reportedAtMs: args?.reportedAtMs, ...deliveryId ? { deliveryId } : {} }
+        );
+        const where = receipt ? `task ${receipt.taskId} attempt ${receipt.attemptId} g${receipt.generation ?? "?"}${receipt.recorded ? "" : " (audit row NOT written)"}` : "no provable attempt";
+        logLocalWorkerRefusal(
+          "report",
+          credential,
+          "invalid_report",
+          `${where}; fields=${safeRefusalFields2(fields).join(",")}; summaryLength=${summaryLength ?? "-"}${deliveryId ? `; delivery=${deliveryId}` : ""}`
+        );
+        return receipt ? { ...answer2, receipt } : answer2;
+      } catch {
+        return args?.prepared ? { ...answer2, receiptPending: true, provenanceError: "storage_failed" } : answer2;
+      }
+    }
+    function toProgressResponse(result) {
+      if (!result.accepted) {
+        return {
+          success: false,
+          error: result.refusal || "unauthenticated",
+          ...result.detail ? { detail: result.detail } : {}
+        };
+      }
+      return {
+        success: true,
+        ...result.taskId ? { taskId: result.taskId } : {},
+        // ★F3: whether the note reached the coordinator, or was recorded
+        // only. The filter is at the producer, so this is the one place
+        // the worker can learn which of the two happened.
+        surfacedToCoordinator: result.surfacedToCoordinator === true
+      };
+    }
+    async function forwardReportToOwner(ctx, remote, report, delivery = {}) {
+      const send = (r) => forwardToOwner(ctx, remote, WORKER_REPORT_FORWARD_COMMAND, { report: r, ...delivery.deliveryId ? { deliveryId: delivery.deliveryId } : {}, ...typeof delivery.reportedAtMs === "number" ? { reportedAtMs: delivery.reportedAtMs } : {} }, `${report.outcome} report`);
+      const first = await send(report);
+      if (first.success !== true && (report.decisionsNeeded || report.commits || report.testsRun) && onlyUnknownStructuredFieldErrors(first)) {
+        const { decisionsNeeded: _d, commits: _c, testsRun: _t, ...legacy } = report;
+        LOG.warn("WorkerReport", `Owner ${remote.ownerDaemonId.slice(0, 16)} does not know decisions_needed/commits (older version) \u2014 resending the ${report.outcome} report for task ${remote.taskId ?? "?"} without them`);
+        return send(legacy);
+      }
+      return first;
+    }
+    function onlyUnknownStructuredFieldErrors(answer2) {
+      if (answer2.error !== "invalid_report" || !Array.isArray(answer2.validationErrors) || answer2.validationErrors.length === 0) return false;
+      return answer2.validationErrors.every((e) => (e?.field === "decisionsNeeded" || e?.field === "commits" || e?.field === "testsRun") && /unknown field/.test(String(e?.message)));
+    }
+    async function forwardToOwner(ctx, remote, command, payload, what) {
+      const dispatch2 = ctx?.deps?.dispatchMeshCommand;
+      if (!dispatch2) {
+        return {
+          success: false,
+          error: "unauthenticated",
+          detail: `this worker's task is owned by daemon ${remote.ownerDaemonId}, and this daemon has no mesh transport to reach it`,
+          hint: "No live task is bound to this worker session \u2014 the task may already be terminal or reassigned."
+        };
+      }
+      const claim = {
+        meshId: remote.meshId,
+        sessionId: remote.sessionId,
+        ...remote.taskId ? { taskId: remote.taskId } : {},
+        ...remote.attemptId ? { attemptId: remote.attemptId } : {},
+        ...remote.generation !== void 0 ? { generation: remote.generation } : {}
+      };
+      const db3 = MeshRuntimeStore.getInstance().db;
+      if (readBridgePolicy(db3, remote.meshId)) {
+        const self = bridgeIdentity(ctx.deps.statusInstanceId ?? "", ctx.deps.statusVersion);
+        const kind = command === WORKER_REPORT_FORWARD_COMMAND ? "report" : command === WORKER_PROGRESS_FORWARD_COMMAND ? "progress" : "refusal";
+        const content = kind === "report" ? { report: payload.report } : kind === "progress" ? { note: payload.note } : { fields: payload.fields, summaryLength: payload.summaryLength };
+        const envelope = {
+          protocol: 1,
+          kind,
+          ownerDaemonId: remote.ownerDaemonId,
+          senderDaemonId: self.daemonId,
+          senderCommit: self.commit,
+          senderVersion: self.version,
+          ...claim,
+          nodeId: remote.nodeId,
+          deliveryId: payload.deliveryId,
+          reportedAtMs: payload.reportedAtMs,
+          payload: content
+        };
+        const saved = typeof payload.deliveryId === "string" ? findBridgeMemberDelivery(db3, self.daemonId, payload.deliveryId) : null;
+        if (saved && (saved.sessionId !== remote.sessionId || saved.meshId !== remote.meshId || saved.taskId !== remote.taskId || saved.attemptId !== remote.attemptId || saved.generation !== remote.generation || saved.nodeId !== remote.nodeId || !daemonIdsEquivalent5(saved.ownerDaemonId, remote.ownerDaemonId) || saved.kind !== kind || saved.reportedAtMs !== payload.reportedAtMs || stableBridgeJson(saved.payload) !== stableBridgeJson(content))) return { success: false, error: "worker_delivery_identity_conflict" };
+        try {
+          return await sendBridgeDelivery(db3, saved ?? envelope, dispatch2);
+        } catch {
+          return { success: false, error: "worker_delivery_identity_conflict" };
+        }
+      }
+      let raw;
+      try {
+        raw = await dispatch2(remote.ownerDaemonId, command, {
+          ...claim,
+          ...remote.nodeId ? { nodeId: remote.nodeId } : {},
+          ...payload
+        });
+      } catch (e) {
+        LOG.warn("WorkerReport", `Forwarding ${what} for session ${remote.sessionId} (task ${remote.taskId ?? "?"}) to owner ${remote.ownerDaemonId.slice(0, 16)} failed: ${e?.message || e}`);
+        return {
+          success: false,
+          error: "forward_failed",
+          detail: e?.message || String(e),
+          hint: "Nothing was recorded \u2014 call again."
+        };
+      }
+      const answer2 = unwrapMeshRelayResult(raw, { command, peerDaemonId: remote.ownerDaemonId });
+      if (answer2.error === "relay_result_malformed") {
+        return { ...answer2, hint: "Nothing was recorded \u2014 call again." };
+      }
+      const line = `Forwarded ${what} for session ${remote.sessionId} (task ${remote.taskId ?? "?"} attempt ${remote.attemptId ?? "?"}) to owner ${remote.ownerDaemonId.slice(0, 16)} \u2192 ${answer2.success === true ? "accepted" : `refused (${String(answer2.error)}${typeof answer2.detail === "string" && answer2.detail ? ` \u2014 ${answer2.detail}` : ""})`}`;
+      if (answer2.success === true) LOG.info("WorkerReport", line);
+      else LOG.warn("WorkerReport", line);
+      if (answer2.success !== true && (String(answer2.error).includes("request failed decode") || String(answer2.error).startsWith("Unknown command:"))) return { ...answer2, error: "worker_protocol_unsupported", detail: "Owner has not admitted this worker protocol; retry is retained." };
+      return answer2;
+    }
+    function decodeForwardedClaim(args, allowedKeys) {
+      const input = stripRouterInternalArgs(args);
+      if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+      const record8 = input;
+      for (const key7 of Object.keys(record8)) if (!allowedKeys.has(key7)) return null;
+      const meshId = readNonEmpty3(record8.meshId);
+      const sessionId = readNonEmpty3(record8.sessionId);
+      if (!meshId || !sessionId) return null;
+      for (const key7 of ["taskId", "attemptId", "nodeId"]) {
+        if (record8[key7] !== void 0 && !readNonEmpty3(record8[key7])) return null;
+      }
+      if (record8.generation !== void 0 && (!Number.isSafeInteger(record8.generation) || record8.generation < 0)) return null;
+      const taskId = readNonEmpty3(record8.taskId);
+      const attemptId = readNonEmpty3(record8.attemptId);
+      return {
+        claim: { meshId, sessionId, ...taskId ? { taskId } : {}, ...attemptId ? { attemptId } : {}, ...record8.generation !== void 0 ? { generation: record8.generation } : {} },
+        record: record8
+      };
+    }
+    function decodeForwardedWorkerReport(args) {
+      const decoded = decodeForwardedClaim(args, FORWARD_KEYS);
+      if (!decoded) return null;
+      const { report } = decoded.record;
+      if (!report || typeof report !== "object" || Array.isArray(report)) return null;
+      return { claim: decoded.claim, report, ...decoded.record.reportedAtMs !== void 0 ? { reportedAtMs: decoded.record.reportedAtMs } : {} };
+    }
+    function decodeForwardedWorkerProgress(args) {
+      const decoded = decodeForwardedClaim(args, PROGRESS_FORWARD_KEYS);
+      if (!decoded) return null;
+      const note2 = readNonEmpty3(decoded.record.note);
+      if (!note2) return null;
+      if (decoded.record.reportedAtMs !== void 0 && !Number.isSafeInteger(decoded.record.reportedAtMs)) return null;
+      if (decoded.record.deliveryId !== void 0 && normalizeWorkerDeliveryId(decoded.record.deliveryId) !== decoded.record.deliveryId) return null;
+      return { claim: decoded.claim, note: note2, ...decoded.record.reportedAtMs !== void 0 ? { reportedAtMs: decoded.record.reportedAtMs } : {}, ...decoded.record.deliveryId !== void 0 ? { deliveryId: decoded.record.deliveryId } : {} };
+    }
+    var WORKER_REPORT_FORWARD_COMMAND;
+    var WORKER_REFUSAL_FORWARD_COMMAND;
+    var WORKER_PROGRESS_FORWARD_COMMAND;
+    var CLAIM_KEYS;
+    var FORWARD_KEYS;
+    var PROGRESS_FORWARD_KEYS;
+    var workerReportHandlers;
+    var workerReportSpecs;
+    var init_worker_report2 = __esm2({
+      "src/commands/low-family/worker-report.ts"() {
+        "use strict";
+        init_worker_bridge_prepared();
+        init_mesh_runtime_store();
+        init_worker_bridge();
+        init_dist();
+        init_command_registry();
+        init_router_internal_args();
+        init_mesh_sender();
+        init_mesh_relay_result();
+        init_mesh_node_identity();
+        init_cli_provider_mesh_assignment();
+        init_logger();
+        init_runtime_defaults();
+        init_worker_report_idempotency();
+        init_mesh_holder_attach();
+        WORKER_REPORT_FORWARD_COMMAND = "worker_report_forwarded";
+        WORKER_REFUSAL_FORWARD_COMMAND = "worker_report_refusal_forwarded";
+        WORKER_PROGRESS_FORWARD_COMMAND = "worker_progress_forwarded";
+        CLAIM_KEYS = ["meshId", "taskId", "attemptId", "sessionId", "nodeId", "generation"];
+        FORWARD_KEYS = /* @__PURE__ */ new Set([...CLAIM_KEYS, "report", "deliveryId", "reportedAtMs"]);
+        PROGRESS_FORWARD_KEYS = /* @__PURE__ */ new Set([...CLAIM_KEYS, "note", "deliveryId", "reportedAtMs"]);
+        workerReportHandlers = {
+          worker_bridge_prepare: async (ctx, args) => {
+            const cached5 = readPreparedDelivery(MeshRuntimeStore.getInstance().db, args ?? {}, args?.deliveryId);
+            if (cached5) return cached5.reportedAtMs === args?.reportedAtMs ? { success: true, protocol: 1, prepared: cached5 } : { success: false, error: "worker_delivery_identity_conflict" };
+            if (args?.resume === true) return { success: false, error: "worker_protocol_provenance_unconfirmed" };
+            const { resolveWorkerIdentity: resolveWorkerIdentity2, workerIdentityPostdates: workerIdentityPostdates2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
+            const local = resolveWorkerIdentity2(args);
+            const remote = local ? null : await resolveRemoteWorker(ctx, { bind: args?.bind });
+            const proven = local ?? remote;
+            const db3 = MeshRuntimeStore.getInstance().db;
+            if (proven && !readBridgePolicy(db3, proven.meshId)) return { success: true, protocol: 0, legacy: true };
+            if (!proven || !proven.taskId || !proven.attemptId || !proven.sessionId || !proven.nodeId || !Number.isSafeInteger(args?.reportedAtMs) || args.reportedAtMs > Date.now() + 6e4 || Date.now() - args.reportedAtMs > 6e4 || local && workerIdentityPostdates2(local, args.reportedAtMs)) return { success: false, error: "worker_protocol_provenance_required" };
+            const generation = remote?.generation ?? db3.prepare("SELECT generation FROM turn_attempts WHERE attempt_id=?").get(proven.attemptId);
+            const exactGeneration = typeof generation === "number" ? generation : generation?.generation;
+            try {
+              const prepared = rememberPreparedDelivery(db3, args, {
+                meshId: proven.meshId,
+                taskId: proven.taskId,
+                attemptId: proven.attemptId,
+                generation: exactGeneration,
+                sessionId: proven.sessionId,
+                nodeId: proven.nodeId,
+                ownerDaemonId: remote?.ownerDaemonId ?? ctx.deps.statusInstanceId ?? "",
+                deliveryId: args.deliveryId,
+                reportedAtMs: args.reportedAtMs
+              });
+              return { success: true, protocol: 1, prepared };
+            } catch {
+              return { success: false, error: "worker_delivery_identity_conflict" };
+            }
+          },
+          /**
+           * Exchange a session bind for the caller's current task identity.
+           *
+           * Exposed as its own command so the MCP server can answer "do I have a task
+           * right now" — which is what decides whether it publishes the reporting
+           * tools at all — without having to submit a report to find out.
+           *
+           * ★The task TOKEN is deliberately NOT returned. The caller does not need it:
+           * it presents the bind again on the actual report, and the daemon re-resolves.
+           * Returning the token would put a second live secret on the wire for no gain.
+           */
+          worker_resolve_task: async (_ctx, args) => {
+            try {
+              const { resolveWorkerIdentity: resolveWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
+              const identity5 = resolveWorkerIdentity2({ token: args?.token, bind: args?.bind });
+              if (!identity5) {
+                const remote = await resolveRemoteWorker(_ctx, args);
+                if (remote?.taskId && remote.attemptId) {
+                  return {
+                    success: true,
+                    meshId: remote.meshId,
+                    taskId: remote.taskId,
+                    attemptId: remote.attemptId,
+                    sessionId: remote.sessionId,
+                    ...remote.nodeId ? { nodeId: remote.nodeId } : {}
+                  };
+                }
+                return {
+                  success: false,
+                  error: "worker_not_bound",
+                  hint: "No live task is bound to this worker session. A report is only possible while a task is assigned."
+                };
+              }
+              return {
+                success: true,
+                meshId: identity5.meshId,
+                taskId: identity5.taskId,
+                ...identity5.attemptId ? { attemptId: identity5.attemptId } : {},
+                ...identity5.sessionId ? { sessionId: identity5.sessionId } : {},
+                ...identity5.nodeId ? { nodeId: identity5.nodeId } : {}
+              };
+            } catch (e) {
+              return { success: false, error: e?.message || String(e) };
+            }
+          },
+          /**
+           * Accept a structured completion report.
+           *
+           * Validation errors come back as a STRUCTURED list rather than a single
+           * string so the MCP layer can hand the worker something it can act on
+           * field-by-field — the retry loop is the whole reason the schema is enforced
+           * at the tool layer instead of being parsed out of prose.
+           */
+          worker_report_completion: async (_ctx, args) => {
+            if (!args?.prepared) {
+              const { resolveWorkerIdentity: resolveWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
+              const bound = resolveWorkerIdentity2(args ?? {}) ?? await resolveRemoteWorker(_ctx, args ?? {});
+              if (bound && readBridgePolicy(MeshRuntimeStore.getInstance().db, bound.meshId)) return { success: false, error: "worker_protocol_provenance_required" };
+            }
+            const prepared = args?.prepared ? validatePreparedDelivery(MeshRuntimeStore.getInstance().db, args) : null;
+            if (args?.prepared && !prepared) return { success: false, error: "worker_protocol_provenance_required" };
+            try {
+              const { acceptWorkerCompletionReport: acceptWorkerCompletionReport2, hasLocalWorkerIdentity: hasLocalWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
+              const { validateWorkerCompletionReport: validateWorkerCompletionReport2 } = await Promise.resolve().then(() => (init_worker_report_validation(), worker_report_validation_exports));
+              const { report, errors } = validateWorkerCompletionReport2(args?.report);
+              if (!report) {
+                return refuseInvalidReport(_ctx, args, errors);
+              }
+              const credential = { token: args?.token, bind: args?.bind };
+              const deliveryId = normalizeWorkerDeliveryId(args?.deliveryId);
+              const replay = prepared ? void 0 : recallWorkerDelivery("report", credential, deliveryId);
+              if (replay) {
+                LOG.info("WorkerReport", `Report delivery ${deliveryId} re-sent after it was already accepted (task ${String(replay.taskId ?? "?")}) \u2014 answered from the replay record`);
+                return { ...replay, success: true, duplicate: true };
+              }
+              const reportedAtMs = args?.reportedAtMs;
+              const isSelfDaemon = selfDaemonPredicate(_ctx);
+              let response;
+              if (prepared ? !isSelfDaemon?.(prepared.ownerDaemonId) : !hasLocalWorkerIdentity2(credential, { isSelfDaemon, reportedAtMs })) {
+                const remote = await resolveRemoteWorker(_ctx, args);
+                if (remote) {
+                  response = await forwardReportToOwner(_ctx, remote, report, { deliveryId, reportedAtMs });
+                  rememberWorkerDelivery("report", credential, deliveryId, response);
+                  return response;
+                }
+              }
+              const apply = () => {
+                const attempt = prepared ? MeshRuntimeStore.getInstance().turnStore().getAttempt(prepared.attemptId) : null;
+                if (prepared && (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId || attempt.meshId !== prepared.meshId || attempt.taskId !== prepared.taskId || attempt.nodeId !== prepared.nodeId || !daemonIdsEquivalent5(attempt.ownerDaemonId, prepared.ownerDaemonId) || !isSelfDaemon || !isSelfDaemon(attempt.ownerDaemonId))) {
+                  return { success: false, error: "stale_report" };
+                }
+                return toReportResponse(acceptWorkerCompletionReport2(credential, report, { isSelfDaemon, reportedAtMs, preparedIdentity: prepared ?? void 0 }));
+              };
+              if (prepared) {
+                const self = bridgeIdentity(_ctx.deps.statusInstanceId ?? "", _ctx.deps.statusVersion);
+                return commitLocalBridgeDelivery(MeshRuntimeStore.getInstance().db, {
+                  protocol: 1,
+                  kind: "report",
+                  senderDaemonId: self.daemonId,
+                  senderCommit: self.commit,
+                  senderVersion: self.version,
+                  ...prepared,
+                  payload: { report }
+                }, apply);
+              }
+              const result = acceptWorkerCompletionReport2(credential, report, { isSelfDaemon, reportedAtMs });
+              if (!result.accepted) logLocalWorkerRefusal(`${report.outcome} report`, credential, result.refusal, result.detail);
+              response = toReportResponse(result);
+              rememberWorkerDelivery("report", credential, deliveryId, response);
+              return response;
+            } catch (e) {
+              return { success: false, error: e?.message || String(e) };
+            }
+          },
+          [WORKER_REFUSAL_FORWARD_COMMAND]: async (_ctx, args) => {
+            if (readBridgePolicy(MeshRuntimeStore.getInstance().db, args?.meshId)) return { success: false, error: "worker_protocol_provenance_required" };
+            const decoded = decodeForwardedClaim(args, /* @__PURE__ */ new Set([...CLAIM_KEYS, "generation", "fields", "summaryLength", "deliveryId", "reportedAtMs"]));
+            if (!decoded || !decoded.claim.taskId || !decoded.claim.attemptId) return { success: false, error: "invalid_refusal_envelope" };
+            const raw = decoded.record;
+            const { safeRefusalFields: safeRefusalFields2, recordRefusedWorkerReportForIdentity: recordRefusedWorkerReportForIdentity2, normalizeWorkerReportedAtMs: normalizeWorkerReportedAtMs2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
+            if (!Number.isSafeInteger(raw.generation) || raw.generation < 0 || !Array.isArray(raw.fields) || raw.fields.length > 16 || raw.fields.some((v) => typeof v !== "string") || JSON.stringify(safeRefusalFields2(raw.fields)) !== JSON.stringify(raw.fields) || !(raw.summaryLength === null || Number.isSafeInteger(raw.summaryLength) && raw.summaryLength >= 0) || raw.deliveryId !== void 0 && normalizeWorkerDeliveryId(raw.deliveryId) !== raw.deliveryId || raw.reportedAtMs !== void 0 && (!Number.isSafeInteger(raw.reportedAtMs) || typeof normalizeWorkerReportedAtMs2(raw.reportedAtMs, Date.now()) !== "number")) {
+              return { success: false, error: "invalid_refusal_envelope" };
+            }
+            const { resolveForwardedWorkerIdentity: resolveForwardedWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report_forwarded(), worker_report_forwarded_exports));
+            const resolved = resolveForwardedWorkerIdentity2(decoded.claim, {
+              senderDaemonId: readMeshSender(args),
+              nodeDaemonId: await ownerRosterNodeDaemonLookup(_ctx, decoded.claim.meshId)
+            }, Date.now(), selfDaemonPredicate(_ctx));
+            if ("refused" in resolved) return { success: false, error: "unauthenticated", detail: resolved.refused };
+            const receipt = recordRefusedWorkerReportForIdentity2(
+              "live" in resolved ? resolved.live : resolved.late,
+              { fields: raw.fields, summaryLength: raw.summaryLength },
+              { generation: raw.generation, deliveryId: raw.deliveryId, reportedAtMs: raw.reportedAtMs }
+            );
+            return receipt ? { success: false, error: "invalid_report", receipt } : { success: false, error: "stale_report" };
+          },
+          /**
+           * F7, OWNER side: a report a remote worker daemon relayed here (it has no
+           * local attempt; this daemon owns the queue row, the attempt and the
+           * token). The claim is re-resolved against this daemon's own state
+           * (`resolveForwardedWorkerIdentity`) — nothing in it is trusted — and the
+           * report then takes the local acceptance body verbatim.
+           */
+          [WORKER_REPORT_FORWARD_COMMAND]: async (_ctx, args) => {
+            if (readBridgePolicy(MeshRuntimeStore.getInstance().db, args?.meshId)) return { success: false, error: "worker_protocol_provenance_required" };
+            const decoded = decodeForwardedWorkerReport(args);
+            if (!decoded) return { success: false, error: `${WORKER_REPORT_FORWARD_COMMAND}: request failed decode (bad shape)` };
+            const { claim } = decoded;
+            const senderDaemonId = readMeshSender(args);
+            const claimLabel = `session ${claim.sessionId} (claimed task ${claim.taskId ?? "?"} attempt ${claim.attemptId ?? "?"}) from ${senderDaemonId ? senderDaemonId.slice(0, 20) : "an unidentified daemon"}`;
+            try {
+              const { validateWorkerCompletionReport: validateWorkerCompletionReport2 } = await Promise.resolve().then(() => (init_worker_report_validation(), worker_report_validation_exports));
+              const { acceptForwardedWorkerCompletionReport: acceptForwardedWorkerCompletionReport2 } = await Promise.resolve().then(() => (init_worker_report_forwarded(), worker_report_forwarded_exports));
+              const { report, errors } = validateWorkerCompletionReport2(decoded.report);
+              if (!report) {
+                LOG.warn("WorkerReport", `Forwarded report for ${claimLabel} refused: invalid_report (${errors.length} validation error(s))`);
+                return { success: false, error: "invalid_report", validationErrors: errors };
+              }
+              const sender = {
+                senderDaemonId,
+                nodeDaemonId: await ownerRosterNodeDaemonLookup(_ctx, claim.meshId)
+              };
+              const result = acceptForwardedWorkerCompletionReport2(claim, report, { sender, isSelfDaemon: selfDaemonPredicate(_ctx), reportedAtMs: decoded.reportedAtMs });
+              if (result.accepted) {
+                LOG.info("WorkerReport", `Forwarded ${report.outcome} report for ${claimLabel} \u2192 accepted as task ${result.taskId} attempt ${result.attemptId ?? "?"}${result.late ? ` (late, after ${result.late.terminalOutcome})` : ""}${result.duplicate ? " (duplicate)" : ""}`);
+              } else {
+                LOG.warn("WorkerReport", `Forwarded ${report.outcome} report for ${claimLabel} \u2192 refused ${result.refusal}${result.detail ? ` \u2014 ${result.detail}` : ""}`);
+              }
+              return toReportResponse(result);
+            } catch (e) {
+              LOG.warn("WorkerReport", `Forwarded report for ${claimLabel} failed: ${e?.message || e}`);
+              return { success: false, error: e?.message || String(e) };
+            }
+          },
+          /** Record a mid-task progress note. Never terminal. */
+          worker_progress_update: async (_ctx, args) => {
+            if (!args?.prepared) {
+              const { resolveWorkerIdentity: resolveWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
+              const bound = resolveWorkerIdentity2(args ?? {}) ?? await resolveRemoteWorker(_ctx, args ?? {});
+              if (bound && readBridgePolicy(MeshRuntimeStore.getInstance().db, bound.meshId)) return { success: false, error: "worker_protocol_provenance_required" };
+            }
+            const prepared = args?.prepared ? validatePreparedDelivery(MeshRuntimeStore.getInstance().db, args) : null;
+            if (args?.prepared && !prepared) return { success: false, error: "worker_protocol_provenance_required" };
+            const note2 = typeof args?.note === "string" ? args.note.trim() : "";
+            if (!note2) return { success: false, error: "note required" };
+            try {
+              const { hasLocalWorkerIdentity: hasLocalWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
+              const { acceptWorkerProgressUpdate: acceptWorkerProgressUpdate2, acceptWorkerProgressUpdateForIdentity: acceptWorkerProgressUpdateForIdentity2 } = await Promise.resolve().then(() => (init_worker_report_progress(), worker_report_progress_exports));
+              const credential = { token: args?.token, bind: args?.bind };
+              const deliveryId = normalizeWorkerDeliveryId(args?.deliveryId);
+              const replay = prepared ? void 0 : recallWorkerDelivery("progress", credential, deliveryId);
+              if (replay) return { ...replay, success: true, duplicate: true };
+              const reportedAtMs = args?.reportedAtMs;
+              let response;
+              if (!hasLocalWorkerIdentity2(credential, { isSelfDaemon: selfDaemonPredicate(_ctx), reportedAtMs })) {
+                const remote = await resolveRemoteWorker(_ctx, args);
+                if (remote) {
+                  response = await forwardToOwner(_ctx, remote, WORKER_PROGRESS_FORWARD_COMMAND, { note: note2, ...deliveryId ? { deliveryId } : {}, ...typeof reportedAtMs === "number" ? { reportedAtMs } : {} }, "progress note");
+                  rememberWorkerDelivery("progress", credential, deliveryId, response);
+                  return response;
+                }
+              }
+              if (prepared) {
+                const self = bridgeIdentity(_ctx.deps.statusInstanceId ?? "", _ctx.deps.statusVersion);
+                return commitLocalBridgeDelivery(MeshRuntimeStore.getInstance().db, {
+                  protocol: 1,
+                  kind: "progress",
+                  senderDaemonId: self.daemonId,
+                  senderCommit: self.commit,
+                  senderVersion: self.version,
+                  ...prepared,
+                  payload: { note: note2 }
+                }, () => {
+                  const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(prepared.attemptId);
+                  if (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId) return { success: false, error: "stale_report" };
+                  if (attempt.terminal || MeshRuntimeStore.getInstance().turnStore().findLatestAttemptForTask(prepared.meshId, prepared.taskId)?.attemptId !== prepared.attemptId) return { success: false, error: "stale_report" };
+                  if (!daemonIdsEquivalent5(attempt.ownerDaemonId, self.daemonId) || attempt.meshId !== prepared.meshId || attempt.taskId !== prepared.taskId || attempt.nodeId !== prepared.nodeId) return { success: false, error: "unauthenticated" };
+                  if (Date.now() - prepared.reportedAtMs > BRIDGE_MAX_AGE_MS || prepared.reportedAtMs > Date.now() + 6e4) return { success: false, error: "stale_report" };
+                  return toProgressResponse(acceptWorkerProgressUpdateForIdentity2({ token: "", ...prepared }, note2, { deliveryId }));
+                });
+              }
+              const result = acceptWorkerProgressUpdate2(credential, note2, { reportedAtMs, deliveryId });
+              if (!result.accepted) logLocalWorkerRefusal("progress note", credential, result.refusal ?? "unauthenticated", result.detail);
+              response = toProgressResponse(result);
+              rememberWorkerDelivery("progress", credential, deliveryId, response);
+              return response;
+            } catch (e) {
+              return { success: false, error: e?.message || String(e) };
+            }
+          },
+          /**
+           * F7 (progress axis), OWNER side: a progress note a remote worker daemon
+           * relayed here. Authorised exactly like a forwarded completion report
+           * (`resolveForwardedWorkerIdentity` with the transport-stamped sender), then
+           * recorded by the local progress body.
+           */
+          [WORKER_PROGRESS_FORWARD_COMMAND]: async (_ctx, args) => {
+            if (readBridgePolicy(MeshRuntimeStore.getInstance().db, args?.meshId)) return { success: false, error: "worker_protocol_provenance_required" };
+            const decoded = decodeForwardedWorkerProgress(args);
+            if (!decoded) return { success: false, error: `${WORKER_PROGRESS_FORWARD_COMMAND}: request failed decode (bad shape)` };
+            const { claim, note: note2 } = decoded;
+            const senderDaemonId = readMeshSender(args);
+            const claimLabel = `session ${claim.sessionId} (claimed task ${claim.taskId ?? "?"} attempt ${claim.attemptId ?? "?"}) from ${senderDaemonId ? senderDaemonId.slice(0, 20) : "an unidentified daemon"}`;
+            try {
+              const { acceptForwardedWorkerProgressUpdate: acceptForwardedWorkerProgressUpdate2 } = await Promise.resolve().then(() => (init_worker_report_progress(), worker_report_progress_exports));
+              const sender = {
+                senderDaemonId,
+                nodeDaemonId: await ownerRosterNodeDaemonLookup(_ctx, claim.meshId)
+              };
+              const result = acceptForwardedWorkerProgressUpdate2(claim, note2, { sender, isSelfDaemon: selfDaemonPredicate(_ctx), reportedAtMs: decoded.reportedAtMs, deliveryId: decoded.deliveryId });
+              if (result.accepted) {
+                LOG.info("WorkerReport", `Forwarded progress note for ${claimLabel} \u2192 accepted for task ${result.taskId ?? "?"}${result.surfacedToCoordinator ? " (surfaced to coordinator)" : ""}`);
+              } else {
+                LOG.warn("WorkerReport", `Forwarded progress note for ${claimLabel} \u2192 refused ${result.refusal ?? "unauthenticated"}${result.detail ? ` \u2014 ${result.detail}` : ""}`);
+              }
+              return toProgressResponse(result);
+            } catch (e) {
+              LOG.warn("WorkerReport", `Forwarded progress note for ${claimLabel} failed: ${e?.message || e}`);
+              return { success: false, error: e?.message || String(e) };
+            }
+          }
+        };
+        workerReportSpecs = defineCommandSpecs("low", workerReportHandlers, {
+          worker_bridge_prepare: { sources: ["ipc", "standalone"] },
+          // Only another daemon's relay may present a forwarded report or progress
+          // note (never a dashboard, the API, or a local worker MCP over IPC).
+          // The router additionally requires the sender on the claimed mesh's roster;
+          // the handler then requires it to own the node the task was assigned to.
+          [WORKER_REFUSAL_FORWARD_COMMAND]: { sources: ["mesh"], meshSender: "roster" },
+          [WORKER_REPORT_FORWARD_COMMAND]: { sources: ["mesh"], meshSender: "roster" },
+          [WORKER_PROGRESS_FORWARD_COMMAND]: { sources: ["mesh"], meshSender: "roster" }
+        }, { meshSender: "authenticated_peer" });
+        Object.defineProperty(workerReportHandlers, "artifact_index_forwarded", {
+          value: async (ctx, args) => {
+            const { handleArtifactIndexForwarded: handleArtifactIndexForwarded2 } = await Promise.resolve().then(() => (init_artifacts2(), artifacts_exports));
+            return handleArtifactIndexForwarded2(ctx, args);
+          },
+          enumerable: false,
+          configurable: true,
+          writable: true
+        });
+      }
+    });
+    async function resolveDriverWorkerIdentity(ctx, args, now = Date.now()) {
+      const local = resolveWorkerIdentity({ token: args?.token, bind: args?.bind });
+      if (local) return { identity: local };
+      const { resolveRemoteWorker: resolveRemoteWorker2 } = await Promise.resolve().then(() => (init_worker_report2(), worker_report_exports2));
+      const remote = await resolveRemoteWorker2(ctx, args);
+      if (!remote) return { error: "worker_credential_required" };
+      const key7 = [remote.meshId, remote.sessionId, remote.taskId ?? "", remote.attemptId ?? "", remote.generation ?? ""].join("\0");
+      const hit = cache3.get(key7);
+      if (hit && hit.expiresAt > now) return { identity: hit.identity };
+      cache3.delete(key7);
+      const dispatch2 = ctx.deps.dispatchMeshCommand;
+      if (!dispatch2) return { error: "worker_credential_required", detail: `task owned by daemon ${remote.ownerDaemonId}; no mesh transport` };
+      let answer2;
+      try {
+        answer2 = unwrapMeshRelayResult(await dispatch2(remote.ownerDaemonId, DRIVER_IDENTITY_VERIFY_COMMAND, {
+          meshId: remote.meshId,
+          sessionId: remote.sessionId,
+          ...remote.taskId ? { taskId: remote.taskId } : {},
+          ...remote.attemptId ? { attemptId: remote.attemptId } : {},
+          ...remote.generation !== void 0 ? { generation: remote.generation } : {},
+          ...remote.nodeId ? { nodeId: remote.nodeId } : {}
+        }), { command: DRIVER_IDENTITY_VERIFY_COMMAND, peerDaemonId: remote.ownerDaemonId });
+      } catch (e) {
+        return { error: "forward_failed", detail: e?.message || String(e) };
+      }
+      const v = answer2?.identity;
+      if (!answer2?.success || !v?.meshId || !v?.taskId || !v?.sessionId || v.meshId !== remote.meshId || v.sessionId !== remote.sessionId) {
+        return { error: "worker_credential_required", detail: typeof answer2?.detail === "string" ? answer2.detail : void 0 };
+      }
+      const identity5 = {
+        meshId: v.meshId,
+        taskId: v.taskId,
+        sessionId: v.sessionId,
+        ...v.attemptId ? { attemptId: v.attemptId } : {},
+        ...v.nodeId ? { nodeId: v.nodeId } : {}
+      };
+      cache3.set(key7, { identity: identity5, expiresAt: now + VERIFIED_IDENTITY_TTL_MS });
+      return { identity: identity5 };
+    }
+    var DRIVER_IDENTITY_VERIFY_COMMAND;
+    var VERIFIED_IDENTITY_TTL_MS;
+    var cache3;
+    var driverIdentityHandlers;
+    var init_driver_worker_identity = __esm2({
+      "src/commands/med-family/driver-worker-identity.ts"() {
+        "use strict";
+        init_mesh_sender();
+        init_mesh_relay_result();
+        init_worker_report();
+        init_mesh_runtime_store();
+        DRIVER_IDENTITY_VERIFY_COMMAND = "driver_worker_identity_forwarded";
+        VERIFIED_IDENTITY_TTL_MS = 6e4;
+        cache3 = /* @__PURE__ */ new Map();
+        driverIdentityHandlers = {
+          /** Owner side: verify only. Sender must own the assigned node; only a LIVE attempt qualifies. */
+          [DRIVER_IDENTITY_VERIFY_COMMAND]: async (ctx, args) => {
+            const { decodeForwardedClaim: decodeForwardedClaim2, CLAIM_KEYS: CLAIM_KEYS2, ownerRosterNodeDaemonLookup: ownerRosterNodeDaemonLookup2, selfDaemonPredicate: selfDaemonPredicate2 } = await Promise.resolve().then(() => (init_worker_report2(), worker_report_exports2));
+            const decoded = decodeForwardedClaim2(args, new Set(CLAIM_KEYS2));
+            if (!decoded) return { success: false, code: "invalid_input" };
+            const { resolveForwardedWorkerIdentity: resolveForwardedWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report_forwarded(), worker_report_forwarded_exports));
+            const resolved = resolveForwardedWorkerIdentity2(decoded.claim, {
+              senderDaemonId: readMeshSender(args),
+              nodeDaemonId: await ownerRosterNodeDaemonLookup2(ctx, decoded.claim.meshId)
+            }, Date.now(), selfDaemonPredicate2(ctx));
+            if ("refused" in resolved) return { success: false, code: "unauthenticated", detail: resolved.refused };
+            if (!("live" in resolved) || !resolved.live.attemptId) return { success: false, code: "binding_missing" };
+            const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(resolved.live.attemptId);
+            if (!attempt || attempt.terminal) return { success: false, code: "binding_missing" };
+            const l = resolved.live;
+            return { success: true, identity: {
+              meshId: l.meshId,
+              taskId: l.taskId,
+              attemptId: l.attemptId,
+              generation: attempt.generation,
+              sessionId: l.sessionId,
+              ...l.nodeId ? { nodeId: l.nodeId } : {}
+            } };
+          }
+        };
+      }
+    });
+    var import_node_fs322;
+    var import_node_path26;
+    var ID3;
+    var TYPE;
+    var DriverGrantStore;
+    var init_grant_store = __esm2({
+      "src/drivers/grant-store.ts"() {
+        "use strict";
+        import_node_fs322 = require("fs");
+        import_node_path26 = require("path");
+        init_config();
+        init_store_guards();
+        ID3 = /^[a-z][a-z0-9_]*$/;
+        TYPE = /^[a-z][a-z0-9-]*$/;
+        DriverGrantStore = class {
+          path;
+          now;
+          constructor(opts = {}) {
+            this.path = (0, import_node_path26.join)(opts.configDir ?? getConfigDir2(), "drivers", "grants.json");
+            this.now = opts.now ?? (() => /* @__PURE__ */ new Date());
+          }
+          /** Throws when the file exists but is unreadable or malformed. */
+          load() {
+            let raw;
+            try {
+              raw = (0, import_node_fs322.readFileSync)(this.path, "utf8");
+            } catch (error) {
+              if (error.code === "ENOENT") return { version: 1, grants: {} };
+              throw error;
+            }
+            const doc = JSON.parse(raw);
+            const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+            if (doc?.version !== 1 || !isObj(doc.grants)) throw new Error("Invalid driver grant store");
+            for (const [type2, byId] of Object.entries(doc.grants)) {
+              if (!TYPE.test(type2) || !isObj(byId)) throw new Error("Invalid driver grant store");
+              for (const [id4, rec8] of Object.entries(byId)) {
+                if (!ID3.test(id4) || !isObj(rec8) || typeof rec8.granted !== "boolean" || !Number.isFinite(Date.parse(String(rec8.updatedAt)))) {
+                  throw new Error("Invalid driver grant store");
+                }
+              }
+            }
+            return doc;
+          }
+          /** True when the store can be read (or does not exist yet). */
+          isHealthy() {
+            try {
+              this.load();
+              return true;
+            } catch {
+              return false;
+            }
+          }
+          isGranted(type2, grantId) {
+            try {
+              return this.load().grants[type2]?.[grantId]?.granted === true;
+            } catch {
+              return false;
+            }
+          }
+          /** Granted state for the given ids; unknown ids and any read failure are false. */
+          snapshot(type2, grantIds) {
+            let byId;
+            try {
+              byId = this.load().grants[type2];
+            } catch {
+              byId = void 0;
+            }
+            return Object.fromEntries(grantIds.map((id4) => [id4, byId?.[id4]?.granted === true]));
+          }
+          /** Throws on a corrupt store instead of overwriting it. */
+          set(type2, changes) {
+            if (!TYPE.test(type2)) throw new Error("Invalid driver type");
+            for (const id4 of Object.keys(changes)) if (!ID3.test(id4)) throw new Error("Invalid grant id");
+            const doc = this.load();
+            const updatedAt = this.now().toISOString();
+            const byId = { ...doc.grants[type2] ?? {} };
+            for (const [id4, granted] of Object.entries(changes)) byId[id4] = { granted, updatedAt };
+            writeFileAtomic600(this.path, JSON.stringify({ version: 1, grants: { ...doc.grants, [type2]: byId } }, null, 2));
+          }
+        };
+      }
+    });
+    var DriverMcpError;
+    var init_mcp_client = __esm2({
+      "src/drivers/mcp-client.ts"() {
+        "use strict";
+        DriverMcpError = class extends Error {
+          constructor(code, message) {
+            super(message);
+            this.code = code;
+            this.name = "DriverMcpError";
+          }
+        };
+      }
+    });
+    function createSdkDriverClient(child, options) {
+      const sdk = new import_client.Client({ name: "adhdev-driver-client", version: "1.0.0" }, { capabilities: {} });
+      const transport = new ManagedStdioTransport(child);
+      const calls = /* @__PURE__ */ new Map();
+      let closing = false;
+      let sequence = 0;
+      sdk.onerror = (error) => {
+        if (!closing) options.onFailure(error);
+      };
+      sdk.onclose = () => {
+        if (!closing) options.onFailure(new DriverMcpError("connection_closed", "Driver connection closed"));
+      };
+      const normalize8 = (error) => {
+        if (error instanceof DriverMcpError) return error;
+        const e = error;
+        if (e?.code === -32001) return new DriverMcpError("timeout", e.message ?? "Driver request timed out");
+        if (e?.code === -32e3) return new DriverMcpError("connection_closed", e.message ?? "Driver connection closed");
+        return error instanceof Error ? error : new Error(String(error));
+      };
+      const client = {
+        async listTools() {
+          const tools = [];
+          let cursor;
+          do {
+            const page = await sdk.listTools(cursor ? { cursor } : void 0, { timeout: options.requestTimeoutMs }).catch((error) => {
+              throw normalize8(error);
+            });
+            tools.push(...page.tools);
+            cursor = page.nextCursor;
+          } while (cursor);
+          return tools;
+        },
+        callTool(name, args, signal) {
+          const id4 = `driver-call-${++sequence}`;
+          const controller = new AbortController();
+          const abort = () => controller.abort(new DriverMcpError("cancelled", "Driver call cancelled"));
+          calls.set(id4, controller);
+          signal?.addEventListener("abort", abort, { once: true });
+          if (signal?.aborted) abort();
+          const promise = sdk.callTool(
+            { name, arguments: args },
+            void 0,
+            { signal: controller.signal, timeout: options.requestTimeoutMs }
+          ).catch((error) => {
+            throw controller.signal.aborted ? controller.signal.reason : normalize8(error);
+          }).finally(() => {
+            calls.delete(id4);
+            signal?.removeEventListener("abort", abort);
+          });
+          return Object.assign(promise, { id: id4 });
+        },
+        cancel(id4) {
+          calls.get(id4)?.abort(new DriverMcpError("cancelled", "Driver call cancelled"));
+        },
+        async close() {
+          closing = true;
+          try {
+            await sdk.close();
+          } finally {
+            await options.stopProcess();
+          }
+        }
+      };
+      return { client, connect: () => sdk.connect(transport, { timeout: options.startupTimeoutMs }).catch((error) => {
+        throw normalize8(error);
+      }) };
+    }
+    function primeDriverMcpSdk() {
+      new import_client.Client({ name: "adhdev-driver-boot-check", version: "1.0.0" }, { capabilities: {} });
+    }
+    var import_client;
+    var import_stdio3;
+    var MAX_DRIVER_MESSAGE_BYTES;
+    var ManagedStdioTransport;
+    var init_mcp_client_sdk = __esm2({
+      "src/drivers/mcp-client-sdk.ts"() {
+        "use strict";
+        import_client = require("@modelcontextprotocol/sdk/client/index.js");
+        import_stdio3 = require("@modelcontextprotocol/sdk/shared/stdio.js");
+        init_mcp_client();
+        MAX_DRIVER_MESSAGE_BYTES = 8 * 1024 * 1024;
+        ManagedStdioTransport = class {
+          constructor(child) {
+            this.child = child;
+          }
+          onclose;
+          onerror;
+          onmessage;
+          buffer = new import_stdio3.ReadBuffer({ maxBufferSize: MAX_DRIVER_MESSAGE_BYTES });
+          closed = false;
+          async start() {
+            if (!this.child.stdin || !this.child.stdout) throw new Error("Missing driver stdio pipes");
+            this.child.stdout.on("data", this.onData);
+            this.child.stdout.on("error", this.onError);
+            this.child.stdin.on("error", this.onError);
+            this.child.on("close", this.onClose);
+          }
+          onData = (chunk) => {
+            if (this.closed) return;
+            try {
+              this.buffer.append(chunk);
+              for (let message = this.buffer.readMessage(); message; message = this.buffer.readMessage()) this.onmessage?.(message);
+            } catch (error) {
+              this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+            }
+          };
+          onError = (error) => {
+            if (!this.closed) this.onerror?.(error);
+          };
+          onClose = () => {
+            void this.close();
+          };
+          async send(message) {
+            if (this.closed || !this.child.stdin?.writable) throw new DriverMcpError("connection_closed", "Driver stdio is closed");
+            await new Promise((resolve77, reject) => this.child.stdin.write((0, import_stdio3.serializeMessage)(message), (error) => error ? reject(error) : resolve77()));
+          }
+          async close() {
+            if (this.closed) return;
+            this.closed = true;
+            this.child.stdout?.off("data", this.onData);
+            this.child.stdout?.off("error", this.onError);
+            this.child.stdin?.off("error", this.onError);
+            this.child.off("close", this.onClose);
+            this.buffer.clear();
+            this.onclose?.();
+          }
+        };
+      }
+    });
+    function buildDriverEnv(runtime2, source2 = process.env) {
+      const normalize8 = (key7) => process.platform === "win32" ? key7.toUpperCase() : key7;
+      const allowed = new Set([...BASE_ENV, ...runtime2.env ?? []].map(normalize8));
+      return (0, import_session_host_core.sanitizeSpawnEnv)(Object.fromEntries(Object.entries(source2).filter(([key7]) => allowed.has(normalize8(key7)))));
+    }
+    async function resolvePackagePath(value, packageDir) {
+      if (!packageDir || !value || value.startsWith("-") || (0, import_node_path27.isAbsolute)(value)) return value;
+      const isExplicitRelative = value.startsWith("./") || value.startsWith(".\\");
+      const candidate = (0, import_node_path27.resolve)(packageDir, value);
+      const rel = (0, import_node_path27.relative)(packageDir, candidate);
+      if (rel.startsWith("..") || (0, import_node_path27.isAbsolute)(rel)) return value;
+      if (isExplicitRelative) return candidate;
+      try {
+        await (0, import_promises9.access)(candidate);
+        return candidate;
+      } catch {
+        return value;
+      }
+    }
+    var import_promises9;
+    var import_node_path27;
+    var BASE_ENV;
+    var ManagedMcpProcess;
+    var init_managed_mcp_process = __esm2({
+      "src/drivers/managed-mcp-process.ts"() {
+        "use strict";
+        import_promises9 = require("fs/promises");
+        import_node_path27 = require("path");
+        init_hidden_spawn();
+        init_spawn_env();
+        init_mcp_client_sdk();
+        init_mcp_client();
+        BASE_ENV = /* @__PURE__ */ new Set(["PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP", "APPDATA", "LOCALAPPDATA", "LANG", "LC_ALL"]);
+        ManagedMcpProcess = class {
+          constructor(runtime2, options) {
+            this.runtime = runtime2;
+            this.options = options;
+          }
+          state = "stopped";
+          failure = null;
+          child = null;
+          sdkClient = null;
+          starting = null;
+          stopping = null;
+          idleTimer = null;
+          exited = Promise.resolve();
+          active = 0;
+          get pid() {
+            return this.child?.pid;
+          }
+          start() {
+            if (this.state === "failed") return Promise.reject(this.failure ?? new DriverMcpError("failed", "Driver failed"));
+            if (this.state === "running") return Promise.resolve();
+            if (this.state === "starting") return this.starting;
+            this.state = "starting";
+            this.starting = this.startInternal();
+            return this.starting;
+          }
+          async startInternal() {
+            const startupTimeoutMs = this.runtime.startupTimeoutMs ?? 15e3;
+            try {
+              if (this.stopping) await this.stopping;
+              this.stopping = null;
+              if (this.state !== "starting") throw new DriverMcpError("connection_closed", "Driver start was cancelled");
+              if (this.runtime.platforms && !this.runtime.platforms.includes(process.platform)) throw new Error("Driver platform is unsupported");
+              await (0, import_promises9.mkdir)(this.options.cwd, { recursive: true });
+              const command = await resolvePackagePath(this.runtime.command, this.options.packageDir);
+              const args = await Promise.all((this.runtime.args ?? []).map((arg) => resolvePackagePath(arg, this.options.packageDir)));
+              if (this.state !== "starting") throw new DriverMcpError("connection_closed", "Driver start was cancelled");
+              const env2 = buildDriverEnv(this.runtime, this.options.env);
+              if (this.options.packageDir) {
+                env2.ADHDEV_DRIVER_PACKAGE_DIR = this.options.packageDir;
+                env2.ADHDEV_DRIVER_STATE_DIR = this.options.cwd;
+              }
+              const child = hiddenSpawn(command, args, {
+                cwd: this.options.cwd,
+                env: env2,
+                stdio: ["pipe", "pipe", "pipe"],
+                shell: false,
+                detached: process.platform !== "win32"
+              });
+              this.child = child;
+              this.exited = new Promise((resolve77) => child.once("close", () => {
+                resolve77();
+                if (this.child === child && !this.stopping && this.state !== "stopped") this.fail(new DriverMcpError("connection_closed", "Driver process exited"));
+              }));
+              child.on("error", (error) => this.fail(error));
+              child.stderr?.on("data", () => {
+              });
+              child.stdin?.on("error", (error) => {
+                if (!this.stopping) this.fail(error);
+              });
+              child.stdout?.on("error", (error) => {
+                if (!this.stopping) this.fail(error);
+              });
+              const adapter = createSdkDriverClient(child, {
+                startupTimeoutMs,
+                requestTimeoutMs: this.options.requestTimeoutMs ?? 3e4,
+                onFailure: (error) => this.fail(error),
+                stopProcess: () => this.stopProcess()
+              });
+              this.sdkClient = adapter.client;
+              let timer;
+              try {
+                await Promise.race([adapter.connect(), new Promise((_, reject) => {
+                  timer = setTimeout(() => reject(new DriverMcpError("timeout", "Driver startup timed out")), startupTimeoutMs);
+                })]);
+              } finally {
+                clearTimeout(timer);
+              }
+              if (this.state !== "starting") throw this.failure ?? new Error("Driver stopped during startup");
+              this.state = "running";
+              this.armIdle();
+            } catch (error) {
+              const failure8 = error instanceof Error ? error : new Error(String(error));
+              this.fail(failure8);
+              await this.close();
+              throw this.failure ?? failure8;
+            }
+          }
+          fail(error) {
+            if (this.state === "failed" || this.state === "stopped") return;
+            this.state = "failed";
+            this.failure = error;
+            this.clearIdle();
+            void this.close().catch(() => {
+            });
+          }
+          clearIdle() {
+            if (this.idleTimer) clearTimeout(this.idleTimer);
+            this.idleTimer = null;
+          }
+          armIdle() {
+            this.clearIdle();
+            if (this.state === "running" && this.active === 0) {
+              this.idleTimer = setTimeout(() => {
+                void this.close().catch((error) => this.fail(error));
+              }, this.runtime.idleStopMs ?? 6e5);
+              this.idleTimer.unref();
+            }
+          }
+          requireClient() {
+            if (this.state !== "running" || !this.sdkClient) throw this.failure ?? new DriverMcpError("connection_closed", "Driver is not running");
+            this.clearIdle();
+            return this.sdkClient;
+          }
+          async listTools() {
+            const client = this.requireClient();
+            this.active++;
+            try {
+              return await client.listTools();
+            } finally {
+              this.active--;
+              this.armIdle();
+            }
+          }
+          callTool(name, args, signal) {
+            const client = this.requireClient();
+            this.active++;
+            const call2 = client.callTool(name, args, signal);
+            const promise = call2.finally(() => {
+              this.active--;
+              this.armIdle();
+            });
+            return Object.assign(promise, { id: call2.id });
+          }
+          cancel(id4) {
+            this.sdkClient?.cancel(id4);
+          }
+          async close() {
+            this.clearIdle();
+            if (this.state !== "failed") this.state = "stopped";
+            const client = this.sdkClient;
+            this.sdkClient = null;
+            if (client) await client.close();
+            else await this.stopProcess();
+          }
+          stopProcess() {
+            if (this.stopping) return this.stopping;
+            const child = this.child;
+            if (!child) return Promise.resolve();
+            this.stopping = (async () => {
+              const signal = async (name) => {
+                if (child.exitCode !== null || child.signalCode !== null) return;
+                try {
+                  if (process.platform !== "win32" && child.pid) process.kill(-child.pid, name);
+                  else if (child.pid) {
+                    await new Promise((resolve77) => {
+                      const killer = hiddenSpawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+                      killer.once("error", () => {
+                        child.kill(name);
+                        resolve77();
+                      });
+                      killer.once("close", () => resolve77());
+                    });
+                  } else child.kill(name);
+                } catch {
+                }
+              };
+              const wait = async (ms3) => {
+                let timer;
+                try {
+                  await Promise.race([this.exited, new Promise((resolve77) => {
+                    timer = setTimeout(resolve77, ms3);
+                  })]);
+                } finally {
+                  clearTimeout(timer);
+                }
+              };
+              child.stdin?.end();
+              await signal("SIGTERM");
+              await wait(2e3);
+              await signal("SIGKILL");
+              await this.exited;
+              if (this.child === child) this.child = null;
+            })();
+            return this.stopping;
+          }
+        };
+      }
+    });
+    async function readDriverInputSchema(cwd, schemaPath) {
+      try {
+        const root = await (0, import_promises10.realpath)(cwd);
+        const file = await (0, import_promises10.realpath)((0, import_node_path28.resolve)(root, schemaPath));
+        const rel = (0, import_node_path28.relative)(root, file);
+        if (!rel || rel === ".." || rel.startsWith("../") || rel.startsWith("..\\") || (0, import_node_path28.isAbsolute)(rel)) return null;
+        const schema22 = JSON.parse(await (0, import_promises10.readFile)(file, "utf8"));
+        return schema22 && typeof schema22 === "object" && !Array.isArray(schema22) ? schema22 : null;
+      } catch {
+        return null;
+      }
+    }
+    async function validateDriverArgs(cwd, schemaPath, args) {
+      if (!args || typeof args !== "object" || Array.isArray(args)) return false;
+      if (!schemaPath) return true;
+      try {
+        const schema22 = await readDriverInputSchema(cwd, schemaPath);
+        if (!schema22) return false;
+        const ajv = new import_ajv.default({ strict: false, allErrors: true, validateFormats: true });
+        (0, import_ajv_formats2.default)(ajv);
+        return ajv.compile(schema22)(args) === true;
+      } catch {
+        return false;
+      }
+    }
+    var import_promises10;
+    var import_node_path28;
+    var import_ajv;
+    var import_ajv_formats2;
+    var init_input_schema = __esm2({
+      "src/drivers/input-schema.ts"() {
+        "use strict";
+        import_promises10 = require("fs/promises");
+        import_node_path28 = require("path");
+        import_ajv = __toESM2(require_ajv());
+        import_ajv_formats2 = __toESM2(require_dist2());
+      }
+    });
+    function sniffImageMime(b) {
+      if (b.length >= 8 && b.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return "image/png";
+      if (b.length >= 3 && b[0] === 255 && b[1] === 216 && b[2] === 255) return "image/jpeg";
+      if (b.length >= 6) {
+        const head = b.subarray(0, 6).toString("latin1");
+        if (head === "GIF87a" || head === "GIF89a") return "image/gif";
+      }
+      if (b.length >= 12 && b.subarray(0, 4).toString("latin1") === "RIFF" && b.subarray(8, 12).toString("latin1") === "WEBP") return "image/webp";
+      return null;
+    }
+    function decodeDriverImage(block3) {
+      const data = typeof block3.data === "string" ? block3.data : "";
+      if (!data) return refuse3("image_invalid", "Image block has no base64 data");
+      if (Math.floor(data.length * 3 / 4) > MAX_ARTIFACT_BYTES + 3) return refuse3("artifact_too_large", `Image exceeds ${MAX_ARTIFACT_BYTES} bytes`);
+      if (data.length % 4 !== 0 || !BASE64.test(data)) return refuse3("image_invalid", "Image data is not canonical base64");
+      const declared = typeof block3.mimeType === "string" ? block3.mimeType.split(";")[0].trim().toLowerCase() : "";
+      if (!IMAGE_EXT[declared]) return refuse3("unsupported_mime_or_kind", `Image mime "${declared || "(none)"}" is not an allowed artifact type`);
+      const bytes = Buffer.from(data, "base64");
+      if (bytes.length > MAX_ARTIFACT_BYTES) return refuse3("artifact_too_large", `Image exceeds ${MAX_ARTIFACT_BYTES} bytes`);
+      const sniffed = sniffImageMime(bytes);
+      if (sniffed !== declared) return refuse3("mime_mismatch", `Image bytes are ${sniffed ?? "not a supported image"}, declared ${declared}`);
+      return { bytes, mime: declared };
+    }
+    function prepareDir(workspaceRoot, invocationId) {
+      const root = (0, import_node_fs33.realpathSync)(workspaceRoot);
+      const parts = [".adhdev", "driver-results", invocationId];
+      let current5 = root;
+      for (const part of parts) {
+        current5 = (0, import_node_path29.join)(current5, part);
+        let stat2;
+        try {
+          stat2 = (0, import_node_fs33.lstatSync)(current5);
+        } catch {
+          stat2 = null;
+        }
+        if (!stat2) (0, import_node_fs33.mkdirSync)(current5, { mode: 448 });
+        else if (stat2.isSymbolicLink() || !stat2.isDirectory()) return refuse3("unsafe_path", "Driver results directory is not a plain directory");
+      }
+      if ((0, import_node_fs33.realpathSync)(current5) !== current5 || !current5.startsWith(root + import_node_path29.sep)) return refuse3("unsafe_path", "Driver results directory escapes the workspace");
+      ensureLocalGitExclude(root, (0, import_node_path29.join)(root, ...parts.slice(0, 2)), "driver results");
+      return { abs: current5, rel: parts.join("/") };
+    }
+    async function writeAndRegister(sink2, invocationId, file, bytes, spec) {
+      const dir = prepareDir(sink2.workspaceRoot, invocationId);
+      const abs = (0, import_node_path29.join)(dir.abs, file);
+      (0, import_node_fs33.writeFileSync)(abs, bytes, { flag: "wx", mode: 384 });
+      try {
+        const relPath = `${dir.rel}/${file}`;
+        return { ...await sink2.register({ relPath, ...spec }), relPath };
+      } catch (error) {
+        try {
+          (0, import_node_fs33.unlinkSync)(abs);
+        } catch {
+        }
+        throw error;
+      }
+    }
+    async function captureDriverArtifacts(input) {
+      const { result, identity: identity5, invocationId, title, port } = input;
+      const artifacts = [];
+      let artifactError;
+      const note2 = (error) => {
+        artifactError ??= error;
+      };
+      let sink2;
+      const getSink = async () => {
+        if (sink2 !== void 0) return sink2;
+        try {
+          sink2 = port ? await port.resolve(identity5) : null;
+        } catch (error) {
+          note2(errorOf(error));
+          sink2 = null;
+        }
+        if (!sink2) note2({ code: "artifact_unavailable", message: "No trusted workspace is available for this worker; result returned inline" });
+        return sink2;
+      };
+      let seq2 = 0;
+      const content = [];
+      for (const block3 of Array.isArray(result.content) ? result.content : []) {
+        const b = block3;
+        if (!b || b.type !== "image") {
+          content.push(block3);
+          continue;
+        }
+        const approxBytes = typeof b.data === "string" ? Math.floor(b.data.length * 3 / 4) : 0;
+        const mime = typeof b.mimeType === "string" ? b.mimeType.split(";")[0].trim().toLowerCase().slice(0, 40) : void 0;
+        const omitted = (error) => {
+          note2(error);
+          content.push({ type: "image", omitted: true, code: error.code, ...mime ? { mime } : {}, sizeBytes: approxBytes });
+        };
+        if (artifacts.length >= MAX_DRIVER_ARTIFACTS_PER_CALL) {
+          omitted({ code: "too_many_artifacts", message: `At most ${MAX_DRIVER_ARTIFACTS_PER_CALL} artifacts per call` });
+          continue;
+        }
+        try {
+          const decoded = decodeDriverImage(b);
+          const target2 = await getSink();
+          if (!target2) {
+            omitted(artifactError ?? { code: "artifact_unavailable", message: "artifact registration unavailable" });
+            continue;
+          }
+          const registered = await writeAndRegister(
+            target2,
+            invocationId,
+            `image-${++seq2}.${IMAGE_EXT[decoded.mime]}`,
+            decoded.bytes,
+            { kind: "image", mime: decoded.mime, title }
+          );
+          artifacts.push({ type: "image", artifactId: registered.artifactId, digest: digestOf(registered.sha256), relPath: registered.relPath });
+          content.push({ type: "image", artifactId: registered.artifactId, relPath: registered.relPath, mime: decoded.mime, sizeBytes: registered.sizeBytes, sha256: registered.sha256 });
+        } catch (error) {
+          omitted(errorOf(error));
+        }
+      }
+      let output = { ...result, content };
+      const json2 = JSON.stringify(output);
+      if (json2.length <= DRIVER_INLINE_CAP) return { output, artifacts, ...artifactError ? { artifactError } : {} };
+      const textOnly = !result.structuredContent && content.every((c) => c?.type === "text" && typeof c.text === "string");
+      const full = textOnly ? content.map((c) => c.text).join("\n") : json2;
+      const bytes = Buffer.from(full, "utf8");
+      const stored = (extra) => ({ truncated: true, text: full.slice(0, DRIVER_PREVIEW_CHARS), ...extra });
+      const cutOff = (extra) => ({ truncated: true, text: json2.slice(0, DRIVER_INLINE_CAP), ...extra });
+      try {
+        if (artifacts.length >= MAX_DRIVER_ARTIFACTS_PER_CALL) refuse3("too_many_artifacts", `At most ${MAX_DRIVER_ARTIFACTS_PER_CALL} artifacts per call`);
+        if (bytes.length > MAX_ARTIFACT_BYTES) refuse3("artifact_too_large", `Result is ${bytes.length} bytes; the artifact limit is ${MAX_ARTIFACT_BYTES}`);
+        const target2 = await getSink();
+        if (!target2) throw new DriverArtifactRefusal("artifact_unavailable", "artifact registration unavailable");
+        const kind = textOnly ? "text" : "json";
+        const registered = await writeAndRegister(
+          target2,
+          invocationId,
+          textOnly ? "result.txt" : "result.json",
+          bytes,
+          { kind, mime: textOnly ? "text/plain" : "application/json", title }
+        );
+        artifacts.push({ type: kind, artifactId: registered.artifactId, digest: digestOf(registered.sha256), relPath: registered.relPath });
+        output = stored({ artifactId: registered.artifactId, relPath: registered.relPath, sizeBytes: registered.sizeBytes, sha256: registered.sha256 });
+      } catch (error) {
+        const e = errorOf(error);
+        note2(e);
+        output = cutOff({ note: `Result exceeded ${DRIVER_INLINE_CAP} characters and could not be stored as an artifact (${e.code}); the rest is cut off.` });
+      }
+      return { output, artifacts, ...artifactError ? { artifactError } : {} };
+    }
+    var import_node_fs33;
+    var import_node_path29;
+    var DRIVER_INLINE_CAP;
+    var DRIVER_PREVIEW_CHARS;
+    var MAX_DRIVER_ARTIFACTS_PER_CALL;
+    var IMAGE_EXT;
+    var BASE64;
+    var DriverArtifactRefusal;
+    var refuse3;
+    var digestOf;
+    var errorOf;
+    var init_driver_artifacts = __esm2({
+      "src/drivers/driver-artifacts.ts"() {
+        "use strict";
+        import_node_fs33 = require("fs");
+        import_node_path29 = require("path");
+        init_types6();
+        init_git_local_exclude();
+        DRIVER_INLINE_CAP = 64e3;
+        DRIVER_PREVIEW_CHARS = 4e3;
+        MAX_DRIVER_ARTIFACTS_PER_CALL = 8;
+        IMAGE_EXT = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" };
+        BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+        DriverArtifactRefusal = class extends Error {
+          constructor(code, message) {
+            super(message);
+            this.code = code;
+          }
+        };
+        refuse3 = (code, message) => {
+          throw new DriverArtifactRefusal(code, message);
+        };
+        digestOf = (hex) => `sha256:${hex}`;
+        errorOf = (error) => error instanceof DriverArtifactRefusal ? { code: error.code, message: error.message } : {
+          code: error?.code && typeof error.code === "string" ? error.code : "artifact_register_failed",
+          message: error instanceof Error ? error.message : String(error)
+        };
+      }
+    });
+    function actionAllowedByPolicy(policy, type2, action2) {
+      if (!policy) return false;
+      if (!Object.hasOwn(policy, type2)) return true;
+      const entry = policy[type2];
+      return Array.isArray(entry?.actions) && entry.actions.includes(action2);
+    }
+    var import_node_crypto41;
+    var import_node_os9;
+    var import_node_path30;
+    var refused2;
+    var LEASE_MS;
+    var DriverService;
+    var init_driver_service = __esm2({
+      "src/drivers/driver-service.ts"() {
+        "use strict";
+        import_node_crypto41 = require("crypto");
+        import_node_os9 = require("os");
+        import_node_path30 = require("path");
+        init_managed_mcp_process();
+        init_risk_class();
+        init_input_schema();
+        init_driver_artifacts();
+        init_logger();
+        refused2 = (code) => ({ success: false, code });
+        LEASE_MS = 30 * 6e4;
+        DriverService = class {
+          constructor(ports) {
+            this.ports = ports;
+            this.now = ports.now ?? Date.now;
+            this.unsubscribe = ports.bus?.on("terminated", (event) => {
+              for (const [key7, lease] of this.leases) if (lease.sessionId === event.sessionId) this.leases.delete(key7);
+            }, { name: "driver-leases" });
+          }
+          closed = false;
+          instances = /* @__PURE__ */ new Map();
+          leases = /* @__PURE__ */ new Map();
+          records = [];
+          now;
+          unsubscribe;
+          read(type2) {
+            try {
+              return this.ports.readCurrent(type2);
+            } catch {
+              return null;
+            }
+          }
+          runtimeDirFor(installed2) {
+            const baseDir = (0, import_node_path30.dirname)(this.ports.activations.path);
+            const candidate = (0, import_node_path30.join)(baseDir, "runtime", installed2.module.type);
+            const rel = (0, import_node_path30.relative)((0, import_node_path30.resolve)(installed2.cwd), (0, import_node_path30.resolve)(candidate));
+            if (!rel || !rel.startsWith("..") && !(0, import_node_path30.isAbsolute)(rel)) {
+              return (0, import_node_path30.join)((0, import_node_os9.tmpdir)(), "adhdev-driver-runtime", installed2.module.type);
+            }
+            return candidate;
+          }
+          async describe(type2) {
+            const installed2 = this.read(type2);
+            if (!installed2) {
+              const previous = this.instances.get(type2);
+              if (previous) {
+                previous.state = "removed";
+                await previous.process?.close();
+              }
+              return refused2("driver_not_installed");
+            }
+            const { module: module22, treeDigest } = installed2;
+            let instance = this.instances.get(type2);
+            if (instance && instance.digest !== treeDigest) {
+              await instance.process?.close();
+              instance = void 0;
+            }
+            if (!instance) {
+              instance = { digest: treeDigest, state: "validated" };
+              this.instances.set(type2, instance);
+            }
+            let prepared;
+            try {
+              prepared = this.ports.activationStaging.prepare(module22, treeDigest, this.ports.activations);
+            } catch {
+              return refused2("activation_unavailable");
+            }
+            if (prepared.state !== "ready") {
+              await instance.process?.close();
+              instance.process = void 0;
+              instance.state = "installed";
+            } else if (instance.process) {
+              instance.state = instance.process?.state === "failed" ? "failed" : instance.process.state === "stopped" ? "stopped" : "running";
+            } else instance.state = "ready";
+            return {
+              success: true,
+              type: type2,
+              name: module22.name,
+              providerVersion: module22.providerVersion,
+              ...module22.publisher ? { publisher: module22.publisher } : {},
+              state: instance.state,
+              treeDigest,
+              actions: await Promise.all(module22.actions.map(async (action2) => ({
+                ...action2,
+                ...action2.inputSchema ? { inputSchema: await readDriverInputSchema(installed2.cwd, action2.inputSchema) } : {}
+              }))),
+              resources: module22.resources ?? [],
+              declaredAccess: module22.declaredAccess ?? {},
+              ...deriveDriverRiskClass(module22),
+              leases: (module22.resources ?? []).map((r) => ({ key: r.key, ...this.leases.get(JSON.stringify([type2, r.key])) })),
+              ..."stagedId" in prepared ? { stagedId: prepared.stagedId } : {}
+            };
+          }
+          async list() {
+            const modules = this.ports.registry.getByCategory("driver");
+            const types2 = new Set(modules.map((m) => m.type));
+            for (const [type2, instance] of this.instances) if (!types2.has(type2)) {
+              await instance.process?.close();
+              instance.state = "removed";
+            }
+            return { success: true, drivers: await Promise.all(modules.map((m) => this.describe(m.type))) };
+          }
+          async setEnabled(type2, enabled) {
+            const installed2 = this.read(type2);
+            if (!installed2) return refused2("driver_not_installed");
+            if (enabled && installed2.module._sourceTrust !== "trusted") {
+              if (this.ports.activations.isDisabled(type2)) this.ports.activations.clearDisabled(type2);
+              const stagedId = this.ports.activationStaging.write(installed2.module, installed2.treeDigest);
+              return { success: true, state: "installed", stagedId };
+            }
+            this.ports.activations.setDisabled(installed2.module, installed2.treeDigest, !enabled);
+            return this.describe(type2);
+          }
+          grantsEntry(installed2) {
+            const { module: module22, treeDigest } = installed2;
+            if (!module22.grants?.length) return null;
+            let activation;
+            try {
+              activation = this.ports.activations.isDisabled(module22.type) ? "disabled" : this.ports.activations.isReady(module22.type, treeDigest) ? "ready" : "needs_approval";
+            } catch {
+              activation = "disabled";
+            }
+            let stagedId;
+            if (activation === "needs_approval") {
+              try {
+                stagedId = this.ports.activationStaging.list().find((r) => r.type === module22.type && r.treeDigest === treeDigest)?.id;
+              } catch {
+              }
+            }
+            const state2 = this.ports.grants?.snapshot(module22.type, module22.grants.map((g3) => g3.id)) ?? {};
+            return {
+              type: module22.type,
+              name: module22.name,
+              providerVersion: module22.providerVersion,
+              activation,
+              ...stagedId ? { stagedId } : {},
+              platformSupported: !module22.runtime.platforms || module22.runtime.platforms.includes(process.platform),
+              grants: module22.grants.map((g3) => ({ id: g3.id, title: g3.title, description: g3.description ?? "", granted: state2[g3.id] === true }))
+            };
+          }
+          /** Drivers that declare `grants[]`, with their current checkbox state. No side effects. */
+          getGrants() {
+            const drivers = [];
+            for (const m of this.ports.registry.getByCategory("driver")) {
+              const installed2 = this.read(m.type);
+              const entry = installed2 ? this.grantsEntry(installed2) : null;
+              if (entry) drivers.push(entry);
+            }
+            return { success: true, drivers };
+          }
+          /** Owner-only (the command layer restricts sources). Unknown ids are rejected before anything is written. */
+          setGrants(type2, changes) {
+            const installed2 = this.read(type2);
+            if (!installed2) return refused2("driver_not_installed");
+            const declared = new Set((installed2.module.grants ?? []).map((g3) => g3.id));
+            if (!declared.size || !this.ports.grants || !changes || typeof changes !== "object" || Array.isArray(changes)) return refused2("invalid_arguments");
+            const entries3 = Object.entries(changes);
+            if (!entries3.length || entries3.some(([id4, v]) => !declared.has(id4) || typeof v !== "boolean")) return refused2("invalid_arguments");
+            try {
+              this.ports.grants.set(type2, Object.fromEntries(entries3));
+            } catch {
+              return refused2("grants_unavailable");
+            }
+            const { module: module22, treeDigest } = installed2;
+            if (entries3.some(([, v]) => v === true) && !this.ports.activations.isReady(type2, treeDigest)) {
+              try {
+                if (module22._sourceTrust === "trusted") this.ports.activations.setDisabled(module22, treeDigest, false);
+                else {
+                  if (this.ports.activations.isDisabled(type2)) this.ports.activations.clearDisabled(type2);
+                  this.ports.activationStaging.write(module22, treeDigest);
+                }
+              } catch {
+                return refused2("activation_unavailable");
+              }
+            }
+            const entry = this.grantsEntry(installed2);
+            return { success: true, ...entry ?? {} };
+          }
+          async invoke(identity5, input) {
+            if (!identity5?.sessionId || !identity5.meshId || !identity5.taskId) return refused2("worker_credential_required");
+            if (input.target !== void 0 && input.target !== "local") return refused2("unsupported");
+            const caller = {
+              meshId: identity5.meshId,
+              taskId: identity5.taskId,
+              sessionId: identity5.sessionId,
+              ...identity5.attemptId ? { attemptId: identity5.attemptId } : {},
+              ...identity5.nodeId ? { nodeId: identity5.nodeId } : {}
+            };
+            return this.execute(caller, input);
+          }
+          async execute(identity5, input, approval) {
+            const installed2 = this.read(input.type);
+            if (!installed2) return refused2("driver_not_approved");
+            if (approval && this.now() >= approval.expiresAt) return refused2("expired");
+            if (approval && installed2.treeDigest !== approval.digest) return refused2("stale");
+            try {
+              this.ports.activationStaging.prepare(installed2.module, installed2.treeDigest, this.ports.activations);
+            } catch {
+              return refused2("driver_not_approved");
+            }
+            if (!this.ports.activations.isReady(input.type, installed2.treeDigest)) return refused2("driver_not_approved");
+            const policy = await this.ports.policy(identity5.meshId).catch(() => void 0);
+            const action2 = installed2.module.actions.find((a) => a.id === input.action);
+            if (!action2 || !actionAllowedByPolicy(policy, input.type, input.action)) return refused2("driver_not_allowed_for_mesh");
+            const grantRequired = () => action2.grant && !this.ports.grants?.isGranted(input.type, action2.grant) ? { ...refused2("driver_grant_required"), grant: action2.grant } : null;
+            const denied = grantRequired();
+            if (denied) return denied;
+            if (action2.risk === "destructive" && !approval) {
+              const staged = this.ports.actions.write({
+                type: input.type,
+                action: input.action,
+                args: input.args ?? {},
+                activationDigest: installed2.treeDigest,
+                requester: identity5,
+                ...input.resourceKey !== void 0 ? { resourceKey: input.resourceKey } : {}
+              });
+              return { ...refused2("owner_approval_required"), stagedId: staged.id, expiresAt: staged.expiresAt };
+            }
+            const resources = installed2.module.resources ?? [];
+            if (input.resourceKey !== void 0 && !resources.some((r) => r.key === input.resourceKey)) return refused2("invalid_arguments");
+            const resourceKeys = action2.lease === false ? [] : resources.filter((r) => input.resourceKey === void 0 || r.key === input.resourceKey).map((r) => r.key);
+            const keys2 = resourceKeys.map((key7) => JSON.stringify([input.type, key7]));
+            for (const key7 of keys2) {
+              const lease = this.leases.get(key7);
+              if (lease && lease.expiresAt > this.now() && lease.sessionId !== identity5.sessionId) return refused2("lease_held");
+            }
+            const added = [];
+            for (const key7 of keys2) {
+              if (this.leases.get(key7)?.sessionId !== identity5.sessionId) added.push(key7);
+              this.leases.set(key7, { sessionId: identity5.sessionId, expiresAt: this.now() + LEASE_MS });
+            }
+            const releaseNew = () => {
+              for (const key7 of added) if (this.leases.get(key7)?.sessionId === identity5.sessionId) this.leases.delete(key7);
+            };
+            if (!await validateDriverArgs(installed2.cwd, action2.inputSchema, input.args ?? {})) {
+              releaseNew();
+              return refused2("invalid_arguments");
+            }
+            const current5 = this.read(input.type);
+            if (current5?.treeDigest !== installed2.treeDigest || !this.ports.activations.isReady(input.type, installed2.treeDigest)) {
+              releaseNew();
+              return refused2("driver_not_approved");
+            }
+            const latest = await this.ports.policy(identity5.meshId).catch(() => void 0);
+            if (!actionAllowedByPolicy(latest, input.type, input.action)) {
+              releaseNew();
+              return refused2("driver_not_allowed_for_mesh");
+            }
+            if (this.read(input.type)?.treeDigest !== installed2.treeDigest || !this.ports.activations.isReady(input.type, installed2.treeDigest)) {
+              releaseNew();
+              return refused2("driver_not_approved");
+            }
+            const deniedLate = grantRequired();
+            if (deniedLate) {
+              releaseNew();
+              return deniedLate;
+            }
+            if (keys2.some((key7) => this.leases.get(key7)?.sessionId !== identity5.sessionId)) {
+              releaseNew();
+              return refused2("lease_held");
+            }
+            if (approval && this.now() >= approval.expiresAt) {
+              releaseNew();
+              return refused2("expired");
+            }
+            if (this.closed) {
+              releaseNew();
+              return refused2("driver_stopped");
+            }
+            let instance = this.instances.get(input.type);
+            if (instance && instance.digest !== installed2.treeDigest) {
+              await instance.process?.close();
+              if (this.instances.get(input.type) === instance) this.instances.delete(input.type);
+              return this.execute(identity5, input, approval);
+            }
+            if (!instance) {
+              instance = { digest: installed2.treeDigest, state: "approved" };
+              this.instances.set(input.type, instance);
+            }
+            const record8 = {
+              invocationId: (0, import_node_crypto41.randomUUID)(),
+              driverType: input.type,
+              action: input.action,
+              activationDigest: installed2.treeDigest,
+              resourceKeys,
+              startedAt: this.now(),
+              status: "running",
+              caller: approval ? { kind: "owner", source: approval.source, stagedRequestId: approval.id, resolvedAt: this.now() } : { kind: "worker", ...identity5 }
+            };
+            this.records.push(record8);
+            if (this.records.length > 100) this.records.shift();
+            try {
+              instance.process ??= this.ports.createProcess?.(installed2) ?? new ManagedMcpProcess(installed2.module.runtime, {
+                cwd: this.runtimeDirFor(installed2),
+                packageDir: installed2.cwd,
+                ...installed2.module.runtime.requestTimeoutMs !== void 0 ? { requestTimeoutMs: installed2.module.runtime.requestTimeoutMs } : {}
+              });
+              await instance.process.start();
+              instance.state = "running";
+              const output = await instance.process.callTool(action2.tool, input.args ?? {});
+              record8.status = output.isError ? "failed" : "completed";
+              const captured = await captureDriverArtifacts({
+                result: output,
+                identity: identity5,
+                invocationId: record8.invocationId,
+                title: `${input.type}.${input.action}`,
+                ...this.ports.artifacts ? { port: this.ports.artifacts } : {}
+              }).catch((error) => ({
+                output: { truncated: true, note: "Result could not be processed for artifact registration" },
+                artifacts: [],
+                artifactError: { code: "artifact_register_failed", message: error instanceof Error ? error.message : String(error) }
+              }));
+              record8.output = captured.output;
+              if (captured.artifacts.length) record8.artifacts = captured.artifacts;
+              if (captured.artifactError) record8.artifactError = captured.artifactError;
+              return {
+                success: !output.isError,
+                invocationId: record8.invocationId,
+                status: record8.status,
+                output: record8.output,
+                ...captured.artifacts.length ? { artifacts: captured.artifacts } : {},
+                ...captured.artifactError ? { artifactError: captured.artifactError } : {}
+              };
+            } catch (error) {
+              instance.state = instance.process?.state === "failed" ? "failed" : "stopped";
+              record8.status = "failed";
+              record8.error = error instanceof Error ? error.message : String(error);
+              return { ...refused2("driver_execution_failed"), invocationId: record8.invocationId, error: record8.error };
+            } finally {
+              record8.completedAt = this.now();
+              LOG.info("Driver", `[driver] invoke type=${input.type} action=${input.action} risk=${action2.risk} caller=${approval ? "owner" : "worker"} status=${record8.status} artifacts=${record8.artifacts?.length ?? 0} ms=${record8.completedAt - record8.startedAt}`);
+            }
+          }
+          async resolveAction(id4, decision, source2) {
+            if (!["p2p", "ws", "standalone"].includes(source2)) return refused2("COMMAND_SOURCE_REJECTED");
+            const pending = this.ports.actions.read(id4);
+            const claim = this.ports.actions.claim(id4, pending ? this.read(pending.type)?.treeDigest : void 0, decision);
+            if ("code" in claim) {
+              const result2 = { success: claim.code === "discarded", code: claim.code, result: claim.code, stagedId: id4 };
+              if (pending?.status === "pending" && ["expired", "stale", "discarded"].includes(claim.code)) {
+                return { ...result2, delivery: this.relay(pending.requester, result2) };
+              }
+              return result2;
+            }
+            const r = claim.record;
+            let result;
+            try {
+              result = await this.execute(r.requester, r, { source: source2, id: id4, digest: r.activationDigest, expiresAt: r.expiresAt });
+            } catch {
+              result = refused2("driver_execution_failed");
+            }
+            const delivery = this.relay(r.requester, { ...result, stagedId: id4 });
+            return { ...result, stagedId: id4, delivery };
+          }
+          relay(identity5, result) {
+            try {
+              return this.ports.relay(identity5, result);
+            } catch {
+              return { ok: false, error: "mailbox_unavailable" };
+            }
+          }
+          stagedActions() {
+            return this.ports.actions.list();
+          }
+          invocations() {
+            return structuredClone(this.records);
+          }
+          async close() {
+            this.closed = true;
+            this.unsubscribe?.();
+            this.leases.clear();
+            await Promise.all([...this.instances.values()].map((i) => i.process?.close()));
+          }
+        };
+      }
+    });
+    var import_node_crypto422;
+    var import_node_fs34;
+    var import_node_path31;
+    var ID4;
+    var DRIVER_ACTION_TTL_MS;
+    var DriverActionStaging;
+    var init_staged_action = __esm2({
+      "src/drivers/staged-action.ts"() {
+        "use strict";
+        import_node_crypto422 = require("crypto");
+        import_node_fs34 = require("fs");
+        import_node_path31 = require("path");
+        init_config();
+        init_store_guards();
+        ID4 = /^driver-action-[a-f0-9-]+$/;
+        DRIVER_ACTION_TTL_MS = 30 * 6e4;
+        DriverActionStaging = class {
+          constructor(configDir = getConfigDir2(), now = Date.now) {
+            this.now = now;
+            this.dir = (0, import_node_path31.join)(configDir, "assistant", "staged");
+          }
+          dir;
+          save(record8) {
+            writeFileAtomic600((0, import_node_path31.join)(this.dir, `${record8.id}.json`), JSON.stringify(record8, null, 2) + "\n");
+          }
+          write(input) {
+            const record8 = {
+              ...structuredClone(input),
+              kind: "driver_action_request",
+              id: `driver-action-${(0, import_node_crypto422.randomUUID)()}`,
+              requesterTaskId: input.requester.taskId,
+              createdAt: this.now(),
+              expiresAt: this.now() + DRIVER_ACTION_TTL_MS,
+              status: "pending"
+            };
+            this.save(record8);
+            return record8;
+          }
+          read(id4) {
+            if (!ID4.test(id4)) return null;
+            try {
+              const r = JSON.parse((0, import_node_fs34.readFileSync)((0, import_node_path31.join)(this.dir, `${id4}.json`), "utf8"));
+              return r.kind === "driver_action_request" && r.id === id4 && typeof r.type === "string" && typeof r.action === "string" && r.args && typeof r.args === "object" && !Array.isArray(r.args) && /^sha256:[a-f0-9]{64}$/.test(r.activationDigest) && !!r.requester?.sessionId && !!r.requester.meshId && r.requester.taskId === r.requesterTaskId && Number.isFinite(r.expiresAt) && r.expiresAt === r.createdAt + DRIVER_ACTION_TTL_MS ? r : null;
+            } catch {
+              return null;
+            }
+          }
+          list() {
+            if (!(0, import_node_fs34.existsSync)(this.dir)) return [];
+            return (0, import_node_fs34.readdirSync)(this.dir).filter((f) => f.endsWith(".json")).flatMap((f) => {
+              const r = this.read(f.slice(0, -5));
+              if (!r || r.status !== "pending") return [];
+              if (r.expiresAt <= this.now()) {
+                this.finish(r, "expired");
+                return [];
+              }
+              return [r];
+            });
+          }
+          finish(record8, status) {
+            this.save({ ...record8, status });
+          }
+          /** No await between pending check and durable consume: concurrent resolves cannot replay. */
+          claim(id4, digest7, decision) {
+            const r = this.read(id4);
+            if (!r) return { code: "staged_not_found" };
+            if (r.status !== "pending") return { code: r.status === "expired" || r.status === "stale" ? r.status : "already_resolved" };
+            if (decision === "discard") {
+              this.finish(r, "discarded");
+              return { code: "discarded" };
+            }
+            if (this.now() >= r.expiresAt) {
+              this.finish(r, "expired");
+              return { code: "expired" };
+            }
+            if (r.activationDigest !== digest7) {
+              this.finish(r, "stale");
+              return { code: "stale" };
+            }
+            this.finish(r, "consumed");
+            return { record: r };
+          }
+        };
+      }
+    });
+    function computeDriverTreeDigest(dir) {
+      if (!(0, import_node_fs35.lstatSync)(dir).isDirectory() || (0, import_node_fs35.lstatSync)(dir).isSymbolicLink()) throw new Error("Invalid driver directory");
+      const files = [];
+      const walk = (sub) => {
+        for (const entry of (0, import_node_fs35.readdirSync)((0, import_node_path32.join)(dir, sub), { withFileTypes: true })) {
+          const rel = sub ? `${sub}/${entry.name}` : entry.name;
+          if (entry.isDirectory()) walk(rel);
+          else if (entry.isFile()) files.push(rel);
+          else throw new Error("Non-regular driver tree entry");
+        }
+      };
+      walk("");
+      if (!files.length) throw new Error("Empty driver tree");
+      const hash3 = (0, import_node_crypto43.createHash)("sha256");
+      for (const rel of files.sort()) {
+        const bytes = (0, import_node_fs35.readFileSync)((0, import_node_path32.join)(dir, rel));
+        hash3.update(`driver/${(0, import_node_path32.basename)(dir)}/${rel}\0${bytes.length}\0`).update(bytes);
+      }
+      return `sha256:${hash3.digest("hex")}`;
+    }
+    function readInstalledDriver(loader2, type2) {
+      const meta2 = loader2.getMeta(type2);
+      const dir = loader2.findProviderDir(type2);
+      if (meta2?.category !== "driver" || !dir) return null;
+      const digest7 = computeDriverTreeDigest(dir);
+      let raw;
+      try {
+        raw = (0, import_node_fs35.readFileSync)((0, import_node_path32.join)(dir, "provider.v1.json"), "utf8");
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+        raw = (0, import_node_fs35.readFileSync)((0, import_node_path32.join)(dir, "provider.json"), "utf8");
+      }
+      const module22 = JSON.parse(raw);
+      if (!validateDriverProviderManifest(module22).ok || module22.type !== type2 || digest7 !== computeDriverTreeDigest(dir)) return null;
+      return { module: { ...module22, _sourceTrust: meta2._sourceTrust }, treeDigest: digest7 };
+    }
+    var import_node_crypto43;
+    var import_node_fs35;
+    var import_node_path32;
+    var init_installed_driver = __esm2({
+      "src/drivers/installed-driver.ts"() {
+        "use strict";
+        import_node_crypto43 = require("crypto");
+        import_node_fs35 = require("fs");
+        import_node_path32 = require("path");
+        init_manifest();
+      }
+    });
+    function createDriverArtifactPort(ctx) {
+      return {
+        async resolve(identity5) {
+          const meshStore = getMeshRuntimeStore(ctx);
+          const queueEntry = meshStore.findQueueEntryById(identity5.meshId, identity5.taskId);
+          if (!queueEntry && !meshStore.findAssignedBySession(identity5.meshId, identity5.sessionId)) return null;
+          const resolved = await resolveRegisteredSessionWorkspace(ctx, identity5.sessionId, {
+            meshId: identity5.meshId,
+            nodeId: identity5.nodeId,
+            taskId: identity5.taskId,
+            allowTrustedWorkerFallback: true,
+            allowStoredArtifactWorkspaceFallback: false
+          });
+          if (!resolved.workspaceRoot) return null;
+          const workspace = canon3(resolved.workspaceRoot);
+          if (!workspace) return null;
+          if (resolved.nodeWorkspaceRoot && canon3(resolved.nodeWorkspaceRoot) !== workspace) return null;
+          const missionId = text2(queueEntry?.missionId) || text2(queueEntry?.payload?.missionId) || null;
+          const store5 = getArtifactStore(ctx);
+          return {
+            workspaceRoot: workspace,
+            async register(input) {
+              const registered = store5.register({
+                sessionId: identity5.sessionId,
+                taskId: identity5.taskId,
+                meshId: identity5.meshId,
+                missionId,
+                producerRole: "worker",
+                originDaemonId: text2(ctx.deps?.statusInstanceId) || null,
+                workspaceRoot: workspace,
+                path: input.relPath,
+                declaredKind: input.kind,
+                declaredMime: input.mime,
+                title: input.title
+              });
+              await publishSessionArtifactBubble(identity5.sessionId, {
+                attachment: registered.attachment,
+                providerType: resolved.providerType,
+                status: resolved.status,
+                title: resolved.title,
+                forceUpsert: true
+              }).catch(() => null);
+              return { artifactId: registered.record.artifactId, sha256: registered.record.sha256, sizeBytes: registered.record.sizeBytes };
+            }
+          };
+        }
+      };
+    }
+    var import_node_fs36;
+    var text2;
+    var canon3;
+    var init_driver_artifact_port = __esm2({
+      "src/commands/med-family/driver-artifact-port.ts"() {
+        "use strict";
+        import_node_fs36 = require("fs");
+        init_transcript_publisher();
+        init_artifact_runtime();
+        init_artifact_sharing();
+        text2 = (v) => typeof v === "string" ? v.trim() : "";
+        canon3 = (p) => {
+          try {
+            return (0, import_node_fs36.realpathSync)(p);
+          } catch {
+            return null;
+          }
+        };
+      }
+    });
+    function getDriverService(ctx) {
+      const existing = services.get(ctx.deps);
+      if (existing) return existing;
+      const assistant = getAssistantServices();
+      if (!assistant.driverActivations || !assistant.driverStaging) throw new Error("Driver activation services unavailable");
+      const service = new DriverService({
+        registry: ctx.deps.providerLoader,
+        activations: assistant.driverActivations,
+        activationStaging: assistant.driverStaging,
+        actions: new DriverActionStaging(),
+        grants: new DriverGrantStore({ configDir: (0, import_node_path33.dirname)((0, import_node_path33.dirname)(assistant.driverActivations.path)) }),
+        bus: ctx.deps.bus,
+        artifacts: createDriverArtifactPort(ctx),
+        readCurrent: (type2) => {
+          const current5 = readInstalledDriver(ctx.deps.providerLoader, type2);
+          const cwd = ctx.deps.providerLoader.findProviderDir(type2);
+          return current5 && cwd ? { ...current5, cwd } : null;
+        },
+        policy: async (meshId) => {
+          const mesh = (await ctx.getMeshForCommand(meshId))?.mesh;
+          return mesh ? mesh.policy?.drivers ?? {} : void 0;
+        },
+        relay: (identity5, result) => {
+          const text10 = JSON.stringify({ kind: "driver_action_result", ...result });
+          return depositWorkerMailboxMessage({
+            meshId: identity5.meshId,
+            taskId: identity5.taskId,
+            text: text10.length <= 2e3 ? text10 : JSON.stringify({
+              kind: "driver_action_result",
+              stagedId: result.stagedId,
+              invocationId: result.invocationId,
+              success: result.success,
+              code: result.code,
+              truncated: true,
+              ...Array.isArray(result.artifacts) ? { artifacts: result.artifacts } : {}
+            })
+          });
+        }
+      });
+      services.set(ctx.deps, service);
+      return service;
+    }
+    async function closeDriverService(deps) {
+      const service = services.get(deps);
+      services.delete(deps);
+      await service?.close();
+    }
+    var import_node_path33;
+    var services;
+    var driverHandlers;
+    var driverSpecs;
+    var init_drivers = __esm2({
+      "src/commands/med-family/drivers.ts"() {
+        "use strict";
+        init_command_registry();
+        init_assistant_services();
+        init_driver_worker_identity();
+        init_worker_mailbox();
+        import_node_path33 = require("path");
+        init_grant_store();
+        init_driver_service();
+        init_staged_action();
+        init_installed_driver();
+        init_driver_artifact_port();
+        services = /* @__PURE__ */ new WeakMap();
+        driverHandlers = {
+          driver_list: async (ctx) => getDriverService(ctx).list(),
+          driver_describe: async (ctx, args) => getDriverService(ctx).describe(String(args?.type ?? "")),
+          driver_invoke: async (ctx, args) => {
+            const resolved = await resolveDriverWorkerIdentity(ctx, args);
+            if ("error" in resolved) return { success: false, code: resolved.error, ...resolved.detail ? { detail: resolved.detail } : {} };
+            const identity5 = resolved.identity;
+            return getDriverService(ctx).invoke(identity5, {
+              type: String(args?.type ?? ""),
+              action: String(args?.action ?? ""),
+              args: args?.args,
+              resourceKey: args?.resourceKey,
+              target: args?.target
+            });
+          },
+          driver_set_enabled: async (ctx, args) => {
+            if (typeof args?.enabled !== "boolean" || typeof args?.type !== "string") return { success: false, code: "invalid_arguments" };
+            return getDriverService(ctx).setEnabled(args.type, args.enabled);
+          },
+          // Owner-only permission checkboxes. Read has no side effects; write may activate or stage the driver.
+          driver_grants_get: async (ctx) => getDriverService(ctx).getGrants(),
+          driver_grants_set: async (ctx, args) => {
+            if (typeof args?.type !== "string") return { success: false, code: "invalid_arguments" };
+            return getDriverService(ctx).setGrants(args.type, args.grants);
+          },
+          ...driverIdentityHandlers
+        };
+        driverSpecs = defineCommandSpecs("med", driverHandlers, {
+          driver_set_enabled: { sources: ["p2p", "ws", "standalone"] },
+          // No 'ws': a compromised server must not be able to turn on desktop control.
+          driver_grants_get: { sources: ["p2p", "standalone"] },
+          driver_grants_set: { sources: ["p2p", "standalone"] },
+          // Owner-side verify-only relay of a member's driver call (no execution here).
+          [DRIVER_IDENTITY_VERIFY_COMMAND]: { sources: ["mesh"], meshSender: "roster" }
+        }, { sources: ["ipc", "standalone"] });
+      }
+    });
     function isAlwaysOnTraceCategory(category) {
       return !!category && ALWAYS_ON_TRACE_CATEGORIES.includes(category);
     }
@@ -131183,7 +132755,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         bytes,
         mime: sniffed,
         ext: EXT_BY_MIME[sniffed],
-        sha256: (0, import_node_crypto44.createHash)("sha256").update(bytes).digest("hex"),
+        sha256: (0, import_node_crypto46.createHash)("sha256").update(bytes).digest("hex"),
         width: dims.width,
         height: dims.height
       };
@@ -131193,7 +132765,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       if (!decoded.ok) return decoded;
       return validateOwnerUploadBytes(decoded.bytes, input.mimeType);
     }
-    var import_node_crypto44;
+    var import_node_crypto46;
     var OWNER_UPLOAD_MAX_FILES;
     var OWNER_UPLOAD_MAX_FILE_BYTES;
     var OWNER_UPLOAD_MAX_TOTAL_BYTES;
@@ -131205,7 +132777,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
     var init_owner_upload_image = __esm2({
       "src/artifacts/owner-upload-image.ts"() {
         "use strict";
-        import_node_crypto44 = require("crypto");
+        import_node_crypto46 = require("crypto");
         init_types6();
         OWNER_UPLOAD_MAX_FILES = 5;
         OWNER_UPLOAD_MAX_FILE_BYTES = MAX_ARTIFACT_BYTES;
@@ -131243,7 +132815,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         const existing = fs90.lstatSync(filePath2);
         if (!existing.isFile() || existing.isSymbolicLink()) throw new Error("owner upload target is not a regular file");
         const prior = fs90.readFileSync(filePath2);
-        if ((0, import_node_crypto45.createHash)("sha256").update(prior).digest("hex") !== opts.image.sha256) throw new Error("owner upload target holds different bytes");
+        if ((0, import_node_crypto47.createHash)("sha256").update(prior).digest("hex") !== opts.image.sha256) throw new Error("owner upload target holds different bytes");
       }
       return store5.register({
         sessionId: opts.sessionId,
@@ -131365,7 +132937,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         "Pass these ids unchanged in input_artifact_ids when a worker needs them; do not copy their bytes into messages. Read an attachment yourself only when your own routing needs it, and then a small page (artifact_read limit) \u2014 workers read them with their own grant."
       ].join("\n");
     }
-    var import_node_crypto45;
+    var import_node_crypto47;
     var fs90;
     var path97;
     var OWNER_UPLOAD_SESSION_PREFIX;
@@ -131377,14 +132949,14 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
     var init_owner_upload = __esm2({
       "src/artifacts/owner-upload.ts"() {
         "use strict";
-        import_node_crypto45 = require("crypto");
+        import_node_crypto47 = require("crypto");
         fs90 = __toESM2(require("fs"));
         path97 = __toESM2(require("path"));
         init_owner_upload_image();
         OWNER_UPLOAD_SESSION_PREFIX = "owner-upload:";
         OWNER_UPLOAD_ATTACH_TTL_MS = 60 * 60 * 1e3;
         OWNER_UPLOAD_WIRE_MAX_CHARS = 12e6;
-        digest3 = (s2, len = 24) => (0, import_node_crypto45.createHash)("sha256").update(s2, "utf8").digest("hex").slice(0, len);
+        digest3 = (s2, len = 24) => (0, import_node_crypto47.createHash)("sha256").update(s2, "utf8").digest("hex").slice(0, len);
         stagedUploadSessionId = (assistantSessionId, ownerMessageId) => `${OWNER_UPLOAD_SESSION_PREFIX}${assistantSessionId}:${ownerMessageId}`;
         committedUploadSessionId = (meshId, clientId) => `${OWNER_UPLOAD_SESSION_PREFIX}${meshId}:${digest3(clientId, 16)}`;
       }
@@ -135253,33 +136825,14 @@ ${detail.join("\n")}` : stripped;
         MIN_CHAIN_WAKE_DELAY_MS = 1e3;
       }
     });
-    function isRouterInternalArgKey(key7) {
-      return key7.startsWith(ROUTER_INTERNAL_ARG_PREFIX);
-    }
-    function stripRouterInternalArgs(args) {
-      if (!args || typeof args !== "object" || Array.isArray(args)) return args;
-      const out = {};
-      for (const [key7, value] of Object.entries(args)) {
-        if (isRouterInternalArgKey(key7)) continue;
-        out[key7] = value;
-      }
-      return out;
-    }
-    var ROUTER_INTERNAL_ARG_PREFIX;
-    var init_router_internal_args = __esm2({
-      "src/commands/router-internal-args.ts"() {
-        "use strict";
-        ROUTER_INTERNAL_ARG_PREFIX = "_";
-      }
-    });
     function remoteProjectKey(meshId, identity5) {
-      return (0, import_node_crypto46.createHash)("sha256").update(`${meshId}\0${identity5}`).digest("hex").slice(0, 24);
+      return (0, import_node_crypto48.createHash)("sha256").update(`${meshId}\0${identity5}`).digest("hex").slice(0, 24);
     }
-    var import_node_crypto46;
+    var import_node_crypto48;
     var init_remote_project_key = __esm2({
       "src/assistant/remote-project-key.ts"() {
         "use strict";
-        import_node_crypto46 = require("crypto");
+        import_node_crypto48 = require("crypto");
       }
     });
     function githubRemote(value) {
@@ -135476,7 +137029,7 @@ ${detail.join("\n")}` : stripped;
         throw busy();
       }
       const ownerPath = (0, import_node_path35.join)(guard2, "owner");
-      const self = { pid: process.pid, nonce: (0, import_node_crypto47.randomUUID)() };
+      const self = { pid: process.pid, nonce: (0, import_node_crypto49.randomUUID)() };
       try {
         await (0, import_promises11.writeFile)(ownerPath, JSON.stringify(self), { flag: "wx" });
       } catch (e) {
@@ -135502,7 +137055,7 @@ ${detail.join("\n")}` : stripped;
           if (current5.nonce !== old.nonce || current5.pid !== old.pid) throw recovery();
           await (0, import_promises11.rm)(lockPath);
         }
-        const owner = { pid: process.pid, nonce: (0, import_node_crypto47.randomUUID)() };
+        const owner = { pid: process.pid, nonce: (0, import_node_crypto49.randomUUID)() };
         await (0, import_promises11.writeFile)(lockPath, JSON.stringify(owner), { flag: "wx" });
         return owner;
       });
@@ -135624,7 +137177,7 @@ ${detail.join("\n")}` : stripped;
     }
     var import_node_child_process26;
     var import_node_util12;
-    var import_node_crypto47;
+    var import_node_crypto49;
     var import_promises11;
     var import_node_path35;
     var exec5;
@@ -135643,7 +137196,7 @@ ${detail.join("\n")}` : stripped;
         "use strict";
         import_node_child_process26 = require("child_process");
         import_node_util12 = require("util");
-        import_node_crypto47 = require("crypto");
+        import_node_crypto49 = require("crypto");
         init_remote_project_key();
         import_promises11 = require("fs/promises");
         import_node_path35 = require("path");
@@ -139651,7 +141204,7 @@ ${tail}` : ""
       const r = c.task.lightResult;
       return { taskId: c.task.id, landing: r.landing, touchedPaths: r.touchedPaths, outsideOwned: outsideOwned(c.task), applyCheck: r.applyCheck?.head.status, branch: r.branch };
     }
-    var import_node_crypto55;
+    var import_node_crypto57;
     var fail4;
     var text3;
     var lightLand;
@@ -139660,7 +141213,7 @@ ${tail}` : ""
     var init_light_land_ipc = __esm2({
       "src/commands/low-family/light-land-ipc.ts"() {
         "use strict";
-        import_node_crypto55 = require("crypto");
+        import_node_crypto57 = require("crypto");
         init_config();
         init_light_task_admission();
         init_light_land();
@@ -139698,7 +141251,7 @@ ${tail}` : ""
               for (const c of v.candidates) await removeLightWorkspace({ path: c.ws.path, checkoutRoot: admission.checkoutRoot, config: admission.config, db: dbh, workspaceId: c.ws.workspaceId, submodules: Object.keys(c.ws.submoduleBases) });
               return { success: true, mode, applied: res.applied, note: "Changes are applied and staged in your checkout, NOT committed. Verify and commit them yourself." };
             }
-            const batchId = (0, import_node_crypto55.randomUUID)();
+            const batchId = (0, import_node_crypto57.randomUUID)();
             const prep = await prepareLightLandBatch({ db: dbh, meshId, batchId, checkoutRoot: admission.checkoutRoot, config: admission.config, candidates: v.candidates });
             const landCtx = { db: dbh, checkoutRoot: admission.checkoutRoot, config: admission.config };
             const landedCandidates = v.candidates.filter((c) => prep.landed.includes(c.task.id));
@@ -140974,1474 +142527,6 @@ ${tail}` : ""
           note_forget: { sources: TURN_IPC_SOURCES },
           ...Object.fromEntries(Object.keys(meshStoreIpcHandlers).map((name) => [name, { sources: TURN_IPC_SOURCES }])),
           ...Object.fromEntries(Object.keys(meshStatsIpcHandlers).map((name) => [name, { sources: TURN_IPC_SOURCES }]))
-        });
-      }
-    });
-    function schema2(db3) {
-      db3.exec("CREATE TABLE IF NOT EXISTS worker_bridge_prepared(credential_hash TEXT NOT NULL,delivery_id TEXT NOT NULL,claim_json TEXT NOT NULL,PRIMARY KEY(credential_hash,delivery_id))");
-    }
-    function key5(credential) {
-      const value = credential.bind ?? credential.token;
-      return typeof value === "string" && value ? (0, import_node_crypto56.createHash)("sha256").update(value).digest("hex") : "";
-    }
-    function rememberPreparedDelivery(db3, credential, claim) {
-      schema2(db3);
-      if (!key5(credential) || normalizeWorkerDeliveryId(claim.deliveryId) !== claim.deliveryId || !Number.isSafeInteger(claim.reportedAtMs) || !Number.isSafeInteger(claim.generation) || claim.generation < 0 || ![claim.meshId, claim.taskId, claim.attemptId, claim.sessionId, claim.nodeId, claim.ownerDaemonId].every((v) => typeof v === "string" && !!v)) throw new Error("worker_protocol_provenance_required");
-      const prior = readPreparedDelivery(db3, credential, claim.deliveryId);
-      if (prior && stableBridgeJson(prior) !== stableBridgeJson(claim)) throw new Error("worker_delivery_identity_conflict");
-      db3.prepare("INSERT OR IGNORE INTO worker_bridge_prepared VALUES (?,?,?)").run(key5(credential), claim.deliveryId, stableBridgeJson(claim));
-      return claim;
-    }
-    function readPreparedDelivery(db3, credential, deliveryId) {
-      schema2(db3);
-      const row2 = db3.prepare("SELECT claim_json FROM worker_bridge_prepared WHERE credential_hash=? AND delivery_id=?").get(key5(credential), String(deliveryId));
-      return row2 ? JSON.parse(row2.claim_json) : null;
-    }
-    function validatePreparedDelivery(db3, args) {
-      const saved = readPreparedDelivery(db3, args, args.deliveryId);
-      return saved && saved.reportedAtMs === args.reportedAtMs && stableBridgeJson(saved) === stableBridgeJson(args.prepared) ? saved : null;
-    }
-    var import_node_crypto56;
-    var init_worker_bridge_prepared = __esm2({
-      "src/mesh/worker-bridge-prepared.ts"() {
-        "use strict";
-        import_node_crypto56 = require("crypto");
-        init_worker_report_idempotency();
-        init_worker_bridge();
-      }
-    });
-    function projectHotChatSessionStatesFromProviderState(state2) {
-      const project2 = (item) => ({
-        id: item.instanceId,
-        status: item.activeChat?.status || item.status,
-        unread: item.unread,
-        inboxBucket: item.inboxBucket,
-        lastMessageAt: item.lastMessageAt ?? item.activeChat?.lastMessageAt,
-        runtimeLifecycle: item.runtime?.lifecycle ?? null,
-        runtimeSurfaceKind: item.runtime?.surfaceKind,
-        runtimeRestoredFromStorage: item.runtime?.restoredFromStorage === true,
-        runtimeRecoveryState: item.runtime?.recoveryState ?? null
-      });
-      if (state2.category === "ide") {
-        return [project2(state2), ...state2.extensions.map(project2)];
-      }
-      return [project2(state2)];
-    }
-    function liveWorkingStatus(state2) {
-      const status = (typeof state2.status === "string" ? state2.status : "").toLowerCase();
-      if (LIVE_WORKING_STATUSES.has(status)) return status;
-      const chatStatus = (typeof state2.activeChat?.status === "string" ? state2.activeChat.status : "").toLowerCase();
-      return LIVE_WORKING_STATUSES.has(chatStatus) ? chatStatus : "";
-    }
-    var LIVE_WORKING_STATUSES;
-    var ProviderInstanceManager;
-    var init_provider_instance_manager = __esm2({
-      "src/providers/provider-instance-manager.ts"() {
-        "use strict";
-        init_logger();
-        LIVE_WORKING_STATUSES = /* @__PURE__ */ new Set(["generating", "waiting_approval", "waiting_choice", "starting", "streaming", "working", "no_progress", "long_generating"]);
-        ProviderInstanceManager = class {
-          instances = /* @__PURE__ */ new Map();
-          tickTimer = null;
-          tickInterval = 5e3;
-          // default 5seconds
-          bus = null;
-          sessionEventPort = null;
-          turnEvidencePort = null;
-          // ─── Instance manage ──────────────────────────────
-          /**
-          * Instance add and initialize
-          */
-          async addInstance(id4, instance, context2) {
-            if (this.instances.has(id4)) {
-              LOG.warn("InstanceMgr", `[InstanceManager] Instance ${id4} already exists, disposing old one`);
-              this.instances.get(id4).dispose();
-            }
-            this.instances.set(id4, instance);
-            await instance.init({
-              ...context2,
-              ...this.sessionEventPort ? { lifecycle: this.sessionEventPort } : {},
-              ...this.turnEvidencePort ? { turnEvidence: this.turnEvidencePort } : {},
-              emitProviderEvent: (event) => this.emitProviderEvent(instance.type, id4, event)
-            });
-          }
-          /**
-          * Instance remove
-          */
-          removeInstance(id4) {
-            const instance = this.instances.get(id4);
-            if (instance) {
-              instance.dispose();
-              this.instances.delete(id4);
-            }
-          }
-          removeByCategory(category, options = {}) {
-            const dispose2 = options.dispose !== false;
-            let removed = 0;
-            for (const [id4, instance] of this.instances) {
-              if (instance.category !== category) continue;
-              if (dispose2) {
-                try {
-                  instance.dispose();
-                } catch {
-                }
-              }
-              this.instances.delete(id4);
-              removed += 1;
-            }
-            return removed;
-          }
-          /**
-          * Import by Instance ID
-          */
-          getInstance(id4) {
-            return this.instances.get(id4);
-          }
-          /**
-          * Per-category Instance list
-          */
-          getByCategory(category) {
-            return [...this.instances.values()].filter((i) => i.category === category);
-          }
-          /**
-          * All Instance count
-          */
-          get size() {
-            return this.instances.size;
-          }
-          /**
-          * All Instance IDs (for iteration without exposing the private Map)
-          */
-          listInstanceIds() {
-            return [...this.instances.keys()];
-          }
-          // ─── State collect ────────────────────────────────
-          /**
-          * all Instance's current status collect. Provider events do not ride this
-          * drain any more: every instance delivers them through its lifecycle port at
-          * push time (wiring-unification B5).
-          */
-          collectAllStates() {
-            const states = [];
-            for (const [id4, instance] of this.instances) {
-              try {
-                const state2 = instance.getState();
-                if (state2.category === "cli") {
-                  const launch = this.sessionEventPort?.launchRecord?.(state2.instanceId);
-                  if (launch) state2.launch = launch;
-                }
-                states.push(state2);
-              } catch (e) {
-                LOG.warn("InstanceMgr", `[InstanceManager] Failed to collect state from ${id4}: ${e.message}`);
-              }
-            }
-            return states;
-          }
-          collectHotChatSessionStates() {
-            const sessions = [];
-            for (const [id4, instance] of this.instances) {
-              try {
-                const projected = instance.getHotChatSessionState?.();
-                if (Array.isArray(projected)) {
-                  sessions.push(...projected.filter((session) => !!session?.id));
-                  continue;
-                }
-                if (projected?.id) {
-                  sessions.push(projected);
-                  continue;
-                }
-                const state2 = instance.getState();
-                sessions.push(...projectHotChatSessionStatesFromProviderState(state2));
-              } catch (e) {
-                LOG.warn("InstanceMgr", `[InstanceManager] Failed to collect hot chat metadata from ${id4}: ${e.message}`);
-              }
-            }
-            return sessions;
-          }
-          /**
-          * Per-category status collect
-          */
-          collectStatesByCategory(category) {
-            return this.collectAllStates().filter((s2) => s2.category === category);
-          }
-          // ─── Tick engine ─────────────────────────────────
-          /**
-          * Start tick — periodically call all Instance.onTick() call
-          */
-          startTicking(intervalMs) {
-            if (this.tickTimer) return;
-            this.tickInterval = intervalMs || this.tickInterval;
-            this.tickTimer = setInterval(async () => {
-              const now = Date.now();
-              for (const [id4, instance] of this.instances) {
-                try {
-                  instance.checkMeshWorkerStall?.(now);
-                } catch (e) {
-                  LOG.warn("InstanceMgr", `[InstanceManager] Mesh stall check failed for ${id4}: ${e.message}`);
-                }
-                try {
-                  await instance.onTick();
-                } catch (e) {
-                  LOG.warn("InstanceMgr", `[InstanceManager] Tick failed for ${id4}: ${e.message}`);
-                }
-              }
-            }, this.tickInterval);
-          }
-          /**
-          * Stop tick
-          */
-          stopTicking() {
-            if (this.tickTimer) {
-              clearInterval(this.tickTimer);
-              this.tickTimer = null;
-            }
-          }
-          // ─── event ────────────────────────────────────
-          /**
-           * Forward every provider event to the lifecycle bus as the transitional
-           * `provider_event` (wiring-unification B1). Pass null to detach.
-           */
-          attachBus(bus) {
-            this.bus = bus;
-          }
-          /**
-           * Port injected as `InstanceContext.lifecycle` into instances added from now
-           * on, and handed to already-live instances through their optional setter.
-           */
-          setSessionEventPort(port) {
-            this.sessionEventPort = port;
-            for (const [id4, instance] of this.instances) {
-              try {
-                instance.setSessionEventPort?.(port);
-              } catch (e) {
-                LOG.warn("InstanceMgr", `[InstanceManager] setSessionEventPort failed for ${id4}: ${e?.message ?? e}`);
-              }
-            }
-          }
-          /**
-           * Port injected as `InstanceContext.turnEvidence` into instances added from
-           * now on, and handed to already-live instances through their optional
-           * setter (wiring-unification C5, mirrors `setSessionEventPort`).
-           */
-          setTurnEvidencePort(port) {
-            this.turnEvidencePort = port;
-            for (const [id4, instance] of this.instances) {
-              try {
-                instance.setTurnEvidencePort?.(port);
-              } catch (e) {
-                LOG.warn("InstanceMgr", `[InstanceManager] setTurnEvidencePort failed for ${id4}: ${e?.message ?? e}`);
-              }
-            }
-          }
-          /**
-           * Publish one enriched provider event on the bus (the transitional
-           * `provider_event`). Every consumer is a bus subscriber since B5 — the
-           * status-event emitter, mesh forwarding, quota refresh, dev SSE — each
-           * isolated in its own try/catch by the bus itself.
-           */
-          dispatchProviderEvent(payload) {
-            if (!this.bus) return;
-            const sessionId = typeof payload.targetSessionId === "string" && payload.targetSessionId ? payload.targetSessionId : String(payload.instanceId ?? "");
-            this.bus.emit({ kind: "provider_event", sessionId, at: Date.now(), event: payload });
-          }
-          emitProviderEvent(providerType, instanceId, event) {
-            const payload = {
-              ...event,
-              providerType,
-              instanceId: typeof event.instanceId === "string" && event.instanceId.trim() ? event.instanceId : instanceId,
-              targetSessionId: typeof event.targetSessionId === "string" && event.targetSessionId.trim() ? event.targetSessionId : instanceId
-            };
-            this.dispatchProviderEvent(payload);
-          }
-          /**
-          * Forward event to specific Instance
-          */
-          sendEvent(id4, event, data) {
-            this.instances.get(id4)?.onEvent(event, data);
-          }
-          /**
-          * Broadcast event to all Instances
-          */
-          broadcast(event, data) {
-            for (const instance of this.instances.values()) {
-              instance.onEvent(event, data);
-            }
-          }
-          /**
-           * Update settings for all instances of a given provider type.
-           * Called when user changes settings from dashboard.
-           */
-          updateInstanceSettings(providerType, settings2) {
-            let updated = 0;
-            for (const instance of this.instances.values()) {
-              if (instance.type === providerType && typeof instance.updateSettings === "function") {
-                instance.updateSettings(settings2);
-                updated++;
-              }
-            }
-            return updated;
-          }
-          /** Stamp a mesh assignment on a single instance (used by mesh_send_task
-           *  --direct so the worker's completion event has a coordinator routing
-           *  marker in state.settings). Returns `{ stamped: true }` when the stamp was
-           *  applied, or `{ stamped: false, reason }` when it was refused — the instance
-           *  was missing / has no attach method, or the DOUBLE-DISPATCH idempotence guard
-           *  fired (the same task is already running on another live session here).
-           *
-           *  DUP-CLAIM-REBIND: when the guard fires, the id of the live session that already
-           *  holds the task is returned as `holderSessionId`. The coordinator needs it to
-           *  REBIND its turn-ledger attempt onto the real worker instead of cancelling the
-           *  attempt — the guard already resolved that instance, so surfacing it here keeps
-           *  the caller from having to parse it back out of an error string. */
-          attachMeshAssignmentToInstance(instanceId, assignment) {
-            const inst = this.instances.get(instanceId);
-            if (!inst || typeof inst.attachMeshAssignment !== "function") {
-              LOG.warn("MeshDispatch", `attachMeshAssignment skipped: instance ${instanceId} ${inst ? "has no attach method" : "not found"}`);
-              return { stamped: false, reason: inst ? "instance_has_no_attach_method" : "instance_not_found" };
-            }
-            if (assignment.taskId) {
-              const conflict = this.findLiveWorkingTaskHolder(assignment.meshId, assignment.taskId, instanceId);
-              if (conflict) {
-                LOG.warn("MeshDispatch", `attachMeshAssignment refused: task ${assignment.taskId} (mesh ${assignment.meshId}) is already being worked by live session ${conflict} \u2014 skipping duplicate stamp on ${instanceId}`);
-                return { stamped: false, reason: "task_already_stamped_on_live_instance", holderSessionId: conflict };
-              }
-            }
-            if (assignment.taskId) {
-              const busy2 = this.readBusyWithOtherTask(inst, assignment.taskId);
-              if (busy2) {
-                LOG.warn("MeshDispatch", `attachMeshAssignment refused on ${instanceId}: session is busy (${busy2.status}) with task ${busy2.currentTaskId} attempt ${busy2.currentAttemptId || "?"} \u2014 not stamping incoming task ${assignment.taskId} attempt ${assignment.attemptId || "?"}`);
-                return {
-                  stamped: false,
-                  reason: "session_busy_with_task",
-                  currentTaskId: busy2.currentTaskId,
-                  ...busy2.currentAttemptId ? { currentAttemptId: busy2.currentAttemptId } : {}
-                };
-              }
-            }
-            inst.attachMeshAssignment(assignment);
-            LOG.info("MeshDispatch", `stamped mesh assignment on ${instanceId}: mesh=${assignment.meshId} node=${assignment.nodeId || ""} task=${assignment.taskId || ""} attempt=${assignment.attemptId || "?"}${typeof assignment.attemptGeneration === "number" ? `/g${assignment.attemptGeneration}` : ""} coordinator=${assignment.coordinatorDaemonId || ""}`);
-            return { stamped: true };
-          }
-          /**
-           * DOUBLE-DISPATCH support: the id of another LIVE, actively-working instance that already
-           * holds (meshId, taskId), or null. "Live working" = stamped with this exact mesh+task AND
-           * currently mid-turn / booting toward it (generating / waiting on approval-or-choice /
-           * starting) — NOT idle, stopped, or errored. A stale/dead/idle holder is deliberately
-           * ignored so a legitimate re-dispatch (e.g. after a dispatch failure) is never blocked.
-           * The instance being stamped (excludeInstanceId) is skipped so re-stamping the same
-           * session stays idempotent. O(n) over instances — the count is small.
-           */
-          findLiveWorkingTaskHolder(meshId, taskId, excludeInstanceId) {
-            for (const [id4, inst] of this.instances) {
-              if (id4 === excludeInstanceId) continue;
-              let state2;
-              try {
-                state2 = inst.getState();
-              } catch {
-                continue;
-              }
-              const settings2 = state2.settings || {};
-              if (settings2.meshNodeFor !== meshId) continue;
-              if (settings2.meshActiveTaskId !== taskId) continue;
-              if (liveWorkingStatus(state2)) return id4;
-            }
-            return null;
-          }
-          /**
-           * SESSION-BUSY support: when `inst` is stamped with a task OTHER than `incomingTaskId`
-           * and is still working it (the same mid-turn / booting status set the DOUBLE-DISPATCH
-           * guard uses — one busy definition for both stamp guards), the task + attempt it is
-           * working. Null when the instance is free to take the new stamp: no current task, the
-           * same task, or not working (idle / stopped / error — a stale stamp left by a missed
-           * detach must not wedge the session forever).
-           */
-          readBusyWithOtherTask(inst, incomingTaskId) {
-            let state2;
-            try {
-              state2 = inst.getState();
-            } catch {
-              return null;
-            }
-            const settings2 = state2.settings || {};
-            const currentTaskId = typeof settings2.meshActiveTaskId === "string" ? settings2.meshActiveTaskId.trim() : "";
-            if (!currentTaskId || currentTaskId === incomingTaskId.trim()) return null;
-            const status = liveWorkingStatus(state2);
-            if (!status) return null;
-            const currentAttemptId = typeof settings2.meshActiveAttemptId === "string" && settings2.meshActiveAttemptId.trim() ? settings2.meshActiveAttemptId.trim() : void 0;
-            return { currentTaskId, ...currentAttemptId ? { currentAttemptId } : {}, status };
-          }
-          /** Clear a mesh assignment after the dispatched task reaches a terminal
-           *  state (generating_completed / stopped / failed). */
-          detachMeshAssignmentFromInstance(instanceId) {
-            const inst = this.instances.get(instanceId);
-            if (!inst || typeof inst.detachMeshAssignment !== "function") return false;
-            inst.detachMeshAssignment();
-            return true;
-          }
-          refreshProviderDefinitions(resolveProvider) {
-            let refreshed = 0;
-            for (const instance of this.instances.values()) {
-              if (typeof instance.refreshProviderDefinition !== "function") continue;
-              const provider = resolveProvider(instance.type);
-              if (!provider || typeof provider !== "object") continue;
-              instance.refreshProviderDefinition(provider);
-              refreshed += 1;
-            }
-            return refreshed;
-          }
-          // ─── cleanup ──────────────────────────────────────
-          /**
-          * All terminate
-          */
-          disposeAll() {
-            this.stopTicking();
-            for (const instance of this.instances.values()) {
-              try {
-                instance.dispose();
-              } catch {
-              }
-            }
-            this.instances.clear();
-          }
-        };
-      }
-    });
-    function journal(create = false) {
-      const db3 = MeshRuntimeStore.getInstance().db;
-      if (create) db3.exec("CREATE TABLE IF NOT EXISTS mesh_holder_attaches (operation_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, identity_json TEXT NOT NULL, snapshot_json TEXT NOT NULL, phase TEXT NOT NULL, prepared_json TEXT NOT NULL, runtime_json TEXT NOT NULL, boot_nonce TEXT NOT NULL)");
-      return db3;
-    }
-    function hasJournal() {
-      return !!journal().prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mesh_holder_attaches'").get();
-    }
-    function runtime(instance) {
-      const m = instance.getAdapter()?.getRuntimeMetadata?.();
-      if (m?.runtimeId !== instance.instanceId || typeof m.runtimeKey !== "string" || !m.runtimeKey || !Number.isSafeInteger(m.osPid) || Number(m.osPid) <= 0 || !Number.isSafeInteger(m.startedAt) || Number(m.startedAt) <= 0) return "";
-      return JSON.stringify([m.runtimeId, m.runtimeKey, m.osPid, m.startedAt]);
-    }
-    function meta(snapshot) {
-      return nativeMeshAssignmentMeta(snapshot.settings);
-    }
-    function isHolderAttachPending(sessionId) {
-      return hasJournal() && !!journal().prepare("SELECT 1 FROM mesh_holder_attaches WHERE session_id=? AND phase IN ('preparing','prepared','rollback_pending','checkpoint_pending')").get(sessionId);
-    }
-    function recoverHolderAttachRollback(instance) {
-      if (!hasJournal() || !instance?.captureMeshAssignment || !instance.restoreMeshAssignment) return;
-      const rows = journal().prepare("SELECT * FROM mesh_holder_attaches WHERE session_id=? AND phase='rollback_pending'").all(instance.instanceId);
-      for (const row2 of rows) {
-        if (!runtime(instance) || runtime(instance) !== row2.runtime_json) continue;
-        const current5 = instance.getState().settings, before = JSON.parse(row2.snapshot_json);
-        const prepared = JSON.parse(row2.prepared_json);
-        if (current5?.assistant || current5?.meshCoordinatorFor || current5?.meshNodeFor !== before.settings.meshNodeFor || current5?.meshNodeId !== before.settings.meshNodeId || typeof current5?.meshCoordinatorDaemonId !== "string" || !daemonIdsEquivalent5(current5.meshCoordinatorDaemonId, before.settings.meshCoordinatorDaemonId) || (current5?.meshActiveDispatchNonce ?? 0) > Math.max(before.settings.meshActiveDispatchNonce ?? 0, prepared.settings.meshActiveDispatchNonce ?? 0) || current5?.meshActiveTaskId && current5.meshActiveTaskId !== before.settings.meshActiveTaskId || current5?.meshActiveAttemptId && current5.meshActiveAttemptId !== before.settings.meshActiveAttemptId || ![before.settings.meshActiveAttemptGeneration ?? 0, prepared.settings.meshActiveAttemptGeneration ?? 0].includes(current5?.meshActiveAttemptGeneration ?? 0)) continue;
-        if (JSON.stringify(instance.captureMeshAssignment()) !== row2.snapshot_json) instance.restoreMeshAssignment(before);
-      }
-    }
-    async function reconcileMeshHolder(host, args) {
-      const mc = args.meshContext, op = args.holderReconcile;
-      const refuse11 = (reason) => ({ success: false, code: "mesh_holder_attach_refused", reason });
-      if (!mc?.meshId || !mc.taskId || !mc.nodeId || !mc.attemptId || !Number.isSafeInteger(mc.attemptGeneration) || mc.attemptGeneration < 0 || !Number.isSafeInteger(mc.dispatchNonce) || mc.dispatchNonce < 0 || !mc.coordinatorDaemonId || !args.targetSessionId || !op?.operationId || op.operationId.length > 512 || !["prepare", "commit", "rollback"].includes(op.phase)) return refuse11("identity_required");
-      const instance = host.deps.getInstanceManager()?.getInstance(args.targetSessionId);
-      if (!instance?.captureMeshAssignment || !instance.restoreMeshAssignment) return refuse11("holder_unavailable");
-      if (!runtime(instance) || !instance.getAdapter()?.verifyRuntimeMeta) return refuse11("native_attach_ack_unavailable");
-      const launch = host.deps.getSessionRegistry?.()?.get(args.targetSessionId)?.launch;
-      if (launch?.launchedBy === "assistant" || launch?.roleLaunch || isWriterStopPending(args.targetSessionId)) return refuse11("protected_or_stopping_holder");
-      const db3 = journal(true), identity5 = JSON.stringify([args.targetSessionId, args.agentType, mc]);
-      const row2 = db3.prepare("SELECT * FROM mesh_holder_attaches WHERE operation_id=?").get(op.operationId);
-      if (row2 && row2.identity_json !== identity5) return refuse11("operation_identity_changed");
-      recoverHolderAttachRollback(instance);
-      const state2 = instance.getState(), s2 = state2.settings;
-      if (instance.getAdapter()?.cliType !== args.agentType || op.phase === "prepare" && !liveWorkingStatus(state2)) return refuse11("holder_not_currently_working");
-      if (s2?.assistant || s2?.meshCoordinatorFor || s2?.meshNodeFor !== mc.meshId || !pinnedMeshNodeIdMatches(s2?.meshNodeId, mc.nodeId) || s2?.meshActiveTaskId !== mc.taskId && !(row2 && row2.boot_nonce !== BOOT && !s2?.meshActiveTaskId) || s2?.meshActiveAttemptId !== mc.attemptId || typeof s2?.meshCoordinatorDaemonId !== "string" || !daemonIdsEquivalent5(s2.meshCoordinatorDaemonId, mc.coordinatorDaemonId) || (s2.meshActiveAttemptGeneration ?? 0) > mc.attemptGeneration || (s2.meshActiveDispatchNonce ?? 0) > mc.dispatchNonce) return refuse11("foreign_or_stale_holder");
-      const current5 = () => {
-        const v = instance.getState().settings;
-        return v?.meshActiveTaskId === mc.taskId && v?.meshActiveAttemptId === mc.attemptId && (v?.meshActiveAttemptGeneration ?? 0) === mc.attemptGeneration && v?.meshActiveDispatchNonce === mc.dispatchNonce;
-      };
-      const verify3 = async (snapshot) => {
-        try {
-          return await instance.getAdapter()?.verifyRuntimeMeta?.(meta(snapshot)) === true;
-        } catch {
-          return false;
-        }
-      };
-      const proof = () => ({ success: true, attached: true, operationId: op.operationId, sessionId: args.targetSessionId, ...mc });
-      if (op.phase === "prepare") {
-        if (row2) {
-          if (!["preparing", "prepared"].includes(row2.phase) || runtime(instance) !== row2.runtime_json) return refuse11("prepare_no_longer_current");
-          if (row2.boot_nonce !== BOOT && !current5() && await verify3(JSON.parse(row2.prepared_json))) {
-            instance.attachMeshAssignment({ ...mc, meshId: mc.meshId });
-            db3.prepare("UPDATE mesh_holder_attaches SET prepared_json=?,boot_nonce=? WHERE operation_id=?").run(JSON.stringify(instance.captureMeshAssignment()), BOOT, op.operationId);
-          }
-          const snapshot = instance.captureMeshAssignment();
-          const owns = row2.boot_nonce !== BOOT || JSON.stringify(snapshot) === row2.prepared_json;
-          return current5() && owns && await verify3(snapshot) ? proof() : refuse11("native_attach_unconfirmed");
-        }
-        const before = instance.captureMeshAssignment();
-        let prepared;
-        try {
-          db3.transaction(() => {
-            const stamped = host.deps.getInstanceManager().attachMeshAssignmentToInstance(args.targetSessionId, { ...mc, meshId: mc.meshId });
-            if (!stamped.stamped || !current5()) throw new Error("holder_attach_failed");
-            prepared = instance.captureMeshAssignment();
-            db3.prepare("INSERT INTO mesh_holder_attaches VALUES (?,?,?,?,?,?,?,?)").run(op.operationId, args.targetSessionId, identity5, JSON.stringify(before), "preparing", JSON.stringify(prepared), runtime(instance), BOOT);
-          }).immediate();
-          if (!await verify3(prepared) || !current5() || JSON.stringify(instance.captureMeshAssignment()) !== JSON.stringify(prepared)) throw new Error("native_attach_unconfirmed");
-          db3.prepare("UPDATE mesh_holder_attaches SET phase='prepared' WHERE operation_id=?").run(op.operationId);
-          return proof();
-        } catch {
-          if (!prepared || JSON.stringify(instance.captureMeshAssignment()) === JSON.stringify(prepared)) {
-            instance.restoreMeshAssignment(before);
-            if (prepared) db3.prepare("UPDATE mesh_holder_attaches SET phase=? WHERE operation_id=?").run(await verify3(before) ? "rolled_back" : "rollback_pending", op.operationId);
-          }
-          return refuse11("holder_attach_failed_checkpoint_pending");
-        }
-      }
-      if (!row2 || !["prepared", "preparing", "committed"].includes(row2.phase) || !current5() || runtime(instance) !== row2.runtime_json || row2.boot_nonce === BOOT && JSON.stringify(instance.captureMeshAssignment()) !== row2.prepared_json) return refuse11("late_claim_changed");
-      if (op.phase === "rollback") {
-        if (row2.phase === "committed") return refuse11("already_committed");
-        const before = JSON.parse(row2.snapshot_json);
-        instance.restoreMeshAssignment(before);
-        const confirmed = await verify3(before);
-        db3.prepare("UPDATE mesh_holder_attaches SET phase=? WHERE operation_id=?").run(confirmed ? "rolled_back" : "rollback_pending", op.operationId);
-        return { success: confirmed, rolledBack: confirmed };
-      }
-      if (!await verify3(instance.captureMeshAssignment())) return refuse11("native_attach_unconfirmed");
-      db3.prepare("UPDATE mesh_holder_attaches SET phase='committed' WHERE operation_id=?").run(op.operationId);
-      return { success: true, committed: true };
-    }
-    var import_node_crypto57;
-    var BOOT;
-    var init_mesh_holder_attach = __esm2({
-      "src/commands/mesh-holder-attach.ts"() {
-        "use strict";
-        init_mesh_pinned_node_identity();
-        import_node_crypto57 = require("crypto");
-        init_dist();
-        init_mesh_runtime_store();
-        init_cli_provider_mesh_assignment();
-        init_provider_instance_manager();
-        init_mesh_writer_stop_journal();
-        BOOT = (0, import_node_crypto57.randomUUID)();
-      }
-    });
-    var worker_report_validation_exports = {};
-    __export2(worker_report_validation_exports, {
-      WORKER_ARTIFACT_IDS_MAX: () => WORKER_ARTIFACT_IDS_MAX,
-      WORKER_BLOCKERS_MAX: () => WORKER_BLOCKERS_MAX,
-      WORKER_FOLLOW_UPS_MAX: () => WORKER_FOLLOW_UPS_MAX,
-      WORKER_GUIDANCE_MAX_CHARS: () => WORKER_GUIDANCE_MAX_CHARS,
-      WORKER_INTENT_MAX_CHARS: () => WORKER_INTENT_MAX_CHARS,
-      WORKER_LIST_ITEM_MAX_CHARS: () => WORKER_LIST_ITEM_MAX_CHARS,
-      WORKER_SUMMARY_MAX_CHARS: () => WORKER_SUMMARY_MAX_CHARS,
-      WORKER_TOUCHED_FILES_MAX: () => WORKER_TOUCHED_FILES_MAX,
-      validateWorkerCompletionReport: () => validateWorkerCompletionReport
-    });
-    function validateWorkerCompletionReport(raw) {
-      const errors = [];
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-        return { errors: [{ field: "", message: "report must be an object" }] };
-      }
-      const input = raw;
-      const KNOWN = /* @__PURE__ */ new Set(["outcome", "summary", "handoffNotes", "touchedFiles", "branchState", "blockers", "decisionsNeeded", "commits", "artifactIds", "review", "findingResponses", "testsRun"]);
-      for (const key7 of Object.keys(input)) {
-        if (!KNOWN.has(key7)) {
-          errors.push({ field: key7, message: `unknown field '${key7}' (expected one of: ${[...KNOWN].join(", ")})` });
-        }
-      }
-      const outcome = input.outcome;
-      if (!isWorkerReportOutcome2(outcome)) {
-        errors.push({ field: "outcome", message: `outcome must be one of ${WORKER_REPORT_OUTCOMES2.map((o) => `'${o}'`).join(" | ")}` });
-      }
-      const summary = typeof input.summary === "string" ? input.summary.trim() : "";
-      if (!summary) {
-        errors.push({ field: "summary", message: "summary is required and must be a non-empty string" });
-      } else if (summary.length > WORKER_SUMMARY_MAX_CHARS) {
-        errors.push({
-          field: "summary",
-          message: `summary is ${summary.length} chars, over the ${WORKER_SUMMARY_MAX_CHARS} limit \u2014 shorten it rather than relying on truncation`
-        });
-      }
-      const touchedFiles = validateStringList2(input.touchedFiles, "touchedFiles", WORKER_TOUCHED_FILES_MAX, errors);
-      const blockers = validateStringList2(input.blockers, "blockers", WORKER_BLOCKERS_MAX, errors);
-      if (input.branchState !== void 0 && !WORKER_BRANCH_STATES2.includes(input.branchState)) {
-        errors.push({
-          field: "branchState",
-          message: `branchState must be one of: ${WORKER_BRANCH_STATES2.join(", ")}`
-        });
-      }
-      let decisionsNeeded;
-      if (input.decisionsNeeded !== void 0) {
-        const raw2 = input.decisionsNeeded;
-        if (!Array.isArray(raw2)) {
-          errors.push({ field: "decisionsNeeded", message: "decisionsNeeded must be an array of {question, context?, options?, recommended?, urgency?} objects" });
-        } else if (raw2.length > WORKER_DECISIONS_NEEDED_MAX) {
-          errors.push({ field: "decisionsNeeded", message: `decisionsNeeded has ${raw2.length} entries, over the ${WORKER_DECISIONS_NEEDED_MAX} limit \u2014 report the most important ones` });
-        } else {
-          const ok = [];
-          for (const entry of raw2) {
-            const n = entry && typeof entry === "object" && !Array.isArray(entry) ? normalizeMissionItemInput({ ...entry, kind: "decision" }) : null;
-            if (!n || "error" in n) {
-              errors.push({ field: "decisionsNeeded", message: "each decision needs a non-empty `question`" });
-              ok.length = 0;
-              break;
-            }
-            ok.push(entry);
-          }
-          if (ok.length) decisionsNeeded = ok;
-        }
-      }
-      let commits;
-      if (input.commits !== void 0) {
-        const normalized = normalizeReportCommits(input.commits);
-        if (!normalized) errors.push({ field: "commits", message: "commits must be an array of git SHA strings (7\u201364 hex chars)" });
-        else if (normalized.length > WORKER_COMMITS_MAX) errors.push({ field: "commits", message: `commits has ${normalized.length} entries, over the ${WORKER_COMMITS_MAX} limit` });
-        else if (normalized.length) commits = normalized;
-      }
-      let artifactIds;
-      if (input.artifactIds !== void 0) {
-        const raw2 = input.artifactIds;
-        const ids = Array.isArray(raw2) ? raw2.map((v) => typeof v === "string" ? v.trim() : "") : null;
-        if (!ids || ids.some((id4) => !id4 || id4.length > 200)) errors.push({ field: "artifactIds", message: "artifactIds must be an array of artifact id strings (art_*, \u2264200 chars each)" });
-        else if (ids.length > WORKER_ARTIFACT_IDS_MAX) errors.push({ field: "artifactIds", message: `artifactIds has ${ids.length} entries, over the ${WORKER_ARTIFACT_IDS_MAX} limit` });
-        else if (ids.length) artifactIds = [...new Set(ids)];
-      }
-      let review;
-      if (input.review !== void 0) {
-        const r = validateReviewReport(input.review, { round: 1 });
-        if (r.errors.length) for (const e of r.errors) errors.push(e);
-        else review = r.report;
-      }
-      let findingResponses;
-      if (input.findingResponses !== void 0) {
-        const r = validateFindingResponses(input.findingResponses);
-        if (r.errors.length) for (const e of r.errors) errors.push(e);
-        else findingResponses = r.responses;
-      }
-      let handoffNotes;
-      if (input.handoffNotes !== void 0) {
-        const notes = input.handoffNotes;
-        if (!notes || typeof notes !== "object" || Array.isArray(notes)) {
-          errors.push({ field: "handoffNotes", message: "handoffNotes must be an object" });
-        } else {
-          const n = notes;
-          const KNOWN_NOTES = /* @__PURE__ */ new Set(["intent", "conflictGuidance", "touchedFiles", "followUps"]);
-          for (const key7 of Object.keys(n)) {
-            if (!KNOWN_NOTES.has(key7)) {
-              errors.push({ field: `handoffNotes.${key7}`, message: `unknown field '${key7}'` });
-            }
-          }
-          const intent = typeof n.intent === "string" ? n.intent.trim() : "";
-          if (!intent) {
-            errors.push({ field: "handoffNotes.intent", message: "intent is required \u2014 it is the part a diff cannot convey" });
-          } else if (intent.length > WORKER_INTENT_MAX_CHARS) {
-            errors.push({ field: "handoffNotes.intent", message: `intent is over the ${WORKER_INTENT_MAX_CHARS} char limit` });
-          }
-          let guidance;
-          if (n.conflictGuidance !== void 0) {
-            if (typeof n.conflictGuidance !== "string") {
-              errors.push({ field: "handoffNotes.conflictGuidance", message: "conflictGuidance must be a string" });
-            } else if (n.conflictGuidance.trim().length > WORKER_GUIDANCE_MAX_CHARS) {
-              errors.push({ field: "handoffNotes.conflictGuidance", message: `conflictGuidance is over the ${WORKER_GUIDANCE_MAX_CHARS} char limit` });
-            } else {
-              guidance = n.conflictGuidance.trim() || void 0;
-            }
-          }
-          const noteFiles = validateStringList2(n.touchedFiles, "handoffNotes.touchedFiles", WORKER_TOUCHED_FILES_MAX, errors);
-          if (n.touchedFiles === void 0) {
-            errors.push({
-              field: "handoffNotes.touchedFiles",
-              message: "touchedFiles is required \u2014 it is what matches this note to future work (use [] on a read-only task)"
-            });
-          }
-          const followUps = validateStringList2(n.followUps, "handoffNotes.followUps", WORKER_FOLLOW_UPS_MAX, errors);
-          if (intent && noteFiles) {
-            handoffNotes = {
-              intent,
-              ...guidance ? { conflictGuidance: guidance } : {},
-              touchedFiles: noteFiles,
-              ...followUps?.length ? { followUps } : {}
-            };
-          }
-        }
-      }
-      const testsRun = validateTestsRun2(input.testsRun, errors);
-      if (errors.length) return { errors };
-      return {
-        report: {
-          outcome,
-          summary,
-          ...handoffNotes ? { handoffNotes } : {},
-          // ★Preserve an EXPLICIT empty array rather than collapsing it to
-          // "absent" on `.length`. `touchedFiles: []` is the worker's statement
-          // "I changed nothing", and checkReportAgainstTaskMode (below) must be
-          // able to tell that apart from the key never being sent at all — that
-          // distinction is what requirement (2) of the invalid_for_task_mode fix
-          // depends on. `undefined` in, `undefined` out; `[]` or non-empty in,
-          // that array out.
-          ...touchedFiles !== void 0 ? { touchedFiles } : {},
-          ...input.branchState ? { branchState: input.branchState } : {},
-          ...blockers?.length ? { blockers } : {},
-          ...decisionsNeeded ? { decisionsNeeded } : {},
-          ...commits ? { commits } : {},
-          ...artifactIds ? { artifactIds } : {},
-          ...review ? { review } : {},
-          ...findingResponses?.length ? { findingResponses } : {},
-          ...testsRun?.length ? { testsRun } : {}
-        },
-        errors: []
-      };
-    }
-    function validateStringList2(value, field3, max, errors) {
-      if (value === void 0) return void 0;
-      if (!Array.isArray(value)) {
-        errors.push({ field: field3, message: `${field3} must be an array of strings` });
-        return void 0;
-      }
-      if (value.length > max) {
-        errors.push({ field: field3, message: `${field3} has ${value.length} entries, over the ${max} limit` });
-        return void 0;
-      }
-      const out = [];
-      for (const item of value) {
-        if (typeof item !== "string") {
-          errors.push({ field: field3, message: `${field3} must contain only strings` });
-          return void 0;
-        }
-        const trimmed3 = item.trim();
-        if (!trimmed3) continue;
-        if (trimmed3.length > WORKER_LIST_ITEM_MAX_CHARS) {
-          errors.push({ field: field3, message: `${field3} contains an entry over the ${WORKER_LIST_ITEM_MAX_CHARS} char limit` });
-          return void 0;
-        }
-        out.push(trimmed3);
-      }
-      return out;
-    }
-    function validateTestsRun2(value, errors) {
-      if (value === void 0) return void 0;
-      if (!Array.isArray(value)) {
-        errors.push({ field: "testsRun", message: "testsRun must be an array" });
-        return void 0;
-      }
-      if (value.length > LIGHT_TESTS_RUN_MAX) {
-        errors.push({ field: "testsRun", message: `testsRun has ${value.length} entries, over the ${LIGHT_TESTS_RUN_MAX} limit` });
-        return void 0;
-      }
-      const out = [];
-      value.forEach((raw, i) => {
-        const where = `testsRun[${i}]`;
-        if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-          errors.push({ field: where, message: "must be an object {command, exit}" });
-          return;
-        }
-        const t = raw;
-        for (const key7 of Object.keys(t)) if (!["command", "exit", "passed", "failed", "note"].includes(key7)) errors.push({ field: `${where}.${key7}`, message: `unknown field '${key7}'` });
-        const command = typeof t.command === "string" ? t.command.trim() : "";
-        if (!command || command.length > 500) errors.push({ field: `${where}.command`, message: "command must be a non-empty string of at most 500 chars" });
-        if (typeof t.exit !== "number" || !Number.isInteger(t.exit)) errors.push({ field: `${where}.exit`, message: "exit must be an integer" });
-        for (const k of ["passed", "failed"]) {
-          if (t[k] !== void 0 && (typeof t[k] !== "number" || !Number.isInteger(t[k]) || t[k] < 0)) errors.push({ field: `${where}.${k}`, message: `${k} must be a non-negative integer` });
-        }
-        if (t.note !== void 0 && (typeof t.note !== "string" || t.note.length > 500)) errors.push({ field: `${where}.note`, message: "note must be a string of at most 500 chars" });
-        if (command && typeof t.exit === "number") {
-          out.push({ command, exit: t.exit, ...typeof t.passed === "number" ? { passed: t.passed } : {}, ...typeof t.failed === "number" ? { failed: t.failed } : {}, ...typeof t.note === "string" && t.note ? { note: t.note } : {} });
-        }
-      });
-      return out;
-    }
-    var WORKER_SUMMARY_MAX_CHARS;
-    var WORKER_INTENT_MAX_CHARS;
-    var WORKER_GUIDANCE_MAX_CHARS;
-    var WORKER_TOUCHED_FILES_MAX;
-    var WORKER_ARTIFACT_IDS_MAX;
-    var WORKER_LIST_ITEM_MAX_CHARS;
-    var WORKER_BLOCKERS_MAX;
-    var WORKER_FOLLOW_UPS_MAX;
-    var init_worker_report_validation = __esm2({
-      "src/mesh/worker-report-validation.ts"() {
-        "use strict";
-        init_dist();
-        WORKER_SUMMARY_MAX_CHARS = WORKER_REPORT_SUMMARY_MAX_CHARS2;
-        WORKER_INTENT_MAX_CHARS = 4e3;
-        WORKER_GUIDANCE_MAX_CHARS = 4e3;
-        WORKER_TOUCHED_FILES_MAX = 200;
-        WORKER_ARTIFACT_IDS_MAX = 24;
-        WORKER_LIST_ITEM_MAX_CHARS = 500;
-        WORKER_BLOCKERS_MAX = 50;
-        WORKER_FOLLOW_UPS_MAX = 50;
-      }
-    });
-    var worker_report_exports2 = {};
-    __export2(worker_report_exports2, {
-      CLAIM_KEYS: () => CLAIM_KEYS,
-      MESH_SENDER_DAEMON_ID_ARG: () => MESH_SENDER_DAEMON_ID_ARG,
-      WORKER_PROGRESS_FORWARD_COMMAND: () => WORKER_PROGRESS_FORWARD_COMMAND,
-      WORKER_REFUSAL_FORWARD_COMMAND: () => WORKER_REFUSAL_FORWARD_COMMAND,
-      WORKER_REPORT_FORWARD_COMMAND: () => WORKER_REPORT_FORWARD_COMMAND,
-      decodeForwardedClaim: () => decodeForwardedClaim,
-      decodeForwardedWorkerProgress: () => decodeForwardedWorkerProgress,
-      decodeForwardedWorkerReport: () => decodeForwardedWorkerReport,
-      findLocalWorkerOfRemoteTask: () => findLocalWorkerOfRemoteTask,
-      logLocalWorkerRefusal: () => logLocalWorkerRefusal,
-      ownerRosterNodeDaemonLookup: () => ownerRosterNodeDaemonLookup,
-      resolveRemoteWorker: () => resolveRemoteWorker,
-      selfDaemonPredicate: () => selfDaemonPredicate,
-      toProgressResponse: () => toProgressResponse,
-      toReportResponse: () => toReportResponse,
-      workerReportHandlers: () => workerReportHandlers,
-      workerReportSpecs: () => workerReportSpecs
-    });
-    function readNonEmpty3(value) {
-      return typeof value === "string" ? value.trim() : "";
-    }
-    function assignmentStampReader(ctx) {
-      return (sessionId) => {
-        let settings2;
-        try {
-          const instance = ctx?.deps?.instanceManager?.getInstance?.(sessionId);
-          if (instance) recoverHolderAttachRollback(instance);
-          const state2 = instance?.getState?.();
-          settings2 = state2?.settings && typeof state2.settings === "object" ? state2.settings : void 0;
-        } catch {
-          return null;
-        }
-        if (!settings2) return null;
-        const meshId = readNonEmpty3(settings2.meshNodeFor);
-        const ownerDaemonId = readNonEmpty3(settings2.meshCoordinatorDaemonId);
-        if (!meshId || !ownerDaemonId) return null;
-        const attemptRef = currentMeshAttemptRef(settings2);
-        const taskId = readNonEmpty3(settings2.meshActiveTaskId);
-        const nodeId = readNonEmpty3(settings2.meshNodeId) || readNonEmpty3(settings2.meshLastNodeId);
-        return {
-          meshId,
-          ownerDaemonId,
-          ...taskId ? { taskId } : {},
-          ...attemptRef ? { attemptId: attemptRef.attemptId, generation: attemptRef.generation } : {},
-          ...nodeId ? { nodeId } : {}
-        };
-      };
-    }
-    function findLocalWorkerOfRemoteTask(ctx, meshId, taskId) {
-      const isSelf2 = selfDaemonPredicate(ctx);
-      if (!isSelf2 || !meshId || !taskId) return null;
-      let ids = [];
-      try {
-        ids = ctx?.deps?.instanceManager?.listInstanceIds?.() ?? [];
-      } catch {
-        ids = [];
-      }
-      const read2 = assignmentStampReader(ctx);
-      for (const sessionId of ids) {
-        const stamp2 = read2(sessionId);
-        if (stamp2 && stamp2.meshId === meshId && stamp2.taskId === taskId && !isSelf2(stamp2.ownerDaemonId)) {
-          return { sessionId, ownerDaemonId: stamp2.ownerDaemonId };
-        }
-      }
-      return null;
-    }
-    function selfDaemonPredicate(ctx) {
-      const selfDaemonId = readNonEmpty3(ctx?.deps?.statusInstanceId);
-      return selfDaemonId ? (daemonId) => daemonIdsEquivalent5(daemonId, selfDaemonId) : void 0;
-    }
-    async function resolveRemoteWorker(ctx, args) {
-      const selfDaemonId = readNonEmpty3(ctx?.deps?.statusInstanceId);
-      if (!selfDaemonId) return null;
-      const prepared = validatePreparedDelivery(MeshRuntimeStore.getInstance().db, args ?? {});
-      if (prepared && !daemonIdsEquivalent5(prepared.ownerDaemonId, selfDaemonId)) return prepared;
-      const { resolveRemoteWorkerIdentity: resolveRemoteWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report_forwarded(), worker_report_forwarded_exports));
-      return resolveRemoteWorkerIdentity2({ bind: args?.bind }, {
-        readAssignmentStamp: assignmentStampReader(ctx),
-        isSelfDaemon: (daemonId) => daemonIdsEquivalent5(daemonId, selfDaemonId)
-      });
-    }
-    async function ownerRosterNodeDaemonLookup(ctx, meshId) {
-      let nodes = [];
-      try {
-        const record8 = await ctx?.getMeshForCommand?.(meshId, void 0, { preferInline: true });
-        nodes = Array.isArray(record8?.mesh?.nodes) ? record8.mesh.nodes : [];
-      } catch {
-        nodes = [];
-      }
-      return (nodeId) => {
-        const node = nodes.find((n) => meshNodeIdMatches7(n, nodeId));
-        return node ? readMeshNodeDaemonId(node) : void 0;
-      };
-    }
-    function logLocalWorkerRefusal(what, credential, refusal2, detail) {
-      try {
-        const bind = typeof credential.bind === "string" ? credential.bind.trim() : "";
-        const binding = bind ? verifyWorkerSessionBind(bind) : null;
-        const who = binding ? `session ${binding.sessionId} (mesh ${binding.meshId})` : bind ? `bind ${hashWorkerSessionBind(bind).slice(0, 12)}` : "a caller with no bind";
-        const line = `Local ${what} from ${who} \u2192 refused ${refusal2}${detail ? ` \u2014 ${detail}` : ""}`;
-        if (what === "mailbox drain" && binding && detail?.includes("no assigned task")) LOG.debug("WorkerReport", line);
-        else LOG.warn("WorkerReport", line);
-      } catch {
-      }
-    }
-    function toReportResponse(result) {
-      if (!result.accepted) {
-        return {
-          success: false,
-          error: result.refusal,
-          ...result.detail ? { detail: result.detail } : {},
-          hint: result.refusal === "unauthenticated" ? "No live task is bound to this worker session \u2014 the task may already be terminal or reassigned." : result.refusal === "bind_unknown_after_restart" ? "This daemon does not recognise the worker session bind \u2014 it was issued before a daemon restart that did not carry it over. A retry will not help: put your result in your final message so the coordinator can read it, and say that this worker session must be relaunched (stopped and launched fresh) before it can report again." : result.refusal === "invalid_for_task_mode" ? "Fix the touchedFiles list to match the task mode and call again." : result.refusal === "storage_failed" ? "Nothing was recorded \u2014 call again." : result.refusal === "stale_report" ? "This report was written for an earlier task of this session and can no longer be filed against it; nothing was recorded." : result.refusal === "rejected_by_reducer" && result.detail?.startsWith("checkpoint_pending") ? "The completion is NOT accepted yet: this session's physical writer stop is unconfirmed. Nothing is completed; keep the saved report and let it be re-sent after the stop settles." : "The completion was refused by the turn ledger; the task state is authoritative."
-        };
-      }
-      return {
-        success: true,
-        taskId: result.taskId,
-        ...result.attemptId ? { attemptId: result.attemptId } : {},
-        outcome: result.outcome,
-        duplicate: result.duplicate,
-        handoffNoteRecorded: result.handoffNoteRecorded,
-        // ★F5: carries WHY a note did not persist, so the tool layer can
-        // warn instead of printing the unconditional "stored" line.
-        ...result.handoffNoteError ? { handoffNoteError: result.handoffNoteError } : {},
-        // H1 (path ownership): present only on a declared-but-mismatched report —
-        // evidence, never a refusal (the completion above already committed).
-        ...result.ownedPathsMismatch ? { ownedPathsMismatch: result.ownedPathsMismatch } : {},
-        // F7b: accepted as evidence after the ledger already terminalized the attempt.
-        ...result.late ? { late: true, terminalOutcome: result.late.terminalOutcome } : {}
-      };
-    }
-    async function refuseInvalidReport(ctx, args, errors) {
-      const answer2 = { success: false, error: "invalid_report", validationErrors: errors };
-      try {
-        const { recordRefusedWorkerReport: recordRefusedWorkerReport2, recordRefusedWorkerReportForIdentity: recordRefusedWorkerReportForIdentity2, safeRefusalFields: safeRefusalFields2, hasLocalWorkerIdentity: hasLocalWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
-        const credential = { token: args?.token, bind: args?.bind };
-        const raw = args?.report && typeof args.report === "object" ? args.report : {};
-        const summaryLength = typeof raw.summary === "string" ? raw.summary.trim().length : null;
-        const deliveryId = normalizeWorkerDeliveryId(args?.deliveryId);
-        const fields = errors.map((e) => e.field);
-        const prepared = args?.prepared ? validatePreparedDelivery(MeshRuntimeStore.getInstance().db, args) : null;
-        if (prepared ? !selfDaemonPredicate(ctx)?.(prepared.ownerDaemonId) : !hasLocalWorkerIdentity2(credential, { isSelfDaemon: selfDaemonPredicate(ctx), reportedAtMs: args?.reportedAtMs })) {
-          const remote = await resolveRemoteWorker(ctx, args);
-          if (remote && remote.taskId && remote.attemptId && Number.isInteger(remote.generation)) {
-            const owner = await forwardToOwner(ctx, remote, WORKER_REFUSAL_FORWARD_COMMAND, {
-              generation: remote.generation,
-              fields: safeRefusalFields2(fields),
-              summaryLength,
-              ...deliveryId ? { deliveryId } : {},
-              ...typeof args?.reportedAtMs === "number" ? { reportedAtMs: args.reportedAtMs } : {}
-            }, "report refusal");
-            return { ...answer2, ...owner.receipt ? { receipt: owner.receipt } : { receiptPending: true }, ...owner.error === "worker_protocol_unsupported" || owner.error === "forward_failed" ? { provenanceError: owner.error } : {} };
-          }
-        }
-        if (prepared && daemonIdsEquivalent5(prepared.ownerDaemonId, ctx.deps.statusInstanceId ?? "")) {
-          const db3 = MeshRuntimeStore.getInstance().db, self = bridgeIdentity(ctx.deps.statusInstanceId ?? "", ctx.deps.statusVersion);
-          const handled = commitLocalBridgeDelivery(db3, {
-            protocol: 1,
-            kind: "refusal",
-            senderDaemonId: self.daemonId,
-            senderCommit: self.commit,
-            senderVersion: self.version,
-            ...prepared,
-            payload: { fields: safeRefusalFields2(fields), summaryLength }
-          }, () => {
-            const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(prepared.attemptId);
-            if (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId || attempt.meshId !== prepared.meshId || attempt.taskId !== prepared.taskId || attempt.nodeId !== prepared.nodeId || !daemonIdsEquivalent5(attempt.ownerDaemonId, prepared.ownerDaemonId) || !daemonIdsEquivalent5(attempt.ownerDaemonId, self.daemonId)) return { success: false, error: "stale_report" };
-            const receipt2 = recordRefusedWorkerReportForIdentity2(
-              { token: "", ...prepared },
-              { fields, summaryLength },
-              { generation: prepared.generation, deliveryId: prepared.deliveryId, reportedAtMs: prepared.reportedAtMs }
-            );
-            return receipt2?.recorded ? { ...answer2, receipt: receipt2 } : { success: false, error: "storage_failed", receiptPending: true };
-          });
-          return { ...handled, success: false };
-        }
-        const receipt = recordRefusedWorkerReport2(
-          credential,
-          { fields, summaryLength, outcome: raw.outcome },
-          { isSelfDaemon: selfDaemonPredicate(ctx), reportedAtMs: args?.reportedAtMs, ...deliveryId ? { deliveryId } : {} }
-        );
-        const where = receipt ? `task ${receipt.taskId} attempt ${receipt.attemptId} g${receipt.generation ?? "?"}${receipt.recorded ? "" : " (audit row NOT written)"}` : "no provable attempt";
-        logLocalWorkerRefusal(
-          "report",
-          credential,
-          "invalid_report",
-          `${where}; fields=${safeRefusalFields2(fields).join(",")}; summaryLength=${summaryLength ?? "-"}${deliveryId ? `; delivery=${deliveryId}` : ""}`
-        );
-        return receipt ? { ...answer2, receipt } : answer2;
-      } catch {
-        return args?.prepared ? { ...answer2, receiptPending: true, provenanceError: "storage_failed" } : answer2;
-      }
-    }
-    function toProgressResponse(result) {
-      if (!result.accepted) {
-        return {
-          success: false,
-          error: result.refusal || "unauthenticated",
-          ...result.detail ? { detail: result.detail } : {}
-        };
-      }
-      return {
-        success: true,
-        ...result.taskId ? { taskId: result.taskId } : {},
-        // ★F3: whether the note reached the coordinator, or was recorded
-        // only. The filter is at the producer, so this is the one place
-        // the worker can learn which of the two happened.
-        surfacedToCoordinator: result.surfacedToCoordinator === true
-      };
-    }
-    async function forwardReportToOwner(ctx, remote, report, delivery = {}) {
-      const send = (r) => forwardToOwner(ctx, remote, WORKER_REPORT_FORWARD_COMMAND, { report: r, ...delivery.deliveryId ? { deliveryId: delivery.deliveryId } : {}, ...typeof delivery.reportedAtMs === "number" ? { reportedAtMs: delivery.reportedAtMs } : {} }, `${report.outcome} report`);
-      const first = await send(report);
-      if (first.success !== true && (report.decisionsNeeded || report.commits || report.testsRun) && onlyUnknownStructuredFieldErrors(first)) {
-        const { decisionsNeeded: _d, commits: _c, testsRun: _t, ...legacy } = report;
-        LOG.warn("WorkerReport", `Owner ${remote.ownerDaemonId.slice(0, 16)} does not know decisions_needed/commits (older version) \u2014 resending the ${report.outcome} report for task ${remote.taskId ?? "?"} without them`);
-        return send(legacy);
-      }
-      return first;
-    }
-    function onlyUnknownStructuredFieldErrors(answer2) {
-      if (answer2.error !== "invalid_report" || !Array.isArray(answer2.validationErrors) || answer2.validationErrors.length === 0) return false;
-      return answer2.validationErrors.every((e) => (e?.field === "decisionsNeeded" || e?.field === "commits" || e?.field === "testsRun") && /unknown field/.test(String(e?.message)));
-    }
-    async function forwardToOwner(ctx, remote, command, payload, what) {
-      const dispatch2 = ctx?.deps?.dispatchMeshCommand;
-      if (!dispatch2) {
-        return {
-          success: false,
-          error: "unauthenticated",
-          detail: `this worker's task is owned by daemon ${remote.ownerDaemonId}, and this daemon has no mesh transport to reach it`,
-          hint: "No live task is bound to this worker session \u2014 the task may already be terminal or reassigned."
-        };
-      }
-      const claim = {
-        meshId: remote.meshId,
-        sessionId: remote.sessionId,
-        ...remote.taskId ? { taskId: remote.taskId } : {},
-        ...remote.attemptId ? { attemptId: remote.attemptId } : {},
-        ...remote.generation !== void 0 ? { generation: remote.generation } : {}
-      };
-      const db3 = MeshRuntimeStore.getInstance().db;
-      if (readBridgePolicy(db3, remote.meshId)) {
-        const self = bridgeIdentity(ctx.deps.statusInstanceId ?? "", ctx.deps.statusVersion);
-        const kind = command === WORKER_REPORT_FORWARD_COMMAND ? "report" : command === WORKER_PROGRESS_FORWARD_COMMAND ? "progress" : "refusal";
-        const content = kind === "report" ? { report: payload.report } : kind === "progress" ? { note: payload.note } : { fields: payload.fields, summaryLength: payload.summaryLength };
-        const envelope = {
-          protocol: 1,
-          kind,
-          ownerDaemonId: remote.ownerDaemonId,
-          senderDaemonId: self.daemonId,
-          senderCommit: self.commit,
-          senderVersion: self.version,
-          ...claim,
-          nodeId: remote.nodeId,
-          deliveryId: payload.deliveryId,
-          reportedAtMs: payload.reportedAtMs,
-          payload: content
-        };
-        const saved = typeof payload.deliveryId === "string" ? findBridgeMemberDelivery(db3, self.daemonId, payload.deliveryId) : null;
-        if (saved && (saved.sessionId !== remote.sessionId || saved.meshId !== remote.meshId || saved.taskId !== remote.taskId || saved.attemptId !== remote.attemptId || saved.generation !== remote.generation || saved.nodeId !== remote.nodeId || !daemonIdsEquivalent5(saved.ownerDaemonId, remote.ownerDaemonId) || saved.kind !== kind || saved.reportedAtMs !== payload.reportedAtMs || stableBridgeJson(saved.payload) !== stableBridgeJson(content))) return { success: false, error: "worker_delivery_identity_conflict" };
-        try {
-          return await sendBridgeDelivery(db3, saved ?? envelope, dispatch2);
-        } catch {
-          return { success: false, error: "worker_delivery_identity_conflict" };
-        }
-      }
-      let raw;
-      try {
-        raw = await dispatch2(remote.ownerDaemonId, command, {
-          ...claim,
-          ...remote.nodeId ? { nodeId: remote.nodeId } : {},
-          ...payload
-        });
-      } catch (e) {
-        LOG.warn("WorkerReport", `Forwarding ${what} for session ${remote.sessionId} (task ${remote.taskId ?? "?"}) to owner ${remote.ownerDaemonId.slice(0, 16)} failed: ${e?.message || e}`);
-        return {
-          success: false,
-          error: "forward_failed",
-          detail: e?.message || String(e),
-          hint: "Nothing was recorded \u2014 call again."
-        };
-      }
-      const answer2 = unwrapMeshRelayResult(raw, { command, peerDaemonId: remote.ownerDaemonId });
-      if (answer2.error === "relay_result_malformed") {
-        return { ...answer2, hint: "Nothing was recorded \u2014 call again." };
-      }
-      const line = `Forwarded ${what} for session ${remote.sessionId} (task ${remote.taskId ?? "?"} attempt ${remote.attemptId ?? "?"}) to owner ${remote.ownerDaemonId.slice(0, 16)} \u2192 ${answer2.success === true ? "accepted" : `refused (${String(answer2.error)}${typeof answer2.detail === "string" && answer2.detail ? ` \u2014 ${answer2.detail}` : ""})`}`;
-      if (answer2.success === true) LOG.info("WorkerReport", line);
-      else LOG.warn("WorkerReport", line);
-      if (answer2.success !== true && (String(answer2.error).includes("request failed decode") || String(answer2.error).startsWith("Unknown command:"))) return { ...answer2, error: "worker_protocol_unsupported", detail: "Owner has not admitted this worker protocol; retry is retained." };
-      return answer2;
-    }
-    function decodeForwardedClaim(args, allowedKeys) {
-      const input = stripRouterInternalArgs(args);
-      if (!input || typeof input !== "object" || Array.isArray(input)) return null;
-      const record8 = input;
-      for (const key7 of Object.keys(record8)) if (!allowedKeys.has(key7)) return null;
-      const meshId = readNonEmpty3(record8.meshId);
-      const sessionId = readNonEmpty3(record8.sessionId);
-      if (!meshId || !sessionId) return null;
-      for (const key7 of ["taskId", "attemptId", "nodeId"]) {
-        if (record8[key7] !== void 0 && !readNonEmpty3(record8[key7])) return null;
-      }
-      if (record8.generation !== void 0 && (!Number.isSafeInteger(record8.generation) || record8.generation < 0)) return null;
-      const taskId = readNonEmpty3(record8.taskId);
-      const attemptId = readNonEmpty3(record8.attemptId);
-      return {
-        claim: { meshId, sessionId, ...taskId ? { taskId } : {}, ...attemptId ? { attemptId } : {}, ...record8.generation !== void 0 ? { generation: record8.generation } : {} },
-        record: record8
-      };
-    }
-    function decodeForwardedWorkerReport(args) {
-      const decoded = decodeForwardedClaim(args, FORWARD_KEYS);
-      if (!decoded) return null;
-      const { report } = decoded.record;
-      if (!report || typeof report !== "object" || Array.isArray(report)) return null;
-      return { claim: decoded.claim, report, ...decoded.record.reportedAtMs !== void 0 ? { reportedAtMs: decoded.record.reportedAtMs } : {} };
-    }
-    function decodeForwardedWorkerProgress(args) {
-      const decoded = decodeForwardedClaim(args, PROGRESS_FORWARD_KEYS);
-      if (!decoded) return null;
-      const note2 = readNonEmpty3(decoded.record.note);
-      if (!note2) return null;
-      if (decoded.record.reportedAtMs !== void 0 && !Number.isSafeInteger(decoded.record.reportedAtMs)) return null;
-      if (decoded.record.deliveryId !== void 0 && normalizeWorkerDeliveryId(decoded.record.deliveryId) !== decoded.record.deliveryId) return null;
-      return { claim: decoded.claim, note: note2, ...decoded.record.reportedAtMs !== void 0 ? { reportedAtMs: decoded.record.reportedAtMs } : {}, ...decoded.record.deliveryId !== void 0 ? { deliveryId: decoded.record.deliveryId } : {} };
-    }
-    var WORKER_REPORT_FORWARD_COMMAND;
-    var WORKER_REFUSAL_FORWARD_COMMAND;
-    var WORKER_PROGRESS_FORWARD_COMMAND;
-    var CLAIM_KEYS;
-    var FORWARD_KEYS;
-    var PROGRESS_FORWARD_KEYS;
-    var workerReportHandlers;
-    var workerReportSpecs;
-    var init_worker_report2 = __esm2({
-      "src/commands/low-family/worker-report.ts"() {
-        "use strict";
-        init_worker_bridge_prepared();
-        init_mesh_runtime_store();
-        init_worker_bridge();
-        init_dist();
-        init_command_registry();
-        init_router_internal_args();
-        init_mesh_sender();
-        init_mesh_relay_result();
-        init_mesh_node_identity();
-        init_cli_provider_mesh_assignment();
-        init_logger();
-        init_runtime_defaults();
-        init_worker_report_idempotency();
-        init_mesh_holder_attach();
-        WORKER_REPORT_FORWARD_COMMAND = "worker_report_forwarded";
-        WORKER_REFUSAL_FORWARD_COMMAND = "worker_report_refusal_forwarded";
-        WORKER_PROGRESS_FORWARD_COMMAND = "worker_progress_forwarded";
-        CLAIM_KEYS = ["meshId", "taskId", "attemptId", "sessionId", "nodeId", "generation"];
-        FORWARD_KEYS = /* @__PURE__ */ new Set([...CLAIM_KEYS, "report", "deliveryId", "reportedAtMs"]);
-        PROGRESS_FORWARD_KEYS = /* @__PURE__ */ new Set([...CLAIM_KEYS, "note", "deliveryId", "reportedAtMs"]);
-        workerReportHandlers = {
-          worker_bridge_prepare: async (ctx, args) => {
-            const cached5 = readPreparedDelivery(MeshRuntimeStore.getInstance().db, args ?? {}, args?.deliveryId);
-            if (cached5) return cached5.reportedAtMs === args?.reportedAtMs ? { success: true, protocol: 1, prepared: cached5 } : { success: false, error: "worker_delivery_identity_conflict" };
-            if (args?.resume === true) return { success: false, error: "worker_protocol_provenance_unconfirmed" };
-            const { resolveWorkerIdentity: resolveWorkerIdentity2, workerIdentityPostdates: workerIdentityPostdates2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
-            const local = resolveWorkerIdentity2(args);
-            const remote = local ? null : await resolveRemoteWorker(ctx, { bind: args?.bind });
-            const proven = local ?? remote;
-            const db3 = MeshRuntimeStore.getInstance().db;
-            if (proven && !readBridgePolicy(db3, proven.meshId)) return { success: true, protocol: 0, legacy: true };
-            if (!proven || !proven.taskId || !proven.attemptId || !proven.sessionId || !proven.nodeId || !Number.isSafeInteger(args?.reportedAtMs) || args.reportedAtMs > Date.now() + 6e4 || Date.now() - args.reportedAtMs > 6e4 || local && workerIdentityPostdates2(local, args.reportedAtMs)) return { success: false, error: "worker_protocol_provenance_required" };
-            const generation = remote?.generation ?? db3.prepare("SELECT generation FROM turn_attempts WHERE attempt_id=?").get(proven.attemptId);
-            const exactGeneration = typeof generation === "number" ? generation : generation?.generation;
-            try {
-              const prepared = rememberPreparedDelivery(db3, args, {
-                meshId: proven.meshId,
-                taskId: proven.taskId,
-                attemptId: proven.attemptId,
-                generation: exactGeneration,
-                sessionId: proven.sessionId,
-                nodeId: proven.nodeId,
-                ownerDaemonId: remote?.ownerDaemonId ?? ctx.deps.statusInstanceId ?? "",
-                deliveryId: args.deliveryId,
-                reportedAtMs: args.reportedAtMs
-              });
-              return { success: true, protocol: 1, prepared };
-            } catch {
-              return { success: false, error: "worker_delivery_identity_conflict" };
-            }
-          },
-          /**
-           * Exchange a session bind for the caller's current task identity.
-           *
-           * Exposed as its own command so the MCP server can answer "do I have a task
-           * right now" — which is what decides whether it publishes the reporting
-           * tools at all — without having to submit a report to find out.
-           *
-           * ★The task TOKEN is deliberately NOT returned. The caller does not need it:
-           * it presents the bind again on the actual report, and the daemon re-resolves.
-           * Returning the token would put a second live secret on the wire for no gain.
-           */
-          worker_resolve_task: async (_ctx, args) => {
-            try {
-              const { resolveWorkerIdentity: resolveWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
-              const identity5 = resolveWorkerIdentity2({ token: args?.token, bind: args?.bind });
-              if (!identity5) {
-                const remote = await resolveRemoteWorker(_ctx, args);
-                if (remote?.taskId && remote.attemptId) {
-                  return {
-                    success: true,
-                    meshId: remote.meshId,
-                    taskId: remote.taskId,
-                    attemptId: remote.attemptId,
-                    sessionId: remote.sessionId,
-                    ...remote.nodeId ? { nodeId: remote.nodeId } : {}
-                  };
-                }
-                return {
-                  success: false,
-                  error: "worker_not_bound",
-                  hint: "No live task is bound to this worker session. A report is only possible while a task is assigned."
-                };
-              }
-              return {
-                success: true,
-                meshId: identity5.meshId,
-                taskId: identity5.taskId,
-                ...identity5.attemptId ? { attemptId: identity5.attemptId } : {},
-                ...identity5.sessionId ? { sessionId: identity5.sessionId } : {},
-                ...identity5.nodeId ? { nodeId: identity5.nodeId } : {}
-              };
-            } catch (e) {
-              return { success: false, error: e?.message || String(e) };
-            }
-          },
-          /**
-           * Accept a structured completion report.
-           *
-           * Validation errors come back as a STRUCTURED list rather than a single
-           * string so the MCP layer can hand the worker something it can act on
-           * field-by-field — the retry loop is the whole reason the schema is enforced
-           * at the tool layer instead of being parsed out of prose.
-           */
-          worker_report_completion: async (_ctx, args) => {
-            if (!args?.prepared) {
-              const { resolveWorkerIdentity: resolveWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
-              const bound = resolveWorkerIdentity2(args ?? {}) ?? await resolveRemoteWorker(_ctx, args ?? {});
-              if (bound && readBridgePolicy(MeshRuntimeStore.getInstance().db, bound.meshId)) return { success: false, error: "worker_protocol_provenance_required" };
-            }
-            const prepared = args?.prepared ? validatePreparedDelivery(MeshRuntimeStore.getInstance().db, args) : null;
-            if (args?.prepared && !prepared) return { success: false, error: "worker_protocol_provenance_required" };
-            try {
-              const { acceptWorkerCompletionReport: acceptWorkerCompletionReport2, hasLocalWorkerIdentity: hasLocalWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
-              const { validateWorkerCompletionReport: validateWorkerCompletionReport2 } = await Promise.resolve().then(() => (init_worker_report_validation(), worker_report_validation_exports));
-              const { report, errors } = validateWorkerCompletionReport2(args?.report);
-              if (!report) {
-                return refuseInvalidReport(_ctx, args, errors);
-              }
-              const credential = { token: args?.token, bind: args?.bind };
-              const deliveryId = normalizeWorkerDeliveryId(args?.deliveryId);
-              const replay = prepared ? void 0 : recallWorkerDelivery("report", credential, deliveryId);
-              if (replay) {
-                LOG.info("WorkerReport", `Report delivery ${deliveryId} re-sent after it was already accepted (task ${String(replay.taskId ?? "?")}) \u2014 answered from the replay record`);
-                return { ...replay, success: true, duplicate: true };
-              }
-              const reportedAtMs = args?.reportedAtMs;
-              const isSelfDaemon = selfDaemonPredicate(_ctx);
-              let response;
-              if (prepared ? !isSelfDaemon?.(prepared.ownerDaemonId) : !hasLocalWorkerIdentity2(credential, { isSelfDaemon, reportedAtMs })) {
-                const remote = await resolveRemoteWorker(_ctx, args);
-                if (remote) {
-                  response = await forwardReportToOwner(_ctx, remote, report, { deliveryId, reportedAtMs });
-                  rememberWorkerDelivery("report", credential, deliveryId, response);
-                  return response;
-                }
-              }
-              const apply = () => {
-                const attempt = prepared ? MeshRuntimeStore.getInstance().turnStore().getAttempt(prepared.attemptId) : null;
-                if (prepared && (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId || attempt.meshId !== prepared.meshId || attempt.taskId !== prepared.taskId || attempt.nodeId !== prepared.nodeId || !daemonIdsEquivalent5(attempt.ownerDaemonId, prepared.ownerDaemonId) || !isSelfDaemon || !isSelfDaemon(attempt.ownerDaemonId))) {
-                  return { success: false, error: "stale_report" };
-                }
-                return toReportResponse(acceptWorkerCompletionReport2(credential, report, { isSelfDaemon, reportedAtMs, preparedIdentity: prepared ?? void 0 }));
-              };
-              if (prepared) {
-                const self = bridgeIdentity(_ctx.deps.statusInstanceId ?? "", _ctx.deps.statusVersion);
-                return commitLocalBridgeDelivery(MeshRuntimeStore.getInstance().db, {
-                  protocol: 1,
-                  kind: "report",
-                  senderDaemonId: self.daemonId,
-                  senderCommit: self.commit,
-                  senderVersion: self.version,
-                  ...prepared,
-                  payload: { report }
-                }, apply);
-              }
-              const result = acceptWorkerCompletionReport2(credential, report, { isSelfDaemon, reportedAtMs });
-              if (!result.accepted) logLocalWorkerRefusal(`${report.outcome} report`, credential, result.refusal, result.detail);
-              response = toReportResponse(result);
-              rememberWorkerDelivery("report", credential, deliveryId, response);
-              return response;
-            } catch (e) {
-              return { success: false, error: e?.message || String(e) };
-            }
-          },
-          [WORKER_REFUSAL_FORWARD_COMMAND]: async (_ctx, args) => {
-            if (readBridgePolicy(MeshRuntimeStore.getInstance().db, args?.meshId)) return { success: false, error: "worker_protocol_provenance_required" };
-            const decoded = decodeForwardedClaim(args, /* @__PURE__ */ new Set([...CLAIM_KEYS, "generation", "fields", "summaryLength", "deliveryId", "reportedAtMs"]));
-            if (!decoded || !decoded.claim.taskId || !decoded.claim.attemptId) return { success: false, error: "invalid_refusal_envelope" };
-            const raw = decoded.record;
-            const { safeRefusalFields: safeRefusalFields2, recordRefusedWorkerReportForIdentity: recordRefusedWorkerReportForIdentity2, normalizeWorkerReportedAtMs: normalizeWorkerReportedAtMs2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
-            if (!Number.isSafeInteger(raw.generation) || raw.generation < 0 || !Array.isArray(raw.fields) || raw.fields.length > 16 || raw.fields.some((v) => typeof v !== "string") || JSON.stringify(safeRefusalFields2(raw.fields)) !== JSON.stringify(raw.fields) || !(raw.summaryLength === null || Number.isSafeInteger(raw.summaryLength) && raw.summaryLength >= 0) || raw.deliveryId !== void 0 && normalizeWorkerDeliveryId(raw.deliveryId) !== raw.deliveryId || raw.reportedAtMs !== void 0 && (!Number.isSafeInteger(raw.reportedAtMs) || typeof normalizeWorkerReportedAtMs2(raw.reportedAtMs, Date.now()) !== "number")) {
-              return { success: false, error: "invalid_refusal_envelope" };
-            }
-            const { resolveForwardedWorkerIdentity: resolveForwardedWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report_forwarded(), worker_report_forwarded_exports));
-            const resolved = resolveForwardedWorkerIdentity2(decoded.claim, {
-              senderDaemonId: readMeshSender(args),
-              nodeDaemonId: await ownerRosterNodeDaemonLookup(_ctx, decoded.claim.meshId)
-            }, Date.now(), selfDaemonPredicate(_ctx));
-            if ("refused" in resolved) return { success: false, error: "unauthenticated", detail: resolved.refused };
-            const receipt = recordRefusedWorkerReportForIdentity2(
-              "live" in resolved ? resolved.live : resolved.late,
-              { fields: raw.fields, summaryLength: raw.summaryLength },
-              { generation: raw.generation, deliveryId: raw.deliveryId, reportedAtMs: raw.reportedAtMs }
-            );
-            return receipt ? { success: false, error: "invalid_report", receipt } : { success: false, error: "stale_report" };
-          },
-          /**
-           * F7, OWNER side: a report a remote worker daemon relayed here (it has no
-           * local attempt; this daemon owns the queue row, the attempt and the
-           * token). The claim is re-resolved against this daemon's own state
-           * (`resolveForwardedWorkerIdentity`) — nothing in it is trusted — and the
-           * report then takes the local acceptance body verbatim.
-           */
-          [WORKER_REPORT_FORWARD_COMMAND]: async (_ctx, args) => {
-            if (readBridgePolicy(MeshRuntimeStore.getInstance().db, args?.meshId)) return { success: false, error: "worker_protocol_provenance_required" };
-            const decoded = decodeForwardedWorkerReport(args);
-            if (!decoded) return { success: false, error: `${WORKER_REPORT_FORWARD_COMMAND}: request failed decode (bad shape)` };
-            const { claim } = decoded;
-            const senderDaemonId = readMeshSender(args);
-            const claimLabel = `session ${claim.sessionId} (claimed task ${claim.taskId ?? "?"} attempt ${claim.attemptId ?? "?"}) from ${senderDaemonId ? senderDaemonId.slice(0, 20) : "an unidentified daemon"}`;
-            try {
-              const { validateWorkerCompletionReport: validateWorkerCompletionReport2 } = await Promise.resolve().then(() => (init_worker_report_validation(), worker_report_validation_exports));
-              const { acceptForwardedWorkerCompletionReport: acceptForwardedWorkerCompletionReport2 } = await Promise.resolve().then(() => (init_worker_report_forwarded(), worker_report_forwarded_exports));
-              const { report, errors } = validateWorkerCompletionReport2(decoded.report);
-              if (!report) {
-                LOG.warn("WorkerReport", `Forwarded report for ${claimLabel} refused: invalid_report (${errors.length} validation error(s))`);
-                return { success: false, error: "invalid_report", validationErrors: errors };
-              }
-              const sender = {
-                senderDaemonId,
-                nodeDaemonId: await ownerRosterNodeDaemonLookup(_ctx, claim.meshId)
-              };
-              const result = acceptForwardedWorkerCompletionReport2(claim, report, { sender, isSelfDaemon: selfDaemonPredicate(_ctx), reportedAtMs: decoded.reportedAtMs });
-              if (result.accepted) {
-                LOG.info("WorkerReport", `Forwarded ${report.outcome} report for ${claimLabel} \u2192 accepted as task ${result.taskId} attempt ${result.attemptId ?? "?"}${result.late ? ` (late, after ${result.late.terminalOutcome})` : ""}${result.duplicate ? " (duplicate)" : ""}`);
-              } else {
-                LOG.warn("WorkerReport", `Forwarded ${report.outcome} report for ${claimLabel} \u2192 refused ${result.refusal}${result.detail ? ` \u2014 ${result.detail}` : ""}`);
-              }
-              return toReportResponse(result);
-            } catch (e) {
-              LOG.warn("WorkerReport", `Forwarded report for ${claimLabel} failed: ${e?.message || e}`);
-              return { success: false, error: e?.message || String(e) };
-            }
-          },
-          /** Record a mid-task progress note. Never terminal. */
-          worker_progress_update: async (_ctx, args) => {
-            if (!args?.prepared) {
-              const { resolveWorkerIdentity: resolveWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
-              const bound = resolveWorkerIdentity2(args ?? {}) ?? await resolveRemoteWorker(_ctx, args ?? {});
-              if (bound && readBridgePolicy(MeshRuntimeStore.getInstance().db, bound.meshId)) return { success: false, error: "worker_protocol_provenance_required" };
-            }
-            const prepared = args?.prepared ? validatePreparedDelivery(MeshRuntimeStore.getInstance().db, args) : null;
-            if (args?.prepared && !prepared) return { success: false, error: "worker_protocol_provenance_required" };
-            const note2 = typeof args?.note === "string" ? args.note.trim() : "";
-            if (!note2) return { success: false, error: "note required" };
-            try {
-              const { hasLocalWorkerIdentity: hasLocalWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
-              const { acceptWorkerProgressUpdate: acceptWorkerProgressUpdate2, acceptWorkerProgressUpdateForIdentity: acceptWorkerProgressUpdateForIdentity2 } = await Promise.resolve().then(() => (init_worker_report_progress(), worker_report_progress_exports));
-              const credential = { token: args?.token, bind: args?.bind };
-              const deliveryId = normalizeWorkerDeliveryId(args?.deliveryId);
-              const replay = prepared ? void 0 : recallWorkerDelivery("progress", credential, deliveryId);
-              if (replay) return { ...replay, success: true, duplicate: true };
-              const reportedAtMs = args?.reportedAtMs;
-              let response;
-              if (!hasLocalWorkerIdentity2(credential, { isSelfDaemon: selfDaemonPredicate(_ctx), reportedAtMs })) {
-                const remote = await resolveRemoteWorker(_ctx, args);
-                if (remote) {
-                  response = await forwardToOwner(_ctx, remote, WORKER_PROGRESS_FORWARD_COMMAND, { note: note2, ...deliveryId ? { deliveryId } : {}, ...typeof reportedAtMs === "number" ? { reportedAtMs } : {} }, "progress note");
-                  rememberWorkerDelivery("progress", credential, deliveryId, response);
-                  return response;
-                }
-              }
-              if (prepared) {
-                const self = bridgeIdentity(_ctx.deps.statusInstanceId ?? "", _ctx.deps.statusVersion);
-                return commitLocalBridgeDelivery(MeshRuntimeStore.getInstance().db, {
-                  protocol: 1,
-                  kind: "progress",
-                  senderDaemonId: self.daemonId,
-                  senderCommit: self.commit,
-                  senderVersion: self.version,
-                  ...prepared,
-                  payload: { note: note2 }
-                }, () => {
-                  const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(prepared.attemptId);
-                  if (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId) return { success: false, error: "stale_report" };
-                  if (attempt.terminal || MeshRuntimeStore.getInstance().turnStore().findLatestAttemptForTask(prepared.meshId, prepared.taskId)?.attemptId !== prepared.attemptId) return { success: false, error: "stale_report" };
-                  if (!daemonIdsEquivalent5(attempt.ownerDaemonId, self.daemonId) || attempt.meshId !== prepared.meshId || attempt.taskId !== prepared.taskId || attempt.nodeId !== prepared.nodeId) return { success: false, error: "unauthenticated" };
-                  if (Date.now() - prepared.reportedAtMs > BRIDGE_MAX_AGE_MS || prepared.reportedAtMs > Date.now() + 6e4) return { success: false, error: "stale_report" };
-                  return toProgressResponse(acceptWorkerProgressUpdateForIdentity2({ token: "", ...prepared }, note2, { deliveryId }));
-                });
-              }
-              const result = acceptWorkerProgressUpdate2(credential, note2, { reportedAtMs, deliveryId });
-              if (!result.accepted) logLocalWorkerRefusal("progress note", credential, result.refusal ?? "unauthenticated", result.detail);
-              response = toProgressResponse(result);
-              rememberWorkerDelivery("progress", credential, deliveryId, response);
-              return response;
-            } catch (e) {
-              return { success: false, error: e?.message || String(e) };
-            }
-          },
-          /**
-           * F7 (progress axis), OWNER side: a progress note a remote worker daemon
-           * relayed here. Authorised exactly like a forwarded completion report
-           * (`resolveForwardedWorkerIdentity` with the transport-stamped sender), then
-           * recorded by the local progress body.
-           */
-          [WORKER_PROGRESS_FORWARD_COMMAND]: async (_ctx, args) => {
-            if (readBridgePolicy(MeshRuntimeStore.getInstance().db, args?.meshId)) return { success: false, error: "worker_protocol_provenance_required" };
-            const decoded = decodeForwardedWorkerProgress(args);
-            if (!decoded) return { success: false, error: `${WORKER_PROGRESS_FORWARD_COMMAND}: request failed decode (bad shape)` };
-            const { claim, note: note2 } = decoded;
-            const senderDaemonId = readMeshSender(args);
-            const claimLabel = `session ${claim.sessionId} (claimed task ${claim.taskId ?? "?"} attempt ${claim.attemptId ?? "?"}) from ${senderDaemonId ? senderDaemonId.slice(0, 20) : "an unidentified daemon"}`;
-            try {
-              const { acceptForwardedWorkerProgressUpdate: acceptForwardedWorkerProgressUpdate2 } = await Promise.resolve().then(() => (init_worker_report_progress(), worker_report_progress_exports));
-              const sender = {
-                senderDaemonId,
-                nodeDaemonId: await ownerRosterNodeDaemonLookup(_ctx, claim.meshId)
-              };
-              const result = acceptForwardedWorkerProgressUpdate2(claim, note2, { sender, isSelfDaemon: selfDaemonPredicate(_ctx), reportedAtMs: decoded.reportedAtMs, deliveryId: decoded.deliveryId });
-              if (result.accepted) {
-                LOG.info("WorkerReport", `Forwarded progress note for ${claimLabel} \u2192 accepted for task ${result.taskId ?? "?"}${result.surfacedToCoordinator ? " (surfaced to coordinator)" : ""}`);
-              } else {
-                LOG.warn("WorkerReport", `Forwarded progress note for ${claimLabel} \u2192 refused ${result.refusal ?? "unauthenticated"}${result.detail ? ` \u2014 ${result.detail}` : ""}`);
-              }
-              return toProgressResponse(result);
-            } catch (e) {
-              LOG.warn("WorkerReport", `Forwarded progress note for ${claimLabel} failed: ${e?.message || e}`);
-              return { success: false, error: e?.message || String(e) };
-            }
-          }
-        };
-        workerReportSpecs = defineCommandSpecs("low", workerReportHandlers, {
-          worker_bridge_prepare: { sources: ["ipc", "standalone"] },
-          // Only another daemon's relay may present a forwarded report or progress
-          // note (never a dashboard, the API, or a local worker MCP over IPC).
-          // The router additionally requires the sender on the claimed mesh's roster;
-          // the handler then requires it to own the node the task was assigned to.
-          [WORKER_REFUSAL_FORWARD_COMMAND]: { sources: ["mesh"], meshSender: "roster" },
-          [WORKER_REPORT_FORWARD_COMMAND]: { sources: ["mesh"], meshSender: "roster" },
-          [WORKER_PROGRESS_FORWARD_COMMAND]: { sources: ["mesh"], meshSender: "roster" }
-        }, { meshSender: "authenticated_peer" });
-        Object.defineProperty(workerReportHandlers, "artifact_index_forwarded", {
-          value: async (ctx, args) => {
-            const { handleArtifactIndexForwarded: handleArtifactIndexForwarded2 } = await Promise.resolve().then(() => (init_artifacts2(), artifacts_exports));
-            return handleArtifactIndexForwarded2(ctx, args);
-          },
-          enumerable: false,
-          configurable: true,
-          writable: true
         });
       }
     });
@@ -161774,8 +161859,8 @@ ${defangRelayBody(text10)}`;
       setAssistantMemberMeshSource({
         selfDaemonId: () => str25(components.statusInstanceId),
         inlineMeshes: () => {
-          const cache3 = components.router?.inlineMeshCache;
-          return cache3 instanceof Map ? [...cache3.values()] : [];
+          const cache4 = components.router?.inlineMeshCache;
+          return cache4 instanceof Map ? [...cache4.values()] : [];
         }
       });
       let projectPorts = null;
@@ -188578,7 +188663,7 @@ ${marker2}`,
     }
     var fs88 = __toESM2(require("fs"));
     var path95 = __toESM2(require("path"));
-    var import_node_crypto422 = require("crypto");
+    var import_node_crypto44 = require("crypto");
     init_config();
     init_logger();
     init_debug_trace();
@@ -190841,7 +190926,7 @@ ${marker2}`,
     function createChatDebugBundleId(targetSessionId) {
       const timestamp2 = (/* @__PURE__ */ new Date()).toISOString().replace(/[-:.]/g, "").replace("T", "T").replace("Z", "Z");
       const sessionSegment = safeBundleIdSegment(targetSessionId, "unknown-session");
-      return `chat-debug-${timestamp2}-${sessionSegment}-${(0, import_node_crypto422.randomUUID)().slice(0, 8)}`;
+      return `chat-debug-${timestamp2}-${sessionSegment}-${(0, import_node_crypto44.randomUUID)().slice(0, 8)}`;
     }
     function buildChatDebugBundleSummary(bundle) {
       const target2 = bundle.target && typeof bundle.target === "object" ? bundle.target : {};
@@ -191135,7 +191220,7 @@ ${marker2}`,
     init_outgoing_receipt();
     var import_node_fs37 = __toESM2(require("fs"));
     var import_node_path34 = __toESM2(require("path"));
-    var import_node_crypto43 = require("crypto");
+    var import_node_crypto45 = require("crypto");
     init_logger();
     init_owned_lock();
     init_outgoing_receipt();
@@ -191157,7 +191242,7 @@ ${marker2}`,
       }
       records = /* @__PURE__ */ new Map();
       filename(id4) {
-        return import_node_path34.default.join(this.directory, (0, import_node_crypto43.createHash)("sha256").update(id4).digest("hex") + ".json");
+        return import_node_path34.default.join(this.directory, (0, import_node_crypto45.createHash)("sha256").update(id4).digest("hex") + ".json");
       }
       syncDirectory() {
         if (!this.directory || process.platform === "win32") return;
@@ -191247,7 +191332,7 @@ ${marker2}`,
           return;
         }
         const file = this.filename(receipt.messageId);
-        const staging = `${file}.${(0, import_node_crypto43.randomUUID)()}.tmp`;
+        const staging = `${file}.${(0, import_node_crypto45.randomUUID)()}.tmp`;
         const fd = import_node_fs37.default.openSync(staging, "wx", 384);
         try {
           try {
@@ -191277,8 +191362,8 @@ ${marker2}`,
             messageId,
             sessionId,
             inputDigest,
-            attemptId: (0, import_node_crypto43.randomUUID)(),
-            generation: (0, import_node_crypto43.randomUUID)(),
+            attemptId: (0, import_node_crypto45.randomUUID)(),
+            generation: (0, import_node_crypto45.randomUUID)(),
             state: unverified ? "uncertain" : "accepted",
             revision: 1,
             proof: unverified ? "none" : "acceptance"
@@ -195525,7 +195610,7 @@ ${marker2}`,
     init_mesh_sender();
     init_mcp_command_ingress();
     init_router_internal_args();
-    var import_node_crypto54 = require("crypto");
+    var import_node_crypto56 = require("crypto");
     var fs106 = __toESM2(require("fs"));
     var path113 = __toESM2(require("path"));
     init_dist();
@@ -195949,9 +196034,12 @@ ${marker2}`,
       writeRelayAllowed(allowed) {
         this.atomicWrite(this.p("settings.json"), JSON.stringify({ ...this.readSettings(), allowRelay: allowed }));
       }
-      /** Per-machine opt-in (default OFF): agent-requested transfers may be approved without the owner (never when they replace files). */
+      /**
+       * Per-machine setting, default ON (owner decision 2026-11-08): agent-requested transfers into a NEW folder
+       * (nothing replaced) may proceed without asking. An explicit owner "off" is respected; overwrites always ask.
+       */
       readAgentAutoApprove() {
-        return this.readSettings().allowAgentTransferAutoApprove === true;
+        return this.readSettings().allowAgentTransferAutoApprove !== false;
       }
       writeAgentAutoApprove(allowed) {
         this.atomicWrite(this.p("settings.json"), JSON.stringify({ ...this.readSettings(), allowAgentTransferAutoApprove: allowed }));
@@ -196588,10 +196676,10 @@ ${marker2}`,
         throw err2;
       }
     }
-    var import_node_crypto49 = require("crypto");
+    var import_node_crypto51 = require("crypto");
     var fs101 = __toESM2(require("fs"));
     var path109 = __toESM2(require("path"));
-    var import_node_crypto48 = require("crypto");
+    var import_node_crypto50 = require("crypto");
     var EXCLUDED_DIRS = /* @__PURE__ */ new Set([
       ".git",
       ".hg",
@@ -196722,7 +196810,7 @@ ${marker2}`,
       return `{${keys2.map((k) => `${JSON.stringify(k)}:${canonicalJson2(obj[k])}`).join(",")}}`;
     }
     function sha256Hex3(text10) {
-      return (0, import_node_crypto48.createHash)("sha256").update(text10, "utf8").digest("hex");
+      return (0, import_node_crypto50.createHash)("sha256").update(text10, "utf8").digest("hex");
     }
     function byteCompare(a, b) {
       return Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
@@ -196900,7 +196988,7 @@ ${marker2}`,
         if (id4.isReparsePoint || id4.linkCount > 1) throw new OverwriteError("TARGET_PATH_UNSAFE", "the existing target file is a link");
         const size = Number(id4.size);
         if (size > TRANSFER_LIMITS.maxFileBytes) throw new OverwriteError("TARGET_PATH_UNSAFE", "the existing target file is too large to replace");
-        const h = (0, import_node_crypto49.createHash)("sha256");
+        const h = (0, import_node_crypto51.createHash)("sha256");
         const buf = Buffer.allocUnsafe(CHUNK);
         for (let o = 0; o < size; ) {
           const n = readHandle(fh, buf, 0, Math.min(CHUNK, size - o), o);
@@ -196941,7 +197029,7 @@ ${marker2}`,
     }
     function overwriteDigest(targetDir, newFiles, replaced) {
       const cmp = (a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b));
-      return (0, import_node_crypto49.createHash)("sha256").update(canonicalJson2({
+      return (0, import_node_crypto51.createHash)("sha256").update(canonicalJson2({
         v: 1,
         targetDir,
         newFiles: [...newFiles].sort(cmp),
@@ -197003,7 +197091,7 @@ ${marker2}`,
         const size = Number(getIdentity(fh).size);
         fs101.mkdirSync(path109.dirname(dest), { recursive: true, mode: 448 });
         fd = fs101.openSync(dest, "w", 384);
-        const h = (0, import_node_crypto49.createHash)("sha256");
+        const h = (0, import_node_crypto51.createHash)("sha256");
         const buf = Buffer.allocUnsafe(CHUNK);
         for (let o = 0; o < size; ) {
           const n = readHandle(fh, buf, 0, Math.min(CHUNK, size - o), o);
@@ -197036,14 +197124,14 @@ ${marker2}`,
     }
     function replaceLeafWithFile(rootH, rel, source2, createDirs) {
       const chain2 = resolveParentDirHandle(rootH, rel, { createDirs });
-      const tmp = `.adhdev-replace-${process.pid}-${(0, import_node_crypto49.randomBytes)(6).toString("hex")}.tmp`;
+      const tmp = `.adhdev-replace-${process.pid}-${(0, import_node_crypto51.randomBytes)(6).toString("hex")}.tmp`;
       let th = null;
       let made = false;
       try {
         th = createExcl(chain2.parentHandle, tmp, { allowProtectedMetadata: true });
         made = true;
         const buf = Buffer.allocUnsafe(CHUNK);
-        const h = (0, import_node_crypto49.createHash)("sha256");
+        const h = (0, import_node_crypto51.createHash)("sha256");
         for (let o = 0; o < source2.size; ) {
           const n = fs101.readSync(source2.fd, buf, 0, Math.min(CHUNK, source2.size - o), o);
           if (n <= 0) throw new OverwriteError("BACKUP_FAILED", "backup is shorter than recorded");
@@ -197167,9 +197255,9 @@ ${marker2}`,
       }
       return out;
     }
-    var import_node_crypto53 = require("crypto");
+    var import_node_crypto55 = require("crypto");
     var fs105 = __toESM2(require("fs"));
-    var import_node_crypto50 = require("crypto");
+    var import_node_crypto522 = require("crypto");
     var FRAME_MAGIC = Buffer.from("ATF1", "ascii");
     var FrameError = class extends Error {
       constructor(code, message) {
@@ -197236,17 +197324,17 @@ ${marker2}`,
     }
     function computeBindingTag(linkKey, transferId, linkGen, fpA, fpB, role) {
       const [lo, hi] = [fpA, fpB].sort();
-      return (0, import_node_crypto50.createHmac)("sha256", linkKey).update(`adhdev-file/1|${role}|${transferId}|${linkGen}|${lo}|${hi}`).digest("hex");
+      return (0, import_node_crypto522.createHmac)("sha256", linkKey).update(`adhdev-file/1|${role}|${transferId}|${linkGen}|${lo}|${hi}`).digest("hex");
     }
     function bindingTagsEqual(a, b) {
       const x = Buffer.from(a, "hex");
       const y = Buffer.from(b, "hex");
-      return x.length === 32 && x.length === y.length && (0, import_node_crypto50.timingSafeEqual)(x, y);
+      return x.length === 32 && x.length === y.length && (0, import_node_crypto522.timingSafeEqual)(x, y);
     }
-    var import_node_crypto522 = require("crypto");
+    var import_node_crypto54 = require("crypto");
     var fs104 = __toESM2(require("fs"));
     var path112 = __toESM2(require("path"));
-    var import_node_crypto51 = require("crypto");
+    var import_node_crypto53 = require("crypto");
     var fs103 = __toESM2(require("fs"));
     var path111 = __toESM2(require("path"));
     var fs102 = __toESM2(require("fs"));
@@ -197486,7 +197574,7 @@ ${marker2}`,
           const out = fs103.openSync(spoolFilePath(spoolDir, i), "wx", 384);
           try {
             if (Number(src.identity.size) !== entry.size) throw new ManifestError("SOURCE_CHANGED", "file size changed since preview");
-            const whole = (0, import_node_crypto51.createHash)("sha256");
+            const whole = (0, import_node_crypto53.createHash)("sha256");
             const blockHashes = [];
             const buf = Buffer.allocUnsafe(TRANSFER_LIMITS.blockBytes);
             let done = 0;
@@ -197504,7 +197592,7 @@ ${marker2}`,
               }
               fs103.writeSync(out, buf, 0, got);
               whole.update(buf.subarray(0, got));
-              blockHashes.push((0, import_node_crypto51.createHash)("sha256").update(buf.subarray(0, got)).digest("hex"));
+              blockHashes.push((0, import_node_crypto53.createHash)("sha256").update(buf.subarray(0, got)).digest("hex"));
               done += got;
               await tick();
             }
@@ -197637,7 +197725,7 @@ ${marker2}`,
               if (n <= 0) break;
               got += n;
             }
-            if (got !== len || (0, import_node_crypto522.createHash)("sha256").update(buf.subarray(0, len)).digest("hex") !== f.blockHashes[b]) break;
+            if (got !== len || (0, import_node_crypto54.createHash)("sha256").update(buf.subarray(0, len)).digest("hex") !== f.blockHashes[b]) break;
             ok = b + 1;
           }
         } catch {
@@ -197739,8 +197827,8 @@ ${marker2}`,
           for (const h of chain2.intermediateHandles.reverse()) safeClose3(h);
           throw err2;
         }
-        const whole = (0, import_node_crypto522.createHash)("sha256");
-        this.cur = { index: i, parentChain: chain2, handle, blockHash: (0, import_node_crypto522.createHash)("sha256"), whole, blockFill: 0 };
+        const whole = (0, import_node_crypto54.createHash)("sha256");
+        this.cur = { index: i, parentChain: chain2, handle, blockHash: (0, import_node_crypto54.createHash)("sha256"), whole, blockFill: 0 };
       }
       closeCur() {
         if (!this.cur) return;
@@ -197795,7 +197883,7 @@ ${marker2}`,
         if (got !== f.blockHashes[b] || got !== senderHashHex) throw new ReceiverError("HASH_MISMATCH", `block ${b} of file ${c.index} failed verification`);
         fullFsync(c.handle);
         this.blocksDone[c.index] = b + 1;
-        c.blockHash = (0, import_node_crypto522.createHash)("sha256");
+        c.blockHash = (0, import_node_crypto54.createHash)("sha256");
         c.blockFill = 0;
         this.onCheckpoint?.(c.index, b + 1, this.bytesDone);
         const fileDone = b + 1 >= blockCount(f.size);
@@ -197826,7 +197914,7 @@ ${marker2}`,
             fh = openFileRead(chain2.parentHandle, chain2.leafName);
             const id4 = getIdentity(fh);
             if (Number(id4.size) !== f.size) throw new ReceiverError("VERIFY_FAILED", "size mismatch");
-            const h = (0, import_node_crypto522.createHash)("sha256");
+            const h = (0, import_node_crypto54.createHash)("sha256");
             const buf = Buffer.allocUnsafe(TRANSFER_LIMITS.blockBytes);
             for (let o = 0; o < f.size; ) {
               const n = readHandle(fh, buf, 0, Math.min(buf.length, f.size - o), o);
@@ -198157,7 +198245,7 @@ ${marker2}`,
               if (this.done) return;
               const start = b * TRANSFER_LIMITS.blockBytes;
               const end = Math.min(f.size, start + TRANSFER_LIMITS.blockBytes);
-              const hash3 = (0, import_node_crypto53.createHash)("sha256");
+              const hash3 = (0, import_node_crypto55.createHash)("sha256");
               for (let o = start; o < end; ) {
                 const len = Math.min(buf.length, end - o);
                 const n = fs105.readSync(fd, buf, 0, len, o);
@@ -198261,7 +198349,7 @@ ${marker2}`,
       }
       store;
       rate;
-      restartEpoch = (0, import_node_crypto54.randomBytes)(8).toString("hex");
+      restartEpoch = (0, import_node_crypto56.randomBytes)(8).toString("hex");
       records = /* @__PURE__ */ new Map();
       runs = /* @__PURE__ */ new Map();
       now() {
@@ -198544,7 +198632,7 @@ ${marker2}`,
           const scan2 = scanSelection(ws.path, input.selected.map(String));
           manifest = validateSelectionManifest({
             v: 1,
-            transferId: (0, import_node_crypto54.randomBytes)(16).toString("hex"),
+            transferId: (0, import_node_crypto56.randomBytes)(16).toString("hex"),
             sourceDaemonId: self,
             targetDaemonId: input.targetDaemonId,
             sourceWorkspaceId: ws.id,
@@ -198776,7 +198864,7 @@ ${marker2}`,
         const factory = this.ports.linkFactory;
         if (!factory) throw new SessionError("LINK_UNAVAILABLE", "no link factory");
         if (run5.relay) this.checkRelayLimits(rec8);
-        run5.linkKey = (0, import_node_crypto54.randomBytes)(32);
+        run5.linkKey = (0, import_node_crypto56.randomBytes)(32);
         rec8.linkGen += 1;
         LOG.info(LOG_TAG, `${idTag(rec8)} link attempt ${rec8.linkGen} started (retries=${run5.retries}${run5.relay ? ", relay allowed" : ""})`);
         this.setState(rec8, "linking");
@@ -199640,12 +199728,12 @@ ${marker2}`,
     function pct(n) {
       return n === void 0 ? null : Math.round(n * 10) / 10;
     }
-    function buildQuotaReserveView(raw, cache3) {
+    function buildQuotaReserveView(raw, cache4) {
       const config = coerceQuotaReserve(raw);
       const rows = [];
       const accounts = {};
       for (const provider of QUOTA_SUPPORTED_PROVIDERS) {
-        const entry = cache3?.[provider];
+        const entry = cache4?.[provider];
         const lineage = quotaAccountLineage(entry?.metadata?.accountLineage);
         const accountKey = lineage.kind === "account" ? lineage.key : null;
         const known = new Set(accountKey ? [accountKey] : []);
@@ -225419,13 +225507,13 @@ ${JSON.stringify(replies)}
     function createSqliteProbeCache() {
       return { db: null, dbPath: null, missingUntil: 0 };
     }
-    function closeSqliteProbeCache(cache3) {
+    function closeSqliteProbeCache(cache4) {
       try {
-        cache3.db?.close();
+        cache4.db?.close();
       } catch {
       }
-      cache3.db = null;
-      cache3.dbPath = null;
+      cache4.db = null;
+      cache4.dbPath = null;
     }
     function probeDirectoriesFor(workingDir) {
       const dirs = /* @__PURE__ */ new Set();
@@ -225443,19 +225531,19 @@ ${JSON.stringify(replies)}
     function sqlPlaceholderList(count2) {
       return Array.from({ length: count2 }, () => "?").join(", ");
     }
-    function querySqliteSessionId(cache3, dbPath, query, params) {
+    function querySqliteSessionId(cache4, dbPath, query, params) {
       try {
-        if (cache3.db === null || cache3.dbPath !== dbPath) {
-          closeSqliteProbeCache(cache3);
+        if (cache4.db === null || cache4.dbPath !== dbPath) {
+          closeSqliteProbeCache(cache4);
           const DatabaseSync = getDatabaseSync();
-          cache3.db = new DatabaseSync(dbPath, { readOnly: true });
-          cache3.dbPath = dbPath;
+          cache4.db = new DatabaseSync(dbPath, { readOnly: true });
+          cache4.dbPath = dbPath;
         }
-        const row2 = cache3.db.prepare(query).get(...params);
+        const row2 = cache4.db.prepare(query).get(...params);
         const sessionId = typeof row2?.id === "string" ? row2.id.trim() : "";
         return sessionId || null;
       } catch {
-        closeSqliteProbeCache(cache3);
+        closeSqliteProbeCache(cache4);
         return null;
       }
     }
@@ -240790,27 +240878,27 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       if (!claimResult.ok) {
         return { ok: false, reason: claimResult.reason, existing: claimResult.existing };
       }
-      const cache3 = definedTopicsFor(node);
-      const known = cache3.get(topic);
+      const cache4 = definedTopicsFor(node);
+      const known = cache4.get(topic);
       if (known === true) return { ok: true, topic };
       if (known === false) return { ok: false, reason: "define_failed" };
       if (!node.authorityEnabled) {
         return { ok: false, reason: "authority_unavailable" };
       }
       if (node.topics.some((d) => d.topic === topic)) {
-        cache3.set(topic, true);
+        cache4.set(topic, true);
         return { ok: true, topic };
       }
       try {
         const policy = sessionChatPolicy();
         node.node.defineTopic(topic, policy);
         node.topics.push({ topic, policy });
-        cache3.set(topic, true);
+        cache4.set(topic, true);
         LOG.info("Seqscribe", `transcript topic defined topic=${topic}`);
         announceTopicActivated(node, topic);
         return { ok: true, topic };
       } catch (error) {
-        cache3.set(topic, false);
+        cache4.set(topic, false);
         LOG.warn(
           "Seqscribe",
           `transcript topic activation failed topic=${topic}: ${error instanceof Error ? error.message : String(error)}`

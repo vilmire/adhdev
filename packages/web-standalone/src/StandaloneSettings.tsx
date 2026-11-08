@@ -15,7 +15,7 @@ import {
     Button,
     Input,
     AppearanceSettingsSection,
-    RemoteProjectAttachSection,
+    FileTransferCard,
     DriverPermissionsSection,
     useBaseDaemons,
     useTransport,
@@ -448,12 +448,12 @@ export default function StandaloneSettings() {
                 </div>
             </Section>
 
-            {/* ═══ Remote Project Attach (per machine, owner-only) ═══ */}
+            {/* ═══ File transfer (per machine, owner-only) ═══ */}
             <Section
-                title={t('settings.remoteProjectAttach.sectionTitle')}
-                description={t('settings.remoteProjectAttach.sectionDescription')}
+                title={t('settings.fileTransfer.title')}
+                description={t('settings.fileTransfer.description')}
             >
-                <RemoteProjectAttachSection />
+                <FileTransferCard />
             </Section>
 
             {/* ═══ Driver permissions (this machine, owner-only) ═══ */}

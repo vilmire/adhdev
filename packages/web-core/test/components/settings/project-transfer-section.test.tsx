@@ -71,7 +71,8 @@ describe('ProjectTransferSection', () => {
         await act(async () => { root.render(<ProjectTransferSection machines={MACHINES} sendCommand={send} pollMs={60_000} />); await flush() })
         const q = (id: string) => container.querySelector<HTMLElement>(`[data-testid="${id}"]`)!
         await act(async () => { setValue(q('project-transfer-from-machine') as HTMLSelectElement, 'daemon_mach_a'); await flush() })
-        expect(container.textContent).toContain('NATIVE_HELPER_UNAVAILABLE')
+        expect(container.textContent).toContain('file-transfer helper is not available')
+        expect(container.textContent).not.toContain('NATIVE_HELPER_UNAVAILABLE')
         expect((q('project-transfer-preview') as HTMLButtonElement).disabled).toBe(true)
     })
 })
@@ -89,20 +90,21 @@ describe('ProjectTransferSection — states and failures', () => {
         return { success: true, entries: [] }
     })
 
-    it('explains a failed transfer in plain words and keeps the code visible', async () => {
+    it('explains a failed transfer in one short sentence, code in the tooltip', async () => {
         await act(async () => { root.render(<ProjectTransferSection machines={MACHINES} sendCommand={sendWith({ ...baseTransfer, state: 'failed', errorCode: 'DIRECT_UNAVAILABLE' })} pollMs={60_000} />); await flush() })
         const err = q('project-transfer-error-tx1')
-        expect(err.textContent).toContain("couldn't connect directly")
-        expect(err.textContent).toContain('DIRECT_UNAVAILABLE')
+        expect(err.textContent).toBe('No direct connection — turn on relay.')
+        expect(err.textContent).not.toContain('DIRECT_UNAVAILABLE')
+        expect(err.getAttribute('title')).toContain('DIRECT_UNAVAILABLE')
         // the title already says the outcome, so the state word is not repeated
         expect(q('project-transfer-title-tx1').textContent).toContain('Send failed')
         expect(container.querySelector('[data-testid="project-transfer-state-tx1"]')).toBeNull()
     })
 
-    it('falls back to a generic line for an unknown failure code, still showing the code', async () => {
+    it('falls back to a generic line for an unknown failure code, code only in the tooltip', async () => {
         await act(async () => { root.render(<ProjectTransferSection machines={MACHINES} sendCommand={sendWith({ ...baseTransfer, state: 'failed', errorCode: 'SOMETHING_NEW' })} pollMs={60_000} />); await flush() })
-        expect(q('project-transfer-error-tx1').textContent).toContain('Transfer failed')
-        expect(q('project-transfer-error-tx1').textContent).toContain('SOMETHING_NEW')
+        expect(q('project-transfer-error-tx1').textContent).toBe('Transfer failed')
+        expect(q('project-transfer-error-tx1').getAttribute('title')).toContain('SOMETHING_NEW')
     })
 
     it('shows progress percent, and a hint while reconnecting', async () => {
@@ -129,39 +131,6 @@ describe('ProjectTransferSection — states and failures', () => {
         expect(q('project-transfer-selection-summary').textContent).toContain('folder sizes appear in the preview')
     })
 
-    it('shows the relay toggle (default on, recommended) and sends project_transfer_set_relay to that machine', async () => {
-        const calls: Array<[string, string, any]> = []
-        const send = vi.fn(async (id: string, cmd: string, args: any) => {
-            calls.push([id, cmd, args])
-            if (cmd === 'project_transfer_capabilities') return { success: true, supported: true, reasons: [], relayAllowed: true }
-            if (cmd === 'project_transfer_set_relay') return { success: true, relayAllowed: args.allowRelay }
-            return { success: true, entries: [], transfers: [] }
-        })
-        await act(async () => { root.render(<ProjectTransferSection machines={MACHINES} sendCommand={send} pollMs={60_000} />); await flush() })
-        expect(q('project-transfer-relay').textContent).toContain('Recommended')
-        expect(q('project-transfer-relay').textContent).toContain("Send through a relay when a direct connection isn't possible")
-        await act(async () => { setValue(q('project-transfer-from-machine') as HTMLSelectElement, 'daemon_mach_a'); await flush() })
-        const box = q('project-transfer-relay-toggle-daemon_mach_a') as HTMLInputElement
-        expect(box.checked).toBe(true)
-        await act(async () => { box.click(); await flush() })
-        expect(calls.filter((c) => c[1] === 'project_transfer_set_relay')).toEqual([['daemon_mach_a', 'project_transfer_set_relay', { allowRelay: false }]])
-        expect((q('project-transfer-relay-toggle-daemon_mach_a') as HTMLInputElement).checked).toBe(false)
-    })
-
-    it('reflects a machine where relay is switched off, and rolls the toggle back when the command fails', async () => {
-        const send = vi.fn(async (_id: string, cmd: string) => {
-            if (cmd === 'project_transfer_capabilities') return { success: true, supported: true, reasons: [], relayAllowed: false }
-            if (cmd === 'project_transfer_set_relay') return { success: false, code: 'OWNER_INGRESS_REQUIRED' }
-            return { success: true, entries: [], transfers: [] }
-        })
-        await act(async () => { root.render(<ProjectTransferSection machines={MACHINES} sendCommand={send} pollMs={60_000} />); await flush() })
-        await act(async () => { setValue(q('project-transfer-from-machine') as HTMLSelectElement, 'daemon_mach_a'); await flush() })
-        expect((q('project-transfer-relay-toggle-daemon_mach_a') as HTMLInputElement).checked).toBe(false)
-        await act(async () => { q('project-transfer-relay-toggle-daemon_mach_a').click(); await flush() })
-        expect((q('project-transfer-relay-toggle-daemon_mach_a') as HTMLInputElement).checked).toBe(false)
-        expect(container.textContent).toContain('Could not change the relay setting')
-    })
-
     it('marks a transfer that went through the relay with a "via relay" chip, and only that one', async () => {
         await act(async () => { root.render(<ProjectTransferSection machines={MACHINES} sendCommand={sendWith({ ...baseTransfer, state: 'transferring', path: 'relay' })} pollMs={60_000} />); await flush() })
         expect(q('project-transfer-path-tx1').textContent).toBe('via relay')
@@ -169,11 +138,11 @@ describe('ProjectTransferSection — states and failures', () => {
         expect(container.querySelector('[data-testid="project-transfer-path-tx1"]')).toBeNull()
     })
 
-    it('explains RELAY_LIMIT_EXCEEDED in plain words and keeps the code visible', async () => {
+    it('explains RELAY_LIMIT_EXCEEDED in a short sentence, code in the tooltip', async () => {
         await act(async () => { root.render(<ProjectTransferSection machines={MACHINES} sendCommand={sendWith({ ...baseTransfer, state: 'failed', errorCode: 'RELAY_LIMIT_EXCEEDED' })} pollMs={60_000} />); await flush() })
         const err = q('project-transfer-error-tx1')
-        expect(err.textContent).toContain('relay limit was reached')
-        expect(err.textContent).toContain('RELAY_LIMIT_EXCEEDED')
+        expect(err.textContent).toBe('Relay limit reached — try again tomorrow.')
+        expect(err.getAttribute('title')).toContain('RELAY_LIMIT_EXCEEDED')
     })
 
     it('says "no projects" instead of an empty dropdown when a machine has none', async () => {

@@ -29,6 +29,7 @@ import InstalledProviderRow, { type ProviderPinInfo } from './InstalledProviderR
 import { extractChannelSyncErrors, hasDigestMismatch, type ChannelSyncErrorInfo } from './providerChannelErrors'
 import Card from '../../components/Card'
 import SourcesPanel from './SourcesPanel'
+import { DriverGrantsPanel } from '../../components/settings/driverGrants'
 import LaunchDefaultsCard from './LaunchDefaultsCard'
 import { IconSpinner } from '../../components/Icons'
 import { AlertBanner } from '../../components/ui/AlertBanner'
@@ -88,7 +89,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
     const [loading, setLoading] = useState(false)
     const [loadError, setLoadError] = useState<string | null>(null)
     const [savingKey, setSavingKey] = useState<string | null>(null)
-    const [filter, setFilter] = useState<'all' | 'cli' | 'ide' | 'extension'>('cli')
+    const [filter, setFilter] = useState<'all' | 'cli' | 'ide' | 'extension' | 'driver'>('cli')
     // Provider type whose install-options modal is open, or null. Set when a
     // provider is switched ON; nothing is persisted until it is confirmed.
     const [installOptionsFor, setInstallOptionsFor] = useState<string | null>(null)
@@ -520,7 +521,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
             <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex gap-1 items-center">
                     <span className="text-2xs text-text-muted font-semibold uppercase tracking-wider mr-2">{t('machine.providers.filter')}</span>
-                    {(['cli', 'ide', 'extension', 'all'] as const).map(cat => (
+                    {(['cli', 'ide', 'extension', 'driver', 'all'] as const).map(cat => (
                         <button
                             key={cat}
                             onClick={() => setFilter(cat)}
@@ -715,8 +716,13 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                 </Card>
             )}
 
+            {/* Drivers: activation + permission toggles + inline approve, same place as install/enable. */}
+            {(filter === 'driver' || filter === 'all') && (
+                <DriverGrantsPanel machineId={machineId} sendCommand={sendDaemonCommand} />
+            )}
+
             {/* Installed providers list */}
-            {loading && settings.length === 0 ? (
+            {filter === 'driver' ? null : loading && settings.length === 0 ? (
                 <div className="p-10 text-center text-text-muted">{t('machine.providers.loadingSettings')}</div>
             ) : filteredSettings.length === 0 ? (
                 <Card padding="none" className="px-4.5 py-8 text-center">

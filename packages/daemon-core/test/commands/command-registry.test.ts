@@ -318,6 +318,8 @@ const LEGACY_MED_FAMILY_COMMANDS = [
     'restart_daemon_node', 'plan_mesh_onboarding', 'cleanup_worktree_nodes', 'mesh_route_preview',
     'mesh_task_output',
     'driver_describe', 'driver_invoke', 'driver_list', 'driver_set_enabled', 'driver_grants_get', 'driver_grants_set',
+    // + owner-side verify-only identity relay for a member's driver call (mesh source only, 2026-11-08).
+    'driver_worker_identity_forwarded',
     // Driver authoring (2026-10-29): worker scaffold/validate/export/install + owner import.
     'driver_scaffold', 'driver_validate', 'driver_export', 'driver_install', 'driver_import',
     // Artifact viewer additions use med-family contexts; not part of the legacy migration.

@@ -51,7 +51,12 @@ describe('transfer row title follows the state', () => {
             expect(t).not.toMatch(/Sending|Receiving/)
             expect(q('project-transfer-state-tx1')).toBeNull()
             expect(q('project-transfer-path-tx1')).not.toBeNull() // the relay chip stays
-            if (state === 'failed') expect(q('project-transfer-error-tx1')!.textContent).toContain('DIRECT_UNAVAILABLE') // the reason stays
+            if (state === 'failed') {
+                const err = q('project-transfer-error-tx1')!
+                expect(err.textContent).toBe('No direct connection — turn on relay.') // short plain sentence
+                expect(err.textContent).not.toContain('DIRECT_UNAVAILABLE') // the raw code is tooltip-only
+                expect(err.getAttribute('title')).toContain('DIRECT_UNAVAILABLE')
+            }
         })
     }
 
@@ -84,24 +89,6 @@ describe('transfer row title follows the state', () => {
     it('shows who requested a transfer (coordinator / assistant)', async () => {
         await render({ ...base, state: 'previewed', localApproved: false, requestedBy: { role: 'coordinator', sessionId: 's1' } })
         expect(q('project-transfer-requested-by-tx1')!.textContent).toBe('Requested by coordinator')
-    })
-
-    it('agent auto-approve toggle is per machine, off by default, and sent to that machine', async () => {
-        const calls: Array<[string, string, any]> = []
-        const send = vi.fn(async (id: string, cmd: string, args: any) => {
-            calls.push([id, cmd, args])
-            if (cmd === 'project_transfer_capabilities') return { success: true, supported: true, reasons: [], relayAllowed: true, agentAutoApprove: false }
-            if (cmd === 'project_transfer_set_agent_auto_approve') return { success: true, agentAutoApprove: args.allow }
-            return { success: true, entries: [], transfers: [] }
-        })
-        await act(async () => { root.render(<ProjectTransferSection machines={MACHINES} sendCommand={send} pollMs={60_000} />); await flush() })
-        const sel = (id: string, v: string) => { const el = q(id) as HTMLSelectElement; Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(el, v); el.dispatchEvent(new Event('change', { bubbles: true })) }
-        await act(async () => { sel('project-transfer-from-machine', 'daemon_mach_a'); await flush() })
-        const box = q('project-transfer-agent-auto-toggle-daemon_mach_a') as HTMLInputElement
-        expect(box.checked).toBe(false)
-        await act(async () => { box.click(); await flush() })
-        expect(calls.find((c) => c[1] === 'project_transfer_set_agent_auto_approve')).toEqual(['daemon_mach_a', 'project_transfer_set_agent_auto_approve', { allow: true }])
-        expect((q('project-transfer-agent-auto-toggle-daemon_mach_a') as HTMLInputElement).checked).toBe(true)
     })
 
     it('a completed overwrite on the target machine shows Revert, which calls project_transfer_revert there', async () => {

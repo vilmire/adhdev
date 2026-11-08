@@ -47,7 +47,7 @@ afterEach(() => {
   try { rmSync(dirname(testConfigDir), { recursive: true, force: true }); } catch { /* best effort */ }
 });
 
-function setup(src: Record<string, string>, dst: Record<string, string> = {}) {
+function setup(src: Record<string, string>, dst: Record<string, string> = {}, leavePolicyUnset = false) {
   const broker = new LinkBroker();
   const peers = new Map<string, Side>();
   const a = makeSide('daemon_mach_a', broker, peers);
@@ -55,6 +55,8 @@ function setup(src: Record<string, string>, dst: Record<string, string> = {}) {
   a.engine.shutdown();
   a.engine = configureProjectTransfer(a.ports); // the process-wide engine is the requesting daemon
   cleanups.push(() => { a.engine.shutdown(); b.engine.shutdown(); });
+  // The shipped default is ON (2026-11-08); the legacy 'asks the owner' tests pin an explicit off.
+  if (!leavePolicyUnset) { a.engine.setAgentAutoApprove(false); b.engine.setAgentAutoApprove(false); }
   writeTree(a.ws.path, src);
   writeTree(b.ws.path, dst);
   setWorkspaceLookupForTest((q) => {
@@ -175,16 +177,34 @@ describe('agent transfer request (owner decision 2026-11-02 section 6)', () => {
       expect(await (spec(name).run as any)({}, raw), name).toMatchObject({ success: false, code: 'OWNER_INGRESS_REQUIRED' });
     }
     expect(spec('project_transfer_agent').sources).toEqual(['ipc']);
-    expect(a.engine.agentAutoApproveAllowed()).toBe(false);
+    expect(a.engine.agentAutoApproveAllowed()).toBe(false); // owner commands must not change the policy
   });
 });
 
-describe('A2: per-machine "auto-approve agent transfers" (default off, both machines must allow)', () => {
-  it('is off by default and the agent request waits for the owner', async () => {
-    const { a, b } = setup({ 'proj/a.txt': 'x' });
-    expect(a.engine.agentAutoApproveAllowed()).toBe(false);
-    expect(b.engine.agentAutoApproveAllowed()).toBe(false);
+describe('A2: per-machine "auto-approve agent transfers" (default on since 2026-11-08, both machines must allow)', () => {
+  it('unset defaults to allowed: a new-folder agent request proceeds without asking', async () => {
+    const { a, b } = setup({ 'proj/a.txt': 'dflt' }, {}, true);
+    expect(a.engine.agentAutoApproveAllowed()).toBe(true);
+    expect(b.engine.agentAutoApproveAllowed()).toBe(true);
+    const r = await agent(REQ);
+    expect(r).toMatchObject({ success: true, autoApproved: true });
+    expect(buildOwnerDecisions(meshId)).toHaveLength(0);
+  });
+
+  it('an explicit owner off on either machine is respected and the request asks', async () => {
+    const { a, b } = setup({ 'proj/a.txt': 'x' }, {}, true);
+    a.engine.setAgentAutoApprove(false);
+    expect(b.engine.agentAutoApproveAllowed()).toBe(true);
     expect((await agent(REQ)).autoApproved).toBe(false);
+    expect(buildOwnerDecisions(meshId).length).toBeGreaterThan(0);
+  });
+
+  it('an unset overwrite request still asks (overwrites always ask)', async () => {
+    const { a, b } = setup({ 'proj/a.txt': 'NEW' }, { 'proj/a.txt': 'OLD' }, true);
+    expect(a.engine.agentAutoApproveAllowed()).toBe(true);
+    const r = await agent({ ...REQ, targetMode: 'existing_path', targetDir: '' });
+    expect(r).toMatchObject({ success: true, autoApproved: false, replacedFiles: 1 });
+    expect(fs.readFileSync(`${b.ws.path}/proj/a.txt`, 'utf8')).toBe('OLD');
   });
 
   it('both machines on: the daemons approve and the transfer completes with no owner decision', async () => {
@@ -216,6 +236,7 @@ describe('A2: per-machine "auto-approve agent transfers" (default off, both mach
   it('the target checks ITS OWN setting: a forged auto-approve request is refused', async () => {
     const { a, b } = setup({ 'proj/a.txt': 'x' });
     a.engine.setAgentAutoApprove(true); // requester claims everything is fine; target is off
+    b.engine.setAgentAutoApprove(false);
     const r = await agent(REQ);
     expect(r.autoApproved).toBe(false);
     const rec = a.engine.get(r.transferId)!;

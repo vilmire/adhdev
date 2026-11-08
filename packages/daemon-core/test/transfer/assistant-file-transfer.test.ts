@@ -61,6 +61,7 @@ beforeEach(() => {
   a.engine.shutdown();
   a.engine = configureProjectTransfer(a.ports);
   cleanups.push(() => { a.engine.shutdown(); s.engine.shutdown(); b.engine.shutdown(); });
+  for (const side of [a, s, b]) side.engine.setAgentAutoApprove(false); // shipped default is ON (2026-11-08); these tests pin the asking path
   writeTree(a.ws.path, { 'proj/a.txt': 'local' });
   writeTree(s.ws.path, { 'proj/s.txt': 'remote' });
   otherWs = tmpDir('other');
