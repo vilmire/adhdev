@@ -186,3 +186,19 @@ describe('LIGHT-TASK central claim rule', () => {
     } finally { cleanup(meshId) }
   })
 })
+
+describe('node_busy hold names its blocker', () => {
+  it('a write claim refused as node_busy records the busy writer id in the hold', () => {
+    const meshId = `mesh_busy_names_${randomUUID().slice(0, 8)}`
+    try {
+      const first = enqueueTask(meshId, 'first write', { taskMode: 'code_change', difficulty: 'easy', ownedPaths: ['docs/a.md'] })
+      expect(claim(meshId, {}, { sessionId: 'session_first' }).task?.id).toBe(first.id)
+      const second = enqueueTask(meshId, 'second write', { taskMode: 'code_change', difficulty: 'easy', ownedPaths: ['docs/b.md'] })
+      const got = claim(meshId, {}, { sessionId: 'session_second' })
+      expect(got.task).toBeNull()
+      expect(MeshRuntimeStore.getInstance().activeNodeWriteAssignmentIds(meshId, NODE_A)).toEqual([first.id])
+      const held = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, second.id) as any
+      if (held?.hold?.reason === 'node_busy_with_active_assignment') expect(held.hold.blockingTaskIds).toEqual([first.id])
+    } finally { cleanup(meshId) }
+  })
+})

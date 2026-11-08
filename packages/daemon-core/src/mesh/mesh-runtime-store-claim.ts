@@ -36,7 +36,7 @@ import type { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { dirtyWriteVerdict, describeDirtyWriteRefusal, type DirtyWriteGate } from './mesh-dirty-write-verdict.js';
 
 /** The MeshRuntimeStore members these functions read or call (compiler-checked; no cast). */
-export type MeshRuntimeStoreClaimHost = Pick<MeshRuntimeStore, 'activeProviderAssignmentCount' | 'activeSlotAssignmentCount' | 'assignedRowsMeshWide' | 'db' | 'getQueueEntries' | 'getQueueSchedulingGraph' | 'ensureLegacyQueueMigrated' | 'hasActiveNodeWriteAssignment' | 'hasActiveSessionAssignment' | 'maybeCheckpointWal' | 'transaction' | 'turnStore'>;
+export type MeshRuntimeStoreClaimHost = Pick<MeshRuntimeStore, 'activeProviderAssignmentCount' | 'activeSlotAssignmentCount' | 'assignedRowsMeshWide' | 'db' | 'getQueueEntries' | 'getQueueSchedulingGraph' | 'ensureLegacyQueueMigrated' | 'hasActiveNodeWriteAssignment' | 'activeNodeWriteAssignmentIds' | 'hasActiveSessionAssignment' | 'maybeCheckpointWal' | 'transaction' | 'turnStore'>;
 
 export interface ScopedInFlightOwnership extends InFlightOwnership { ownershipScope?: PhysicalOwnershipScope; readLease?: boolean; /** A light task: its scope is a private worktree no other task ever claims. */ privateWorktree?: boolean }
 type OwnershipCandidate = Pick<MeshWorkQueueEntry, 'ownedPaths' | 'readonly' | 'taskMode' | 'ownershipScope'> & Partial<Pick<MeshWorkQueueEntry, 'id'>>;
@@ -592,6 +592,8 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
                     context.detail = { unknownField, resolution: ownershipUnprovenResolution(message) };
                 }
                 if (gate.reason === 'dependencies_unsatisfied') context.blockingTaskIds = (candidate.dependsOn || []).filter(id => depStatus.get(id) !== 'completed');
+                // Name the same writers the busy gate counted (all daemon-id forms, stopping writers included).
+                if (gate.reason === 'node_busy_with_active_assignment' && nodeWriteBusy) context.blockingTaskIds = host.activeNodeWriteAssignmentIds(meshId, nodeId);
                 const previousHold = JSON.stringify(candidate.hold);
                 setQueueTaskHold(candidate, gate.reason, context);
                 if (previousHold !== JSON.stringify(candidate.hold)) {

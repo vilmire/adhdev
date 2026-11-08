@@ -510,6 +510,15 @@ export class MeshRuntimeStore {
      * (nodeHasActiveAssignment).
      */
     hasActiveNodeWriteAssignment(meshId: string, nodeId: string): boolean {
+        return this.activeNodeWriteAssignmentIds(meshId, nodeId).length > 0;
+    }
+
+    /**
+     * The task ids that make a node write-busy — the exact set {@link hasActiveNodeWriteAssignment} gates on, so a
+     * `node_busy_with_active_assignment` hold can always name its blockers (live 2026-11-08: a hold reported no
+     * blocking task because the hold context re-derived blockers with a narrower node/readonly match).
+     */
+    activeNodeWriteAssignmentIds(meshId: string, nodeId: string): string[] {
         // The serialization gate (claimNextQueueTask's `!nodeBusy`) must see a node as
         // busy when ANY active row's assigned_node_id matches in ANY equivalent
         // daemon-id form (config-form `daemon_mach_X` vs stamp-form `mach_X`, or the
@@ -520,14 +529,14 @@ export class MeshRuntimeStore {
         // every equivalent form and bind an IN (...) set so the busy gate and the
         // candidate SELECT use the SAME matching rule.
         const nodeIdForms = expandDaemonIdForms(nodeId);
-        if (nodeIdForms.length === 0) return false;
+        if (nodeIdForms.length === 0) return [];
         const placeholders = nodeIdForms.map(() => '?').join(', ');
         const rows = this.db.prepare(`
             SELECT payload FROM mesh_queue
             WHERE mesh_id = ? AND ${ACTIVE_WRITER_CLAIM_SQL} AND assigned_node_id IN (${placeholders})
         `).all(meshId, ...nodeIdForms) as Array<{ payload: string }>;
         // LIGHT-TASK: a light row runs in its own scratch checkout, so it never makes the node write-busy.
-        return rows.some(row => { const e = JSON.parse(row.payload) as MeshWorkQueueEntry; return !isTaskReadonly(e) && !e.light; });
+        return rows.map(row => JSON.parse(row.payload) as MeshWorkQueueEntry).filter(e => !isTaskReadonly(e) && !e.light).map(e => e.id);
     }
 
     /**

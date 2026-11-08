@@ -45,3 +45,20 @@ describe('notice consume watch — unconfirmed approval notices are redelivered 
         expect(h.timers).toHaveLength(0);
     });
 });
+
+describe('notice consume watch — a turn after the write counts as consumed', () => {
+    it('does not release a notice whose session took a turn after it was typed, even if the journal reads unknown', async () => {
+        const timers: Array<() => void> = [];
+        const release = vi.fn(() => true);
+        const turned = vi.fn((_s: string, since: number) => since > 0);
+        const w = createNoticeConsumeWatch({
+            settle: async () => view('unknown'), forget: vi.fn(), release, stillParked: () => false, sessionTurnedSince: turned,
+            setTimer: (fn) => { timers.push(fn); return {}; },
+        });
+        w.watch(input);
+        timers[0]!();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(turned).toHaveBeenCalled();
+        expect(release).not.toHaveBeenCalled();
+    });
+});

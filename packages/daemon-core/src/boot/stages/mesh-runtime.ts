@@ -432,6 +432,7 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
         forget: (messageId) => components.cliManager.input.forgetSettled(messageId),
         release: (claimEventId) => notices.releaseDelivery?.(claimEventId) === true,
         stillParked: (sessionId, messageId) => components.cliManager.resolveSessionInputTarget(sessionId)?.hasQueuedSend?.(messageId) === true,
+        sessionTurnedSince: (sessionId, sinceMs) => notices.sessionTurnedSince?.(sessionId, sinceMs) === true,
         log: deliverLog,
     });
     bindMeshNoticeRuntime(notices);

@@ -98999,6 +98999,7 @@ ${continuationNotice}` } : dispatchTask,
               context2.detail = { unknownField, resolution: ownershipUnprovenResolution(message) };
             }
             if (gate.reason === "dependencies_unsatisfied") context2.blockingTaskIds = (candidate.dependsOn || []).filter((id4) => depStatus.get(id4) !== "completed");
+            if (gate.reason === "node_busy_with_active_assignment" && nodeWriteBusy) context2.blockingTaskIds = host.activeNodeWriteAssignmentIds(meshId, nodeId);
             const previousHold = JSON.stringify(candidate.hold);
             setQueueTaskHold(candidate, gate.reason, context2);
             if (previousHold !== JSON.stringify(candidate.hold)) {
@@ -99628,17 +99629,22 @@ ${continuationNotice}` } : dispatchTask,
            * (nodeHasActiveAssignment).
            */
           hasActiveNodeWriteAssignment(meshId, nodeId) {
+            return this.activeNodeWriteAssignmentIds(meshId, nodeId).length > 0;
+          }
+          /**
+           * The task ids that make a node write-busy — the exact set {@link hasActiveNodeWriteAssignment} gates on, so a
+           * `node_busy_with_active_assignment` hold can always name its blockers (live 2026-11-08: a hold reported no
+           * blocking task because the hold context re-derived blockers with a narrower node/readonly match).
+           */
+          activeNodeWriteAssignmentIds(meshId, nodeId) {
             const nodeIdForms = expandDaemonIdForms(nodeId);
-            if (nodeIdForms.length === 0) return false;
+            if (nodeIdForms.length === 0) return [];
             const placeholders = nodeIdForms.map(() => "?").join(", ");
             const rows = this.db.prepare(`
             SELECT payload FROM mesh_queue
             WHERE mesh_id = ? AND ${ACTIVE_WRITER_CLAIM_SQL} AND assigned_node_id IN (${placeholders})
         `).all(meshId, ...nodeIdForms);
-            return rows.some((row2) => {
-              const e = JSON.parse(row2.payload);
-              return !isTaskReadonly3(e) && !e.light;
-            });
+            return rows.map((row2) => JSON.parse(row2.payload)).filter((e) => !isTaskReadonly3(e) && !e.light).map((e) => e.id);
           }
           /**
            * Count active writer claims on a node, regardless of provider or
@@ -164234,7 +164240,7 @@ ${defangRelayBody(text10)}`;
       const setTimer = deps.setTimer ?? ((fn, ms3) => setTimeout(fn, ms3));
       const retried = /* @__PURE__ */ new Set();
       const log = deps.log;
-      async function check(input) {
+      async function check(input, writtenAt = 0) {
         if (deps.stillParked?.(input.sessionId, input.messageId)) return "parked";
         let view2;
         try {
@@ -164244,6 +164250,13 @@ ${defangRelayBody(text10)}`;
         }
         if (view2?.state === "consumed") return "consumed";
         if (view2?.state === "queued") return "parked";
+        let turned = false;
+        try {
+          turned = writtenAt > 0 && deps.sessionTurnedSince?.(input.sessionId, writtenAt) === true;
+        } catch {
+          turned = false;
+        }
+        if (turned) return "consumed";
         retried.add(input.messageId);
         deps.forget(input.messageId);
         let released = 0;
@@ -164260,8 +164273,9 @@ ${defangRelayBody(text10)}`;
         check,
         watch(input) {
           if (!CONSUME_WATCHED_NOTIFY.has(input.notify) || retried.has(input.messageId)) return;
+          const writtenAt = Date.now();
           const t = setTimer(() => {
-            void check(input).catch(() => void 0);
+            void check(input, writtenAt).catch(() => void 0);
           }, delayMs);
           t.unref?.();
         }
@@ -165772,6 +165786,7 @@ ${defangRelayBody(text10)}`;
         forget: (messageId) => components.cliManager.input.forgetSettled(messageId),
         release: (claimEventId) => notices.releaseDelivery?.(claimEventId) === true,
         stillParked: (sessionId, messageId) => components.cliManager.resolveSessionInputTarget(sessionId)?.hasQueuedSend?.(messageId) === true,
+        sessionTurnedSince: (sessionId, sinceMs) => notices.sessionTurnedSince?.(sessionId, sinceMs) === true,
         log: deliverLog
       });
       bindMeshNoticeRuntime(notices);
