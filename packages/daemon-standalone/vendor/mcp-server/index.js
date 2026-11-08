@@ -217450,7 +217450,14 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         );
         return parseNativeProcessTable(String(stdout));
       },
-      pause: () => new Promise((resolve77) => setTimeout(resolve77, 100))
+      pause: () => new Promise((resolve77) => setTimeout(resolve77, 100)),
+      signalGroup(pgid, signal) {
+        if (process.platform === "win32" || !(pgid > 1)) return;
+        try {
+          process.kill(-pgid, signal);
+        } catch {
+        }
+      }
     };
     var testPorts;
     async function stopExactMeshWriter(host, request, ports = testPorts ?? nativeWriterStopPorts) {
@@ -217540,7 +217547,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           for (const p of before) if (tree.has(p.ppid) && (root.pgid !== null || Date.parse(p.birth) >= Date.parse(before.find((x) => x.pid === p.ppid).birth))) tree.add(p.pid);
           if (old === tree.size) break;
         }
-        if (root.pgid !== null && before.some((p) => tree.has(p.pid) && (p.pgid !== root.pgid || p.uid !== root.uid) || p.pgid === root.pgid && !tree.has(p.pid))) return pending("ambiguous_worker_tree");
+        if (root.pgid !== null && before.some((p) => tree.has(p.pid) && p.uid !== root.uid || p.pgid === root.pgid && !tree.has(p.pid))) return pending("ambiguous_worker_tree");
+        const detachedGroups = root.pgid === null ? [] : [...new Set(before.filter((p) => tree.has(p.pid) && p.pgid !== null && p.pgid !== root.pgid).map((p) => p.pgid))];
+        if (detachedGroups.some((g3) => before.some((p) => p.pgid === g3 && !tree.has(p.pid)))) return pending("ambiguous_worker_tree");
         const held = before.filter((p) => tree.has(p.pid));
         const capture = captureWriterStop(request, root, held, captured.runtimeKey, captured.startedAt);
         if (!current5()) return pending("claim_changed");
@@ -217557,6 +217566,12 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           const after = await ports.read();
           if (!after) return pending("native_observation_unknown");
           if (after.some((p) => held.some((old) => old.pid === p.pid && old.birth !== p.birth))) return pending("pid_reused");
+          for (const g3 of detachedGroups) {
+            const leader = held.find((h) => h.pid === g3);
+            const alive = after.some((p) => p.pgid === g3 && held.some((h) => h.pid === p.pid && h.birth === p.birth));
+            if (!alive || leader && !after.some((p) => p.pid === g3 && p.birth === leader.birth) && after.some((p) => p.pid === g3)) continue;
+            ports.signalGroup?.(g3, pass < 3 ? "SIGTERM" : "SIGKILL");
+          }
           if (!after.some((p) => inWriterGroup(p, root) || tree.has(p.pid))) {
             markWriterStopQuiescent(request);
             return {

@@ -64,6 +64,8 @@ export function nativeProcessesFromWindowsTable(rows: readonly ProcessNodeInfo[]
 export interface WriterStopPorts {
     read(): Promise<NativeWriterProcess[] | null>;
     pause(): Promise<void>;
+    /** Signal a process group (POSIX). Used only for the writer's own detached descendants. */
+    signalGroup?(pgid: number, signal: 'SIGTERM' | 'SIGKILL'): void;
 }
 /** One unreadable row voids the table: a process we cannot read could be the writer. */
 export function parseNativeProcessTable(stdout: string): NativeWriterProcess[] | null {
@@ -85,6 +87,10 @@ export const nativeWriterStopPorts: WriterStopPorts = {
         return parseNativeProcessTable(String(stdout));
     },
     pause: () => new Promise(resolve => setTimeout(resolve, 100)),
+    signalGroup(pgid, signal) {
+        if (process.platform === 'win32' || !(pgid > 1)) return;
+        try { process.kill(-pgid, signal); } catch { /* already gone */ }
+    },
 };
 let testPorts: WriterStopPorts | undefined;
 export function __setWriterStopPortsForTests(ports: WriterStopPorts | undefined): void { testPorts = ports; }
@@ -194,9 +200,19 @@ export async function stopExactMeshWriter(
             for (const p of before) if (tree.has(p.ppid) && (root.pgid !== null || Date.parse(p.birth) >= Date.parse(before.find(x => x.pid === p.ppid)!.birth))) tree.add(p.pid);
             if (old === tree.size) break;
         }
-        // A detached descendant or foreign member makes containment ambiguous.
-        if (root.pgid !== null && before.some(p => (tree.has(p.pid) && (p.pgid !== root.pgid || p.uid !== root.uid))
+        // A foreign member of the writer's group, or a descendant running as another user, makes
+        // containment ambiguous. A descendant that moved to its OWN process group is still the
+        // writer's (proven by the parent chain and birth order above) — CLIs such as codex run every
+        // tool command that way. Refusing it left a finished worker's report held forever (live
+        // 2026-11-08: one member 840+ refusals, the mesh host 1h+). Such groups are stopped with the writer below.
+        if (root.pgid !== null && before.some(p => (tree.has(p.pid) && p.uid !== root.uid)
             || (p.pgid === root.pgid && !tree.has(p.pid)))) return pending('ambiguous_worker_tree');
+        // Detached groups: led by a tree member and holding only tree members (a group that also
+        // holds foreign processes is not ours to signal).
+        const detachedGroups = root.pgid === null ? [] : [...new Set(before
+            .filter(p => tree.has(p.pid) && p.pgid !== null && p.pgid !== root.pgid)
+            .map(p => p.pgid as number))];
+        if (detachedGroups.some(g => before.some(p => p.pgid === g && !tree.has(p.pid)))) return pending('ambiguous_worker_tree');
         const held = before.filter(p => tree.has(p.pid));
         const capture = captureWriterStop(request, root, held, captured.runtimeKey!, captured.startedAt!);
         // Recheck the source claim immediately before the exact adapter stop.
@@ -213,6 +229,14 @@ export async function stopExactMeshWriter(
             if (!after) return pending('native_observation_unknown');
             // PID reuse is ambiguous, never a proof that our captured tree died.
             if (after.some(p => held.some(old => old.pid === p.pid && old.birth !== p.birth))) return pending('pid_reused');
+            // Stop the writer's detached descendants: a group still led by the SAME process (pid AND
+            // birth match the capture) is signalled — TERM first, KILL from the fourth pass.
+            for (const g of detachedGroups) {
+                const leader = held.find(h => h.pid === g);
+                const alive = after.some(p => p.pgid === g && held.some(h => h.pid === p.pid && h.birth === p.birth));
+                if (!alive || (leader && !after.some(p => p.pid === g && p.birth === leader.birth) && after.some(p => p.pid === g))) continue;
+                ports.signalGroup?.(g, pass < 3 ? 'SIGTERM' : 'SIGKILL');
+            }
             if (!after.some(p => inWriterGroup(p, root) || tree.has(p.pid))) {
                 markWriterStopQuiescent(request);
                 return { ...request, success: true, quiescent: true,

@@ -422,6 +422,45 @@ describe('RC29 exact stop and crash settlement through real command/ledger/queue
         expect(revoke).toHaveBeenCalledTimes(1);
     });
 
+    // Live 2026-11-08: codex runs tool commands in their own process group, so every finished codex
+    // worker with a lingering command was refused ambiguous_worker_tree forever (report held, task stuck).
+    it('stops a detached descendant group with the writer and settles the attempt', async () => {
+        open();
+        const f = sourceFixture();
+        const detached: NativeWriterProcess = { pid: 900, ppid: 418, pgid: 900, uid: 501, birth: new Date(T0 + 2000).toString() };
+        let table = [nativeRoot, nativeChild, detached];
+        f.adapter.shutdown.mockImplementation(() => { table = table.filter(p => p.pgid !== 417); });
+        const signals: Array<[number, string]> = [];
+        wireNativeStop(f, () => table);
+        __setWriterStopPortsForTests({ read: async () => table, pause: async () => {},
+            signalGroup: (g, sig) => { signals.push([g, sig]); table = table.filter(p => p.pgid !== g); } });
+        now += 90_000; ledger.sweepExpiredHolds(now);
+        now += 90_001; ledger.sweepExpiredHolds(now);
+        await drain();
+        expect(signals).toEqual([[900, 'SIGTERM']]);
+        expect(ledger.getAttempt(ATTEMPT)).toMatchObject({ state: 'accepted', generation: 1, terminal: null });
+    });
+
+    it.each([
+        ['a foreign process in the writer group', { pid: 950, ppid: 1, pgid: 417, uid: 501 }],
+        ['a descendant running as another user', { pid: 951, ppid: 418, pgid: 951, uid: 0 }],
+    ] as const)('still refuses (ambiguous) with %s and signals nothing', async (_label, extra) => {
+        open();
+        const f = sourceFixture();
+        const other: NativeWriterProcess = { ...extra, birth: new Date(T0 + 3000).toString() };
+        let table = [nativeRoot, nativeChild, other];
+        f.adapter.shutdown.mockImplementation(() => { table = [other]; });
+        const signals: Array<[number, string]> = [];
+        wireNativeStop(f, () => table);
+        __setWriterStopPortsForTests({ read: async () => table, pause: async () => {}, signalGroup: (g, sig) => { signals.push([g, sig]); } });
+        now += 90_000; ledger.sweepExpiredHolds(now);
+        now += 90_001; ledger.sweepExpiredHolds(now);
+        await drain();
+        expect(f.adapter.shutdown).not.toHaveBeenCalled();
+        expect(signals).toEqual([]);
+        expect(ledger.getAttempt(ATTEMPT)).toMatchObject({ state: 'stopping', generation: 0, terminal: null });
+    });
+
     it.each(['still_live', 'pid_reused', 'unknown', 'shutdown_failed'] as const)('%s retains cap claim and denies forced requeue', async mode => {
         open();
         const f = sourceFixture(); let reads = 0;
@@ -528,11 +567,12 @@ describe('RC29 exact stop and crash settlement through real command/ledger/queue
         await ledger.resumeStoppingWriters(); expect(revoke).toHaveBeenCalledTimes(1);
     });
 
-    it.each(['stale_birth', 'detached_descendant', 'foreign_group_member'] as const)('denies native identity ambiguity before shutdown: %s', async mode => {
+    // detached_descendant moved out of this list (owner decision 2026-11-08): a descendant in its own
+    // process group is the writer's and is stopped with it — see "stops a detached descendant group".
+    it.each(['stale_birth', 'foreign_group_member'] as const)('denies native identity ambiguity before shutdown: %s', async mode => {
         open(); const f = sourceFixture();
         wireNativeStop(f, () => mode === 'stale_birth' ? [{ ...nativeRoot, birth: new Date(T0 + 60_000).toString() }]
-            : mode === 'detached_descendant' ? [nativeRoot, { ...nativeChild, pgid: 999 }]
-                : [nativeRoot, { ...nativeChild, ppid: 999 }]);
+            : [nativeRoot, { ...nativeChild, ppid: 999 }]);
         now = T0 + DEFAULT_TURN_POLICY.hardCeilingMs; ledger.sweepExpiredHolds(now); await drain();
         expect(f.adapter.shutdown).not.toHaveBeenCalled();
         expect(ledger.getAttempt(ATTEMPT)).toMatchObject({ state: 'stopping', terminal: null });
