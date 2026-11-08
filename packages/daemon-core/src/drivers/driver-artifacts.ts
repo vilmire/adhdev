@@ -34,6 +34,11 @@ export interface DriverArtifactSink {
 export interface DriverArtifactPort {
     /** Null when the worker has no trusted local workspace (session gone, remote worker). */
     resolve(identity: DriverWorkerIdentity): Promise<DriverArtifactSink | null>;
+    /**
+     * The worker session's own workspace on THIS machine, for a result that cannot be registered
+     * as a mesh artifact (the task is owned by another daemon). Null when the session is not local.
+     */
+    resolveLocal?(identity: DriverWorkerIdentity): Promise<string | null>;
 }
 
 const IMAGE_EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' };
@@ -136,6 +141,21 @@ export async function captureDriverArtifacts(input: {
         return sink;
     };
     let seq = 0;
+    // REMOTE WORKER (live 2026-11-08, Air): the task's owner holds the artifact store, so nothing can be
+    // registered here — but the image must still reach the worker. It is written as a plain file into the
+    // worker's own workspace and the path is returned, so the CLI can open the image itself.
+    let localRoot: string | null | undefined;
+    const getLocalRoot = async (): Promise<string | null> => {
+        if (localRoot !== undefined) return localRoot;
+        try { localRoot = port?.resolveLocal ? await port.resolveLocal(identity) : null; } catch { localRoot = null; }
+        return localRoot;
+    };
+    const writeLocal = (root: string, file: string, bytes: Buffer): { absPath: string; relPath: string } => {
+        const dir = prepareDir(root, invocationId);
+        const absPath = join(dir.abs, file);
+        writeFileSync(absPath, bytes, { flag: 'wx', mode: 0o600 });
+        return { absPath, relPath: `${dir.rel}/${file}` };
+    };
     const content: unknown[] = [];
     for (const block of Array.isArray(result.content) ? result.content : []) {
         const b = block as { type?: unknown; data?: unknown; mimeType?: unknown } | null;
@@ -150,7 +170,16 @@ export async function captureDriverArtifacts(input: {
         try {
             const decoded = decodeDriverImage(b);
             const target = await getSink();
-            if (!target) { omitted(artifactError ?? { code: 'artifact_unavailable', message: 'artifact registration unavailable' }); continue; }
+            if (!target) {
+                const root = await getLocalRoot();
+                if (root) {
+                    const local = writeLocal(root, `image-${++seq}.${IMAGE_EXT[decoded.mime]}`, decoded.bytes);
+                    content.push({ type: 'image', localPath: local.absPath, relPath: local.relPath, mime: decoded.mime, sizeBytes: decoded.bytes.length,
+                        note: 'Saved as a local file in your workspace (this task is owned by another machine, so it is not a shared artifact). Open the file to see the image.' });
+                    continue;
+                }
+                omitted(artifactError ?? { code: 'artifact_unavailable', message: 'artifact registration unavailable' }); continue;
+            }
             const registered = await writeAndRegister(target, invocationId, `image-${++seq}.${IMAGE_EXT[decoded.mime]}`, decoded.bytes,
                 { kind: 'image', mime: decoded.mime, title });
             artifacts.push({ type: 'image', artifactId: registered.artifactId, digest: digestOf(registered.sha256), relPath: registered.relPath });

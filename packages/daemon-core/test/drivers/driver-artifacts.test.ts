@@ -162,6 +162,19 @@ describe('failure containment', () => {
         expect(text.artifactError).toMatchObject({ code: 'artifact_unavailable' });
         expect(text.output).toMatchObject({ truncated: true, note: expect.stringContaining('could not be stored') });
     });
+    // Live 2026-11-08: a worker on a member machine (task owned by another daemon) got every screenshot
+    // dropped as artifact_unavailable. The image now lands as a local file in its own workspace.
+    it('a remote worker with a local workspace gets the image as a local file, never base64', async () => {
+        const remote: DriverArtifactPort = { resolve: async () => null, resolveLocal: async () => ws };
+        const r = await capture([image(PNG, 'image/png')], remote);
+        const block = (r.output as any).content[0];
+        expect(block).toMatchObject({ type: 'image', relPath: '.adhdev/driver-results/inv-1/image-1.png', mime: 'image/png', sizeBytes: PNG.length });
+        expect(block.omitted).toBeUndefined();
+        expect(readFileSync(block.localPath)).toEqual(PNG);
+        expect(JSON.stringify(r.output)).not.toContain(PNG.toString('base64'));
+        expect(r.artifacts).toEqual([]);
+        expect(git('status', '--porcelain')).toBe('');
+    });
 });
 
 describe('sniffing', () => {

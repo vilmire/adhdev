@@ -49,7 +49,14 @@ export function createDriverArtifactPort(ctx: ArtifactCommandContext): DriverArt
                     }).catch(() => null);
                     return { artifactId: registered.record.artifactId, sha256: registered.record.sha256, sizeBytes: registered.record.sizeBytes };
                 },
-            };
+                        };
+        },
+        async resolveLocal(identity) {
+            const resolved = await resolveRegisteredSessionWorkspace(ctx, identity.sessionId, {
+                meshId: identity.meshId, nodeId: identity.nodeId, taskId: identity.taskId,
+                allowTrustedWorkerFallback: true, allowStoredArtifactWorkspaceFallback: false,
+            });
+            return resolved.workspaceRoot ? canon(resolved.workspaceRoot) : null;
         },
     };
 }

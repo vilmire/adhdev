@@ -131563,6 +131563,22 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         return sink2;
       };
       let seq2 = 0;
+      let localRoot;
+      const getLocalRoot = async () => {
+        if (localRoot !== void 0) return localRoot;
+        try {
+          localRoot = port?.resolveLocal ? await port.resolveLocal(identity5) : null;
+        } catch {
+          localRoot = null;
+        }
+        return localRoot;
+      };
+      const writeLocal = (root, file, bytes2) => {
+        const dir = prepareDir(root, invocationId);
+        const absPath = (0, import_node_path29.join)(dir.abs, file);
+        (0, import_node_fs34.writeFileSync)(absPath, bytes2, { flag: "wx", mode: 384 });
+        return { absPath, relPath: `${dir.rel}/${file}` };
+      };
       const content = [];
       for (const block3 of Array.isArray(result.content) ? result.content : []) {
         const b = block3;
@@ -131584,6 +131600,19 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
           const decoded = decodeDriverImage(b);
           const target2 = await getSink();
           if (!target2) {
+            const root = await getLocalRoot();
+            if (root) {
+              const local = writeLocal(root, `image-${++seq2}.${IMAGE_EXT[decoded.mime]}`, decoded.bytes);
+              content.push({
+                type: "image",
+                localPath: local.absPath,
+                relPath: local.relPath,
+                mime: decoded.mime,
+                sizeBytes: decoded.bytes.length,
+                note: "Saved as a local file in your workspace (this task is owned by another machine, so it is not a shared artifact). Open the file to see the image."
+              });
+              continue;
+            }
             omitted(artifactError ?? { code: "artifact_unavailable", message: "artifact registration unavailable" });
             continue;
           }
@@ -132237,6 +132266,16 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
               return { artifactId: registered.record.artifactId, sha256: registered.record.sha256, sizeBytes: registered.record.sizeBytes };
             }
           };
+        },
+        async resolveLocal(identity5) {
+          const resolved = await resolveRegisteredSessionWorkspace(ctx, identity5.sessionId, {
+            meshId: identity5.meshId,
+            nodeId: identity5.nodeId,
+            taskId: identity5.taskId,
+            allowTrustedWorkerFallback: true,
+            allowStoredArtifactWorkspaceFallback: false
+          });
+          return resolved.workspaceRoot ? canon3(resolved.workspaceRoot) : null;
         }
       };
     }
