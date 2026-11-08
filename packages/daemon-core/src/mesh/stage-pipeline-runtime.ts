@@ -230,16 +230,31 @@ export class StagePipelineRuntime {
                 // coordinator may accept (skip the review) or abandon such a task without the review running.
                 const pendingChild = parent.status === 'assigned' && parent.stageState!.phase === 'awaiting_review'
                     ? this.ports.queue.get(meshId, parent.stageState!.reviewTaskIds.at(-1) ?? '') : null;
-                const reviewNeverStarted = !!pendingChild && pendingChild.status === 'pending' && !pendingChild.assignedSessionId;
+                // Never started = never claimed. A child already cancelled unclaimed also qualifies: rc.109 cancelled
+                // the child but left the parent held (live 2026-11-08, d495d612), and a retry must finish the job.
+                const reviewNeverStarted = !!pendingChild && !pendingChild.assignedSessionId
+                    && (pendingChild.status === 'pending' || pendingChild.status === 'cancelled');
                 if ((action === 'accept' || action === 'abandon') && reviewNeverStarted) {
-                    // Settle the parent FIRST, so the child's terminal hook finds a finished parent and does not
-                    // react to the cancelled review (e.g. by queueing a replacement reviewer).
+                    // Release the stage row FIRST: until it is released every `completed` on a stage parent is
+                    // held for the pipeline (shouldHoldStageTerminal), so the commit would silently not land.
+                    const lifted = this.ports.queue.mutate(meshId, parentId, e => {
+                        e.stageState!.released = true;
+                        e.stageState!.phase = 'done';
+                        e.stageState!.phaseSince = this.iso();
+                    }) ?? parent;
+                    // Settle the parent before the child, so the child's terminal hook finds a finished parent and
+                    // does not react to the cancelled review (e.g. by queueing a replacement reviewer).
                     if (action === 'accept') {
-                        this.ports.queue.commitParent(parent, 'completed', { finalSummary: `Accepted by coordinator without review${note ? `: ${note}` : ''}` }, 'stage_decide:accept_unreviewed');
+                        this.ports.queue.commitParent(lifted, 'completed', { finalSummary: `Accepted by coordinator without review${note ? `: ${note}` : ''}` }, 'stage_decide:accept_unreviewed');
+                        this.ports.events.implementerFinished?.(lifted);
+                        dropStageReport(meshId, parentId);
                     } else {
                         this.ports.queue.cancel(meshId, parentId, `stage_decide:abandon${note ? `: ${note}` : ''}`);
                     }
-                    this.ports.queue.cancel(meshId, pendingChild!.id, `stage_decide:${action}: review skipped before it started`);
+                    if (pendingChild!.status === 'pending') this.ports.queue.cancel(meshId, pendingChild!.id, `stage_decide:${action}: review skipped before it started`);
+                    const after = this.ports.queue.get(meshId, parentId);
+                    const expected = action === 'accept' ? 'completed' : 'cancelled';
+                    if (after && after.status !== expected) result = { ok: false, error: `stage_decide_not_applied: task is ${after.status}` };
                     return;
                 }
                 if (parent.status !== 'blocked' || !parent.stageState!.blockedReason) { result = { ok: false, error: 'stage_task_not_blocked' }; return; }

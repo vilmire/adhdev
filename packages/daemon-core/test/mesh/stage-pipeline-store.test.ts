@@ -103,6 +103,34 @@ describe('terminal choke point hold', () => {
         expect(getQueueEntryById(mesh, parent.id)!.status).toBe('completed');
     });
 
+    // Live 2026-11-08 (d495d612): accept on a never-started review cancelled the child but the parent's
+    // `completed` was HELD (row not released), so the task stayed assigned. Uses the real store + terminal choke point.
+    it('accepting a never-started review lands the completed against the real terminal hold', async () => {
+        const { StagePipelineRuntime } = await import('../../src/mesh/stage-pipeline-runtime.js');
+        const mesh = newMesh();
+        const parent = enqueueTask(mesh, 'fix', stagey);
+        assigned(mesh, parent.id);
+        const cur = getQueueEntryById(mesh, parent.id)!;
+        const child = enqueueTask(mesh, 'review it', { stageChild: { parentTaskId: parent.id, round: 1, review: { sourceTaskId: parent.id, independence: 'different_provider' } }, difficulty: 'medium' } as any);
+        cur.stageState = { ...cur.stageState!, phase: 'awaiting_review', round: 1, reviewTaskIds: [child.id] };
+        store().updateQueueEntry(cur);
+        const rt = new StagePipelineRuntime({
+            now: () => Date.now(),
+            queue: {
+                get: (m: string, id: string) => getQueueEntryById(m, id),
+                mutate: (m: string, id: string, fn: (e: MeshWorkQueueEntry) => void) => { const e = getQueueEntryById(m, id); if (!e) return null; fn(e); store().updateQueueEntry(e); return getQueueEntryById(m, id); },
+                cancel: (m: string, id: string, reason: string) => { cancelTask(m, id, { reason, stageManaged: true }); },
+                commitParent: (e: MeshWorkQueueEntry, status: 'completed' | 'blocked', env: { finalSummary: string }, reason: string) => {
+                    commitTaskTerminal({ meshId: e.meshId, taskId: e.id, status, source: 'queue_policy', reason, envelope: { finalSummary: env.finalSummary, completedAt: new Date().toISOString() } } as any);
+                },
+            },
+            events: { progress: () => undefined, notifyParentTerminal: () => undefined },
+        } as any);
+        expect(await rt.decide(mesh, parent.id, 'accept', 'owner waived review')).toEqual({ ok: true });
+        expect(getQueueEntryById(mesh, parent.id)!.status).toBe('completed');
+        expect(getQueueEntryById(mesh, child.id)!.status).toBe('cancelled');
+    });
+
     it('keeps holding after the phase moved on (the ledger re-commits on the idle edge) without re-firing the hook', async () => {
         const mesh = newMesh();
         const calls: string[] = [];

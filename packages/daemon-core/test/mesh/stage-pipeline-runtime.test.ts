@@ -190,6 +190,22 @@ describe('stage pipeline runtime', () => {
         expect(h.log.cancelled).toContain(child.id);
         expect(h.log.commits[0]).toMatchObject({ status: 'completed' });
         expect(h.log.commits[0].text).toMatch(/without review/);
+        // Released before the commit, or the real terminal choke point holds the `completed` (shouldHoldStageTerminal).
+        expect(h.parent().stageState).toMatchObject({ released: true, phase: 'done' });
+    });
+    // Live 2026-11-08 (d495d612): rc.109 cancelled the review but left the parent held; a retried accept must finish it.
+    it('a retried accept finishes a task whose unclaimed review was already cancelled', async () => {
+        const h = harness();
+        await h.implDone('a1');
+        const child = h.lastChild(); child.status = 'cancelled'; child.cancelReason = 'stage_decide:accept: review skipped before it started';
+        expect(await h.rt.decide(MESH, PARENT, 'accept')).toEqual({ ok: true });
+        expect(h.log.commits[0]).toMatchObject({ status: 'completed' });
+    });
+    it('reports failure instead of success when the commit did not land', async () => {
+        const h = harness();
+        await h.implDone('a1');
+        h.ports.queue.commitParent = () => { /* held: nothing lands */ };
+        expect(await h.rt.decide(MESH, PARENT, 'accept')).toEqual({ ok: false, error: 'stage_decide_not_applied: task is assigned' });
     });
     it('accept is still refused while the review is running', async () => {
         const h = harness();
