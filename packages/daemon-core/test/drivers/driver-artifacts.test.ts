@@ -141,13 +141,19 @@ describe('oversized text', () => {
 });
 
 describe('failure containment', () => {
-    it('registration failure -> artifactError, file removed, no base64, result still returned', async () => {
-        failRegister = Object.assign(new Error('store is locked'), { code: 'db_locked' });
+    // Live 2026-11-08: a mission at its artifact cap (mission_artifact_limit_exceeded) dropped every
+    // screenshot. A refused registration now keeps the image as a local file the worker can open.
+    it('registration failure -> artifactError, image kept as a local file, no base64, result still returned', async () => {
+        failRegister = Object.assign(new Error('mission has 200 artifacts'), { code: 'mission_artifact_limit_exceeded' });
         const r = await capture([image(PNG, 'image/png')]);
-        expect(r.artifactError).toEqual({ code: 'db_locked', message: 'store is locked' });
+        expect(r.artifactError).toEqual({ code: 'mission_artifact_limit_exceeded', message: 'mission has 200 artifacts' });
         expect(r.artifacts).toEqual([]);
         expect(JSON.stringify(r.output)).not.toContain(PNG.toString('base64'));
-        expect(files().filter(f => f.endsWith('.png'))).toEqual([]);
+        const block = (r.output as any).content[0];
+        expect(block).toMatchObject({ type: 'image', relPath: '.adhdev/driver-results/inv-1/image-1.png', mime: 'image/png' });
+        expect(block.note).toContain('mission_artifact_limit_exceeded');
+        expect(readFileSync(block.localPath)).toEqual(PNG);
+        expect(git('status', '--porcelain')).toBe('');
     });
     it('a resolver that throws or returns null leaves the result inline with a note, never base64', async () => {
         const throwing: DriverArtifactPort = { resolve: async () => { throw new Error('boom'); } };

@@ -180,8 +180,21 @@ export async function captureDriverArtifacts(input: {
                 }
                 omitted(artifactError ?? { code: 'artifact_unavailable', message: 'artifact registration unavailable' }); continue;
             }
-            const registered = await writeAndRegister(target, invocationId, `image-${++seq}.${IMAGE_EXT[decoded.mime]}`, decoded.bytes,
-                { kind: 'image', mime: decoded.mime, title });
+            const file = `image-${++seq}.${IMAGE_EXT[decoded.mime]}`;
+            let registered;
+            try {
+                registered = await writeAndRegister(target, invocationId, file, decoded.bytes, { kind: 'image', mime: decoded.mime, title });
+            } catch (registerError) {
+                // Registration refused (e.g. mission_artifact_limit_exceeded, live 2026-11-08): the worker
+                // still needs the picture. Keep it as a local file in the same workspace and say why.
+                const e = errorOf(registerError);
+                if (e.code === 'unsafe_path') throw registerError;
+                note(e);
+                const local = writeLocal(target.workspaceRoot, file, decoded.bytes);
+                content.push({ type: 'image', localPath: local.absPath, relPath: local.relPath, mime: decoded.mime, sizeBytes: decoded.bytes.length,
+                    note: `Saved as a local file in your workspace; it could not be registered as a shared artifact (${e.code}). Open the file to see the image.` });
+                continue;
+            }
             artifacts.push({ type: 'image', artifactId: registered.artifactId, digest: digestOf(registered.sha256), relPath: registered.relPath });
             content.push({ type: 'image', artifactId: registered.artifactId, relPath: registered.relPath, mime: decoded.mime, sizeBytes: registered.sizeBytes, sha256: registered.sha256 });
         } catch (error) { omitted(errorOf(error)); }

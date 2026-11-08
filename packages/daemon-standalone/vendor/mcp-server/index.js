@@ -131617,13 +131617,25 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             omitted(artifactError ?? { code: "artifact_unavailable", message: "artifact registration unavailable" });
             continue;
           }
-          const registered = await writeAndRegister(
-            target2,
-            invocationId,
-            `image-${++seq2}.${IMAGE_EXT[decoded.mime]}`,
-            decoded.bytes,
-            { kind: "image", mime: decoded.mime, title }
-          );
+          const file = `image-${++seq2}.${IMAGE_EXT[decoded.mime]}`;
+          let registered;
+          try {
+            registered = await writeAndRegister(target2, invocationId, file, decoded.bytes, { kind: "image", mime: decoded.mime, title });
+          } catch (registerError) {
+            const e = errorOf(registerError);
+            if (e.code === "unsafe_path") throw registerError;
+            note2(e);
+            const local = writeLocal(target2.workspaceRoot, file, decoded.bytes);
+            content.push({
+              type: "image",
+              localPath: local.absPath,
+              relPath: local.relPath,
+              mime: decoded.mime,
+              sizeBytes: decoded.bytes.length,
+              note: `Saved as a local file in your workspace; it could not be registered as a shared artifact (${e.code}). Open the file to see the image.`
+            });
+            continue;
+          }
           artifacts.push({ type: "image", artifactId: registered.artifactId, digest: digestOf(registered.sha256), relPath: registered.relPath });
           content.push({ type: "image", artifactId: registered.artifactId, relPath: registered.relPath, mime: decoded.mime, sizeBytes: registered.sizeBytes, sha256: registered.sha256 });
         } catch (error) {
