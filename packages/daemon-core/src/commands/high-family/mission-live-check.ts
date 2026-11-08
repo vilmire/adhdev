@@ -1,5 +1,5 @@
 /**
- * mission_live_check_resolve { meshId, itemId, verdict: 'works'|'doesnt_work', note?, via? }
+ * mission_live_check_resolve { meshId, itemId, verdict: 'works'|'doesnt_work'|'not_relevant', note?, via? }
  *
  * Owner-only, same authority model as `mission_decision_answer` (see mission-decisions.ts): the
  * caller is classified from the router-stamped source and the router-recorded MCP capability, never
@@ -25,7 +25,7 @@ const resolve: HighFamilyHandler = async (_ctx, rawArgs) => {
     const meshId = typeof args.meshId === 'string' ? args.meshId.trim() : '';
     const itemId = typeof args.itemId === 'string' ? args.itemId.trim() : '';
     if (!meshId || !itemId) return { success: false, code: 'invalid_args', error: 'meshId and itemId are required' };
-    if (!isLiveCheckVerdict(args.verdict)) return { success: false, code: 'invalid_args', error: "verdict must be 'works' or 'doesnt_work'" };
+    if (!isLiveCheckVerdict(args.verdict)) return { success: false, code: 'invalid_args', error: "verdict must be 'works', 'doesnt_work' or 'not_relevant'" };
     const result = resolveLiveCheck(
         { meshId, itemId, verdict: args.verdict, ...(typeof args.note === 'string' ? { note: args.note } : {}) },
         { via: caller.actor.via as LiveCheckVia },

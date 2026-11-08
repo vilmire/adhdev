@@ -179,7 +179,7 @@ export default function TodoPanel() {
                     outcome={state.outcomes[c.itemId]}
                     onResolve={(verdict, note) => {
                         void state.resolveLiveCheck({ daemonId: c.daemonId, meshId: c.meshId, itemId: c.itemId, verdict, ...(note ? { note } : {}) }).then(o => {
-                            if (o.ok) setToast({ message: t(verdict === 'works' ? 'needsYou.liveCheckToastWorks' : 'needsYou.liveCheckToastFailed') })
+                            if (o.ok) setToast({ message: t(verdict === 'works' ? 'needsYou.liveCheckToastWorks' : verdict === 'not_relevant' ? 'needsYou.liveCheckToastRetired' : 'needsYou.liveCheckToastFailed') })
                         })
                     }}
                     onOpenMission={() => navigate('/mesh')}

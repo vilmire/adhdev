@@ -56,7 +56,7 @@ export interface NeedsYouLiveCheckInput {
     daemonId: string
     meshId: string
     itemId: string
-    verdict: 'works' | 'doesnt_work'
+    verdict: 'works' | 'doesnt_work' | 'not_relevant'
     note?: string
 }
 

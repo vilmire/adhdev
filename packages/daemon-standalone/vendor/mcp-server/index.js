@@ -145460,6 +145460,8 @@ ${tail}` : ""
       DECISION_ANSWER_TEXT_MAX: () => DECISION_ANSWER_TEXT_MAX,
       DECISION_ANSWER_VIAS: () => DECISION_ANSWER_VIAS,
       DECISION_INTERPRETED_FROM_MAX: () => DECISION_INTERPRETED_FROM_MAX,
+      LIVE_CHECK_STALE_AGE_MS: () => LIVE_CHECK_STALE_AGE_MS,
+      LIVE_CHECK_STALE_CARRY_COUNT: () => LIVE_CHECK_STALE_CARRY_COUNT,
       answerMissionDecision: () => answerMissionDecision,
       buildMissionStructure: () => buildMissionStructure,
       buildOpenLiveChecks: () => buildOpenLiveChecks,
@@ -145674,7 +145676,21 @@ ${tail}` : ""
       }
       return out.sort(compareOwnerDecisions);
     }
-    function buildOpenLiveChecks(meshId) {
+    function carryHistory(meshId, missionId) {
+      const out = /* @__PURE__ */ new Map();
+      for (const e of store3().missionItems().listEvents(meshId, missionId, { types: ["items_moved"], limit: 500 })) {
+        if (e.payload.dir !== "in" || !Array.isArray(e.payload.ids)) continue;
+        const from = typeof e.payload.from === "string" ? e.payload.from : void 0;
+        for (const id4 of e.payload.ids) {
+          if (typeof id4 !== "string") continue;
+          const prev = out.get(id4);
+          out.set(id4, { at: e.at, ...from ?? prev?.from ? { from: from ?? prev?.from } : {}, count: (prev?.count ?? 0) + 1 });
+        }
+      }
+      return out;
+    }
+    function buildOpenLiveChecks(meshId, nowMs2 = Date.now()) {
+      const historyCache = /* @__PURE__ */ new Map();
       const missionCache = /* @__PURE__ */ new Map();
       return store3().missionItems().listByKindStates(meshId, "live_check", ["open", "failed"]).map((item) => {
         let m = missionCache.get(item.missionId);
@@ -145683,12 +145699,22 @@ ${tail}` : ""
           m = { title: rec8?.title ?? item.missionId, carryOver: rec8 ? isCarryOverMissionRecord(rec8) : false };
           missionCache.set(item.missionId, m);
         }
+        let history = historyCache.get(item.missionId);
+        if (!history) {
+          history = carryHistory(meshId, item.missionId);
+          historyCache.set(item.missionId, history);
+        }
+        const carried = history.get(item.id);
+        const createdMs = Date.parse(item.createdAt);
+        const stale = (carried?.count ?? 0) >= LIVE_CHECK_STALE_CARRY_COUNT || Number.isFinite(createdMs) && nowMs2 - createdMs > LIVE_CHECK_STALE_AGE_MS;
         return {
           meshId,
           missionId: item.missionId,
           missionTitle: m.title,
           itemId: item.id,
           text: item.text,
+          ...carried ? { carriedOverAt: carried.at, carryCount: carried.count, ...carried.from ? { carriedFromMissionId: carried.from } : {} } : {},
+          ...stale ? { stale: true } : {},
           state: item.state === "failed" ? "failed" : "open",
           ...item.machine ? { machine: item.machine } : {},
           createdAt: item.createdAt,
@@ -145769,6 +145795,8 @@ ${tail}` : ""
     var DECISION_ANSWER_VIAS;
     var DECISION_ANSWER_TEXT_MAX;
     var DECISION_INTERPRETED_FROM_MAX;
+    var LIVE_CHECK_STALE_AGE_MS;
+    var LIVE_CHECK_STALE_CARRY_COUNT;
     var init_mesh_mission_decisions = __esm2({
       "src/mesh/mesh-mission-decisions.ts"() {
         "use strict";
@@ -145785,6 +145813,8 @@ ${tail}` : ""
         DECISION_ANSWER_VIAS = ["dashboard", "assistant", "push", "cli"];
         DECISION_ANSWER_TEXT_MAX = 1e3;
         DECISION_INTERPRETED_FROM_MAX = 500;
+        LIVE_CHECK_STALE_AGE_MS = 14 * 24 * 3600 * 1e3;
+        LIVE_CHECK_STALE_CARRY_COUNT = 2;
       }
     });
     function formatProjectAttachDisabledHint(info) {
@@ -208275,12 +208305,12 @@ ${lines.join("\n")}
     init_mesh_mission_change_notifier();
     var LIVE_CHECK_NOTE_MAX = 200;
     function isLiveCheckVerdict(v) {
-      return v === "works" || v === "doesnt_work";
+      return v === "works" || v === "doesnt_work" || v === "not_relevant";
     }
     function resolveLiveCheck(req, actor, nowMs2 = Date.now()) {
       const s2 = MeshRuntimeStore.getInstance();
       const note2 = typeof req.note === "string" ? truncateMissionText(req.note.replace(/\s+/g, " ").trim(), LIVE_CHECK_NOTE_MAX) : "";
-      const target2 = req.verdict === "works" ? "done" : "failed";
+      const target2 = req.verdict === "works" ? "done" : req.verdict === "not_relevant" ? "superseded" : "failed";
       const result = s2.transaction(() => {
         const items = s2.missionItems();
         const item = items.getItem(req.meshId, req.itemId);
@@ -208302,7 +208332,7 @@ ${lines.join("\n")}
           dedupe_key: `live-check-result:${item.id}:${nowMs2}`
         });
         let evidenceItemId;
-        if (!("error" in n)) {
+        if (target2 !== "superseded" && !("error" in n)) {
           evidenceItemId = addNormalizedItem(req.meshId, item.missionId, n.item, "owner", "daemon").id;
         }
         items.updateItem(req.meshId, item.id, { state: target2 });
@@ -208333,7 +208363,7 @@ ${lines.join("\n")}
       const meshId = typeof args.meshId === "string" ? args.meshId.trim() : "";
       const itemId = typeof args.itemId === "string" ? args.itemId.trim() : "";
       if (!meshId || !itemId) return { success: false, code: "invalid_args", error: "meshId and itemId are required" };
-      if (!isLiveCheckVerdict(args.verdict)) return { success: false, code: "invalid_args", error: "verdict must be 'works' or 'doesnt_work'" };
+      if (!isLiveCheckVerdict(args.verdict)) return { success: false, code: "invalid_args", error: "verdict must be 'works', 'doesnt_work' or 'not_relevant'" };
       const result = resolveLiveCheck(
         { meshId, itemId, verdict: args.verdict, ...typeof args.note === "string" ? { note: args.note } : {} },
         { via: caller.actor.via }

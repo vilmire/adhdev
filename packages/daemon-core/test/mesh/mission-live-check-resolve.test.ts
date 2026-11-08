@@ -133,3 +133,50 @@ describe('mission close scope guidance', () => {
         expect(entry).toMatchObject({ outcome: 'not_needed', outcomeReason: 'scope: checked grep; not checked live' });
     });
 });
+
+describe('live check carry-over metadata and retirement', () => {
+    function seedClosedWithLiveCheck() {
+        const r = upsertStructuredMission(meshId, {
+            title: 'Old release', goal: 'g', itemsAdd: [{ kind: 'live_check', text: 'rc.49 look at the badge' }],
+        }, { actor: 'coordinator' });
+        const itemId = r.result.itemResults[0].id!;
+        const closed = upsertStructuredMission(meshId, { title: 'Old release', goal: 'g', id: r.record.id, status: 'completed', outcome: 'shipped', outcomeReason: 'scope: x' } as any, { actor: 'coordinator' });
+        return { itemId, fromId: r.record.id, movedTo: closed.result.movedTo };
+    }
+
+    it('records carry metadata for an item carried over from a closing mission', () => {
+        const { itemId, fromId, movedTo } = seedClosedWithLiveCheck();
+        expect(movedTo).toBeTruthy();
+        const [entry] = buildOpenLiveChecks(meshId);
+        expect(entry).toMatchObject({ itemId, carryOver: true, carryCount: 1, carriedFromMissionId: fromId });
+        expect(typeof entry.carriedOverAt).toBe('string');
+        expect(entry.stale).toBeUndefined();
+    });
+
+    it('flags items older than 14 days as stale (read model only)', () => {
+        seedClosedWithLiveCheck();
+        const [entry] = buildOpenLiveChecks(meshId, Date.now() + 15 * 24 * 3600 * 1000);
+        expect(entry.stale).toBe(true);
+    });
+
+    it('not_relevant retires the item (superseded, no evidence item) and it is no longer listed', () => {
+        const { itemId, movedTo } = seedClosedWithLiveCheck();
+        const r = resolveLiveCheck({ meshId, itemId, verdict: 'not_relevant', note: 'old rc' }, { via: 'dashboard' });
+        expect(r).toMatchObject({ ok: true, state: 'superseded', missionId: movedTo });
+        expect(store().missionItems().getItem(meshId, itemId)!.state).toBe('superseded');
+        expect(store().missionItems().listItems(meshId, movedTo!, { kinds: ['evidence'] })).toHaveLength(0);
+        expect(store().missionItems().listEvents(meshId, movedTo!).some(e => e.type === 'item_state_changed' && e.payload.verdict === 'not_relevant' && e.payload.note === 'old rc')).toBe(true);
+        expect(buildOpenLiveChecks(meshId)).toHaveLength(0);
+        expect(resolveLiveCheck({ meshId, itemId, verdict: 'works' }, { via: 'dashboard' })).toMatchObject({ ok: false, code: 'live_check_not_open' });
+    });
+
+    it('the command accepts not_relevant from the owner and refuses a non-owner source', async () => {
+        const { itemId } = seedClosedWithLiveCheck();
+        const spec = getDaemonCommandRegistry().get(MISSION_LIVE_CHECK_RESOLVE)!;
+        const refused = await (spec as any).run({}, { meshId, itemId, verdict: 'not_relevant', _commandSource: 'mesh' });
+        expect(refused).toMatchObject({ success: false, code: 'live_check_resolve_not_allowed' });
+        expect(store().missionItems().getItem(meshId, itemId)!.state).toBe('open');
+        const ok = await (spec as any).run({}, { meshId, itemId, verdict: 'not_relevant', _commandSource: 'p2p' });
+        expect(ok).toMatchObject({ success: true, state: 'superseded' });
+    });
+});

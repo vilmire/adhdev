@@ -340,10 +340,35 @@ export interface OpenLiveCheckEntry {
     state: 'open' | 'failed';
     createdAt: string;
     carryOver?: true;
+    /** Carry-over history (from `items_moved` events): last carry time, mission it came from, how many times it was carried. */
+    carriedOverAt?: string;
+    carriedFromMissionId?: string;
+    carryCount?: number;
+    /** Old enough (or carried often enough) that the owner should probably retire it; never auto-closed. */
+    stale?: true;
+}
+
+export const LIVE_CHECK_STALE_AGE_MS = 14 * 24 * 3600 * 1000;
+export const LIVE_CHECK_STALE_CARRY_COUNT = 2;
+
+/** Per-item carry history of one mission, read from its inbound `items_moved` events. */
+function carryHistory(meshId: string, missionId: string): Map<string, { at: string; from?: string; count: number }> {
+    const out = new Map<string, { at: string; from?: string; count: number }>();
+    for (const e of store().missionItems().listEvents(meshId, missionId, { types: ['items_moved'], limit: 500 })) {
+        if (e.payload.dir !== 'in' || !Array.isArray(e.payload.ids)) continue;
+        const from = typeof e.payload.from === 'string' ? e.payload.from : undefined;
+        for (const id of e.payload.ids) {
+            if (typeof id !== 'string') continue;
+            const prev = out.get(id);
+            out.set(id, { at: e.at, ...(from ?? prev?.from ? { from: from ?? prev?.from } : {}), count: (prev?.count ?? 0) + 1 });
+        }
+    }
+    return out;
 }
 
 /** Open and failed `live_check` items of one mesh (the "needs you" page lists them next to decisions). Oldest first. */
-export function buildOpenLiveChecks(meshId: string): OpenLiveCheckEntry[] {
+export function buildOpenLiveChecks(meshId: string, nowMs: number = Date.now()): OpenLiveCheckEntry[] {
+    const historyCache = new Map<string, ReturnType<typeof carryHistory>>();
     const missionCache = new Map<string, { title: string; carryOver: boolean }>();
     return store().missionItems().listByKindStates(meshId, 'live_check', ['open', 'failed']).map(item => {
         let m = missionCache.get(item.missionId);
@@ -352,8 +377,15 @@ export function buildOpenLiveChecks(meshId: string): OpenLiveCheckEntry[] {
             m = { title: rec?.title ?? item.missionId, carryOver: rec ? isCarryOverMissionRecord(rec) : false };
             missionCache.set(item.missionId, m);
         }
+        let history = historyCache.get(item.missionId);
+        if (!history) { history = carryHistory(meshId, item.missionId); historyCache.set(item.missionId, history); }
+        const carried = history.get(item.id);
+        const createdMs = Date.parse(item.createdAt);
+        const stale = (carried?.count ?? 0) >= LIVE_CHECK_STALE_CARRY_COUNT || (Number.isFinite(createdMs) && nowMs - createdMs > LIVE_CHECK_STALE_AGE_MS);
         return {
             meshId, missionId: item.missionId, missionTitle: m.title, itemId: item.id, text: item.text,
+            ...(carried ? { carriedOverAt: carried.at, carryCount: carried.count, ...(carried.from ? { carriedFromMissionId: carried.from } : {}) } : {}),
+            ...(stale ? { stale: true as const } : {}),
             state: item.state === 'failed' ? 'failed' as const : 'open' as const,
             ...(item.machine ? { machine: item.machine } : {}),
             createdAt: item.createdAt,

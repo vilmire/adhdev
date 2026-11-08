@@ -16,7 +16,7 @@ export default function LiveCheckCard({ check, projectName, busy, outcome, onRes
     projectName?: string
     busy: boolean
     outcome?: NeedsYouOutcome
-    onResolve: (verdict: 'works' | 'doesnt_work', note: string) => void
+    onResolve: (verdict: 'works' | 'doesnt_work' | 'not_relevant', note: string) => void
     onOpenMission?: () => void
 }) {
     const { t } = useTranslation('common')
@@ -27,6 +27,11 @@ export default function LiveCheckCard({ check, projectName, busy, outcome, onRes
             <div className="flex items-center gap-1.5">
                 <span className="rounded px-1.5 py-0.5 text-3xs font-semibold bg-bg-secondary text-text-muted">{t('needsYou.kinds.live_check')}</span>
                 {check.machine && <span className="text-3xs text-text-muted">{check.machine}</span>}
+                {check.stale && (
+                    <span data-testid="needs-you-live-check-stale" className="rounded px-1.5 py-0.5 text-3xs font-semibold bg-bg-secondary text-text-muted">
+                        {t('needsYou.liveCheckStaleBadge')}
+                    </span>
+                )}
                 {failed && (
                     <span data-testid="needs-you-live-check-failed" className="rounded px-1.5 py-0.5 text-3xs font-bold" style={{ background: 'color-mix(in srgb, var(--status-danger) 18%, transparent)', color: 'var(--status-danger)' }}>
                         {t('needsYou.liveCheckFailedBadge')}
@@ -52,6 +57,9 @@ export default function LiveCheckCard({ check, projectName, busy, outcome, onRes
                 </Button>
                 <Button size="sm" variant="danger" className="min-h-[44px] md:min-h-0" data-testid="needs-you-live-check-fails" disabled={busy} onClick={() => onResolve('doesnt_work', note.trim())}>
                     {t('needsYou.liveCheckDoesntWork')}
+                </Button>
+                <Button size="sm" variant="secondary" className="min-h-[44px] md:min-h-0" data-testid="needs-you-live-check-not-relevant" disabled={busy} onClick={() => onResolve('not_relevant', note.trim())}>
+                    {t('needsYou.liveCheckNotRelevant')}
                 </Button>
             </div>
             {busy && <div className="text-2xs text-text-muted" role="status" data-testid="needs-you-sending">{t('needsYou.sending')}</div>}

@@ -30,6 +30,11 @@ export interface NeedsYouDecision {
     source: 'coordinator' | 'worker' | 'daemon'
     createdAt: string
     carryOver?: boolean
+    /** Carried over from a closed mission this many times (daemon read model; absent on older daemons). */
+    carryCount?: number
+    carriedOverAt?: string
+    /** Daemon-flagged as old / repeatedly carried: a candidate for "No longer relevant". */
+    stale?: boolean
     /** A file-transfer approval requested by an agent: rendered as a preview card, approved on both machines. */
     transferId?: string
     /** Answer revision the daemon reported; echoed as `expectedRevision` so an answer to a changed decision is refused. */
@@ -48,6 +53,11 @@ export interface NeedsYouLiveCheck {
     state?: 'open' | 'failed'
     createdAt: string
     carryOver?: boolean
+    /** Carried over from a closed mission this many times (daemon read model; absent on older daemons). */
+    carryCount?: number
+    carriedOverAt?: string
+    /** Daemon-flagged as old / repeatedly carried: a candidate for "No longer relevant". */
+    stale?: boolean
 }
 
 export interface NeedsYouAnswered {
@@ -156,6 +166,9 @@ export function parseNeedsYouList(raw: unknown, daemonId: string): NeedsYouSnaps
             ...(c.state === 'failed' ? { state: 'failed' as const } : {}),
             createdAt: s(c.createdAt),
             ...(c.carryOver === true ? { carryOver: true } : {}),
+            ...(typeof c.carryCount === 'number' && c.carryCount > 0 ? { carryCount: c.carryCount } : {}),
+            ...(s(c.carriedOverAt) ? { carriedOverAt: s(c.carriedOverAt) } : {}),
+            ...(c.stale === true ? { stale: true } : {}),
         })
     }
     const answered: NeedsYouAnswered[] = []
@@ -223,7 +236,7 @@ export const PENDING_ACTION_TTL_MS = 120_000
 
 export type PendingOwnerAction =
     | { kind: 'answer'; daemonId: string; meshId: string; itemId: string; optionId?: string; text?: string; at: string; confirmedAt?: number; expiresAt?: number }
-    | { kind: 'live_check'; daemonId: string; meshId: string; itemId: string; verdict: 'works' | 'doesnt_work'; confirmedAt?: number; expiresAt?: number }
+    | { kind: 'live_check'; daemonId: string; meshId: string; itemId: string; verdict: 'works' | 'doesnt_work' | 'not_relevant'; confirmedAt?: number; expiresAt?: number }
 
 export function pendingActionKey(a: { daemonId: string; meshId: string; itemId: string }): string {
     return `${a.daemonId}\u0000${a.meshId}\u0000${a.itemId}`
@@ -244,7 +257,7 @@ export function applyPendingOwnerActions(base: NeedsYouSnapshot, allPending: rea
         x.daemonId === a.daemonId && x.meshId === a.meshId && x.itemId === a.itemId
     for (const a of pending) {
         if (a.kind === 'live_check') {
-            if (a.verdict === 'works') liveChecks = liveChecks.filter(c => !same(c, a))
+            if (a.verdict === 'works' || a.verdict === 'not_relevant') liveChecks = liveChecks.filter(c => !same(c, a))
             else liveChecks = liveChecks.map(c => (same(c, a) ? { ...c, state: 'failed' as const } : c))
             continue
         }

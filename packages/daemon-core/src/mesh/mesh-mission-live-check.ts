@@ -4,6 +4,8 @@
  *   works        → item `done`   + an evidence item "Live check passed …"
  *   doesnt_work  → item `failed` + an evidence item "Live check FAILED …" (the item stays visible in
  *                  Needs You until the owner re-checks or the coordinator re-adds it)
+ *   not_relevant → item `superseded` (no evidence item): the owner retires a stale check that is
+ *                  neither working nor broken any more (carried over from an old release, superseded)
  *
  * Both write an `item_state_changed` mission event (`via` / `verdict` / `note`), bump the mission
  * version and notify the change channel. The item text and note live in the local mesh runtime
@@ -15,15 +17,15 @@ import { addNormalizedItem } from './mesh-mission-structured.js';
 import { notifyMissionChanged } from './mesh-mission-change-notifier.js';
 
 export const LIVE_CHECK_NOTE_MAX = 200;
-export type LiveCheckVerdict = 'works' | 'doesnt_work';
+export type LiveCheckVerdict = 'works' | 'doesnt_work' | 'not_relevant';
 export type LiveCheckVia = 'dashboard' | 'cli' | 'push';
 
 export type LiveCheckResolveResult =
-    | { ok: true; meshId: string; missionId: string; itemId: string; state: 'done' | 'failed'; evidenceItemId?: string; unchanged?: true }
+    | { ok: true; meshId: string; missionId: string; itemId: string; state: 'done' | 'failed' | 'superseded'; evidenceItemId?: string; unchanged?: true }
     | { ok: false; code: string; error: string };
 
 export function isLiveCheckVerdict(v: unknown): v is LiveCheckVerdict {
-    return v === 'works' || v === 'doesnt_work';
+    return v === 'works' || v === 'doesnt_work' || v === 'not_relevant';
 }
 
 export function resolveLiveCheck(
@@ -33,7 +35,7 @@ export function resolveLiveCheck(
 ): LiveCheckResolveResult {
     const s = MeshRuntimeStore.getInstance();
     const note = typeof req.note === 'string' ? truncateMissionText(req.note.replace(/\s+/g, ' ').trim(), LIVE_CHECK_NOTE_MAX) : '';
-    const target: 'done' | 'failed' = req.verdict === 'works' ? 'done' : 'failed';
+    const target: 'done' | 'failed' | 'superseded' = req.verdict === 'works' ? 'done' : req.verdict === 'not_relevant' ? 'superseded' : 'failed';
     const result = s.transaction((): LiveCheckResolveResult => {
         const items = s.missionItems();
         const item = items.getItem(req.meshId, req.itemId);
@@ -53,7 +55,7 @@ export function resolveLiveCheck(
             kind: 'evidence', text, dedupe_key: `live-check-result:${item.id}:${nowMs}`,
         });
         let evidenceItemId: string | undefined;
-        if (!('error' in n)) {
+        if (target !== 'superseded' && !('error' in n)) {
             evidenceItemId = addNormalizedItem(req.meshId, item.missionId, n.item, 'owner', 'daemon').id;
         }
         items.updateItem(req.meshId, item.id, { state: target });
