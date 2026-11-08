@@ -225,6 +225,23 @@ export class StagePipelineRuntime {
                     parent = this.ports.queue.mutate(meshId, parentId, e => { e.status = 'blocked'; }) ?? parent;
                     this.ports.events.progress(meshId, parentId, 'restored the review block a late completion had overwritten');
                 }
+                // Review is opt-in (2026-11-08): a review that never started — parked on its pin, quota-gated,
+                // or waiting for a reviewer that cannot claim it — must not hold the work hostage. The
+                // coordinator may accept (skip the review) or abandon such a task without the review running.
+                const pendingChild = parent.status === 'assigned' && parent.stageState!.phase === 'awaiting_review'
+                    ? this.ports.queue.get(meshId, parent.stageState!.reviewTaskIds.at(-1) ?? '') : null;
+                const reviewNeverStarted = !!pendingChild && pendingChild.status === 'pending' && !pendingChild.assignedSessionId;
+                if ((action === 'accept' || action === 'abandon') && reviewNeverStarted) {
+                    // Settle the parent FIRST, so the child's terminal hook finds a finished parent and does not
+                    // react to the cancelled review (e.g. by queueing a replacement reviewer).
+                    if (action === 'accept') {
+                        this.ports.queue.commitParent(parent, 'completed', { finalSummary: `Accepted by coordinator without review${note ? `: ${note}` : ''}` }, 'stage_decide:accept_unreviewed');
+                    } else {
+                        this.ports.queue.cancel(meshId, parentId, `stage_decide:abandon${note ? `: ${note}` : ''}`);
+                    }
+                    this.ports.queue.cancel(meshId, pendingChild!.id, `stage_decide:${action}: review skipped before it started`);
+                    return;
+                }
                 if (parent.status !== 'blocked' || !parent.stageState!.blockedReason) { result = { ok: false, error: 'stage_task_not_blocked' }; return; }
                 if (action === 'accept' || action === 'abandon') {
                     if (action === 'accept') {

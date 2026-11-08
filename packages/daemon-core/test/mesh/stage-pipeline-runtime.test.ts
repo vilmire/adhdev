@@ -179,6 +179,26 @@ describe('stage pipeline runtime', () => {
         expect(h.log.commits[0].text).toMatch(/2 rounds.*1 finding fixed, 1 nit open/);
     });
 
+    // Live 2026-11-08: two reviews sat parked/quota-gated for hours and the only escape (a 14-field recovery
+    // tool) refused every attempt. With review opt-in, a never-started review can simply be skipped.
+    it('accept on an awaiting_review task whose review never started skips the review and completes', async () => {
+        const h = harness();
+        await h.implDone('a1');
+        const child = h.lastChild();
+        expect(h.parent().stageState!.phase).toBe('awaiting_review');
+        expect(await h.rt.decide(MESH, PARENT, 'accept', 'review not needed')).toEqual({ ok: true });
+        expect(h.log.cancelled).toContain(child.id);
+        expect(h.log.commits[0]).toMatchObject({ status: 'completed' });
+        expect(h.log.commits[0].text).toMatch(/without review/);
+    });
+    it('accept is still refused while the review is running', async () => {
+        const h = harness();
+        await h.implDone('a1');
+        const c = h.lastChild(); c.status = 'assigned'; c.assignedSessionId = 'rev-s';
+        expect(await h.rt.decide(MESH, PARENT, 'accept')).toEqual({ ok: false, error: 'stage_task_not_blocked' });
+        expect(h.log.commits).toHaveLength(0);
+    });
+
     // Live 2026-11-08: round 2 was pinned to the round-1 reviewer, which sat below the review's difficulty
     // floor, never claimed, and parked the review after the pin TTL (task idle for 2h).
     it('pins the next round to the prior reviewer only when that session can claim its difficulty', async () => {
