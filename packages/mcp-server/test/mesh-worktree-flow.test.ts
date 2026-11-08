@@ -1539,7 +1539,7 @@ test('mesh_send_task self-heals a mesh-owned remote session missing the relay an
       id: meshId,
       name: 'Remote Explicit Session Mesh',
       repoIdentity: 'example/repo',
-      policy: {},
+      policy: { pathOwnershipGate: 'same_checkout' },
       coordinator: {},
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -3890,8 +3890,9 @@ test('local IPC mesh_send_task with explicit session resolves providerType from 
   // (The route question — mesh_dispatch_route, answered by the fake daemon from its roster — is not a dispatch step.)
   const dispatchSteps = directCalls.filter(c => c.command !== 'mesh_dispatch_route' && c.command !== 'get_mesh');
   assert.equal(directCalls.filter(c => c.command === 'mesh_dispatch_route').length, 1);
-  assert.equal(dispatchSteps.length, 4);
-  assert.equal(dispatchSteps.filter(c => c.command === 'get_status_metadata').length, 2, 'write admission rechecks the resolved session workspace');
+  // Default pathOwnershipGate 'off': no write-admission workspace recheck (owner 2026-11-08, opt-in only).
+  assert.equal(dispatchSteps.length, 3);
+  assert.equal(dispatchSteps.filter(c => c.command === 'get_status_metadata').length, 1, 'only the provider-type lookup; no ownership recheck when the gate is off');
   assert.equal(dispatchSteps[0].command, 'get_status_metadata');
   assert.equal(directCalls.filter(c => c.command === 'turn_observe').length, 1);
   const agentCommandCall = directCalls.find(c => c.command === 'agent_command');
@@ -5000,7 +5001,7 @@ test('mesh_send_task admits a remote write once the remote machine attests its c
   const ctx = {
     localDaemonId: 'daemon-coordinator',
     mesh: {
-      id: meshId, name: 'Remote Attested Write Mesh', repoIdentity: 'example/repo', policy: {}, coordinator: {},
+      id: meshId, name: 'Remote Attested Write Mesh', repoIdentity: 'example/repo', policy: { pathOwnershipGate: 'same_checkout' }, coordinator: {},
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       nodes: [{ id: 'node-remote-worker', workspace: '/repo-remote', repoRoot: '/repo-remote', daemonId: 'daemon-remote', userOverrides: {}, policy: { providerPriority: ['hermes-cli'] } }],
     },

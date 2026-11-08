@@ -30341,7 +30341,7 @@ ${renderWorkerProtocolFooter2(input)}`;
     function sameValue(a, b) {
       return a === b || JSON.stringify(a) === JSON.stringify(b);
     }
-    function resolveMeshPolicy2(overrides2) {
+    function resolveMeshPolicy3(overrides2) {
       const src = policyRecord(overrides2);
       const out = {};
       for (const [key7, value] of Object.entries(src)) {
@@ -48860,7 +48860,7 @@ ${error.message || ""}`;
     function resolvePathOwnershipGate(meshId) {
       if (override) return override;
       try {
-        const v = resolveMeshPolicy2(getMesh(meshId)?.policy).pathOwnershipGate;
+        const v = resolveMeshPolicy3(getMesh(meshId)?.policy).pathOwnershipGate;
         return v === "same_checkout" || v === "mesh_wide" ? v : "off";
       } catch {
         return "off";
@@ -95685,7 +95685,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const graph = store5.getQueueSchedulingGraph(meshId);
       const statusById = new Map(graph.map((t) => [t.id, t.status]));
       const graphById = new Map(graph.map((t) => [t.id, t]));
-      const cap = resolveMaxLightParallelTasks(resolveMeshPolicy2(m.policy).maxParallelTasks);
+      const cap = resolveMaxLightParallelTasks(resolveMeshPolicy3(m.policy).maxParallelTasks);
       let started = 0;
       for (const task of pending.sort((a, b) => meshTaskPriorityRank(b.priority) - meshTaskPriorityRank(a.priority))) {
         const key7 = `${meshId}::${task.id}`;
@@ -96032,7 +96032,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const autoLaunchScanInFlight = raced === SCAN_STILL_RUNNING;
       autoLaunchStarted = raced === SCAN_STILL_RUNNING ? false : raced;
       sweepAutoLaunchOrphanSessions(components, meshId, {
-        idleTtlMinutes: resolveDelegatedSessionIdleTtlMinutes(resolveMeshPolicy2(mesh.policy).delegatedSessionIdleTtlMinutes)
+        idleTtlMinutes: resolveDelegatedSessionIdleTtlMinutes(resolveMeshPolicy3(mesh.policy).delegatedSessionIdleTtlMinutes)
       });
       const afterHeads = getQueueHeads2(meshId, { status: ["pending", "assigned"] });
       const pendingAfter = afterHeads.filter((task) => task.status === "pending").length;
@@ -96292,7 +96292,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           sessionId,
           providerType: p.providerType,
           consumeProfile: p.assignedTranscriptProfile?.class === "native-source" ? "native_source" : "default",
-          maxTaskRetries: resolveMeshPolicy2(p.mesh?.policy).maxTaskRetries ?? 1
+          maxTaskRetries: resolveMeshPolicy3(p.mesh?.policy).maxTaskRetries ?? 1
         });
         if ("refused" in opened) {
           const rebound = rebindRefusedClaimToOpenAttempt(meshId, task.id, opened.refused);
@@ -96365,7 +96365,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           // Same source as a fresh auto-launch (mesh-queue-autolaunch.ts): a mesh whose
           // policy shows worker sessions must not have them hidden just because an
           // existing session claimed the task.
-          spawnedSessionVisibility: resolveMeshPolicy2(p.mesh?.policy).spawnedSessionVisibility || "hidden",
+          spawnedSessionVisibility: resolveMeshPolicy3(p.mesh?.policy).spawnedSessionVisibility || "hidden",
           ...delegatedWorkerAutoApproveSettingsForNode(
             p.mesh,
             p.node,
@@ -97482,7 +97482,7 @@ ${continuationNotice}` } : dispatchTask,
         role: "worker",
         meshNodeFor: meshId,
         meshNodeId: nodeId,
-        spawnedSessionVisibility: resolveMeshPolicy2(mesh?.policy).spawnedSessionVisibility || "hidden",
+        spawnedSessionVisibility: resolveMeshPolicy3(mesh?.policy).spawnedSessionVisibility || "hidden",
         ...effectiveModel ? { initialModel: effectiveModel } : {},
         // Coordinator-dispatched worker: auto-approve unless mesh/node policy
         // opts out (default true). Lands in settingsOverride and beats the
@@ -97638,7 +97638,7 @@ ${continuationNotice}` } : dispatchTask,
       pruneAwaitClaimBackoff(meshId, pending);
       if (!pending.length) return false;
       const freshnessGate = { maxBehind: resolveAutoFastForwardPolicy2(mesh).maxBehind };
-      const maxParallelTasks = resolveMeshPolicy2(mesh?.policy).maxParallelTasks;
+      const maxParallelTasks = resolveMeshPolicy3(mesh?.policy).maxParallelTasks;
       const maxReadonlyParallelTasks = resolveMaxReadonlyParallelTasks(maxParallelTasks);
       let madeProgress = false;
       for (const task of pending) {
@@ -101149,7 +101149,7 @@ No nodes configured yet. Ask the user to add nodes with \`${IDENTITY2.binaryName
         const operatingNotes = buildOperatingNotesSection(notes);
         if (operatingNotes) sections.push(operatingNotes);
       }
-      sections.push(buildPolicySection(resolveMeshPolicy2(mesh.policy)));
+      sections.push(buildPolicySection(resolveMeshPolicy3(mesh.policy)));
       sections.push(buildBrainPresetsSection());
       sections.push(MULTI_PERSPECTIVE_REVIEW_SECTION);
       sections.push(TOOLS_SECTION);
@@ -101179,7 +101179,7 @@ No nodes configured yet. Ask the user to add nodes with \`${IDENTITY2.binaryName
         mission: ctx.missionSection?.trim() || "",
         recentActivity: buildRecentActivitySection(ctx.recentActivity) || "",
         operatingNotes: buildOperatingNotesSection(ctx.operatingNotes) || "",
-        policy: buildPolicySection(resolveMeshPolicy2(mesh.policy)),
+        policy: buildPolicySection(resolveMeshPolicy3(mesh.policy)),
         tools: TOOLS_SECTION,
         workers: WORKERS_SECTION,
         ownershipAndBrief: OWNERSHIP_AND_BRIEF_SECTION,
@@ -105675,7 +105675,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
       return task.status === "assigned";
     }
     function buildMeshSchedulingRuntime(mesh, queue) {
-      const effectivePolicy = resolveMeshPolicy2(mesh?.policy);
+      const effectivePolicy = resolveMeshPolicy3(mesh?.policy);
       const strategy = effectivePolicy.schedulingStrategy ?? "first_eligible";
       const maxParallelTasks = effectivePolicy.maxParallelTasks;
       const maxReadonlyParallelTasks = resolveMaxReadonlyParallelTasks(maxParallelTasks);
@@ -110217,7 +110217,7 @@ ${cleanBody}`;
           { sessionId: instanceId, input: components.cliManager.input },
           (() => {
             const m = getMesh(coordinatorMeshId);
-            return m ? resolveMeshPolicy2(m.policy) : void 0;
+            return m ? resolveMeshPolicy3(m.policy) : void 0;
           })(),
           void 0,
           components.instanceManager,
@@ -140063,7 +140063,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         autoPublishPolicySource: autoPublishSubmoduleMainCommits.source,
         worktreeRoot: node.workspace,
         approvedPublishShas: ctx.args?.approvedPublishShas,
-        ...!resolveMeshPolicy2(mesh?.policy).requireApprovalForPush ? { rootCommit: branchHead, rootBranch: baseBranch } : {}
+        ...!resolveMeshPolicy3(mesh?.policy).requireApprovalForPush ? { rootCommit: branchHead, rootBranch: baseBranch } : {}
       });
       recordMeshRefineStage(refineStages, "submodule_reachability", submoduleReachability.status, submoduleReachabilityStarted, {
         checked: submoduleReachability.checked,
@@ -140615,7 +140615,7 @@ ${e?.stderr || ""}`;
           }
         } };
       }
-      const requireApprovalForPush = resolveMeshPolicy2(mesh?.policy).requireApprovalForPush;
+      const requireApprovalForPush = resolveMeshPolicy3(mesh?.policy).requireApprovalForPush;
       let pushResult;
       if (!requireApprovalForPush) {
         const pushStarted = Date.now();
@@ -140734,7 +140734,7 @@ ${e?.stderr || ""}`;
         } };
       }
       const cleanupStarted = Date.now();
-      const explicitRefineSessionCleanupPolicy = resolveMeshPolicy2(mesh?.policy).sessionCleanupOnNodeRemove;
+      const explicitRefineSessionCleanupPolicy = resolveMeshPolicy3(mesh?.policy).sessionCleanupOnNodeRemove;
       const refineSessionCleanupMode = explicitRefineSessionCleanupPolicy ? self.normalizeMeshSessionCleanupMode(explicitRefineSessionCleanupPolicy) : void 0;
       let refineSessionIds;
       if (refineSessionCleanupMode !== "preserve" && self.deps.sessionHostControl) {
@@ -151710,7 +151710,7 @@ ${committed.block}`;
             try {
               await runIdleSessionReapPass(sessionLifetimeDeps(components, mesh, nowMs2), { meshId: mesh.id, policy: (() => {
                 const m = getMesh(mesh.id);
-                return m ? resolveMeshPolicy2(m.policy) : void 0;
+                return m ? resolveMeshPolicy3(m.policy) : void 0;
               })(), now: nowMs2 });
             } catch (e) {
               LOG.warn("MeshHousekeeping", `Idle session reap failed for mesh ${mesh.id}: ${e?.message || e}`);
@@ -167453,7 +167453,7 @@ ${defangRelayBody(text10)}`;
       resolveMeshConnectWaitMs: () => resolveMeshConnectWaitMs,
       resolveMeshHostStatus: () => resolveMeshHostStatus,
       resolveMeshNodeAttribution: () => resolveMeshNodeAttribution,
-      resolveMeshPolicy: () => resolveMeshPolicy2,
+      resolveMeshPolicy: () => resolveMeshPolicy3,
       resolveMeshRefineValidationPlan: () => resolveMeshRefineValidationPlan,
       resolveMeshSurfacedSessionPreview: () => resolveMeshSurfacedSessionPreview2,
       resolveModelLaunchValue: () => resolveModelLaunchValue,
@@ -203296,7 +203296,7 @@ ${marker2}`,
         }
         const explicitCleanupMode = args?.sessionCleanupMode ?? args?.session_cleanup_mode;
         const sessionCleanupMode = ctx.normalizeMeshSessionCleanupMode(
-          explicitCleanupMode ?? (node?.isLocalWorktree === true ? "stop_and_delete" : void 0) ?? resolveMeshPolicy2(mesh?.policy).sessionCleanupOnNodeRemove
+          explicitCleanupMode ?? (node?.isLocalWorktree === true ? "stop_and_delete" : void 0) ?? resolveMeshPolicy3(mesh?.policy).sessionCleanupOnNodeRemove
         );
         const explicitSessionIds = Array.isArray(args?.sessionIds) ? args.sessionIds.filter((v) => typeof v === "string" && v.trim().length > 0).map((v) => v.trim()) : void 0;
         if (node?.isLocalWorktree && !remoteWorktreeOwner(ctx, node, args)) {
@@ -203524,7 +203524,7 @@ ${marker2}`,
           if (!mesh) return { success: false, error: "Mesh not found" };
           const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
           if (!node) return { success: false, error: `Node '${nodeId}' not found in mesh` };
-          const mode = ctx.normalizeMeshSessionCleanupMode(args?.mode ?? resolveMeshPolicy2(mesh?.policy).sessionCleanupOnNodeRemove);
+          const mode = ctx.normalizeMeshSessionCleanupMode(args?.mode ?? resolveMeshPolicy3(mesh?.policy).sessionCleanupOnNodeRemove);
           const sessionIds = Array.isArray(args?.sessionIds) ? args.sessionIds.map((id4) => typeof id4 === "string" ? id4.trim() : "").filter(Boolean) : void 0;
           const reclaimOrphans = args?.reclaimOrphans === true;
           const liveMeshNodeIds = Array.isArray(mesh?.nodes) ? mesh.nodes.map((n) => normalizeMeshNodeId(n)).filter(Boolean) : [];
@@ -204243,7 +204243,7 @@ ${marker2}`,
     function withEffectivePolicy(mesh) {
       if (!mesh || typeof mesh !== "object") return mesh;
       try {
-        return { ...mesh, effectivePolicy: resolveMeshPolicy2(mesh.policy) };
+        return { ...mesh, effectivePolicy: resolveMeshPolicy3(mesh.policy) };
       } catch {
         return mesh;
       }
@@ -212695,7 +212695,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       syncInlineMeshPoliciesFromDisk(host);
       const out = [];
       for (const mesh of host.inlineMeshCache.values()) {
-        const spawnedSessionVisibility = resolveMeshPolicy2(mesh?.policy).spawnedSessionVisibility === "visible" ? "visible" : "hidden";
+        const spawnedSessionVisibility = resolveMeshPolicy3(mesh?.policy).spawnedSessionVisibility === "visible" ? "visible" : "hidden";
         if (Array.isArray(mesh?.nodes)) {
           for (const node of mesh.nodes) {
             out.push({ node, spawnedSessionVisibility });
@@ -255956,8 +255956,17 @@ function checkSendTaskNodeGates(ctx, node, args, req) {
   }
   return null;
 }
+function directSendPathGate(ctx) {
+  try {
+    const v = (0, import_daemon_core23.resolveMeshPolicy)(ctx.mesh?.policy).pathOwnershipGate;
+    return v === "same_checkout" || v === "mesh_wide" ? v : "off";
+  } catch {
+    return "off";
+  }
+}
 async function directSendOwnershipRefusal(ctx, node, route, target, args, req) {
   if ((0, import_daemon_core24.isTaskReadonly)({ readonly: req.readonly, taskMode: req.taskMode })) return null;
+  if (directSendPathGate(ctx) === "off") return null;
   const declared = normalizeOwnedPaths(req.ownedPaths);
   const refuse = (unknownField, resolution) => JSON.stringify({
     success: false,

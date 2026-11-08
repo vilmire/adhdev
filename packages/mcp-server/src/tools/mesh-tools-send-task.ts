@@ -29,6 +29,7 @@ import {
     validateMeshTaskModeRequest,
     buildMeshTaskModeViolationError,
     buildNewWorkHeldRefusal,
+    resolveMeshPolicy,
 } from '@adhdev/daemon-core';
 import { supportsMeshRelay } from '../transports/mode.js';
 import {
@@ -298,8 +299,21 @@ function checkSendTaskNodeGates(ctx: MeshContext, node: LocalMeshNodeEntry, args
     return null;
 }
 
+/** The mesh's pathOwnershipGate as the coordinator sees it; anything but an explicit opt-in is 'off'. */
+export function directSendPathGate(ctx: Pick<MeshContext, 'mesh'>): 'off' | 'same_checkout' | 'mesh_wide' {
+    try {
+        const v = resolveMeshPolicy((ctx.mesh as { policy?: unknown } | undefined)?.policy as any).pathOwnershipGate;
+        return v === 'same_checkout' || v === 'mesh_wide' ? v : 'off';
+    } catch { return 'off'; }
+}
+
 async function directSendOwnershipRefusal(ctx: MeshContext, node: LocalMeshNodeEntry, route: DirectDispatchRoute, target: DirectDispatchTarget, args: MeshSendTaskArgs, req: SendTaskRequest): Promise<string | null> {
     if (isTaskReadonly({ readonly: req.readonly, taskMode: req.taskMode })) return null;
+    // Same rule as the queue claim (mesh-runtime-store-claim ownershipProven): path ownership is proven or
+    // required only when the owner opted into pathOwnershipGate. With the default 'off', owned_paths are
+    // advisory, so a direct send needs no declaration and no checkout attestation (live 2026-11-08: every
+    // write send to a member's non-git project folder was refused ownership_unproven).
+    if (directSendPathGate(ctx) === 'off') return null;
     const declared = normalizeOwnedPaths(req.ownedPaths);
     const refuse = (unknownField: string, resolution: string) => JSON.stringify({
         success: false,

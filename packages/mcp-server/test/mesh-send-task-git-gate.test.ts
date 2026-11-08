@@ -242,10 +242,27 @@ test('clean WORKTREE node → no continuation notice', async () => {
     }
 });
 
-test('non-readonly local send with no owned paths is ownership_unproven and records nothing', async () => {
-    const meshId = `mesh-gitgate-unproven-${randomUUID().slice(0, 8)}`;
+// Owner 2026-11-08: path ownership is opt-in (pathOwnershipGate). With the default 'off' a write send needs no
+// owned_paths and no checkout attestation — it was refusing every write send to a member's non-git project folder.
+test('default policy: a non-readonly send with no owned paths is delivered, not ownership_unproven', async () => {
+    const meshId = `mesh-gitgate-default-${randomUUID().slice(0, 8)}`;
     cleanupMesh(meshId);
     const h = createLocalCtx(meshId, { acceptDelivery: true });
+    try {
+        await withLedger(async () => {
+            const res = await send(h.ctx);
+            assert.notEqual(res.code, 'ownership_unproven', JSON.stringify(res));
+            assert.ok(h.localCommands.some(command => command.command === 'agent_command'), 'the write is delivered');
+        });
+    } finally {
+        cleanupMesh(meshId);
+    }
+});
+
+test('pathOwnershipGate opt-in: a non-readonly local send with no owned paths is ownership_unproven and records nothing', async () => {
+    const meshId = `mesh-gitgate-unproven-${randomUUID().slice(0, 8)}`;
+    cleanupMesh(meshId);
+    const h = createLocalCtx(meshId, { acceptDelivery: true, policy: { pathOwnershipGate: 'same_checkout' } });
     try {
         await withLedger(async () => {
             const res = await send(h.ctx);
@@ -276,13 +293,13 @@ test('a retired dirtyWorkspaceBehavior on the mesh policy changes nothing (dirty
 });
 
 
-test('direct write refuses a selected session in another physical checkout or with no workspace proof', async () => {
+test('pathOwnershipGate opt-in: direct write refuses a selected session in another physical checkout or with no workspace proof', async () => {
     const workspace = realGitWorkspace();
     const other = realGitWorkspace();
     try {
         for (const sessionWorkspace of [other, null]) {
             const meshId = `gitgate-session-workspace-${randomUUID()}`;
-            const h = createLocalCtx(meshId, { workspace, sessionWorkspace, acceptDelivery: true });
+            const h = createLocalCtx(meshId, { workspace, sessionWorkspace, acceptDelivery: true, policy: { pathOwnershipGate: 'same_checkout' } });
             await withLedger(async () => {
                 const res = await send(h.ctx, { owned_paths: ['file.ts'], allow_stale_node: true });
                 assert.equal(res.code, 'ownership_unproven');
