@@ -1,4 +1,4 @@
-import { notifyHeldQueueTasks } from './mesh-queue-hold-store.js';
+import { notifyHeldQueueTasks, recordQueueTaskHold } from './mesh-queue-hold-store.js';
 import { notifyStuckAssignedWorkers } from './mesh-stuck-approval-notify.js';
 import { escalateQuotaHeldTasks } from './mesh-quota-hold-escalation.js';
 import { buildNewWorkHeldRefusal, evaluateNewWorkHold, NEW_WORK_HELD_CODE } from '../maintenance/new-work-hold.js';
@@ -28,6 +28,8 @@ import { LOG } from '../logging/logger.js';
 import { sweepAutoLaunchOrphanSessions, isAutoLaunchWithinAwaitClaimWindow } from './mesh-autolaunch-integrity.js';
 import { maybeAutoFastForwardIdleNode } from './mesh-auto-fast-forward.js';
 import { collectPinnedRemoteIdleCandidates } from './mesh-pinned-remote-idle.js';
+import { taskIsParked } from './mesh-task-parking.js';
+import { QUEUE_HOLD_NOTICE_AFTER_MS } from './mesh-queue-hold.js';
 
 export interface MeshQueueTriggerResult {
     success: true;
@@ -369,6 +371,27 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
             nodeId: task.assignedNodeId,
             sessionId: task.assignedSessionId,
         }));
+
+    // IDLE-SESSION-UNCLAIMED: a pending task that sat past the notice bound although an
+    // eligible idle session was offered to the drain above must never be silent — record a
+    // hold (the housekeeping notice path then pages the coordinator once).
+    try {
+        const offered = [...localCandidates, ...remoteCandidates];
+        if (offered.length > 0) {
+            const nowMs = Date.now();
+            for (const task of getQueue(meshId, { status: ['pending'] })) {
+                if (task.hold || taskIsParked(task)) continue;
+                const since = Date.parse(task.requeuedAt || task.updatedAt || task.createdAt);
+                if (!Number.isFinite(since) || nowMs - since < QUEUE_HOLD_NOTICE_AFTER_MS) continue;
+                const targetNodeId = readText(task.targetNodeId);
+                const targetSessionId = readText(task.targetSessionId);
+                const eligible = offered.find(c =>
+                    (!targetNodeId || meshNodeIdMatches({ id: c.nodeId } as any, targetNodeId))
+                    && (!targetSessionId || c.sessionId === targetSessionId));
+                if (eligible) recordQueueTaskHold(meshId, task.id, 'idle_session_unclaimed', eligible.nodeId);
+            }
+        }
+    } catch (e: any) { LOG.debug('MeshQueue', `idle-unclaimed hold scan failed: ${e?.message || e}`); }
 
     // A successful claim logs its blocked→winner transition at the atomic claim point.
     // If no candidate cleared the quota gate and auto-launch also made no progress, emit

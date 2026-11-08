@@ -45,6 +45,7 @@ import { activeWriteAssignedCount, activeReadonlyAssignedCount, nodeHasActiveWri
 import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, logAutoLaunchQuotaFallbackSuccess, recordAutoLaunchEvent } from './mesh-queue-observability.js';
 import { buildAutoLaunchRoutingDecision, type ResolvedProviderSelection } from './mesh-routing-decision.js';
 import { selectQuotaBusyFallback } from './mesh-quota-fallback.js';
+import { launchedSessionProvablyGone } from './mesh-pinned-remote-idle.js';
 import { autoLaunchWriteWouldClobberWinner, driveExpiredAwaitClaim, autoLaunchAwaitClaimBackoff, claimAfterRemoteAutoLaunch, AUTO_LAUNCH_AWAIT_CLAIM_MS, isAutoLaunchWithinAwaitClaimWindow, __clearAwaitClaimBackoffForTests, __resetAutoLaunchOrphanNotifiedForTests } from './mesh-autolaunch-integrity.js';
 import { autoLaunchWriteWouldClobberDifficultyFloorWaitClock, handleDifficultyFloorSkip, isDifficultyFloorWaitReason, launchSideDifficultyFloorMismatch } from './mesh-difficulty-floor.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
@@ -319,6 +320,8 @@ function driveAwaitClaimGuard(components: DaemonComponents, meshId: string, mesh
         // session → ghost accumulation), re-drive the claim for the EXISTING launched session,
         // backing off on unknown liveness and direct-dispatching after the cap. Only a
         // 'respawn' directive falls through to a fresh launch below.
+        // STALE-AUTOLAUNCH-MARKER: launched session provably gone → ignore the stale marker, launch fresh.
+        if (launchedSessionProvablyGone(components, meshId, mesh, { nodeId: alNodeId, sessionId: alSessionId, launchedAtMs })) return 'proceed';
         if (Number.isFinite(launchedAtMs) && alSessionId && alNodeId) {
             const outcome = driveExpiredAwaitClaim(
                 components,

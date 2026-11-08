@@ -816,6 +816,9 @@ export function requeueTaskWithOutcome(
         // on the ordinary requeue path too (not only for parked rows), which is
         // harmless: `delete` on an absent field is a no-op for every normal task.
         delete entry.parked;
+        // STALE-AUTOLAUNCH-MARKER: an explicit requeue is a fresh decision — the previous run's
+        // launch record (status 'completed' + dead sessionId) must not make the await-claim guard wait.
+        delete entry.autoLaunch;
         // AUTOLAUNCH-SPAWN-CAP (P3): a requeue is the sanctioned exit from a spawn-cap
         // park — it must also restore the durable launch budget, or the unparked row
         // would re-park on its very next launch attempt (a dead exit).
