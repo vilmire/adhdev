@@ -60,6 +60,16 @@ describe('driver worker identity on a member daemon', () => {
     expect(relay).toHaveBeenCalledTimes(2)
   })
 
+  it('carries the owner driver policy so a member without the mesh record can apply it', async () => {
+    const i = ids(); const attemptId = `mesh_direct:${i.taskId}`
+    const bind = mintWorkerSessionBind({ meshId: i.meshId, sessionId: i.sessionId, nodeId: i.nodeId }).bind
+    const { ownerDriverPolicy } = await import('../../src/commands/med-family/driver-worker-identity.js')
+    expect(ownerDriverPolicy(i.meshId)).toBeUndefined()
+    const res: any = await resolveDriverWorkerIdentity(memberCtx(i, attemptId, ownerAnswer(i)), { bind })
+    expect(res.identity).toBeTruthy()
+    expect(ownerDriverPolicy(i.meshId)).toEqual({})
+  })
+
   it('refuses a bad credential with no relay', async () => {
     const i = ids(); const relay = vi.fn()
     const res: any = await resolveDriverWorkerIdentity(memberCtx(i, `mesh_direct:${i.taskId}`, relay), { bind: 'wsb_forged' })

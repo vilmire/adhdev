@@ -130624,6 +130624,26 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         });
       }
     });
+    var driver_worker_identity_exports = {};
+    __export2(driver_worker_identity_exports, {
+      DRIVER_IDENTITY_VERIFY_COMMAND: () => DRIVER_IDENTITY_VERIFY_COMMAND,
+      VERIFIED_IDENTITY_TTL_MS: () => VERIFIED_IDENTITY_TTL_MS,
+      driverIdentityHandlers: () => driverIdentityHandlers,
+      invalidateVerifiedDriverIdentities: () => invalidateVerifiedDriverIdentities,
+      ownerDriverPolicy: () => ownerDriverPolicy,
+      resolveDriverWorkerIdentity: () => resolveDriverWorkerIdentity
+    });
+    function ownerDriverPolicy(meshId, now = Date.now()) {
+      const hit = ownerPolicies.get(meshId);
+      return hit && hit.expiresAt > now ? hit.policy : void 0;
+    }
+    function invalidateVerifiedDriverIdentities(sessionId) {
+      if (!sessionId) {
+        cache3.clear();
+        return;
+      }
+      for (const key7 of [...cache3.keys()]) if (key7.split("\0")[1] === sessionId) cache3.delete(key7);
+    }
     async function resolveDriverWorkerIdentity(ctx, args, now = Date.now()) {
       const local = resolveWorkerIdentity({ token: args?.token, bind: args?.bind });
       if (local) return { identity: local };
@@ -130661,11 +130681,16 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         ...v.nodeId ? { nodeId: v.nodeId } : {}
       };
       cache3.set(key7, { identity: identity5, expiresAt: now + VERIFIED_IDENTITY_TTL_MS });
+      const policy = answer2?.driverPolicy;
+      if (policy && typeof policy === "object" && !Array.isArray(policy)) {
+        ownerPolicies.set(remote.meshId, { policy, expiresAt: now + VERIFIED_IDENTITY_TTL_MS });
+      }
       return { identity: identity5 };
     }
     var DRIVER_IDENTITY_VERIFY_COMMAND;
     var VERIFIED_IDENTITY_TTL_MS;
     var cache3;
+    var ownerPolicies;
     var driverIdentityHandlers;
     var init_driver_worker_identity = __esm2({
       "src/commands/med-family/driver-worker-identity.ts"() {
@@ -130677,6 +130702,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         DRIVER_IDENTITY_VERIFY_COMMAND = "driver_worker_identity_forwarded";
         VERIFIED_IDENTITY_TTL_MS = 6e4;
         cache3 = /* @__PURE__ */ new Map();
+        ownerPolicies = /* @__PURE__ */ new Map();
         driverIdentityHandlers = {
           /** Owner side: verify only. Sender must own the assigned node; only a LIVE attempt qualifies. */
           [DRIVER_IDENTITY_VERIFY_COMMAND]: async (ctx, args) => {
@@ -130693,6 +130719,13 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(resolved.live.attemptId);
             if (!attempt || attempt.terminal) return { success: false, code: "binding_missing" };
             const l = resolved.live;
+            let driverPolicy;
+            try {
+              const mesh = (await ctx.getMeshForCommand(l.meshId))?.mesh;
+              if (mesh) driverPolicy = mesh.policy?.drivers ?? {};
+            } catch {
+              driverPolicy = void 0;
+            }
             return { success: true, identity: {
               meshId: l.meshId,
               taskId: l.taskId,
@@ -130700,7 +130733,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
               generation: attempt.generation,
               sessionId: l.sessionId,
               ...l.nodeId ? { nodeId: l.nodeId } : {}
-            } };
+            }, ...driverPolicy ? { driverPolicy } : {} };
           }
         };
       }
@@ -131982,7 +132015,9 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         },
         policy: async (meshId) => {
           const mesh = (await ctx.getMeshForCommand(meshId))?.mesh;
-          return mesh ? mesh.policy?.drivers ?? {} : void 0;
+          if (mesh) return mesh.policy?.drivers ?? {};
+          const { ownerDriverPolicy: ownerDriverPolicy2 } = await Promise.resolve().then(() => (init_driver_worker_identity(), driver_worker_identity_exports));
+          return ownerDriverPolicy2(meshId);
         },
         relay: (identity5, result) => {
           const text10 = JSON.stringify({ kind: "driver_action_result", ...result });

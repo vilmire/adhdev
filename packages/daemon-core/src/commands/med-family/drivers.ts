@@ -27,7 +27,13 @@ export function getDriverService(ctx: DriverContext): DriverService {
             const cwd = ctx.deps.providerLoader.findProviderDir(type);
             return current && cwd ? { ...current, cwd } : null;
         },
-        policy: async meshId => { const mesh = (await ctx.getMeshForCommand(meshId))?.mesh; return mesh ? (mesh.policy?.drivers ?? {}) : undefined; },
+        policy: async meshId => {
+            const mesh = (await ctx.getMeshForCommand(meshId))?.mesh;
+            if (mesh) return mesh.policy?.drivers ?? {};
+            // A member without a local record of the mesh: the owner's policy, returned with the verified identity.
+            const { ownerDriverPolicy } = await import('./driver-worker-identity.js');
+            return ownerDriverPolicy(meshId);
+        },
         relay: (identity, result) => {
             // Mailbox text is capped by its existing transport. Full output stays in the ring.
             const text = JSON.stringify({ kind: 'driver_action_result', ...result });

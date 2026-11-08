@@ -19,6 +19,16 @@ export const DRIVER_IDENTITY_VERIFY_COMMAND = 'driver_worker_identity_forwarded'
 export const VERIFIED_IDENTITY_TTL_MS = 60_000;
 
 const cache = new Map<string, { identity: DriverWorkerIdentity; expiresAt: number }>();
+/**
+ * The owner's `policy.drivers` for a mesh, returned with a verified identity. A member often has no local record of
+ * a mesh it only works for (live 2026-11-08: driver_not_allowed_for_mesh on a member after rc.104), so the driver
+ * policy port falls back to this — still the host's authoritative policy, never caller-supplied input.
+ */
+const ownerPolicies = new Map<string, { policy: Record<string, { actions: string[] }>; expiresAt: number }>();
+export function ownerDriverPolicy(meshId: string, now = Date.now()): Record<string, { actions: string[] }> | undefined {
+    const hit = ownerPolicies.get(meshId);
+    return hit && hit.expiresAt > now ? hit.policy : undefined;
+}
 export function invalidateVerifiedDriverIdentities(sessionId?: string): void {
     if (!sessionId) { cache.clear(); return; }
     for (const key of [...cache.keys()]) if (key.split('\u0000')[1] === sessionId) cache.delete(key);
@@ -60,6 +70,10 @@ export async function resolveDriverWorkerIdentity(ctx: Ctx, args: any, now = Dat
     const identity: DriverWorkerIdentity = { meshId: v.meshId, taskId: v.taskId, sessionId: v.sessionId,
         ...(v.attemptId ? { attemptId: v.attemptId } : {}), ...(v.nodeId ? { nodeId: v.nodeId } : {}) };
     cache.set(key, { identity, expiresAt: now + VERIFIED_IDENTITY_TTL_MS });
+    const policy = answer?.driverPolicy;
+    if (policy && typeof policy === 'object' && !Array.isArray(policy)) {
+        ownerPolicies.set(remote.meshId, { policy: policy as Record<string, { actions: string[] }>, expiresAt: now + VERIFIED_IDENTITY_TTL_MS });
+    }
     return { identity };
 }
 
@@ -78,7 +92,9 @@ export const driverIdentityHandlers: Record<string, MedFamilyHandler> = {
         const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(resolved.live.attemptId);
         if (!attempt || attempt.terminal) return { success: false, code: 'binding_missing' };
         const l = resolved.live;
+        let driverPolicy: Record<string, unknown> | undefined;
+        try { const mesh = (await ctx.getMeshForCommand(l.meshId))?.mesh; if (mesh) driverPolicy = mesh.policy?.drivers ?? {}; } catch { driverPolicy = undefined; }
         return { success: true, identity: { meshId: l.meshId, taskId: l.taskId, attemptId: l.attemptId, generation: attempt.generation,
-            sessionId: l.sessionId, ...(l.nodeId ? { nodeId: l.nodeId } : {}) } };
+            sessionId: l.sessionId, ...(l.nodeId ? { nodeId: l.nodeId } : {}) }, ...(driverPolicy ? { driverPolicy } : {}) };
     },
 };
