@@ -106,7 +106,8 @@
  */
 import { type MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 import { resolveQuotaReserve } from '../quota/quota-reserve.js';
-import { cliRateLimitHoldActive, cliRateLimitResetPassed, readCliRateLimitEvidence, windowResetUnconfirmed } from '../quota/exhaustion-hold.js';
+import { cliRateLimitHoldActive, cliRateLimitResetPassed, readCliRateLimitEvidence, readPoolCliRateLimitEvidence, windowResetUnconfirmed } from '../quota/exhaustion-hold.js';
+import { quotaPoolForModel, quotaPoolsOf } from '../quota/quota-pools.js';
 import { recordQuotaReserveBlock } from '../quota/quota-reserve-metrics.js';
 import { quotaAccountLineage } from '../quota/account-lineage.js';
 import {
@@ -194,10 +195,7 @@ type QuotaGateWindow = {
 type AntigravityQuotaPool = 'gemini' | 'claude-gpt';
 
 export function antigravityPoolFromLeadingLabel(value: string | null | undefined): AntigravityQuotaPool | undefined {
-    const label = typeof value === 'string' ? value.trim().toLowerCase() : '';
-    if (/^gemini(?:[\s/_-]|$)/.test(label)) return 'gemini';
-    if (/^(?:claude|gpt)(?:[\s/_-]|$)/.test(label)) return 'claude-gpt';
-    return undefined;
+    return quotaPoolForModel('antigravity-cli', value) as AntigravityQuotaPool | undefined;
 }
 
 function worstBucketWindow(
@@ -435,6 +433,28 @@ export function evaluateProviderQuotaGate(
             thresholdPercent: 0,
             ...(cliEvidence.resetsAt !== undefined ? { resetsAt: cliEvidence.resetsAt } : {}),
         };
+    }
+    // POOL-SCOPED CLI EVIDENCE (owner decision 2026-11-08): a limit one model group hit binds that group only.
+    // A target whose model resolves to that pool is blocked; another pool is judged on its own windows; a target
+    // with no model is blocked only when EVERY pool of the provider is held (the claim gate re-judges the live model).
+    const poolEvidence = readPoolCliRateLimitEvidence(quota);
+    const heldPools = Object.values(poolEvidence).filter(ev => cliRateLimitHoldActive(ev, quota));
+    if (heldPools.length) {
+        const targetPool = quotaPoolForModel(providerType, target?.model);
+        const providerPools = quotaPoolsOf(providerType);
+        const binding = targetPool
+            ? heldPools.find(ev => ev.pool === targetPool)
+            : (providerPools.length > 0 && providerPools.every(p => heldPools.some(ev => ev.pool === p)) ? heldPools[0] : undefined);
+        if (binding) {
+            const resetPassed = cliRateLimitResetPassed(binding, now);
+            return {
+                reason: resetPassed ? PROVIDER_QUOTA_RESET_UNCONFIRMED_SKIP_REASON : PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON,
+                window: 'unknown',
+                remainingPercent: 0,
+                thresholdPercent: 0,
+                ...(binding.resetsAt !== undefined ? { resetsAt: binding.resetsAt } : {}),
+            };
+        }
     }
     // MODEL-UNSPECIFIED Antigravity admission: the provider headline is the WORST pool, so a Gemini slot with
     // headroom was refused because Claude/GPT in the same account was low. With no model to judge, admit when

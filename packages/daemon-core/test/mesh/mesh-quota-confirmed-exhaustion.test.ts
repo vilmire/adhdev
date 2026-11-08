@@ -142,6 +142,37 @@ describe('model-unspecified Antigravity admission', () => {
     expect(gate(agy(6, 100), 'Gemini 3.1 Pro (High)')).toBeNull()
     expect(gate(agy(100, 100))).not.toBeNull()
   })
+
+  // Live 2026-11-08: a Claude Opus session on Antigravity printed its usage limit and the whole provider was
+  // held, Gemini included (0% used). The CLI's report now binds only the pool of the model that hit it.
+  it('a pool-scoped CLI limit report blocks that pool only; provider-only routing still admits the other pool', () => {
+    const q = withCliRateLimitEvidence('antigravity-cli', agy(6, 40), { observedAt: NOW - MIN, resetsAt: NOW + 2 * HOUR, pool: 'claude-gpt' })
+    expect(q.metadata?.cliRateLimit).toBeUndefined()
+    expect(q.metadata?.cliRateLimitPools).toEqual({ 'claude-gpt': { observedAt: NOW - MIN, resetsAt: NOW + 2 * HOUR } })
+    expect(gate(q, 'claude-opus-5-5-high')?.reason).toBe('provider_quota_exhausted')
+    expect(gate(q, 'Gemini 4 Argon (High)')).toBeNull()
+    expect(gate(q)).toBeNull()
+    const both = withCliRateLimitEvidence('antigravity-cli', q, { observedAt: NOW - MIN, resetsAt: NOW + 2 * HOUR, pool: 'gemini' })
+    expect(gate(both)).not.toBeNull()
+    expect(gate(both, 'Gemini 4 Argon (High)')).not.toBeNull()
+  })
+  it('a pool report with no prior entry never marks the whole provider exhausted', () => {
+    const q = withCliRateLimitEvidence('antigravity-cli', undefined, { observedAt: NOW - MIN, pool: 'claude-gpt' })
+    expect(q.metadata?.failureKind).toBeUndefined()
+    expect(gate(q, 'Gemini 4 Argon (High)')).toBeNull()
+    expect(gate(q, 'Claude Opus 5.5 (High)')).not.toBeNull()
+  })
+  it('a refresh keeps a still-binding pool report and drops it after a post-reset measurement', () => {
+    const held = withCliRateLimitEvidence('antigravity-cli', agy(6, 40), { observedAt: NOW - MIN, resetsAt: NOW + 2 * HOUR, pool: 'claude-gpt' })
+    const kept = preserveCliRateLimitEvidence(held, { ...agy(6, 40), updatedAt: NOW } as any)
+    expect(kept.metadata?.cliRateLimitPools).toHaveProperty('claude-gpt')
+    const after = preserveCliRateLimitEvidence(held, { ...agy(6, 10), updatedAt: NOW + 3 * HOUR } as any)
+    expect(after.metadata?.cliRateLimitPools).toBeUndefined()
+  })
+  it('a provider-wide report (no pool) still holds every pool, as before', () => {
+    const q = withCliRateLimitEvidence('antigravity-cli', agy(6, 40), { observedAt: NOW - MIN, resetsAt: NOW + 2 * HOUR })
+    expect(gate(q, 'Gemini 4 Argon (High)')).not.toBeNull()
+  })
 })
 
 describe('provider pin vs the reserve line (owner decision A) and confirmed exhaustion', () => {

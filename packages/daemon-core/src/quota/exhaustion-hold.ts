@@ -44,6 +44,11 @@ export interface CliRateLimitEvidence {
     observedAt: number;
     /** Unix ms the CLI said the limit resets, when it said so. */
     resetsAt?: number;
+    /**
+     * The quota pool (quota-pools.ts) of the model that hit the limit. Set only for a provider whose account
+     * is split into pools; the hold then binds that pool alone (stored under metadata.cliRateLimitPools).
+     */
+    pool?: string;
 }
 
 type HoldWindow = { usedPercent?: number | null; resetsAt?: number | null } | null | undefined;
@@ -85,6 +90,27 @@ export function windowResetUnconfirmed(
     return null;
 }
 
+function parseEvidence(raw: unknown, pool?: string): CliRateLimitEvidence | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const observedAt = Number((raw as { observedAt?: unknown }).observedAt);
+    if (!Number.isFinite(observedAt) || observedAt <= 0) return null;
+    const resetsAt = Number((raw as { resetsAt?: unknown }).resetsAt);
+    return { observedAt, ...(Number.isFinite(resetsAt) && resetsAt > 0 ? { resetsAt } : {}), ...(pool ? { pool } : {}) };
+}
+
+/** Pool-scoped CLI reports, keyed by pool id. */
+export function readPoolCliRateLimitEvidence(quota: Pick<MeshNodeFactsProviderQuota, 'metadata'> | undefined | null): Record<string, CliRateLimitEvidence> {
+    const raw = (quota?.metadata as { cliRateLimitPools?: unknown } | undefined)?.cliRateLimitPools;
+    const out: Record<string, CliRateLimitEvidence> = {};
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+    for (const [pool, value] of Object.entries(raw as Record<string, unknown>)) {
+        const parsed = parseEvidence(value, pool);
+        if (parsed) out[pool] = parsed;
+    }
+    return out;
+}
+
+/** The PROVIDER-WIDE CLI report (no pool known). Pool-scoped reports are read with readPoolCliRateLimitEvidence. */
 export function readCliRateLimitEvidence(quota: Pick<MeshNodeFactsProviderQuota, 'metadata'> | undefined | null): CliRateLimitEvidence | null {
     const raw = (quota?.metadata as { cliRateLimit?: unknown } | undefined)?.cliRateLimit;
     if (!raw || typeof raw !== 'object') return null;
@@ -94,8 +120,11 @@ export function readCliRateLimitEvidence(quota: Pick<MeshNodeFactsProviderQuota,
     return { observedAt, ...(Number.isFinite(resetsAt) && resetsAt > 0 ? { resetsAt } : {}) };
 }
 
-function minRemaining(quota: MeshNodeFactsProviderQuota): number | undefined {
-    const values = [quota.session, quota.weekly, quota.monthly, ...(Array.isArray(quota.buckets) ? quota.buckets : [])]
+function minRemaining(quota: MeshNodeFactsProviderQuota, pool?: string): number | undefined {
+    const buckets = Array.isArray(quota.buckets) ? quota.buckets : [];
+    // A pool-scoped report clears on its OWN pool's buckets: the other pool's headroom says nothing about it.
+    const poolBuckets = pool ? buckets.filter(b => (b as { group?: string } | undefined)?.group === pool) : [];
+    const values = (pool && poolBuckets.length ? poolBuckets : [quota.session, quota.weekly, quota.monthly, ...buckets])
         .map(w => remaining(w as HoldWindow)).filter((v): v is number => v !== undefined);
     return values.length ? Math.min(...values) : undefined;
 }
@@ -108,7 +137,7 @@ function minRemaining(quota: MeshNodeFactsProviderQuota): number | undefined {
 export function cliRateLimitHoldActive(evidence: CliRateLimitEvidence, quota: MeshNodeFactsProviderQuota): boolean {
     if (quota.status !== 'ok' || !(Number(quota.updatedAt) > evidence.observedAt)) return true;
     if (evidence.resetsAt !== undefined) return Number(quota.updatedAt) < evidence.resetsAt;
-    const left = minRemaining(quota);
+    const left = minRemaining(quota, evidence.pool);
     return left === undefined || left < CLI_RATE_LIMIT_CLEAR_MIN_PERCENT;
 }
 
@@ -117,10 +146,25 @@ export function preserveCliRateLimitEvidence(
     prev: MeshNodeFactsProviderQuota | undefined,
     next: MeshNodeFactsProviderQuota,
 ): MeshNodeFactsProviderQuota {
+    let out = next;
     const evidence = readCliRateLimitEvidence(prev);
-    if (!evidence || readCliRateLimitEvidence(next)) return next;
-    if (!cliRateLimitHoldActive(evidence, next)) return next;
-    return { ...next, metadata: { ...next.metadata, cliRateLimit: evidence } };
+    if (evidence && !readCliRateLimitEvidence(next) && cliRateLimitHoldActive(evidence, next)) {
+        out = { ...out, metadata: { ...out.metadata, cliRateLimit: evidence } };
+    }
+    const prevPools = readPoolCliRateLimitEvidence(prev);
+    const nextPools = readPoolCliRateLimitEvidence(next);
+    const kept: Record<string, CliRateLimitEvidence> = { ...nextPools };
+    for (const [pool, ev] of Object.entries(prevPools)) {
+        if (!kept[pool] && cliRateLimitHoldActive(ev, next)) kept[pool] = ev;
+    }
+    if (Object.keys(kept).length > Object.keys(nextPools).length) {
+        out = { ...out, metadata: { ...out.metadata, cliRateLimitPools: stripPools(kept) } };
+    }
+    return out;
+}
+
+function stripPools(pools: Record<string, CliRateLimitEvidence>): Record<string, Omit<CliRateLimitEvidence, 'pool'>> {
+    return Object.fromEntries(Object.entries(pools).map(([pool, { pool: _p, ...rest }]) => [pool, rest]));
 }
 
 /** The entry with the CLI's rate-limit report stamped on (creating a minimal error entry when none exists). */
@@ -131,7 +175,12 @@ export function withCliRateLimitEvidence(
 ): MeshNodeFactsProviderQuota {
     const base: MeshNodeFactsProviderQuota = prev ?? {
         provider, status: 'error', session: null, weekly: null, updatedAt: evidence.observedAt,
-        error: 'CLI reported its usage limit', metadata: { failureKind: 'quota-exhausted', source: 'cli-evidence' },
+        // A pool-scoped report must not mark the whole provider exhausted (the gate hard-blocks that).
+        error: 'CLI reported its usage limit', metadata: evidence.pool ? { source: 'cli-evidence' } : { failureKind: 'quota-exhausted', source: 'cli-evidence' },
     };
+    if (evidence.pool) {
+        const pools = { ...readPoolCliRateLimitEvidence(base), [evidence.pool]: evidence };
+        return { ...base, metadata: { ...base.metadata, cliRateLimitPools: stripPools(pools) } };
+    }
     return { ...base, metadata: { ...base.metadata, cliRateLimit: evidence } };
 }

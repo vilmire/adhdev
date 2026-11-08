@@ -31,6 +31,7 @@ import { isWeakCompletionEvidence } from '../../mesh/mesh-events-utils.js';
 import type { ProviderModule } from '../contracts.js';
 import { emitTurnEnd, type TurnEvidencePort } from '../turn-evidence-port.js';
 import { recordCliRateLimitEvidence } from '../../quota/refresh.js';
+import { quotaPoolForModel, quotaPoolsOf } from '../../quota/quota-pools.js';
 import { classifyOwnAuthFailureOnlyReply, classifyOwnQuotaFailureOnlyReply, parseClaudeUsageLimitBanner } from '../spec/provider-output-attribution.js';
 import type { TurnAttemptRef, TurnEndBlockReason, NativeTurnOutcome } from '@adhdev/mesh-shared';
 
@@ -320,11 +321,23 @@ export function flushCompletedDebounceIfFinalized(host: CompletionFlushHost): vo
 }
 
 /** The narrow surface of CliProviderInstance the completion emit reads/writes. */
+/** The quota pool of the model this session runs, read from the most specific source available. */
+export function sessionQuotaPool(host: Pick<CompletionEmitHost, 'type' | 'settings' | 'controlValues'>): string | undefined {
+    const candidates = [host.controlValues?.model, host.settings?.model, host.settings?.initialModel];
+    for (const c of candidates) {
+        const pool = typeof c === 'string' ? quotaPoolForModel(host.type, c) : undefined;
+        if (pool) return pool;
+    }
+    return undefined;
+}
+
 export interface CompletionEmitHost {
     /** Owning CLI, never inferred from the final assistant reply. */
     type: string;
     instanceId: string;
     settings: Record<string, any>;
+    /** Live control values (the running model among them), when the host tracks them. */
+    controlValues?: Record<string, string | number | boolean>;
     busyEpoch: number;
     lastCompletionSummary: { content: string; receivedAt: number; sourceTimestampMs?: number } | null;
     lastEmittedCompletion: { taskId: string; at: number; evidenceLevel?: string; weak: boolean; emittedAtEpoch: number } | null;
@@ -364,7 +377,10 @@ export function emitGeneratingCompleted(host: CompletionEmitHost, opts: {
         try {
             const observedAt = Date.now();
             const resetsAt = host.type === 'claude-cli' ? parseClaudeUsageLimitBanner(summary as string, observedAt)?.resetsAt : undefined;
-            recordCliRateLimitEvidence(host.type, { observedAt, ...(resetsAt ? { resetsAt } : {}) });
+            // A provider whose account is split into model pools records the limit against the running model's
+            // pool only, so the other pool keeps routing (quota-pools.ts). Unknown model → provider-wide, as before.
+            const pool = quotaPoolsOf(host.type).length ? sessionQuotaPool(host) : undefined;
+            recordCliRateLimitEvidence(host.type, { observedAt, ...(resetsAt ? { resetsAt } : {}), ...(pool ? { pool } : {}) });
         } catch { /* evidence is best-effort */ }
     }
     // Claude Code's banner says it CONTINUES AUTOMATICALLY at the reset time: the turn is paused, not ended.

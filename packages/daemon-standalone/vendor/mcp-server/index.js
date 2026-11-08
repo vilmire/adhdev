@@ -36304,6 +36304,23 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
       }
       return null;
     }
+    function parseEvidence(raw, pool) {
+      if (!raw || typeof raw !== "object") return null;
+      const observedAt = Number(raw.observedAt);
+      if (!Number.isFinite(observedAt) || observedAt <= 0) return null;
+      const resetsAt = Number(raw.resetsAt);
+      return { observedAt, ...Number.isFinite(resetsAt) && resetsAt > 0 ? { resetsAt } : {}, ...pool ? { pool } : {} };
+    }
+    function readPoolCliRateLimitEvidence(quota) {
+      const raw = quota?.metadata?.cliRateLimitPools;
+      const out = {};
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+      for (const [pool, value] of Object.entries(raw)) {
+        const parsed = parseEvidence(value, pool);
+        if (parsed) out[pool] = parsed;
+      }
+      return out;
+    }
     function readCliRateLimitEvidence(quota) {
       const raw = quota?.metadata?.cliRateLimit;
       if (!raw || typeof raw !== "object") return null;
@@ -36312,21 +36329,37 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
       const resetsAt = Number(raw.resetsAt);
       return { observedAt, ...Number.isFinite(resetsAt) && resetsAt > 0 ? { resetsAt } : {} };
     }
-    function minRemaining(quota) {
-      const values = [quota.session, quota.weekly, quota.monthly, ...Array.isArray(quota.buckets) ? quota.buckets : []].map((w) => remaining(w)).filter((v) => v !== void 0);
+    function minRemaining(quota, pool) {
+      const buckets = Array.isArray(quota.buckets) ? quota.buckets : [];
+      const poolBuckets = pool ? buckets.filter((b) => b?.group === pool) : [];
+      const values = (pool && poolBuckets.length ? poolBuckets : [quota.session, quota.weekly, quota.monthly, ...buckets]).map((w) => remaining(w)).filter((v) => v !== void 0);
       return values.length ? Math.min(...values) : void 0;
     }
     function cliRateLimitHoldActive(evidence, quota) {
       if (quota.status !== "ok" || !(Number(quota.updatedAt) > evidence.observedAt)) return true;
       if (evidence.resetsAt !== void 0) return Number(quota.updatedAt) < evidence.resetsAt;
-      const left = minRemaining(quota);
+      const left = minRemaining(quota, evidence.pool);
       return left === void 0 || left < CLI_RATE_LIMIT_CLEAR_MIN_PERCENT;
     }
     function preserveCliRateLimitEvidence(prev, next) {
+      let out = next;
       const evidence = readCliRateLimitEvidence(prev);
-      if (!evidence || readCliRateLimitEvidence(next)) return next;
-      if (!cliRateLimitHoldActive(evidence, next)) return next;
-      return { ...next, metadata: { ...next.metadata, cliRateLimit: evidence } };
+      if (evidence && !readCliRateLimitEvidence(next) && cliRateLimitHoldActive(evidence, next)) {
+        out = { ...out, metadata: { ...out.metadata, cliRateLimit: evidence } };
+      }
+      const prevPools = readPoolCliRateLimitEvidence(prev);
+      const nextPools = readPoolCliRateLimitEvidence(next);
+      const kept = { ...nextPools };
+      for (const [pool, ev] of Object.entries(prevPools)) {
+        if (!kept[pool] && cliRateLimitHoldActive(ev, next)) kept[pool] = ev;
+      }
+      if (Object.keys(kept).length > Object.keys(nextPools).length) {
+        out = { ...out, metadata: { ...out.metadata, cliRateLimitPools: stripPools(kept) } };
+      }
+      return out;
+    }
+    function stripPools(pools) {
+      return Object.fromEntries(Object.entries(pools).map(([pool, { pool: _p, ...rest }]) => [pool, rest]));
     }
     function withCliRateLimitEvidence(provider, prev, evidence) {
       const base = prev ?? {
@@ -36335,9 +36368,14 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
         session: null,
         weekly: null,
         updatedAt: evidence.observedAt,
+        // A pool-scoped report must not mark the whole provider exhausted (the gate hard-blocks that).
         error: "CLI reported its usage limit",
-        metadata: { failureKind: "quota-exhausted", source: "cli-evidence" }
+        metadata: evidence.pool ? { source: "cli-evidence" } : { failureKind: "quota-exhausted", source: "cli-evidence" }
       };
+      if (evidence.pool) {
+        const pools = { ...readPoolCliRateLimitEvidence(base), [evidence.pool]: evidence };
+        return { ...base, metadata: { ...base.metadata, cliRateLimitPools: stripPools(pools) } };
+      }
       return { ...base, metadata: { ...base.metadata, cliRateLimit: evidence } };
     }
     var QUOTA_HARD_EXHAUSTED_PERCENT;
@@ -72145,6 +72183,26 @@ ${mergeTreeErr?.stderr || ""}`;
         init_dist();
       }
     });
+    function quotaPoolsOf(provider) {
+      return (PROVIDER_QUOTA_POOLS[provider] ?? []).map((rule) => rule.pool);
+    }
+    function quotaPoolForModel(provider, model) {
+      const label2 = typeof model === "string" ? model.trim().toLowerCase() : "";
+      if (!label2) return void 0;
+      return PROVIDER_QUOTA_POOLS[provider]?.find((rule) => rule.leadingLabel.test(label2))?.pool;
+    }
+    var PROVIDER_QUOTA_POOLS;
+    var init_quota_pools = __esm2({
+      "src/quota/quota-pools.ts"() {
+        "use strict";
+        PROVIDER_QUOTA_POOLS = {
+          "antigravity-cli": [
+            { pool: "gemini", leadingLabel: /^gemini(?:[\s/_-]|$)/ },
+            { pool: "claude-gpt", leadingLabel: /^(?:claude|gpt)(?:[\s/_-]|$)/ }
+          ]
+        };
+      }
+    });
     function recordQuotaReserveBlock(consumer, provider, pool) {
       const key7 = `${consumer}|${provider}${pool ? `:${pool}` : ""}`;
       blocks.set(key7, (blocks.get(key7) ?? 0) + 1);
@@ -72355,10 +72413,7 @@ ${mergeTreeErr?.stderr || ""}`;
       return Number.isFinite(at) && at > 0 ? { resetsAt: at } : {};
     }
     function antigravityPoolFromLeadingLabel(value) {
-      const label2 = typeof value === "string" ? value.trim().toLowerCase() : "";
-      if (/^gemini(?:[\s/_-]|$)/.test(label2)) return "gemini";
-      if (/^(?:claude|gpt)(?:[\s/_-]|$)/.test(label2)) return "claude-gpt";
-      return void 0;
+      return quotaPoolForModel("antigravity-cli", value);
     }
     function worstBucketWindow(buckets, targetMinutes) {
       const tolerance = targetMinutes * 0.1;
@@ -72439,6 +72494,23 @@ ${mergeTreeErr?.stderr || ""}`;
           thresholdPercent: 0,
           ...cliEvidence.resetsAt !== void 0 ? { resetsAt: cliEvidence.resetsAt } : {}
         };
+      }
+      const poolEvidence = readPoolCliRateLimitEvidence(quota);
+      const heldPools = Object.values(poolEvidence).filter((ev) => cliRateLimitHoldActive(ev, quota));
+      if (heldPools.length) {
+        const targetPool = quotaPoolForModel(providerType, target2?.model);
+        const providerPools = quotaPoolsOf(providerType);
+        const binding = targetPool ? heldPools.find((ev) => ev.pool === targetPool) : providerPools.length > 0 && providerPools.every((p) => heldPools.some((ev) => ev.pool === p)) ? heldPools[0] : void 0;
+        if (binding) {
+          const resetPassed = cliRateLimitResetPassed(binding, now);
+          return {
+            reason: resetPassed ? PROVIDER_QUOTA_RESET_UNCONFIRMED_SKIP_REASON : PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON,
+            window: "unknown",
+            remainingPercent: 0,
+            thresholdPercent: 0,
+            ...binding.resetsAt !== void 0 ? { resetsAt: binding.resetsAt } : {}
+          };
+        }
       }
       if (providerType === "antigravity-cli" && !target2?.model?.trim()) {
         const pools = ["Gemini", "Claude"].filter((model) => quotaWindowsForGateTarget(providerType, quota, { model }));
@@ -72661,6 +72733,7 @@ ${mergeTreeErr?.stderr || ""}`;
         "use strict";
         init_quota_reserve();
         init_exhaustion_hold();
+        init_quota_pools();
         init_quota_reserve_metrics();
         init_account_lineage();
         init_repo_mesh_types();
@@ -227913,6 +227986,7 @@ ${buttons.join("\n")}`;
     init_mesh_events_utils();
     init_turn_evidence_port();
     init_refresh();
+    init_quota_pools();
     var TURN_END_BLOCK_REASON_SET = /* @__PURE__ */ new Set([
       "missing_final_assistant",
       "finalization_timeout",
@@ -228095,6 +228169,14 @@ ${buttons.join("\n")}`;
       host.generatingStartedAt = 0;
       host.lastApprovalEventFingerprint = "";
     }
+    function sessionQuotaPool(host) {
+      const candidates = [host.controlValues?.model, host.settings?.model, host.settings?.initialModel];
+      for (const c of candidates) {
+        const pool = typeof c === "string" ? quotaPoolForModel(host.type, c) : void 0;
+        if (pool) return pool;
+      }
+      return void 0;
+    }
     function emitGeneratingCompleted(host, opts) {
       const summary = typeof opts.finalSummary === "string" ? opts.finalSummary.trim() : "";
       if (summary) {
@@ -228105,7 +228187,8 @@ ${buttons.join("\n")}`;
         try {
           const observedAt = Date.now();
           const resetsAt = host.type === "claude-cli" ? parseClaudeUsageLimitBanner(summary, observedAt)?.resetsAt : void 0;
-          recordCliRateLimitEvidence(host.type, { observedAt, ...resetsAt ? { resetsAt } : {} });
+          const pool = quotaPoolsOf(host.type).length ? sessionQuotaPool(host) : void 0;
+          recordCliRateLimitEvidence(host.type, { observedAt, ...resetsAt ? { resetsAt } : {}, ...pool ? { pool } : {} });
         } catch {
         }
       }
