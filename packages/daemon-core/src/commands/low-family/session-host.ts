@@ -1,7 +1,7 @@
 import { readCoordinatorMeshAssociation } from '../../session-host/coordinator-association.js';
 import { detectCLI } from '../../detection/cli-detector.js';
 import { getAssistantRegistry } from '../../assistant/assistant-registry.js';
-import { getCoordinatorForSession } from '../../mesh/coordinator-registry.js';
+import { getCoordinatorForSession, registerMeshCoordinator } from '../../mesh/coordinator-registry.js';
 import { parseSessionLaunchRecord } from '@adhdev/mesh-shared';
 import { validateLaunchDefault } from '../../launch-defaults/validate.js';
 import { createLaunchValidationPorts } from '../../launch-defaults/ports.js';
@@ -202,10 +202,16 @@ export async function restartHostedSession(deps: LowFamilyContext['deps'], args:
         if (!valid.ok) return { success: false, code: 'restart_selection_unavailable',
             error: `Recorded provider '${launch.providerType}' cannot restart: ${valid.issue.reason}` };
     }
+    const savedCoordinator = getCoordinatorForSession(sessionId);
     const record = await traceSessionHostAction('session_host_restart_session', args, async () => {
         const nextRecord = await deps.sessionHostControl!.restartSession(sessionId);
         const hosted = toHostedCliRuntimeDescriptor(nextRecord);
         if (hosted) {
+            // Drop the stopped predecessor's binding first, or restore skips the record and the
+            // predecessor's auto-clean erases the key (live 2026-11-08). Termination unregisters a
+            // coordinator synchronously, so its entry is put back before the restore re-attaches it.
+            deps.cliManager.releaseForHostedRestart?.(sessionId);
+            if (savedCoordinator) registerMeshCoordinator(savedCoordinator);
             await deps.cliManager.restoreHostedSessions([hosted]);
         }
         return nextRecord;
@@ -213,6 +219,10 @@ export async function restartHostedSession(deps: LowFamilyContext['deps'], args:
         ...summarizeSessionHostRecord(result),
         restoredHostedSession: !!toHostedCliRuntimeDescriptor(result),
     }));
+    // Never report success for a restart that left nothing attached.
+    if (deps.cliManager.isSessionAttached && !deps.cliManager.isSessionAttached(sessionId)) {
+        return { success: false, code: 'restart_rebind_failed', error: `Session ${sessionId} restarted in the session host but did not re-attach here.`, record };
+    }
     return { success: true, record };
 }
 

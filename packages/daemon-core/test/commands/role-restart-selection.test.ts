@@ -105,6 +105,28 @@ describe('role restarts replay recorded launch selection', () => {
         expect(deps.sessionHostControl.restartSession).toHaveBeenCalledWith(id);
         expect(restore).toHaveBeenCalledWith([expect.objectContaining({ launchRecord: record })]);
     });
+    // Live 2026-11-08: a hosted coordinator restart stopped the session, restore skipped it because the
+    // stopped predecessor still held the key, and the predecessor's auto-clean then erased it — success
+    // was reported with no coordinator left. The restart must re-bind under the same key, keep the
+    // coordinator registered, and say so when it cannot.
+    it('hosted coordinator restart re-binds a fresh adapter under the same key and keeps it registered', async () => {
+        const { getCoordinatorForSession, registerMeshCoordinator } = await import('../../src/mesh/coordinator-registry.js');
+        const { runtimeSessionId: id, record } = await startRole('coordinator');
+        registerMeshCoordinator({ meshId: 'mesh', sessionId: id, cliType: 'claude-cli', workspace: dir } as any);
+        const before = manager.adapters.get(id);
+        expect(before).toBeTruthy();
+        const deps = hostedDeps(id, record);
+        expect(await sessionHostHandlers.session_host_restart_session({ deps } as any, { sessionId: id })).toMatchObject({ success: true });
+        expect(manager.isSessionAttached(id)).toBe(true);
+        expect(manager.adapters.get(id)).not.toBe(before);
+        expect(getCoordinatorForSession(id)).toBeTruthy();
+    });
+    it('hosted restart reports restart_rebind_failed instead of success when nothing re-attaches', async () => {
+        const { runtimeSessionId: id, record } = await startRole('coordinator');
+        const deps = hostedDeps(id, record);
+        vi.spyOn(manager, 'restoreHostedSessions').mockResolvedValue(0);
+        expect(await sessionHostHandlers.session_host_restart_session({ deps } as any, { sessionId: id })).toMatchObject({ success: false, code: 'restart_rebind_failed' });
+    });
     it.each(['assistant', 'coordinator'] as const)('hosted %s without roleLaunch still validates and fails closed', async role => {
         const { runtimeSessionId: id, record } = await startRole(role); delete record.roleLaunch; loader.enabled = false;
         await manager.stopSession(id);

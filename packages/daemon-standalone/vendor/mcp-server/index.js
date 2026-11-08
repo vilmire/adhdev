@@ -195099,10 +195099,13 @@ ${marker2}`,
           error: `Recorded provider '${launch.providerType}' cannot restart: ${valid.issue.reason}`
         };
       }
+      const savedCoordinator = getCoordinatorForSession(sessionId);
       const record8 = await traceSessionHostAction("session_host_restart_session", args, async () => {
         const nextRecord = await deps.sessionHostControl.restartSession(sessionId);
         const hosted = toHostedCliRuntimeDescriptor(nextRecord);
         if (hosted) {
+          deps.cliManager.releaseForHostedRestart?.(sessionId);
+          if (savedCoordinator) registerMeshCoordinator(savedCoordinator);
           await deps.cliManager.restoreHostedSessions([hosted]);
         }
         return nextRecord;
@@ -195110,6 +195113,9 @@ ${marker2}`,
         ...summarizeSessionHostRecord(result),
         restoredHostedSession: !!toHostedCliRuntimeDescriptor(result)
       }));
+      if (deps.cliManager.isSessionAttached && !deps.cliManager.isSessionAttached(sessionId)) {
+        return { success: false, code: "restart_rebind_failed", error: `Session ${sessionId} restarted in the session host but did not re-attach here.`, record: record8 };
+      }
       return { success: true, record: record8 };
     }
     var sessionHostHandlers = {
@@ -232188,6 +232194,33 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
        *  2026-09-10 stranded-composer incident). Awaited by
        *  shutdownDaemonComponents BEFORE detachAll(); immediate no-op when nothing
        *  is in flight. Rationale + limitation: ./cli-manager-submit-drain.ts. */
+      /**
+       * Let a session-host restart re-bind under the SAME key. The restarted runtime is already
+       * running in the session host; the old (now stopped) adapter still holds the key, so
+       * restoreHostedSessions would skip the record and the old adapter's auto-clean would then
+       * erase the key — the 2026-11-08 coordinator that "restarted" into nothing. Detach only:
+       * shutdown() could stop the new hosted runtime. The caller re-registers role state.
+       */
+      releaseForHostedRestart(key7) {
+        this.roleRestartInputs.delete(key7);
+        const adapter = this.adapters.get(key7);
+        if (adapter) {
+          this.adapters.delete(key7);
+          try {
+            if (typeof adapter.detach === "function") adapter.detach();
+          } catch {
+          }
+        }
+        this.deps.getSessionRegistry?.()?.terminateByInstanceKey(key7, "stop_requested");
+        try {
+          this.deps.getInstanceManager()?.removeInstance(key7);
+        } catch {
+        }
+      }
+      /** Whether a session is attached in this daemon (adapter or instance). */
+      isSessionAttached(key7) {
+        return this.adapters.has(key7) || !!this.deps.getInstanceManager()?.getInstance(key7);
+      }
       drainInFlightSubmits(timeoutMs) {
         return drainInFlightSubmits(this.adapters, timeoutMs);
       }

@@ -610,6 +610,29 @@ export class DaemonCliManager {
      *  2026-09-10 stranded-composer incident). Awaited by
      *  shutdownDaemonComponents BEFORE detachAll(); immediate no-op when nothing
      *  is in flight. Rationale + limitation: ./cli-manager-submit-drain.ts. */
+    /**
+     * Let a session-host restart re-bind under the SAME key. The restarted runtime is already
+     * running in the session host; the old (now stopped) adapter still holds the key, so
+     * restoreHostedSessions would skip the record and the old adapter's auto-clean would then
+     * erase the key — the 2026-11-08 coordinator that "restarted" into nothing. Detach only:
+     * shutdown() could stop the new hosted runtime. The caller re-registers role state.
+     */
+    releaseForHostedRestart(key: string): void {
+        this.roleRestartInputs.delete(key);
+        const adapter = this.adapters.get(key);
+        if (adapter) {
+            this.adapters.delete(key);
+            try { if (typeof adapter.detach === 'function') adapter.detach(); } catch { /* best-effort */ }
+        }
+        this.deps.getSessionRegistry?.()?.terminateByInstanceKey(key, 'stop_requested');
+        try { this.deps.getInstanceManager()?.removeInstance(key); } catch { /* best-effort */ }
+    }
+
+    /** Whether a session is attached in this daemon (adapter or instance). */
+    isSessionAttached(key: string): boolean {
+        return this.adapters.has(key) || !!this.deps.getInstanceManager()?.getInstance(key);
+    }
+
     drainInFlightSubmits(timeoutMs: number): Promise<SubmitDrainResult> {
         return drainInFlightSubmits(this.adapters, timeoutMs);
     }
