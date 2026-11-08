@@ -477,6 +477,13 @@ export async function handleActivateProviderUpdates(host: ProviderCatalogCommand
     if (host._ctx.providerLoader) {
         invalidateCachedCliInventory(host._ctx.providerLoader);
     }
+    // Running sessions keep the spec they launched with unless told: hand them the activated
+    // definitions (the spec adapter re-points its FSM when the spec path moved).
+    let refreshedInstances = 0;
+    try {
+        const loader = host._ctx.providerLoader;
+        if (loader && host._ctx.instanceManager) refreshedInstances = host._ctx.instanceManager.refreshProviderDefinitions((t: string) => loader.resolve(t));
+    } catch { /* best-effort: activation itself already succeeded */ }
 
     // Report what actually moved. "The sync succeeded" and "this machine
     // now runs a different spec" are different statements, and the second
@@ -494,7 +501,7 @@ export async function handleActivateProviderUpdates(host: ProviderCatalogCommand
     const blocked = Array.isArray((channelSync as { blocked?: unknown } | null)?.blocked)
         ? (channelSync as { blocked: unknown[] }).blocked
         : [];
-    return { success: true, activated, blocked, channelSync };
+    return { success: true, activated, blocked, channelSync, refreshedInstances };
 }
 
 /**

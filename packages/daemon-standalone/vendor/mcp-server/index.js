@@ -136367,7 +136367,9 @@ ${detail.join("\n")}` : stripped;
         const idx = matchNumberedChoiceIndex(line);
         if (idx !== null) {
           let optEnd = i;
-          for (let j = i + 1; j <= lastNonBlankRow && j <= i + 3; j += 1) {
+          const optTextIndent = /^\s*(?:[›❯>]\s*)?\d+\.\s*/.exec(line)?.[0].length ?? 0;
+          const isWrappedContinuation = (l) => (/^\s*/.exec(l)?.[0].length ?? 0) >= optTextIndent && optTextIndent > 0;
+          for (let j = i + 1; j <= lastNonBlankRow && (j <= i + 3 || j <= i + MAX_WRAPPED_OPTION_ROWS && isWrappedContinuation(lines[j])); j += 1) {
             const next = lines[j];
             if (!next.trim()) break;
             if (matchNumberedChoiceIndex(next) !== null) break;
@@ -136615,6 +136617,7 @@ ${detail.join("\n")}` : stripped;
     var PARKED_BELOW_KEY_HINT_RE;
     var PARKED_BELOW_SKIP_ROW_RE;
     var PARKED_BELOW_PROMPT_RE;
+    var MAX_WRAPPED_OPTION_ROWS;
     var init_fsm_driver_modal = __esm2({
       "src/providers/spec/fsm-driver-modal.ts"() {
         "use strict";
@@ -136633,6 +136636,7 @@ ${detail.join("\n")}` : stripped;
         PARKED_BELOW_KEY_HINT_RE = /\((?:y|n|p|tab|shift\+tab|esc(?:\s+or\s+n)?)\)\s*$/i;
         PARKED_BELOW_SKIP_ROW_RE = /^\s*Skip & tell the agent what to do instead \(esc or n\)\s*$/;
         PARKED_BELOW_PROMPT_RE = /^\s*Run this (?:command|MCP tool)\?\s*$/;
+        MAX_WRAPPED_OPTION_ROWS = 16;
       }
     });
     function unavailableSignalSnapshot(now, reason, profile) {
@@ -215693,6 +215697,12 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       if (host._ctx.providerLoader) {
         invalidateCachedCliInventory(host._ctx.providerLoader);
       }
+      let refreshedInstances = 0;
+      try {
+        const loader2 = host._ctx.providerLoader;
+        if (loader2 && host._ctx.instanceManager) refreshedInstances = host._ctx.instanceManager.refreshProviderDefinitions((t) => loader2.resolve(t));
+      } catch {
+      }
       const activated = [];
       for (const [type2, pointer] of after) {
         const wasVersion = before.get(type2)?.active?.providerVersion ?? null;
@@ -215702,7 +215712,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }
       }
       const blocked = Array.isArray(channelSync?.blocked) ? channelSync.blocked : [];
-      return { success: true, activated, blocked, channelSync };
+      return { success: true, activated, blocked, channelSync, refreshedInstances };
     }
     async function handleRollbackProviderUpdate(host, args) {
       const providerType = typeof args?.providerType === "string" ? args.providerType.trim() : "";
@@ -220286,6 +220296,41 @@ trust_level = "trusted"
         );
         this.signalGate.reset();
       }
+      /**
+       * Point a RUNNING session at a newly activated spec file (provider channel activation installs the
+       * new version under a different path, so the path watcher below never sees it). Live 2026-11-08: a
+       * fixed codex approval matcher was activated on the machine, but the worker already waiting at that
+       * prompt kept the old spec and stayed invisible. Refused (old spec kept) when the new file is invalid
+       * or no longer has the state this session is in, so a running session never lands in an unknown state.
+       */
+      switchSpecPath(nextPath) {
+        if (!nextPath || nextPath === this.opts.specPath) return false;
+        const res = loadFsmSpec(nextPath);
+        if (!res.ok) {
+          this.emit({ kind: "spec_error", errors: res.errors });
+          return false;
+        }
+        if (this.currentStateId && !stateById(res.spec, this.currentStateId)) {
+          LOG.warn("FsmDriver", `[${this.specTag()}] new spec ${nextPath} has no state "${this.currentStateId}"; keeping the current spec`);
+          return false;
+        }
+        this.opts.specPath = nextPath;
+        this.spec = res.spec;
+        this.compileSignalRules();
+        this.bgMarker = new BackgroundMarkerBound(compileBackgroundMarkers(this.spec.background_marker, this.specTag()));
+        reportFsmSpecWarnings(res.warnings, this.specTag(), LOG.warn.bind(LOG));
+        if (this.specWatcher) {
+          try {
+            this.specWatcher.close();
+          } catch {
+          }
+          this.specWatcher = null;
+          if (this.opts.hotReload) this.armSpecWatcher();
+        }
+        LOG.info("FsmDriver", `[${this.specTag()}] switched to activated spec ${nextPath}`);
+        this.reevaluate(true);
+        return true;
+      }
       armSpecWatcher() {
         try {
           const dir = path131.dirname(this.opts.specPath);
@@ -220563,6 +220608,9 @@ trust_level = "trusted"
         if (st && statusForState(st) === "approval") {
           soonest = Math.min(soonest, _FsmDriver.APPROVAL_LATCH_REFRESH_FLOOR_MS);
         }
+        if (st && statusForState(st) === "idle") {
+          soonest = Math.min(soonest, _FsmDriver.IDLE_REFRESH_FLOOR_MS);
+        }
         if (!Number.isFinite(soonest)) return;
         this.wakeTimer = setTimeout(() => {
           this.wakeTimer = null;
@@ -220600,6 +220648,8 @@ trust_level = "trusted"
       postTransitionBudget = _FsmDriver.POST_TRANSITION_REEVALUATE_BUDGET;
       /** @see scheduleWakeForState — floor poll interval while parked at a modal. */
       static APPROVAL_LATCH_REFRESH_FLOOR_MS = 2e3;
+      /** @see scheduleWakeForState — floor re-evaluation interval for a quiet idle state. */
+      static IDLE_REFRESH_FLOOR_MS = 5e3;
       /** Wall-clock time the screen last changed IN THE CURRENT STATE, falling
        *  back to state entry when it has not changed since (i.e. fully stalled
        *  from the start of the state). State-relative on purpose — the stall
@@ -224095,7 +224145,14 @@ ${text10}` : text10;
       }
       refreshProviderDefinition(provider) {
         const specPath = provider?._resolvedSpecPath;
-        if (specPath) this.specPath = specPath;
+        if (specPath && specPath !== this.specPath) {
+          try {
+            if (this.driver.switchSpecPath?.(specPath) === false) return;
+          } catch {
+            return;
+          }
+          this.specPath = specPath;
+        }
         void this.kimiQuestionReader?.reloadConfig(specPath || this.specPath);
         void this.kimiBackgroundReader?.reloadConfig(specPath || this.specPath);
       }

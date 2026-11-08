@@ -930,7 +930,11 @@ export class SpecCliAdapter implements CliAdapter {
     }
     refreshProviderDefinition(provider?: unknown): void {
         const specPath = (provider as { _resolvedSpecPath?: string })?._resolvedSpecPath;
-        if (specPath) this.specPath = specPath;
+        if (specPath && specPath !== this.specPath) {
+            // A newly activated provider version lives at a new path: re-point the running FSM.
+            try { if (this.driver.switchSpecPath?.(specPath) === false) return; } catch { return; }
+            this.specPath = specPath;
+        }
         void this.kimiQuestionReader?.reloadConfig(specPath || this.specPath);
         void this.kimiBackgroundReader?.reloadConfig(specPath || this.specPath);
     }

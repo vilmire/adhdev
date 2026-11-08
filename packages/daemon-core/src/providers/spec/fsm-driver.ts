@@ -584,6 +584,32 @@ export class FsmDriver implements ISpecDriver {
     }
 
 
+    /**
+     * Point a RUNNING session at a newly activated spec file (provider channel activation installs the
+     * new version under a different path, so the path watcher below never sees it). Live 2026-11-08: a
+     * fixed codex approval matcher was activated on the machine, but the worker already waiting at that
+     * prompt kept the old spec and stayed invisible. Refused (old spec kept) when the new file is invalid
+     * or no longer has the state this session is in, so a running session never lands in an unknown state.
+     */
+    switchSpecPath(nextPath: string): boolean {
+        if (!nextPath || nextPath === this.opts.specPath) return false;
+        const res = loadFsmSpec(nextPath);
+        if (!res.ok) { this.emit({ kind: 'spec_error', errors: res.errors }); return false; }
+        if (this.currentStateId && !stateById(res.spec, this.currentStateId)) {
+            LOG.warn('FsmDriver', `[${this.specTag()}] new spec ${nextPath} has no state "${this.currentStateId}"; keeping the current spec`);
+            return false;
+        }
+        (this.opts as { specPath: string }).specPath = nextPath;
+        this.spec = res.spec;
+        this.compileSignalRules();
+        this.bgMarker = new BackgroundMarkerBound(compileBackgroundMarkers(this.spec.background_marker, this.specTag()));
+        reportFsmSpecWarnings(res.warnings, this.specTag(), LOG.warn.bind(LOG));
+        if (this.specWatcher) { try { this.specWatcher.close(); } catch { /* best-effort */ } this.specWatcher = null; if (this.opts.hotReload) this.armSpecWatcher(); }
+        LOG.info('FsmDriver', `[${this.specTag()}] switched to activated spec ${nextPath}`);
+        this.reevaluate(true);
+        return true;
+    }
+
     private armSpecWatcher(): void {
         try {
             const dir = path.dirname(this.opts.specPath);
@@ -956,6 +982,13 @@ export class FsmDriver implements ISpecDriver {
         if (st && statusForState(st) === 'approval') {
             soonest = Math.min(soonest, FsmDriver.APPROVAL_LATCH_REFRESH_FLOOR_MS);
         }
+        // IDLE-STALE-VERDICT (live 2026-11-08): an idle verdict taken on a half-restored screen right
+        // after a reattach was never revisited — codex sat at a fully drawn approval prompt, printing
+        // nothing, so no PTY frame ever re-ran the guards and the session read "idle" for 40+ minutes.
+        // A quiet idle state re-evaluates on a slow floor so a modal on an unchanging screen is still seen.
+        if (st && statusForState(st) === 'idle') {
+            soonest = Math.min(soonest, FsmDriver.IDLE_REFRESH_FLOOR_MS);
+        }
         if (!Number.isFinite(soonest)) return;
         this.wakeTimer = setTimeout(() => { this.wakeTimer = null; this.reevaluate(); }, Math.max(soonest + 30, 50));
     }
@@ -986,6 +1019,8 @@ export class FsmDriver implements ISpecDriver {
 
     /** @see scheduleWakeForState — floor poll interval while parked at a modal. */
     private static readonly APPROVAL_LATCH_REFRESH_FLOOR_MS = 2000;
+    /** @see scheduleWakeForState — floor re-evaluation interval for a quiet idle state. */
+    private static readonly IDLE_REFRESH_FLOOR_MS = 5000;
 
     /** Wall-clock time the screen last changed IN THE CURRENT STATE, falling
      *  back to state entry when it has not changed since (i.e. fully stalled

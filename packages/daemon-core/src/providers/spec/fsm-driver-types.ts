@@ -99,6 +99,8 @@ export interface FsmSnapshotEntry {
 }
 
 export interface ISpecDriver {
+    /** Re-point a running session at a newly activated spec file; false = kept the current spec. */
+    switchSpecPath?(nextPath: string): boolean;
     subscribe(listener: (ev: DashboardEvent) => void): () => void;
     start(): void;
     dispatch(cmd: DashboardCommand): void;

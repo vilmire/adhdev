@@ -46,6 +46,9 @@ const PARKED_BELOW_KEY_HINT_RE = /\((?:y|n|p|tab|shift\+tab|esc(?:\s+or\s+n)?)\)
 const PARKED_BELOW_SKIP_ROW_RE = /^\s*Skip & tell the agent what to do instead \(esc or n\)\s*$/;
 const PARKED_BELOW_PROMPT_RE = /^\s*Run this (?:command|MCP tool)\?\s*$/;
 
+/** Upper bound for one wrapped option's rows (see resolveLiveModalSlice). */
+const MAX_WRAPPED_OPTION_ROWS = 16;
+
 function matchNumberedChoiceIndex(line: string): number | null {
     const m = NUMBERED_CHOICE_LINE_RE.exec(line);
     if (!m) return null;
@@ -118,7 +121,14 @@ export function resolveLiveModalSlice(
         const idx = matchNumberedChoiceIndex(line);
         if (idx !== null) {
             let optEnd = i;
-            for (let j = i + 1; j <= lastNonBlankRow && j <= i + 3; j += 1) {
+            // A long option (e.g. codex's "Yes, and don't ask again for commands that start with `<cmd>`")
+            // wraps over many rows. Rows indented deeper than the option's own text are its continuation,
+            // so they extend the option past the short 3-row window (live 2026-11-08: an 8-row option split
+            // 1./2./3. into separate blocks, the prompt never counted as a live modal, and the session sat
+            // "idle" at an approval for 40+ minutes).
+            const optTextIndent = (/^\s*(?:[›❯>]\s*)?\d+\.\s*/.exec(line)?.[0].length) ?? 0;
+            const isWrappedContinuation = (l: string) => (/^\s*/.exec(l)?.[0].length ?? 0) >= optTextIndent && optTextIndent > 0;
+            for (let j = i + 1; j <= lastNonBlankRow && (j <= i + 3 || (j <= i + MAX_WRAPPED_OPTION_ROWS && isWrappedContinuation(lines[j]))); j += 1) {
                 const next = lines[j];
                 if (!next.trim()) break;
                 if (matchNumberedChoiceIndex(next) !== null) break;
