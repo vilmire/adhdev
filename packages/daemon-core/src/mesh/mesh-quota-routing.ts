@@ -407,6 +407,9 @@ function isWindowExpired(
  * quota reappears on its own momentarily, so holding the claim would just
  * idle the mesh (isSessionResetImminent). The weekly gate never relaxes.
  */
+/** UNMEASURABLE-RESET: how long past a CLI-reported reset an unmeasurable provider stays held. */
+export const UNMEASURABLE_RESET_GRACE_MS = 30 * 60_000;
+
 export function evaluateProviderQuotaGate(
     node: any,
     providerType: string,
@@ -424,7 +427,15 @@ export function evaluateProviderQuotaGate(
     // CLI EVIDENCE: a session of this provider printed its own "usage limit reached". That is a confirmed
     // fact about the account, stronger than any percentage, and only a measurement taken after it can end it.
     const cliEvidence = readCliRateLimitEvidence(quota);
-    if (cliEvidence && cliRateLimitHoldActive(cliEvidence, quota)) {
+    // UNMEASURABLE-RESET (owner 2026-11-08): when the provider cannot be measured at all (no 'ok' snapshot,
+    // e.g. antigravity's token only refreshes when `agy` runs), "wait for a post-reset measurement" never
+    // ends: the provider is held, so it never runs, so it is never measured. Its Gemini pool sat unused all
+    // day. For an unmeasurable provider the clock decides: past the stated reset (or the bounded unknown-reset
+    // window) the hold lifts; a session that hits the limit again simply records new evidence.
+    // A grace past the reset keeps a measurement that is about to arrive in charge (no flapping at the reset).
+    const unmeasurable = quota.status !== 'ok';
+    const pastResetGrace = (ev: Parameters<typeof cliRateLimitResetPassed>[0]) => unmeasurable && cliRateLimitResetPassed(ev, now - UNMEASURABLE_RESET_GRACE_MS);
+    if (cliEvidence && cliRateLimitHoldActive(cliEvidence, quota) && !pastResetGrace(cliEvidence)) {
         const resetPassed = cliRateLimitResetPassed(cliEvidence, now);
         return {
             reason: resetPassed ? PROVIDER_QUOTA_RESET_UNCONFIRMED_SKIP_REASON : PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON,
@@ -438,7 +449,7 @@ export function evaluateProviderQuotaGate(
     // A target whose model resolves to that pool is blocked; another pool is judged on its own windows; a target
     // with no model is blocked only when EVERY pool of the provider is held (the claim gate re-judges the live model).
     const poolEvidence = readPoolCliRateLimitEvidence(quota);
-    const heldPools = Object.values(poolEvidence).filter(ev => cliRateLimitHoldActive(ev, quota));
+    const heldPools = Object.values(poolEvidence).filter(ev => cliRateLimitHoldActive(ev, quota) && !pastResetGrace(ev));
     if (heldPools.length) {
         const targetPool = quotaPoolForModel(providerType, target?.model);
         const providerPools = quotaPoolsOf(providerType);

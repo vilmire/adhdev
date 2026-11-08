@@ -72485,7 +72485,9 @@ ${mergeTreeErr?.stderr || ""}`;
       }
       const { facts, quota } = entry;
       const cliEvidence = readCliRateLimitEvidence(quota);
-      if (cliEvidence && cliRateLimitHoldActive(cliEvidence, quota)) {
+      const unmeasurable = quota.status !== "ok";
+      const pastResetGrace = (ev) => unmeasurable && cliRateLimitResetPassed(ev, now - UNMEASURABLE_RESET_GRACE_MS);
+      if (cliEvidence && cliRateLimitHoldActive(cliEvidence, quota) && !pastResetGrace(cliEvidence)) {
         const resetPassed = cliRateLimitResetPassed(cliEvidence, now);
         return {
           reason: resetPassed ? PROVIDER_QUOTA_RESET_UNCONFIRMED_SKIP_REASON : PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON,
@@ -72496,7 +72498,7 @@ ${mergeTreeErr?.stderr || ""}`;
         };
       }
       const poolEvidence = readPoolCliRateLimitEvidence(quota);
-      const heldPools = Object.values(poolEvidence).filter((ev) => cliRateLimitHoldActive(ev, quota));
+      const heldPools = Object.values(poolEvidence).filter((ev) => cliRateLimitHoldActive(ev, quota) && !pastResetGrace(ev));
       if (heldPools.length) {
         const targetPool = quotaPoolForModel(providerType, target2?.model);
         const providerPools = quotaPoolsOf(providerType);
@@ -72726,6 +72728,7 @@ ${mergeTreeErr?.stderr || ""}`;
     var PROVIDER_QUOTA_RESET_UNCONFIRMED_SKIP_REASON;
     var PROVIDER_QUOTA_GROUP_EXHAUSTED_SKIP_REASON;
     var ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON;
+    var UNMEASURABLE_RESET_GRACE_MS;
     var DEFAULT_WEEKLY_WINDOW_MINUTES;
     var DEFAULT_SESSION_WINDOW_MINUTES;
     var init_mesh_quota_routing = __esm2({
@@ -72745,6 +72748,7 @@ ${mergeTreeErr?.stderr || ""}`;
         PROVIDER_QUOTA_RESET_UNCONFIRMED_SKIP_REASON = "provider_quota_reset_unconfirmed";
         PROVIDER_QUOTA_GROUP_EXHAUSTED_SKIP_REASON = "provider_quota_group_exhausted";
         ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON = "all_providers_quota_gated";
+        UNMEASURABLE_RESET_GRACE_MS = 30 * 6e4;
         DEFAULT_WEEKLY_WINDOW_MINUTES = 7 * 24 * 60;
         DEFAULT_SESSION_WINDOW_MINUTES = 5 * 60;
       }

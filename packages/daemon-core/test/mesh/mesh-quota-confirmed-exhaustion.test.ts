@@ -34,7 +34,7 @@ import { evaluateProviderQuotaGate } from '../../src/mesh/mesh-quota-routing.js'
 import { evaluateQuotaClaimGateForAssignment } from '../../src/mesh/mesh-queue-claim-gate.js'
 import { quotaBlockOverridable, quotaBlockPinOverridable } from '../../src/mesh/mesh-quota-override.js'
 import { resetPinCrossingForTests } from '../../src/mesh/mesh-quota-pin-crossing.js'
-import { preserveCliRateLimitEvidence, withCliRateLimitEvidence } from '../../src/quota/exhaustion-hold.js'
+import { CLI_RATE_LIMIT_UNKNOWN_RESET_HARD_MS, preserveCliRateLimitEvidence, withCliRateLimitEvidence } from '../../src/quota/exhaustion-hold.js'
 import { classifyOwnQuotaFailureOnlyReply, parseClaudeUsageLimitBanner } from '../../src/providers/spec/provider-output-attribution.js'
 import { clearQuotaCache, readQuotaCache, recordCliRateLimitEvidence } from '../../src/quota/refresh.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask } from '../../src/mesh/mesh-work-queue.js'
@@ -109,6 +109,22 @@ describe('confirmed exhaustion: the CLI reported its own usage limit', () => {
     const afterMeasure = preserveCliRateLimitEvidence(held as any, quota({ updatedAt: NOW - MIN }) as any)
     expect(afterMeasure.metadata?.cliRateLimit).toBeUndefined()
     expect(evaluateProviderQuotaGate(node({ 'claude-cli': afterMeasure }), 'claude-cli', null, NOW)).toBeNull()
+  })
+
+  // Owner 2026-11-08: antigravity's token only refreshes when `agy` runs, so a held antigravity was never
+  // measured again and its Gemini pool sat unused all day. An UNMEASURABLE provider is released by the clock.
+  it('an unmeasurable provider is released 30 min past the stated reset; a measurable one still waits', () => {
+    const held = withCliRateLimitEvidence('claude-cli', onePercent() as any, evidence(NOW - 31 * MIN))
+    const unmeasurable = preserveCliRateLimitEvidence(held as any, quota({ status: 'error', session: null, weekly: null, metadata: { failureKind: 'expired-token' }, updatedAt: NOW }) as any)
+    expect(evaluateProviderQuotaGate(node({ 'claude-cli': unmeasurable }), 'claude-cli', null, NOW)).toBeNull()
+    expect(evaluateProviderQuotaGate(node({ 'claude-cli': held }), 'claude-cli', null, NOW)).not.toBeNull() // measurable (ok, pre-reset reading)
+  })
+  it('an unmeasurable provider with no stated reset is released after the bounded unknown-reset window + grace', () => {
+    const old = { observedAt: NOW - CLI_RATE_LIMIT_UNKNOWN_RESET_HARD_MS - 31 * MIN }
+    const unmeasurable = withCliRateLimitEvidence('antigravity-cli', quota({ provider: 'antigravity-cli', status: 'unavailable', session: null, weekly: null, metadata: { failureKind: 'expired-token' }, updatedAt: NOW }) as any, old)
+    expect(evaluateProviderQuotaGate(node({ 'antigravity-cli': unmeasurable }), 'antigravity-cli', null, NOW)).toBeNull()
+    const fresh = withCliRateLimitEvidence('antigravity-cli', quota({ provider: 'antigravity-cli', status: 'unavailable', session: null, weekly: null, metadata: { failureKind: 'expired-token' }, updatedAt: NOW }) as any, { observedAt: NOW - HOUR })
+    expect(evaluateProviderQuotaGate(node({ 'antigravity-cli': fresh }), 'antigravity-cli', null, NOW)).not.toBeNull()
   })
 
   it('without a stated reset only a newer reading with real headroom everywhere clears it', () => {
