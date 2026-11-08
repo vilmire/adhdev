@@ -40,6 +40,7 @@ import { resolveSessionHostAppName } from '../../session-host/app-name.js';
 import type { LowFamilyContext } from './types.js';
 import type { CommandRouterResult } from '../router.js';
 import { defineCommandSpecs } from '../command-registry.js';
+import { formatGiB, readFreeDiskBytes, upgradeDiskShortfall } from '../upgrade-disk-guard.js';
 
 // Matches the installed package directory ("…/@adhdev/daemon-standalone/…" or
 // "…/daemon-standalone/…" in a monorepo checkout) as a bounded path SEGMENT,
@@ -210,6 +211,25 @@ export const daemonLifecycleHandlers: Record<string, (ctx: DepsOnlyLowFamilyCont
             }
             if (direction !== null && direction < 0) {
                 LOG.warn('Upgrade', `allowDowngrade set — proceeding with DOWNGRADE from v${runningVersion} to v${latest} on the ${TRACK} track`);
+            }
+
+            // DISK PRECHECK: an install that hits ENOSPC midway leaves a half-replaced package and a
+            // daemon that never comes back cleanly. Refuse here, before the point of no return.
+            // Only when a package install will actually run (restart-only reuse needs no space).
+            if (currentInstalled !== latest && args?.ignoreDiskCheck !== true) {
+                const shortfall = upgradeDiskShortfall(readFreeDiskBytes());
+                if (shortfall) {
+                    LOG.warn('Upgrade', `Refusing upgrade to v${latest}: only ${formatGiB(shortfall.freeBytes)} free, need ${formatGiB(shortfall.requiredBytes)}`);
+                    return withChannelNotice({
+                        success: false, upgraded: false, restarting: false,
+                        code: 'insufficient_disk', outcome: 'insufficient_disk',
+                        ...(runningVersion ? { version: runningVersion, currentVersion: runningVersion } : {}),
+                        targetVersion: latest, channel: TRACK, npmTag,
+                        freeBytes: shortfall.freeBytes, requiredBytes: shortfall.requiredBytes,
+                        reason: `Upgrade refused: only ${formatGiB(shortfall.freeBytes)} of disk is free on this machine and the install needs about ${formatGiB(shortfall.requiredBytes)}. An install that runs out of space midway can leave the daemon unable to restart.`,
+                        clientHint: 'Free some disk space on this machine and try again — no restart happened and the daemon is untouched. Pass ignoreDiskCheck:true to try anyway.',
+                    });
+                }
             }
 
             // killSessionHost was previously read only by daemon_restart — an

@@ -929,7 +929,7 @@ function buildBrainPresetsSection(): string {
  */
 const MULTI_PERSPECTIVE_REVIEW_SECTION = `## Multi-perspective review
 
-This recipe is for design checks, root-cause cross-checks and claim audits — NOT for reviewing a code diff: a medium/difficult \`code_change\` is reviewed by its own stage task (self-check, independent review and revise rounds run inside the task). For a multi-perspective review (a design check, a root-cause cross-check, a claim audit), send the same question to 2–3 workers via \`mesh_send_task\`, each on a different provider (use \`task_mode: "live_debug_readonly"\`), wait for their \`report_completion\`, then synthesize yourself: what they agree on, where they disagree, and which claims only one worker made — verify those before acting on them.`;
+This recipe is for design checks, root-cause cross-checks and claim audits — NOT for reviewing a code diff: a \`code_change\` that needs review asks for it with \`review: true\` on its own task (self-check, independent review and revise rounds then run inside the task). For a multi-perspective review (a design check, a root-cause cross-check, a claim audit), send the same question to 2–3 workers via \`mesh_send_task\`, each on a different provider (use \`task_mode: "live_debug_readonly"\`), wait for their \`report_completion\`, then synthesize yourself: what they agree on, where they disagree, and which claims only one worker made — verify those before acting on them.`;
 
 function buildPolicySection(policy: RepoMeshPolicy): string {
     const rules: string[] = [];

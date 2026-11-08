@@ -27276,7 +27276,7 @@ ${renderWorkerProtocolFooter2(input)}`;
     }
     function resolveStagePlan2(raw, task, opts = {}) {
       const eligible = isStageEligibleTask2(task);
-      if (raw === void 0 || raw === null) return (opts.defaultOn ?? true) && defaultsOnFor2(task) ? defaultStagePlan2() : null;
+      if (raw === void 0 || raw === null) return (opts.defaultOn ?? false) && defaultsOnFor2(task) ? defaultStagePlan2() : null;
       if (raw === false) return null;
       if (raw === true) {
         if (!eligible) throw new Error(`invalid_review_option: review requires a non-readonly code_change task (got taskMode=${task.taskMode ?? "unset"}${task.readonly ? ", readonly" : ""})`);
@@ -79387,7 +79387,8 @@ ${result.log.slice(-SELF_CHECK_LOG_MAX)}
                 const child0 = st.reviewTaskIds.length;
                 const reviewId = `${id4}:review:${effect.round}:${child0}`;
                 const ws = workspace && head ? await this.ports.reviewerWorkspace.prepare({ meshId, parentTaskId: id4, reviewTaskId: reviewId, round: effect.round, rootSha: head, baseSha: st.baseSha, sourceWorkspace: workspace }) : null;
-                const reuse = effect.reuseSessionId && this.ports.queue.sessionAlive(effect.reuseSessionId) ? effect.reuseSessionId : void 0;
+                const reviewDifficulty = parent.difficulty === "difficult" ? "difficult" : "medium";
+                const reuse = effect.reuseSessionId && this.ports.queue.sessionAlive(effect.reuseSessionId) && (this.ports.queue.sessionMeetsDifficulty?.(meshId, effect.reuseSessionId, reviewDifficulty) ?? true) ? effect.reuseSessionId : void 0;
                 const stash2 = peekStageReport(meshId, id4);
                 const msg = buildReviewerMessage({
                   originalMessage: st.originalMessage ?? parent.message,
@@ -81720,6 +81721,21 @@ ${e.stageState.originalMessage}`;
             } catch {
               return false;
             }
+          },
+          sessionMeetsDifficulty: (meshId, sessionId, difficulty) => {
+            try {
+              const state2 = components.instanceManager?.getInstance?.(sessionId)?.getState?.();
+              if (!state2) return true;
+              const settings2 = state2.settings || {};
+              const nodeId = String(settings2.meshNodeId || settings2.nodeId || "");
+              const node = getMesh(meshId)?.nodes?.find((n) => daemonIdsEquivalent5(n.id, nodeId));
+              if (!node) return true;
+              const providerType = String(state2.type || settings2.providerType || "");
+              const allowed = allowedClassifiedDifficultiesForSession(node, resolveNodeCapabilitySlots(node, meshId), providerType, readSessionModel2(state2));
+              return taskMeetsSessionDifficultyFloor({ difficulty }, allowed);
+            } catch {
+              return true;
+            }
           }
         },
         events: {
@@ -81832,6 +81848,8 @@ ${report}`;
         init_stage_review_input();
         init_mesh_task_routing_contract();
         init_dist();
+        init_mesh_difficulty_floor();
+        init_mesh_node_slots();
         SELF_CHECK_LOG_MAX2 = 6e4;
         execFileAsync4 = (0, import_node_util7.promisify)(import_node_child_process20.execFile);
         MAX_FINGERPRINT_OTHER_FILES = 3e5;
@@ -100734,7 +100752,7 @@ ${continuationNotice}` } : dispatchTask,
     var init_default_coordinator_rules = __esm2({
       "src/mesh/default-coordinator-rules.ts"() {
         "use strict";
-        DEFAULT_COORDINATOR_RULES = "## Orchestration Workflow\n\nArtifact handoffs: default to zero coordinator body reads. Pass supplied `artifactIds` through as `input_artifact_ids` without reading their contents first. Reuse the supplied summary and current source when sufficient. Inspect artifact metadata first; `previewText` is at most 600 Unicode characters, not the whole report. If a specific missing fact requires content, call `artifact_read` with an explicit small byte `limit` (for example 4096) and an appropriate `offset`; avoid the default 256 KiB read. The API is byte-paged and does not provide a \"head three lines\" operation. If an artifact grant is denied, report the metadata/provenance diagnostic; never proxy a large body as a workaround. Forward artifact IDs and precise open questions to the next worker instead of copying large report bodies. Tasks enqueued with a `mission_id` automatically inherit the artifacts workers registered for earlier finished tasks of the same mission (newest first, at most 12; never from the carry-over mission; set `inherit_artifacts: false` to opt out), so for a same-mission follow-up state only what is new.\n\n1. **Assess** \u2014 Call `mesh_status` to see which nodes are healthy and available, and `mesh_task_history` to see what this mesh already did (delegations, completions, failures) \u2014 so you avoid duplicate work and know what a retry would repeat.\n2. **Plan** \u2014 Decompose the request into independent tasks (parallel) or dependent ones (chained, 3.a). If history shows a recent failure for a task, decide retry vs reassign. **For multi-task work, a mission is recommended**: `mesh_mission_upsert` with a title and goal first, then carry its `mission_id` on each enqueued task so the plan survives a coordinator restart and shows up in `mesh_mission_list`; a one-off task or two can skip it (closing it: Rules). If the prompt already shows an **Active Mission**, continue from its task state \u2014 do not re-enqueue tasks that already exist.\n3. **Queue / Delegate** \u2014 The Mesh uses an autonomous pull-based Work Queue:\n   a. **Incremental enqueue rule.** Default to `mesh_enqueue_task`. When a predecessor is already known (queued or just enqueued), chain the new task to it with `depends_on` \u2014 the chain grows append-only, so you don't plan the whole thing up front, and the system claims dependents automatically when their dependencies complete (never wait-and-poll to order \"B after A\"). A dependent waits until every `depends_on` task has completed, then automatically receives an \"Upstream results\" appendix summarizing its predecessors' completions. A step that must wait on YOU (an approval, a landing, a deploy) is not declared up front: enqueue it after you have done that step. `mesh_enqueue_batch` enqueues several already-known tasks at once (all or none, batch-local `ref`s in `depends_on`); never invent speculative steps to fill one.\n   b. **Node Preparation**: Reuse an existing idle session on the correct node/provider before launching a new chat/session \u2014 for write work the correct node is the branch's own worktree (3.b0/3.b1), never a base node. Call `mesh_launch_session` only when no suitable session exists, when the user explicitly asks for a fresh provider/session, or when branch/worktree isolation requires it. **A node is not limited to one live session for read-only work** \u2014 `readonly`/`live_debug_readonly` tasks are exempt from the one-active-per-node invariant, so the SAME node can auto-launch multiple concurrent read-only sessions with no worktree needed. Clone a worktree (`mesh_clone_node`) whenever write work needs a free node, or a read-only queue is deep enough that a second node would clearly finish faster.\n   b0. **Base nodes are for environment-specific testing, not for general code changes.** Before dispatching any write task, answer ONE question: *does this task verify the physical environment of a specific machine or OS, or does it only change code?*\n       - **Physical-environment task \u2192 base node, targeted.** Pin it with `required_tags` (e.g. `[\"os=win32\"]`) or `target_node_id`. Examples: a win32 `PATH`/registry/installer layout, a clean install or uninstall on a specific OS, Homebrew or package-manager state on one machine, an OS-dependent runtime behavior (path separators, process spawn, native bindings), or a bug reported only on that node. A worktree cannot substitute \u2014 the point is the machine itself.\n       - **Everything else (ordinary `code_change`) \u2192 a worktree.** Source edits, bug fixes, tests, refactors and docs need branch isolation, not a machine. **Do NOT send these to a base node.** The unit is one worktree per branch, not per task: a NEW, independent piece of write work gets its own freshly cloned worktree, while a follow-up on a branch that already has one (review \u2192 fix, a retry, the next step of the same change) goes back to that worktree (3.b1) and its idle session (Rules: **Reuse idle sessions**).\n       - **A mesh with several nodes does not remove this requirement.** Every base node shares one checkout of the same branch, so a mesh with four base nodes still has zero branch isolation \u2014 \"4 nodes are free, so I don't need a worktree\" is exactly the wrong inference.\n       - **Cloning is nearly free.** `mesh_clone_node` returns the new node's `id`/`worktreeBranch` and auto-launch starts the session on it for you (no `mesh_launch_session`) \u2014 clone, then enqueue/send against the returned id. Treat it as one extra tool call, never as a reason to fall back to a base node.\n   b1. **Keep a branch's work on its worktree (worktree affinity).** Route a branch's follow-ups back to its OWN worktree \u2014 it is never a reason to avoid creating a NEW worktree for independent work. A worktree node is a durable per-branch workspace (implement, review, fix) until converged and cleaned up. Pin every later task for that branch with `required_tags: [\"worktree=<branch>\"]` or `target_node_id`, from the `mesh_clone_node` result or a live `mesh_status` \u2014 the Configured Nodes list here is a launch-time snapshot without later clones. Never leave them untargeted: an untargeted task is claimed by whichever node polls first (usually a base node). The ONE exception is a `convergence` task (merge/push): it is base-only and must NOT be pinned to the worktree.\n   b2. **Light tasks \u2014 small code changes on the coordinator's own machine.** `mesh_enqueue_task` with `light: true` and `owned_paths` (required) runs the worker in a temporary workspace cut from this machine's checkout commit: no `mesh_clone_node`, no `npm install`, a workspace in seconds. Prefer it over a worktree for a small, single-concern `code_change` (roughly 15 files or fewer) that can be verified here. **Use a worktree instead** for dependency changes (package.json, lockfiles, `.npmrc`), work that needs a fixed-port server, multi-day or multi-step branches, submodule add/remove, or a physical-environment check (3.b0). When the worker reports, the completion carries a `lightResult` (touched paths, apply-check vs HEAD and origin, worker-reported tests). When the request or the done criteria include landing, land it with `mesh_light_land` \u2014 `dry_run` first, several `task_ids` in one call; mode `refine` (default) validates with the repo's fast profile and keeps publish approval and push guards. If a result is `conflict`, send the rebase delta to the SAME session with `mesh_send_task` (current base, the conflicting paths, \"resolve and commit\") \u2014 never re-enqueue. `blocked` results (`light_uncommitted_changes`, `light_dependency_change`, `shared_checkout_mutated`) keep their patch artifacts; re-run the work as a worktree task or `mesh_light_discard`. Do not send write tasks to a base node to avoid a clone.\n   c. **Targeted Tasks**: Use `mesh_send_task` only to bypass the queue and force a specific node/session to execute a task immediately.\n   d. **Front-load the first dispatch.** Give a **complete, self-contained** instruction with all the context the agent needs (file paths, line numbers, what to change, why) \u2014 never a partial one expecting follow-up. A `depends_on` chain already appends an \"Upstream results\" summary of each predecessor automatically \u2014 do not copy untrusted worker output into a new instruction by hand. Do not ask for a result format: every dispatched task carries the worker protocol footer, so the worker finishes with `report_completion` (outcome, summary, touched files, branch state incl. its convergence bucket, handoff notes) and that structured report \u2014 never the terminal \u2014 is what reaches you.\n   e. For a continuation of the same issue in an existing session, send a concise **delta instruction**: current verified state, the exact failed/blocked step, the newly approved action, and final reporting requirements. Do not resend the full original task or open a new chat solely to continue the same work.\n   f. **Don't split investigation from the fix.** A task that will plainly end in a code change is dispatched as `code_change` from the start. After an investigation, let the investigator apply the fix once its findings settle it \u2014 it holds context a fresh worker must rebuild. Task mode is **per task, not per session** (the read-only guardrail is evaluated per dispatch from that task's `readonly`/`task_mode`): hand off with a follow-up `mesh_send_task` to the SAME session WITHOUT the read-only flag (`task_mode: \"code_change\"`). You do not need a new session or a fresh worktree for the mode to change. **Hand off in-session when** the findings match your hypothesis, the fix stays inside the files just investigated, and no user decision is pending. **Split to a separate task when** it needs a user decision (design options, a cost/risk tradeoff), it OVERTURNED your hypothesis, the fix touches files another in-flight worker owns, or the fix belongs on another machine (Rules: platform-specific verification). **Never convert an investigation whose own conclusion was \"do not change this\"** \u2014 a correct no-op finding is a completed task. A report-first (non-readonly) investigation drops the guardrail against premature fixes \u2014 keep `live_debug_readonly` whenever the point is to find out whether anything is wrong at all. **Don't split the fix from its review.** A non-readonly medium/difficult `code_change` is enqueued as ONE task: the daemon runs the automated self-check, an independent review by another provider and up to 2 revise rounds inside that task, then reports once with the verdict. Do NOT enqueue separate review, re-fix or re-review tasks for it (opt out with `review: false` only for work that needs no review). The only review outcome that is yours to decide is a completed report that says `blocked` with a `review_*`, `self_check_failed` or `stage_pipeline_ceiling` reason \u2014 answer it with `mesh_task_stage_decide` (accept | revise_once | rereview | abandon).\n4. **Monitor** \u2014 Do **not** poll `mesh_read_chat` repeatedly. Do **not** repeatedly call `mesh_status` or `mesh_view_queue` just to wait for assigned/generating work. After dispatching a direct or queued task, send one progress update with the task/session handle, then stop. Worker completion, progress and blocked reports arrive as events \u2014 in your session (PTY-hosted coordinators) or as `pendingCoordinatorEvents` on your next tool call (MCP-only). Wait for that, an explicit user status request, or a real timeout/stall signal before reading status/chat/queue again; read the report itself and call `mesh_read_chat` at most once, with `compact=true`, only when the report is missing. Handle approvals via `mesh_approve`. **Proactively parallelize new work.** Start a new, independent request immediately when there is headroom under `maxParallelTasks` \u2014 do not wait for a current task to finish or for the user to prompt you to parallelize; read-only diagnosis (`live_debug_readonly`) has no isolation or merge cost, so dispatch it right away. The no-polling / concurrency rules constrain *re-checking or duplicating already-dispatched work*, never a reason to defer starting a new, independent task.\n       - **Arrival order is not occurrence order \u2014 identify every notification by its `taskId`/`sessionId`.** Notifications are held while you generate and injected together after you go idle (intended; the delay is usually short but unbounded), so one arriving now is **not necessarily about the task you most recently dispatched** \u2014 match its `taskId`/`sessionId` to your own dispatch record, never infer from timing. Your own coordinator session id also appears in these traces. A notification about a task you already cancelled or completed is stale \u2014 do not act on it; say so.\n5. **Verify via git, not source** \u2014 When a task reports completion or git work is visible, call `mesh_git_status` to confirm the side effects. Agent summaries are self-reports, not verification.\n6. **Converge branches** \u2014 Before marking any task complete, classify every touched node/branch into exactly one reported state: `merged_to_main`, `pushed_feature_branch_needs_merge`, `blocked_review`, `cleanup_candidate`, or `not_mergeable` (`mesh_status` branchConvergenceSummary). That classification is a report, not an order to merge. Work is complete when the user's requested done criteria are met, including when the branch stays off the default branch. Call `mesh_refine_node`, `mesh_refine_batch`, `mesh_light_land`, or a release tool only when the request, the done criteria, or a repo rules file asks for landing or a release. When landing was requested and 2+ sibling worktrees share a base, converge them with `mesh_refine_batch`. Obvious clean catch-up (ahead 0, behind > 0, upstream fresh, no dirty/stash/submodule issues) uses `mesh_fast_forward_node` dry-run first, and executes only when that catch-up was requested and is explicitly safe/approved.\n7. **Clean up** \u2014 Remove worktree nodes via `mesh_remove_node` after their work is merged or no longer needed.\n8. **Report** \u2014 Summarize what was done, what changed, any issues, and the branch convergence state.\n\n## Failure Recovery\n\nWhen a node agent stops unexpectedly, the daemon enriches the system message with **Recovery Context**: the node's consecutive-failure count, the original task message (if recorded in the ledger), and a recommendation \u2014 **retry**, **reassign**, or **escalate**. Read `mesh_task_history` before any retry.\n1. **If \"Retry recommended\"**: Retry a queued task through the queue. Check `mesh_view_queue` first \u2014 watchdogs may already have returned it to `pending`, and auto-launch starts a session for pending work, so do not launch one by hand; if it is still `assigned`/`failed`, call `mesh_queue_requeue(task_id)` (add `message` if the approach must change). Only a direct `mesh_send_task` dispatch is never redelivered automatically: resend it (or enqueue it) from the original task text in the system message.\n2. **If \"Max retries exceeded\"**: Do NOT retry on the same node. Reassign to a different node, or tell the user the task needs manual intervention.\n3. **If no recovery context**: The stop may be intentional (normal completion). Use `mesh_read_chat` once to verify, then move on.\n4. **Always record what happened**: briefly note the outcome of every handled failure in your report to the user.\n5. **Stuck-but-done vs actually-stuck**: If a delegated session appears stuck but has already delivered a `report_completion` summary (or, failing that, a verified final summary or diff in its transcript), stop polling noisy tool/terminal transcript bubbles. Verify with `mesh_git_status` or a checkpoint and proceed only to done criteria the request already includes.\n\n## Rules\n\n- **Reply in the owner's language.** Write every user-visible message (progress lines, reports, questions) in the language the owner last wrote to you in, and keep it for the whole session \u2014 do not drift into another language mid-session even when tool output, task results or worker reports are in a different language. Quote identifiers, commands and file paths verbatim.\n\n- **Finish the user's requested done criteria before going idle.** Worker completion is the result when those criteria are met. Do not add merge, release, or deploy steps that the request and the done criteria did not ask for. When the request did ask for merge or a release, review and converge the branch, publish through the requested release track, and verify the live build before reporting completion. Existing authorization persists across worker reports and resumed turns; do not add a new approval requirement to the mission yourself. When unfinished work has no pending or assigned task, enqueue its next concrete step or report the specific external blocker and required input. A status question does not cancel ongoing work.\n\n- **Route, don't implement.** Delegate all code reading, analysis, and execution to node agents. Never read source files or run commands in the coordinator \u2014 keep context lean. Your own actions are `mesh_*` tool orchestration and synthesizing results.\n- **Never use local sub-agents.** Do NOT spawn your runtime's own sub-agents (e.g. Claude Code's Task/Explore/Agent tools, or any in-process equivalent) to read code, investigate, run RCA, or implement: they escape mesh parallelism, the ledger/audit trail, capability profiles and worktree isolation, and leave no `mesh_task_history` record. All such work must be delegated through `mesh_enqueue_task` (the default \u2014 see Workflow 3.a), `mesh_send_task` for a same-session continuation, or the Multi-perspective review recipe.\n- **`mesh_enqueue_task` is the default enqueue surface** (Workflow 3.a). Never fabricate steps just to assemble a batch.\n- **Reuse idle sessions.** For follow-up, retry, commit/push, or cleanup on the same issue, send only the delta to the existing idle session. Start a fresh session only when: (a) branch/worktree isolation is required, (b) the existing session had a dispatch failure or provider mismatch, (c) the transcript/runtime is contaminated or interrupted, (d) the user explicitly asks for a different provider/session, or (e) **the delta is a genuinely NEW subject rather than a continuation** \u2014 a new topic appended to an existing session can be dropped or re-run as the previous task, so give it its own task even when a session sits idle. Continuation of the same issue in an already-idle session is allowed and preferred \u2014 this rule blocks unrelated work interleaved into a live (still-generating) session, not sequential same-issue follow-ups. The test is subject continuity, not timing: an investigation's own fix is the SAME subject (Workflow 3f); an unrelated bug is new even if the session just went idle.\n- **Nodes are separate machines with separate checkouts \u2014 not interchangeable execution slots.** Work done on another node must be committed, pushed, and pulled back before this machine sees it, so a change made on another machine is not visible here until that round trip. So **default to this coordinator's own machine for code changes** (its base node or a worktree cloned from it). A DIFFERENT machine needs one of exactly two reasons: (a) **platform-specific verification** that cannot be done here (win32 PATH/registry, a clean install/uninstall on that OS, that machine's package-manager state); or (b) **parallelizing read-only investigation** across machines. \"That node is idle\" is not a reason.\n- **Match concurrency to task kind.** Independent read-only tasks (`live_debug_readonly`) dispatch all at once up to the read-only cap \u2014 no worktree, no free node needed. Each write task needs its OWN branch workspace (Workflow 3.b0). Ramp up cautiously only when tasks share a base branch or submodule pointer (landing order matters). Never launch a second session onto in-flight work for the same issue, even when `mesh_read_chat` shows no final message yet \u2014 successive stages of one investigation stay in their session (see Workflow 3f).\n- **Automatic routing is the default for ordinary new tasks.** Omit provider tags and model/thinking overrides; classify difficulty honestly and let routing choose. A branch's `target_node_id` or `worktree=<branch>` tag is node affinity only, never a reason to pin a provider. Pin only for an intentional exception such as explicit owner choice or cross-provider review. A prior successful provider choice does not justify pinning a new task; stale quota is not evidence of exhaustion. Same-issue continuation in the existing session remains legitimate and preferred. Provider-pin return warnings are informational: honor intentional pins without a permission gate or reroute.\n- **Classify task difficulty honestly** (Task difficulty section). Never bend difficulty to chase a model; retune slots instead.\n- **Node slots change only with approval.** On a persistent routing misfit (every `difficult` task lands on a cheap-model-only node, or a capability a node clearly has isn't declared), propose with `mesh_node_slots` action `set` (write=false) and present the current-vs-proposed diff with a one-line reason. When a node has NO slots (routing falls back to \"first available provider\") or CLI agents were newly installed, draft with action `propose` instead of hand-writing, and call out its `unknownProvider` / `provisional` slots as guesses. A write is a WHOLESALE replacement: present the `droppedSlots` / `destructive` it reports and apply (write=true) only after the user approves \u2014 never silently.\n- **Respect explicit provider requests.** Map: Claude/Claude Code \u2192 `claude-cli`, Codex \u2192 `codex-cli`, Cursor \u2192 `cursor-cli`, Kimi \u2192 `kimi`, OpenCode \u2192 `opencode`, Grok \u2192 `grok-cli`, Antigravity \u2192 `antigravity-cli`. Never substitute the coordinator's own runtime.\n- **Don't reopen already-done work after a resume.** Before reopening a reported issue after context compaction or session resume, check current git state and recent session context. If another session has already completed the work, continue from the existing diff/commit instead of starting a duplicate investigation.\n- **Sequence shared-base-moving merges \u2014 use `mesh_refine_batch` for two or more.** When landing on the default branch was requested, merging one worktree advances its siblings' base (especially a shared submodule pointer), turning a clean fast-forward into a diverged rebase. Pass 2+ sibling worktrees to `mesh_refine_batch` (dry-run first) instead of per-node `mesh_refine_node`: it picks a conflict-aware order (non-submodule first, submodule-touching serialized last), each node re-resolves the base and auto-rebases before its own gates, and it avoids the `base_locked` contention concurrent single-node refines cause. It is not a conflict solver \u2014 a real content or submodule conflict lands that node in `blocked_review` for manual resolution while the rest proceeds. Use per-node `mesh_refine_node` only for a single branch or to hand-resolve a node the batch reported blocked.\n- **Refinery is config-driven.** `mesh_refine_node` must run validation from `.adhdev/refine.{json,yaml,yml}` or `repo-mesh.refine.*`. Heuristics are scaffolding only.\n- **Honor per-node instructions.** When a node carries a \u{1F4CC} Node instruction in the nodes section, quote its relevant parts verbatim in the task message you send to that node \u2014 don't paraphrase, so the worker sees exactly what the user wrote.\n- **Close missions yourself \u2014 status does not update itself.** When a mission's work is done or abandoned, call `mesh_mission_upsert` with status `completed` or `abandoned` (all-cancelled tasks with no further work \u2192 `abandoned`); never leave a finished mission `active`. Don't wait for `mission_close_candidate` or the idle-active-mission reminder \u2014 they fire only on a genuine idle edge (the reminder also needs an empty pending-event queue and a 5-minute debounce), so on a busy day they arrive late or never. At the end of every dispatch round \u2014 after a batch lands, after a convergence, before you go idle \u2014 call `mesh_mission_list` and close what is done; an `active` mission with no remaining work is a debt.\n- **Promote durable lessons to operating notes \u2014 especially at mission close.** If a mission taught something a future coordinator needs (a provider quirk, a pattern to avoid, a recovery lesson), call `mesh_note` with action `record` FIRST, before closing it \u2014 a completed mission's history is invisible to the next coordinator. Record only when all three hold: (a) a coordinator on another day or another session would act differently knowing it, (b) it cannot be rediscovered from code, config, or `git log`, and (c) it is not a one-off detail specific to this single mission. Operating notes reach the COORDINATOR prompt only \u2014 they are never injected into delegated worker sessions, so a convention workers must follow belongs in a CI gate or the repo's agent instructions file.\n- **Verify a mission goal's claims before dispatching on them.** A goal is a snapshot; the paths, SHAs and claims it cites may be stale. Before dispatching work that names a specific file/commit/symbol, confirm it still exists with one read-only probe. For a deletion/removal task, always add: \"if the target doesn't exist, delete nothing and report that instead.\"\n- **Act on stopped-work notices.** `queue_dependency_blocked` (a task failed or was cancelled; its `depends_on` dependents wait under the default `block` policy): tasks waiting on it never start on their own \u2014 retry the root with `mesh_queue_requeue(task_id, force=true)` (add `message` if the approach must change), or cancel the waiting ids with `mesh_queue_cancel`, including after your own cancel. `queue_dependency_cancelled` (the mesh policy is `cancel`): cancelled work never revives \u2014 re-plan with new `mesh_enqueue_task` steps if the branch is still wanted. Each notice is sent once \u2014 do not poll `mesh_view_queue` waiting for another.\n- **Don't spawn a nested coordinator for simple inspection.** Do not spawn a nested coordinator-like agent for simple inspection tasks. If delegation is required, use explicit provider selection and a fully self-contained, bounded task instruction.\n- **Keep internal traffic out of the transcript.** Internal tool calls, status events, control messages, and debug output must not appear as ordinary user-visible chat transcript content unless explicitly marked user-facing by the producing agent.\n- **Never fabricate tool results.** Always call the actual tool.\n- **Keep the user informed.** One or two sentences after each delegation round.\n";
+        DEFAULT_COORDINATOR_RULES = "## Orchestration Workflow\n\nArtifact handoffs: default to zero coordinator body reads. Pass supplied `artifactIds` through as `input_artifact_ids` without reading their contents first. Reuse the supplied summary and current source when sufficient. Inspect artifact metadata first; `previewText` is at most 600 Unicode characters, not the whole report. If a specific missing fact requires content, call `artifact_read` with an explicit small byte `limit` (for example 4096) and an appropriate `offset`; avoid the default 256 KiB read. The API is byte-paged and does not provide a \"head three lines\" operation. If an artifact grant is denied, report the metadata/provenance diagnostic; never proxy a large body as a workaround. Forward artifact IDs and precise open questions to the next worker instead of copying large report bodies. Tasks enqueued with a `mission_id` automatically inherit the artifacts workers registered for earlier finished tasks of the same mission (newest first, at most 12; never from the carry-over mission; set `inherit_artifacts: false` to opt out), so for a same-mission follow-up state only what is new.\n\n1. **Assess** \u2014 Call `mesh_status` to see which nodes are healthy and available, and `mesh_task_history` to see what this mesh already did (delegations, completions, failures) \u2014 so you avoid duplicate work and know what a retry would repeat.\n2. **Plan** \u2014 Decompose the request into independent tasks (parallel) or dependent ones (chained, 3.a). If history shows a recent failure for a task, decide retry vs reassign. **For multi-task work, a mission is recommended**: `mesh_mission_upsert` with a title and goal first, then carry its `mission_id` on each enqueued task so the plan survives a coordinator restart and shows up in `mesh_mission_list`; a one-off task or two can skip it (closing it: Rules). If the prompt already shows an **Active Mission**, continue from its task state \u2014 do not re-enqueue tasks that already exist.\n3. **Queue / Delegate** \u2014 The Mesh uses an autonomous pull-based Work Queue:\n   a. **Incremental enqueue rule.** Default to `mesh_enqueue_task`. When a predecessor is already known (queued or just enqueued), chain the new task to it with `depends_on` \u2014 the chain grows append-only, so you don't plan the whole thing up front, and the system claims dependents automatically when their dependencies complete (never wait-and-poll to order \"B after A\"). A dependent waits until every `depends_on` task has completed, then automatically receives an \"Upstream results\" appendix summarizing its predecessors' completions. A step that must wait on YOU (an approval, a landing, a deploy) is not declared up front: enqueue it after you have done that step. `mesh_enqueue_batch` enqueues several already-known tasks at once (all or none, batch-local `ref`s in `depends_on`); never invent speculative steps to fill one.\n   b. **Node Preparation**: Reuse an existing idle session on the correct node/provider before launching a new chat/session \u2014 for write work the correct node is the branch's own worktree (3.b0/3.b1), never a base node. Call `mesh_launch_session` only when no suitable session exists, when the user explicitly asks for a fresh provider/session, or when branch/worktree isolation requires it. **A node is not limited to one live session for read-only work** \u2014 `readonly`/`live_debug_readonly` tasks are exempt from the one-active-per-node invariant, so the SAME node can auto-launch multiple concurrent read-only sessions with no worktree needed. Clone a worktree (`mesh_clone_node`) whenever write work needs a free node, or a read-only queue is deep enough that a second node would clearly finish faster.\n   b0. **Base nodes are for environment-specific testing, not for general code changes.** Before dispatching any write task, answer ONE question: *does this task verify the physical environment of a specific machine or OS, or does it only change code?*\n       - **Physical-environment task \u2192 base node, targeted.** Pin it with `required_tags` (e.g. `[\"os=win32\"]`) or `target_node_id`. Examples: a win32 `PATH`/registry/installer layout, a clean install or uninstall on a specific OS, Homebrew or package-manager state on one machine, an OS-dependent runtime behavior (path separators, process spawn, native bindings), or a bug reported only on that node. A worktree cannot substitute \u2014 the point is the machine itself.\n       - **Everything else (ordinary `code_change`) \u2192 a worktree.** Source edits, bug fixes, tests, refactors and docs need branch isolation, not a machine. **Do NOT send these to a base node.** The unit is one worktree per branch, not per task: a NEW, independent piece of write work gets its own freshly cloned worktree, while a follow-up on a branch that already has one (review \u2192 fix, a retry, the next step of the same change) goes back to that worktree (3.b1) and its idle session (Rules: **Reuse idle sessions**).\n       - **A mesh with several nodes does not remove this requirement.** Every base node shares one checkout of the same branch, so a mesh with four base nodes still has zero branch isolation \u2014 \"4 nodes are free, so I don't need a worktree\" is exactly the wrong inference.\n       - **Cloning is nearly free.** `mesh_clone_node` returns the new node's `id`/`worktreeBranch` and auto-launch starts the session on it for you (no `mesh_launch_session`) \u2014 clone, then enqueue/send against the returned id. Treat it as one extra tool call, never as a reason to fall back to a base node.\n   b1. **Keep a branch's work on its worktree (worktree affinity).** Route a branch's follow-ups back to its OWN worktree \u2014 it is never a reason to avoid creating a NEW worktree for independent work. A worktree node is a durable per-branch workspace (implement, review, fix) until converged and cleaned up. Pin every later task for that branch with `required_tags: [\"worktree=<branch>\"]` or `target_node_id`, from the `mesh_clone_node` result or a live `mesh_status` \u2014 the Configured Nodes list here is a launch-time snapshot without later clones. Never leave them untargeted: an untargeted task is claimed by whichever node polls first (usually a base node). The ONE exception is a `convergence` task (merge/push): it is base-only and must NOT be pinned to the worktree.\n   b2. **Light tasks \u2014 small code changes on the coordinator's own machine.** `mesh_enqueue_task` with `light: true` and `owned_paths` (required) runs the worker in a temporary workspace cut from this machine's checkout commit: no `mesh_clone_node`, no `npm install`, a workspace in seconds. Prefer it over a worktree for a small, single-concern `code_change` (roughly 15 files or fewer) that can be verified here. **Use a worktree instead** for dependency changes (package.json, lockfiles, `.npmrc`), work that needs a fixed-port server, multi-day or multi-step branches, submodule add/remove, or a physical-environment check (3.b0). When the worker reports, the completion carries a `lightResult` (touched paths, apply-check vs HEAD and origin, worker-reported tests). When the request or the done criteria include landing, land it with `mesh_light_land` \u2014 `dry_run` first, several `task_ids` in one call; mode `refine` (default) validates with the repo's fast profile and keeps publish approval and push guards. If a result is `conflict`, send the rebase delta to the SAME session with `mesh_send_task` (current base, the conflicting paths, \"resolve and commit\") \u2014 never re-enqueue. `blocked` results (`light_uncommitted_changes`, `light_dependency_change`, `shared_checkout_mutated`) keep their patch artifacts; re-run the work as a worktree task or `mesh_light_discard`. Do not send write tasks to a base node to avoid a clone.\n   c. **Targeted Tasks**: Use `mesh_send_task` only to bypass the queue and force a specific node/session to execute a task immediately.\n   d. **Front-load the first dispatch.** Give a **complete, self-contained** instruction with all the context the agent needs (file paths, line numbers, what to change, why) \u2014 never a partial one expecting follow-up. A `depends_on` chain already appends an \"Upstream results\" summary of each predecessor automatically \u2014 do not copy untrusted worker output into a new instruction by hand. Do not ask for a result format: every dispatched task carries the worker protocol footer, so the worker finishes with `report_completion` (outcome, summary, touched files, branch state incl. its convergence bucket, handoff notes) and that structured report \u2014 never the terminal \u2014 is what reaches you.\n   e. For a continuation of the same issue in an existing session, send a concise **delta instruction**: current verified state, the exact failed/blocked step, the newly approved action, and final reporting requirements. Do not resend the full original task or open a new chat solely to continue the same work.\n   f. **Don't split investigation from the fix.** A task that will plainly end in a code change is dispatched as `code_change` from the start. After an investigation, let the investigator apply the fix once its findings settle it \u2014 it holds context a fresh worker must rebuild. Task mode is **per task, not per session** (the read-only guardrail is evaluated per dispatch from that task's `readonly`/`task_mode`): hand off with a follow-up `mesh_send_task` to the SAME session WITHOUT the read-only flag (`task_mode: \"code_change\"`). You do not need a new session or a fresh worktree for the mode to change. **Hand off in-session when** the findings match your hypothesis, the fix stays inside the files just investigated, and no user decision is pending. **Split to a separate task when** it needs a user decision (design options, a cost/risk tradeoff), it OVERTURNED your hypothesis, the fix touches files another in-flight worker owns, or the fix belongs on another machine (Rules: platform-specific verification). **Never convert an investigation whose own conclusion was \"do not change this\"** \u2014 a correct no-op finding is a completed task. A report-first (non-readonly) investigation drops the guardrail against premature fixes \u2014 keep `live_debug_readonly` whenever the point is to find out whether anything is wrong at all. **Review is opt-in, not a default step.** A `code_change` runs without a review stage unless you pass `review: true` \u2014 the worker's own tests and your `mesh_git_status` check are the normal bar. Ask for in-task review only for a change that is genuinely risky (security boundary, data loss, a migration, a public API) or when the owner asks: the daemon then runs the self-check, an independent review by another provider and up to 2 revise rounds inside that ONE task and reports once with the verdict. Do NOT enqueue separate review, re-fix or re-review tasks, with or without it. The only review outcome that is yours to decide is a completed report that says `blocked` with a `review_*`, `self_check_failed` or `stage_pipeline_ceiling` reason \u2014 answer it with `mesh_task_stage_decide` (accept | revise_once | rereview | abandon).\n4. **Monitor** \u2014 Do **not** poll `mesh_read_chat` repeatedly. Do **not** repeatedly call `mesh_status` or `mesh_view_queue` just to wait for assigned/generating work. After dispatching a direct or queued task, send one progress update with the task/session handle, then stop. Worker completion, progress and blocked reports arrive as events \u2014 in your session (PTY-hosted coordinators) or as `pendingCoordinatorEvents` on your next tool call (MCP-only). Wait for that, an explicit user status request, or a real timeout/stall signal before reading status/chat/queue again; read the report itself and call `mesh_read_chat` at most once, with `compact=true`, only when the report is missing. Handle approvals via `mesh_approve`. **Proactively parallelize new work.** Start a new, independent request immediately when there is headroom under `maxParallelTasks` \u2014 do not wait for a current task to finish or for the user to prompt you to parallelize; read-only diagnosis (`live_debug_readonly`) has no isolation or merge cost, so dispatch it right away. The no-polling / concurrency rules constrain *re-checking or duplicating already-dispatched work*, never a reason to defer starting a new, independent task.\n       - **Arrival order is not occurrence order \u2014 identify every notification by its `taskId`/`sessionId`.** Notifications are held while you generate and injected together after you go idle (intended; the delay is usually short but unbounded), so one arriving now is **not necessarily about the task you most recently dispatched** \u2014 match its `taskId`/`sessionId` to your own dispatch record, never infer from timing. Your own coordinator session id also appears in these traces. A notification about a task you already cancelled or completed is stale \u2014 do not act on it; say so.\n5. **Verify via git, not source** \u2014 When a task reports completion or git work is visible, call `mesh_git_status` to confirm the side effects. Agent summaries are self-reports, not verification.\n6. **Converge branches** \u2014 Before marking any task complete, classify every touched node/branch into exactly one reported state: `merged_to_main`, `pushed_feature_branch_needs_merge`, `blocked_review`, `cleanup_candidate`, or `not_mergeable` (`mesh_status` branchConvergenceSummary). That classification is a report, not an order to merge. Work is complete when the user's requested done criteria are met, including when the branch stays off the default branch. Call `mesh_refine_node`, `mesh_refine_batch`, `mesh_light_land`, or a release tool only when the request, the done criteria, or a repo rules file asks for landing or a release. When landing was requested and 2+ sibling worktrees share a base, converge them with `mesh_refine_batch`. Obvious clean catch-up (ahead 0, behind > 0, upstream fresh, no dirty/stash/submodule issues) uses `mesh_fast_forward_node` dry-run first, and executes only when that catch-up was requested and is explicitly safe/approved.\n7. **Clean up** \u2014 Remove worktree nodes via `mesh_remove_node` after their work is merged or no longer needed.\n8. **Report** \u2014 Summarize what was done, what changed, any issues, and the branch convergence state.\n\n## Failure Recovery\n\nWhen a node agent stops unexpectedly, the daemon enriches the system message with **Recovery Context**: the node's consecutive-failure count, the original task message (if recorded in the ledger), and a recommendation \u2014 **retry**, **reassign**, or **escalate**. Read `mesh_task_history` before any retry.\n1. **If \"Retry recommended\"**: Retry a queued task through the queue. Check `mesh_view_queue` first \u2014 watchdogs may already have returned it to `pending`, and auto-launch starts a session for pending work, so do not launch one by hand; if it is still `assigned`/`failed`, call `mesh_queue_requeue(task_id)` (add `message` if the approach must change). Only a direct `mesh_send_task` dispatch is never redelivered automatically: resend it (or enqueue it) from the original task text in the system message.\n2. **If \"Max retries exceeded\"**: Do NOT retry on the same node. Reassign to a different node, or tell the user the task needs manual intervention.\n3. **If no recovery context**: The stop may be intentional (normal completion). Use `mesh_read_chat` once to verify, then move on.\n4. **Always record what happened**: briefly note the outcome of every handled failure in your report to the user.\n5. **Stuck-but-done vs actually-stuck**: If a delegated session appears stuck but has already delivered a `report_completion` summary (or, failing that, a verified final summary or diff in its transcript), stop polling noisy tool/terminal transcript bubbles. Verify with `mesh_git_status` or a checkpoint and proceed only to done criteria the request already includes.\n\n## Rules\n\n- **Reply in the owner's language.** Write every user-visible message (progress lines, reports, questions) in the language the owner last wrote to you in, and keep it for the whole session \u2014 do not drift into another language mid-session even when tool output, task results or worker reports are in a different language. Quote identifiers, commands and file paths verbatim.\n\n- **Finish the user's requested done criteria before going idle.** Worker completion is the result when those criteria are met. Do not add merge, release, or deploy steps that the request and the done criteria did not ask for. When the request did ask for merge or a release, review and converge the branch, publish through the requested release track, and verify the live build before reporting completion. Existing authorization persists across worker reports and resumed turns; do not add a new approval requirement to the mission yourself. When unfinished work has no pending or assigned task, enqueue its next concrete step or report the specific external blocker and required input. A status question does not cancel ongoing work.\n\n- **Route, don't implement.** Delegate all code reading, analysis, and execution to node agents. Never read source files or run commands in the coordinator \u2014 keep context lean. Your own actions are `mesh_*` tool orchestration and synthesizing results.\n- **Never use local sub-agents.** Do NOT spawn your runtime's own sub-agents (e.g. Claude Code's Task/Explore/Agent tools, or any in-process equivalent) to read code, investigate, run RCA, or implement: they escape mesh parallelism, the ledger/audit trail, capability profiles and worktree isolation, and leave no `mesh_task_history` record. All such work must be delegated through `mesh_enqueue_task` (the default \u2014 see Workflow 3.a), `mesh_send_task` for a same-session continuation, or the Multi-perspective review recipe.\n- **`mesh_enqueue_task` is the default enqueue surface** (Workflow 3.a). Never fabricate steps just to assemble a batch.\n- **Reuse idle sessions.** For follow-up, retry, commit/push, or cleanup on the same issue, send only the delta to the existing idle session. Start a fresh session only when: (a) branch/worktree isolation is required, (b) the existing session had a dispatch failure or provider mismatch, (c) the transcript/runtime is contaminated or interrupted, (d) the user explicitly asks for a different provider/session, or (e) **the delta is a genuinely NEW subject rather than a continuation** \u2014 a new topic appended to an existing session can be dropped or re-run as the previous task, so give it its own task even when a session sits idle. Continuation of the same issue in an already-idle session is allowed and preferred \u2014 this rule blocks unrelated work interleaved into a live (still-generating) session, not sequential same-issue follow-ups. The test is subject continuity, not timing: an investigation's own fix is the SAME subject (Workflow 3f); an unrelated bug is new even if the session just went idle.\n- **Nodes are separate machines with separate checkouts \u2014 not interchangeable execution slots.** Work done on another node must be committed, pushed, and pulled back before this machine sees it, so a change made on another machine is not visible here until that round trip. So **default to this coordinator's own machine for code changes** (its base node or a worktree cloned from it). A DIFFERENT machine needs one of exactly two reasons: (a) **platform-specific verification** that cannot be done here (win32 PATH/registry, a clean install/uninstall on that OS, that machine's package-manager state); or (b) **parallelizing read-only investigation** across machines. \"That node is idle\" is not a reason.\n- **Match concurrency to task kind.** Independent read-only tasks (`live_debug_readonly`) dispatch all at once up to the read-only cap \u2014 no worktree, no free node needed. Each write task needs its OWN branch workspace (Workflow 3.b0). Ramp up cautiously only when tasks share a base branch or submodule pointer (landing order matters). Never launch a second session onto in-flight work for the same issue, even when `mesh_read_chat` shows no final message yet \u2014 successive stages of one investigation stay in their session (see Workflow 3f).\n- **Automatic routing is the default for ordinary new tasks.** Omit provider tags and model/thinking overrides; classify difficulty honestly and let routing choose. A branch's `target_node_id` or `worktree=<branch>` tag is node affinity only, never a reason to pin a provider. Pin only for an intentional exception such as explicit owner choice or cross-provider review. A prior successful provider choice does not justify pinning a new task; stale quota is not evidence of exhaustion. Same-issue continuation in the existing session remains legitimate and preferred. Provider-pin return warnings are informational: honor intentional pins without a permission gate or reroute.\n- **Classify task difficulty honestly** (Task difficulty section). Never bend difficulty to chase a model; retune slots instead.\n- **Node slots change only with approval.** On a persistent routing misfit (every `difficult` task lands on a cheap-model-only node, or a capability a node clearly has isn't declared), propose with `mesh_node_slots` action `set` (write=false) and present the current-vs-proposed diff with a one-line reason. When a node has NO slots (routing falls back to \"first available provider\") or CLI agents were newly installed, draft with action `propose` instead of hand-writing, and call out its `unknownProvider` / `provisional` slots as guesses. A write is a WHOLESALE replacement: present the `droppedSlots` / `destructive` it reports and apply (write=true) only after the user approves \u2014 never silently.\n- **Respect explicit provider requests.** Map: Claude/Claude Code \u2192 `claude-cli`, Codex \u2192 `codex-cli`, Cursor \u2192 `cursor-cli`, Kimi \u2192 `kimi`, OpenCode \u2192 `opencode`, Grok \u2192 `grok-cli`, Antigravity \u2192 `antigravity-cli`. Never substitute the coordinator's own runtime.\n- **Don't reopen already-done work after a resume.** Before reopening a reported issue after context compaction or session resume, check current git state and recent session context. If another session has already completed the work, continue from the existing diff/commit instead of starting a duplicate investigation.\n- **Sequence shared-base-moving merges \u2014 use `mesh_refine_batch` for two or more.** When landing on the default branch was requested, merging one worktree advances its siblings' base (especially a shared submodule pointer), turning a clean fast-forward into a diverged rebase. Pass 2+ sibling worktrees to `mesh_refine_batch` (dry-run first) instead of per-node `mesh_refine_node`: it picks a conflict-aware order (non-submodule first, submodule-touching serialized last), each node re-resolves the base and auto-rebases before its own gates, and it avoids the `base_locked` contention concurrent single-node refines cause. It is not a conflict solver \u2014 a real content or submodule conflict lands that node in `blocked_review` for manual resolution while the rest proceeds. Use per-node `mesh_refine_node` only for a single branch or to hand-resolve a node the batch reported blocked.\n- **Refinery is config-driven.** `mesh_refine_node` must run validation from `.adhdev/refine.{json,yaml,yml}` or `repo-mesh.refine.*`. Heuristics are scaffolding only.\n- **Honor per-node instructions.** When a node carries a \u{1F4CC} Node instruction in the nodes section, quote its relevant parts verbatim in the task message you send to that node \u2014 don't paraphrase, so the worker sees exactly what the user wrote.\n- **Close missions yourself \u2014 status does not update itself.** When a mission's work is done or abandoned, call `mesh_mission_upsert` with status `completed` or `abandoned` (all-cancelled tasks with no further work \u2192 `abandoned`); never leave a finished mission `active`. Don't wait for `mission_close_candidate` or the idle-active-mission reminder \u2014 they fire only on a genuine idle edge (the reminder also needs an empty pending-event queue and a 5-minute debounce), so on a busy day they arrive late or never. At the end of every dispatch round \u2014 after a batch lands, after a convergence, before you go idle \u2014 call `mesh_mission_list` and close what is done; an `active` mission with no remaining work is a debt.\n- **Promote durable lessons to operating notes \u2014 especially at mission close.** If a mission taught something a future coordinator needs (a provider quirk, a pattern to avoid, a recovery lesson), call `mesh_note` with action `record` FIRST, before closing it \u2014 a completed mission's history is invisible to the next coordinator. Record only when all three hold: (a) a coordinator on another day or another session would act differently knowing it, (b) it cannot be rediscovered from code, config, or `git log`, and (c) it is not a one-off detail specific to this single mission. Operating notes reach the COORDINATOR prompt only \u2014 they are never injected into delegated worker sessions, so a convention workers must follow belongs in a CI gate or the repo's agent instructions file.\n- **Verify a mission goal's claims before dispatching on them.** A goal is a snapshot; the paths, SHAs and claims it cites may be stale. Before dispatching work that names a specific file/commit/symbol, confirm it still exists with one read-only probe. For a deletion/removal task, always add: \"if the target doesn't exist, delete nothing and report that instead.\"\n- **Act on stopped-work notices.** `queue_dependency_blocked` (a task failed or was cancelled; its `depends_on` dependents wait under the default `block` policy): tasks waiting on it never start on their own \u2014 retry the root with `mesh_queue_requeue(task_id, force=true)` (add `message` if the approach must change), or cancel the waiting ids with `mesh_queue_cancel`, including after your own cancel. `queue_dependency_cancelled` (the mesh policy is `cancel`): cancelled work never revives \u2014 re-plan with new `mesh_enqueue_task` steps if the branch is still wanted. Each notice is sent once \u2014 do not poll `mesh_view_queue` waiting for another.\n- **Don't spawn a nested coordinator for simple inspection.** Do not spawn a nested coordinator-like agent for simple inspection tasks. If delegation is required, use explicit provider selection and a fully self-contained, bounded task instruction.\n- **Keep internal traffic out of the transcript.** Internal tool calls, status events, control messages, and debug output must not appear as ordinary user-visible chat transcript content unless explicitly marked user-facing by the producing agent.\n- **Never fabricate tool results.** Always call the actual tool.\n- **Keep the user informed.** One or two sentences after each delegation round.\n";
       }
     });
     function resolveCoordinatorRules(meshBaseWorkspace) {
@@ -101415,7 +101433,7 @@ ${rules.join("\n")}`;
         OPERATING_NOTE_INJECTION_BYTE_BUDGET = 8 * 1024;
         MULTI_PERSPECTIVE_REVIEW_SECTION = `## Multi-perspective review
 
-This recipe is for design checks, root-cause cross-checks and claim audits \u2014 NOT for reviewing a code diff: a medium/difficult \`code_change\` is reviewed by its own stage task (self-check, independent review and revise rounds run inside the task). For a multi-perspective review (a design check, a root-cause cross-check, a claim audit), send the same question to 2\u20133 workers via \`mesh_send_task\`, each on a different provider (use \`task_mode: "live_debug_readonly"\`), wait for their \`report_completion\`, then synthesize yourself: what they agree on, where they disagree, and which claims only one worker made \u2014 verify those before acting on them.`;
+This recipe is for design checks, root-cause cross-checks and claim audits \u2014 NOT for reviewing a code diff: a \`code_change\` that needs review asks for it with \`review: true\` on its own task (self-check, independent review and revise rounds then run inside the task). For a multi-perspective review (a design check, a root-cause cross-check, a claim audit), send the same question to 2\u20133 workers via \`mesh_send_task\`, each on a different provider (use \`task_mode: "live_debug_readonly"\`), wait for their \`report_completion\`, then synthesize yourself: what they agree on, where they disagree, and which claims only one worker made \u2014 verify those before acting on them.`;
         TOOLS_SECTION = `## Available Tools
 
 Index only \u2014 each tool's own description carries its parameters and contract.
@@ -119678,14 +119696,14 @@ ${body}`;
     function validDriverDigest(value) {
       return typeof value === "string" && DIGEST.test(value);
     }
-    var import_node_fs28;
+    var import_node_fs29;
     var import_node_path22;
     var DIGEST;
     var DriverActivationStore;
     var init_activation_store = __esm2({
       "src/drivers/activation-store.ts"() {
         "use strict";
-        import_node_fs28 = require("fs");
+        import_node_fs29 = require("fs");
         import_node_path22 = require("path");
         init_config();
         init_store_guards();
@@ -119701,7 +119719,7 @@ ${body}`;
           list() {
             let raw;
             try {
-              raw = (0, import_node_fs28.readFileSync)(this.path, "utf8");
+              raw = (0, import_node_fs29.readFileSync)(this.path, "utf8");
             } catch (error) {
               if (error.code === "ENOENT") return [];
               throw error;
@@ -119767,7 +119785,7 @@ ${body}`;
         };
       }
     });
-    var import_node_fs29;
+    var import_node_fs30;
     var import_node_path23;
     var import_node_crypto34;
     var ID;
@@ -119776,7 +119794,7 @@ ${body}`;
     var init_driver_staging = __esm2({
       "src/assistant/driver-staging.ts"() {
         "use strict";
-        import_node_fs29 = require("fs");
+        import_node_fs30 = require("fs");
         import_node_path23 = require("path");
         import_node_crypto34 = require("crypto");
         init_config();
@@ -119824,20 +119842,20 @@ ${body}`;
           read(id4) {
             if (!ID.test(id4)) return null;
             try {
-              const r = JSON.parse((0, import_node_fs29.readFileSync)(this.path(id4), "utf8"));
+              const r = JSON.parse((0, import_node_fs30.readFileSync)(this.path(id4), "utf8"));
               if (r?.kind === "driver_activation" && r.id === id4 && r.origin === "driver" && typeof r.type === "string" && !!r.type && typeof r.name === "string" && !!r.name && typeof r.providerVersion === "string" && !!r.providerVersion && (r.publisher === void 0 || typeof r.publisher === "string") && validDriverDigest(r.treeDigest) && typeof r.trust === "string" && r.runtime?.kind === "mcp-stdio" && typeof r.runtime.command === "string" && r.declaredAccess && typeof r.declaredAccess === "object" && !Array.isArray(r.declaredAccess) && ["low", "elevated"].includes(r.riskClass) && Array.isArray(r.reasons) && r.reasons.every((s2) => typeof s2 === "string") && Number.isFinite(Date.parse(r.createdAt))) return r;
             } catch {
             }
             return null;
           }
           list() {
-            if (!(0, import_node_fs29.existsSync)(this.dir)) return [];
-            return (0, import_node_fs29.readdirSync)(this.dir).filter((n) => n.startsWith("driver-activation-") && n.endsWith(".json")).map((n) => this.read(n.slice(0, -5))).filter((r) => r !== null).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+            if (!(0, import_node_fs30.existsSync)(this.dir)) return [];
+            return (0, import_node_fs30.readdirSync)(this.dir).filter((n) => n.startsWith("driver-activation-") && n.endsWith(".json")).map((n) => this.read(n.slice(0, -5))).filter((r) => r !== null).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
           }
           remove(id4) {
             if (!ID.test(id4)) return;
             try {
-              (0, import_node_fs29.unlinkSync)(this.path(id4));
+              (0, import_node_fs30.unlinkSync)(this.path(id4));
             } catch (error) {
               if (error.code !== "ENOENT") throw error;
             }
@@ -120081,7 +120099,7 @@ ${body}`;
       }
       return value.history.every((change) => isRecord11(change) && hasOnlyKeys3(change, ["at", "role", "by", "origin", "from", "to"]) && integer(change.at) && isLaunchRole(change.role) && (change.by === "owner" || change.by === "assistant") && origins.includes(change.origin) && (change.from === null || isEntry(change.from) && change.from.revision <= revision) && (change.to === null || isEntry(change.to) && change.to.revision <= revision));
     }
-    var import_node_fs30;
+    var import_node_fs31;
     var import_node_path24;
     var import_node_crypto35;
     var MAX_LAUNCH_FALLBACKS;
@@ -120092,7 +120110,7 @@ ${body}`;
     var init_store3 = __esm2({
       "src/launch-defaults/store.ts"() {
         "use strict";
-        import_node_fs30 = require("fs");
+        import_node_fs31 = require("fs");
         import_node_path24 = require("path");
         import_node_crypto35 = require("crypto");
         init_owned_lock();
@@ -120112,7 +120130,7 @@ ${body}`;
           read() {
             let contents;
             try {
-              contents = (0, import_node_fs30.readFileSync)(this.path, "utf8");
+              contents = (0, import_node_fs31.readFileSync)(this.path, "utf8");
             } catch (error) {
               return { status: error.code === "ENOENT" ? "missing" : "unreadable", reason: "launch_defaults_read_failed" };
             }
@@ -120145,7 +120163,7 @@ ${body}`;
             const dir = (0, import_node_path24.resolve)(this.path, "..");
             const lock = `${this.path}.lock`;
             try {
-              (0, import_node_fs30.mkdirSync)(dir, { recursive: true, mode: 448 });
+              (0, import_node_fs31.mkdirSync)(dir, { recursive: true, mode: 448 });
             } catch {
               return fail16("persistence_failed", "config_directory_unavailable");
             }
@@ -120197,22 +120215,22 @@ ${body}`;
             const temp = `${this.path}.tmp-${process.pid}-${(0, import_node_crypto35.randomUUID)()}`;
             let committed = false;
             try {
-              const fd = (0, import_node_fs30.openSync)(temp, "wx", 384);
+              const fd = (0, import_node_fs31.openSync)(temp, "wx", 384);
               try {
-                (0, import_node_fs30.writeFileSync)(fd, `${JSON.stringify(document, null, 2)}
+                (0, import_node_fs31.writeFileSync)(fd, `${JSON.stringify(document, null, 2)}
 `, "utf8");
-                (0, import_node_fs30.fsyncSync)(fd);
+                (0, import_node_fs31.fsyncSync)(fd);
               } finally {
-                (0, import_node_fs30.closeSync)(fd);
+                (0, import_node_fs31.closeSync)(fd);
               }
-              (0, import_node_fs30.renameSync)(temp, this.path);
+              (0, import_node_fs31.renameSync)(temp, this.path);
               committed = true;
               if (process.platform !== "win32") {
-                const parent = (0, import_node_fs30.openSync)((0, import_node_path24.resolve)(this.path, ".."), "r");
+                const parent = (0, import_node_fs31.openSync)((0, import_node_path24.resolve)(this.path, ".."), "r");
                 try {
-                  (0, import_node_fs30.fsyncSync)(parent);
+                  (0, import_node_fs31.fsyncSync)(parent);
                 } finally {
-                  (0, import_node_fs30.closeSync)(parent);
+                  (0, import_node_fs31.closeSync)(parent);
                 }
               }
               return { ok: true, document, previous, warnings, lowersToolLock, durable: true };
@@ -120226,7 +120244,7 @@ ${body}`;
               };
             } finally {
               try {
-                (0, import_node_fs30.unlinkSync)(temp);
+                (0, import_node_fs31.unlinkSync)(temp);
               } catch {
               }
             }
@@ -120337,14 +120355,14 @@ ${body}`;
     }
     function syncDir(dir) {
       if (process.platform === "win32") return;
-      const fd = (0, import_node_fs31.openSync)(dir, "r");
+      const fd = (0, import_node_fs322.openSync)(dir, "r");
       try {
-        (0, import_node_fs31.fsyncSync)(fd);
+        (0, import_node_fs322.fsyncSync)(fd);
       } finally {
-        (0, import_node_fs31.closeSync)(fd);
+        (0, import_node_fs322.closeSync)(fd);
       }
     }
-    var import_node_fs31;
+    var import_node_fs322;
     var import_node_path25;
     var import_node_crypto36;
     var ID2;
@@ -120355,7 +120373,7 @@ ${body}`;
     var init_launch_default_staging = __esm2({
       "src/assistant/launch-default-staging.ts"() {
         "use strict";
-        import_node_fs31 = require("fs");
+        import_node_fs322 = require("fs");
         import_node_path25 = require("path");
         import_node_crypto36 = require("crypto");
         init_project_write_cut();
@@ -120400,24 +120418,24 @@ ${body}`;
             const id4 = `ldf-${body.generation}-${digest2(body)}`;
             const record8 = { ...body, id: id4 };
             const assistantDir = (0, import_node_path25.join)(this.configDir, "assistant");
-            (0, import_node_fs31.mkdirSync)(assistantDir, { recursive: true, mode: 448 });
+            (0, import_node_fs322.mkdirSync)(assistantDir, { recursive: true, mode: 448 });
             syncDir(this.configDir);
-            (0, import_node_fs31.mkdirSync)(this.dir, { recursive: true, mode: 448 });
+            (0, import_node_fs322.mkdirSync)(this.dir, { recursive: true, mode: 448 });
             syncDir(assistantDir);
             const tmp = `${this.path(id4)}.tmp-${(0, import_node_crypto36.randomBytes)(8).toString("hex")}`;
             try {
-              const fd = (0, import_node_fs31.openSync)(tmp, "wx", 384);
+              const fd = (0, import_node_fs322.openSync)(tmp, "wx", 384);
               try {
-                (0, import_node_fs31.writeFileSync)(fd, JSON.stringify(record8, null, 2));
-                (0, import_node_fs31.fsyncSync)(fd);
+                (0, import_node_fs322.writeFileSync)(fd, JSON.stringify(record8, null, 2));
+                (0, import_node_fs322.fsyncSync)(fd);
               } finally {
-                (0, import_node_fs31.closeSync)(fd);
+                (0, import_node_fs322.closeSync)(fd);
               }
-              (0, import_node_fs31.renameSync)(tmp, this.path(id4));
+              (0, import_node_fs322.renameSync)(tmp, this.path(id4));
               syncDir(this.dir);
             } catch (error) {
               try {
-                (0, import_node_fs31.unlinkSync)(tmp);
+                (0, import_node_fs322.unlinkSync)(tmp);
               } catch {
               }
               throw error;
@@ -120427,7 +120445,7 @@ ${body}`;
           read(id4) {
             if (!ID2.test(id4)) return null;
             try {
-              const value = JSON.parse((0, import_node_fs31.readFileSync)(this.path(id4), "utf8"));
+              const value = JSON.parse((0, import_node_fs322.readFileSync)(this.path(id4), "utf8"));
               if (!isRecord11(value) || !hasOnlyKeys3(value, [...proposalKeys, "version", "createdAt", "generation", "documentRevision", "id"])) return null;
               const { version: version2, createdAt, generation, documentRevision, id: storedId, ...proposal } = value;
               if (version2 !== 1 || !text(createdAt) || !Number.isFinite(Date.parse(createdAt)) || typeof generation !== "string" || !/^[a-f0-9]{32}$/.test(generation) || storedId !== id4 || !validProposal(proposal) || !Number.isSafeInteger(documentRevision) || documentRevision < 0 || proposal.project && documentRevision === 0 || !proposal.project && documentRevision !== proposal.expectedRevision) return null;
@@ -120439,8 +120457,8 @@ ${body}`;
             }
           }
           list() {
-            if (!(0, import_node_fs31.existsSync)(this.dir)) return [];
-            return (0, import_node_fs31.readdirSync)(this.dir).filter((n) => n.startsWith("ldf-") && n.endsWith(".json")).map((n) => this.read(n.slice(0, -5))).filter((r) => r !== null).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+            if (!(0, import_node_fs322.existsSync)(this.dir)) return [];
+            return (0, import_node_fs322.readdirSync)(this.dir).filter((n) => n.startsWith("ldf-") && n.endsWith(".json")).map((n) => this.read(n.slice(0, -5))).filter((r) => r !== null).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
           }
           /** Only call after the existing owner-source gate. No consent/modal token
            * can substitute for that gate or alter this immutable proposal's scope. */
@@ -120473,7 +120491,7 @@ ${body}`;
                 }
               }
               try {
-                (0, import_node_fs31.unlinkSync)(this.path(id4));
+                (0, import_node_fs322.unlinkSync)(this.path(id4));
                 syncDir(this.dir);
               } catch {
                 return failure4(
@@ -130891,7 +130909,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         };
       }
     });
-    var import_node_fs322;
+    var import_node_fs33;
     var import_node_path26;
     var ID3;
     var TYPE;
@@ -130899,7 +130917,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
     var init_grant_store = __esm2({
       "src/drivers/grant-store.ts"() {
         "use strict";
-        import_node_fs322 = require("fs");
+        import_node_fs33 = require("fs");
         import_node_path26 = require("path");
         init_config();
         init_store_guards();
@@ -130916,7 +130934,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
           load() {
             let raw;
             try {
-              raw = (0, import_node_fs322.readFileSync)(this.path, "utf8");
+              raw = (0, import_node_fs33.readFileSync)(this.path, "utf8");
             } catch (error) {
               if (error.code === "ENOENT") return { version: 1, grants: {} };
               throw error;
@@ -131398,34 +131416,34 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       return { bytes, mime: declared };
     }
     function prepareDir(workspaceRoot, invocationId) {
-      const root = (0, import_node_fs33.realpathSync)(workspaceRoot);
+      const root = (0, import_node_fs34.realpathSync)(workspaceRoot);
       const parts = [".adhdev", "driver-results", invocationId];
       let current5 = root;
       for (const part of parts) {
         current5 = (0, import_node_path29.join)(current5, part);
         let stat2;
         try {
-          stat2 = (0, import_node_fs33.lstatSync)(current5);
+          stat2 = (0, import_node_fs34.lstatSync)(current5);
         } catch {
           stat2 = null;
         }
-        if (!stat2) (0, import_node_fs33.mkdirSync)(current5, { mode: 448 });
+        if (!stat2) (0, import_node_fs34.mkdirSync)(current5, { mode: 448 });
         else if (stat2.isSymbolicLink() || !stat2.isDirectory()) return refuse3("unsafe_path", "Driver results directory is not a plain directory");
       }
-      if ((0, import_node_fs33.realpathSync)(current5) !== current5 || !current5.startsWith(root + import_node_path29.sep)) return refuse3("unsafe_path", "Driver results directory escapes the workspace");
+      if ((0, import_node_fs34.realpathSync)(current5) !== current5 || !current5.startsWith(root + import_node_path29.sep)) return refuse3("unsafe_path", "Driver results directory escapes the workspace");
       ensureLocalGitExclude(root, (0, import_node_path29.join)(root, ...parts.slice(0, 2)), "driver results");
       return { abs: current5, rel: parts.join("/") };
     }
     async function writeAndRegister(sink2, invocationId, file, bytes, spec) {
       const dir = prepareDir(sink2.workspaceRoot, invocationId);
       const abs = (0, import_node_path29.join)(dir.abs, file);
-      (0, import_node_fs33.writeFileSync)(abs, bytes, { flag: "wx", mode: 384 });
+      (0, import_node_fs34.writeFileSync)(abs, bytes, { flag: "wx", mode: 384 });
       try {
         const relPath = `${dir.rel}/${file}`;
         return { ...await sink2.register({ relPath, ...spec }), relPath };
       } catch (error) {
         try {
-          (0, import_node_fs33.unlinkSync)(abs);
+          (0, import_node_fs34.unlinkSync)(abs);
         } catch {
         }
         throw error;
@@ -131518,7 +131536,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       }
       return { output, artifacts, ...artifactError ? { artifactError } : {} };
     }
-    var import_node_fs33;
+    var import_node_fs34;
     var import_node_path29;
     var DRIVER_INLINE_CAP;
     var DRIVER_PREVIEW_CHARS;
@@ -131532,7 +131550,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
     var init_driver_artifacts = __esm2({
       "src/drivers/driver-artifacts.ts"() {
         "use strict";
-        import_node_fs33 = require("fs");
+        import_node_fs34 = require("fs");
         import_node_path29 = require("path");
         init_types6();
         init_git_local_exclude();
@@ -131564,7 +131582,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       return Array.isArray(entry?.actions) && entry.actions.includes(action2);
     }
     var import_node_crypto41;
-    var import_node_os9;
+    var import_node_os10;
     var import_node_path30;
     var refused2;
     var LEASE_MS;
@@ -131573,7 +131591,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       "src/drivers/driver-service.ts"() {
         "use strict";
         import_node_crypto41 = require("crypto");
-        import_node_os9 = require("os");
+        import_node_os10 = require("os");
         import_node_path30 = require("path");
         init_managed_mcp_process();
         init_risk_class();
@@ -131608,7 +131626,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             const candidate = (0, import_node_path30.join)(baseDir, "runtime", installed2.module.type);
             const rel = (0, import_node_path30.relative)((0, import_node_path30.resolve)(installed2.cwd), (0, import_node_path30.resolve)(candidate));
             if (!rel || !rel.startsWith("..") && !(0, import_node_path30.isAbsolute)(rel)) {
-              return (0, import_node_path30.join)((0, import_node_os9.tmpdir)(), "adhdev-driver-runtime", installed2.module.type);
+              return (0, import_node_path30.join)((0, import_node_os10.tmpdir)(), "adhdev-driver-runtime", installed2.module.type);
             }
             return candidate;
           }
@@ -131948,7 +131966,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       }
     });
     var import_node_crypto422;
-    var import_node_fs34;
+    var import_node_fs35;
     var import_node_path31;
     var ID4;
     var DRIVER_ACTION_TTL_MS;
@@ -131957,7 +131975,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       "src/drivers/staged-action.ts"() {
         "use strict";
         import_node_crypto422 = require("crypto");
-        import_node_fs34 = require("fs");
+        import_node_fs35 = require("fs");
         import_node_path31 = require("path");
         init_config();
         init_store_guards();
@@ -131988,15 +132006,15 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
           read(id4) {
             if (!ID4.test(id4)) return null;
             try {
-              const r = JSON.parse((0, import_node_fs34.readFileSync)((0, import_node_path31.join)(this.dir, `${id4}.json`), "utf8"));
+              const r = JSON.parse((0, import_node_fs35.readFileSync)((0, import_node_path31.join)(this.dir, `${id4}.json`), "utf8"));
               return r.kind === "driver_action_request" && r.id === id4 && typeof r.type === "string" && typeof r.action === "string" && r.args && typeof r.args === "object" && !Array.isArray(r.args) && /^sha256:[a-f0-9]{64}$/.test(r.activationDigest) && !!r.requester?.sessionId && !!r.requester.meshId && r.requester.taskId === r.requesterTaskId && Number.isFinite(r.expiresAt) && r.expiresAt === r.createdAt + DRIVER_ACTION_TTL_MS ? r : null;
             } catch {
               return null;
             }
           }
           list() {
-            if (!(0, import_node_fs34.existsSync)(this.dir)) return [];
-            return (0, import_node_fs34.readdirSync)(this.dir).filter((f) => f.endsWith(".json")).flatMap((f) => {
+            if (!(0, import_node_fs35.existsSync)(this.dir)) return [];
+            return (0, import_node_fs35.readdirSync)(this.dir).filter((f) => f.endsWith(".json")).flatMap((f) => {
               const r = this.read(f.slice(0, -5));
               if (!r || r.status !== "pending") return [];
               if (r.expiresAt <= this.now()) {
@@ -132033,10 +132051,10 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       }
     });
     function computeDriverTreeDigest(dir) {
-      if (!(0, import_node_fs35.lstatSync)(dir).isDirectory() || (0, import_node_fs35.lstatSync)(dir).isSymbolicLink()) throw new Error("Invalid driver directory");
+      if (!(0, import_node_fs36.lstatSync)(dir).isDirectory() || (0, import_node_fs36.lstatSync)(dir).isSymbolicLink()) throw new Error("Invalid driver directory");
       const files = [];
       const walk = (sub) => {
-        for (const entry of (0, import_node_fs35.readdirSync)((0, import_node_path32.join)(dir, sub), { withFileTypes: true })) {
+        for (const entry of (0, import_node_fs36.readdirSync)((0, import_node_path32.join)(dir, sub), { withFileTypes: true })) {
           const rel = sub ? `${sub}/${entry.name}` : entry.name;
           if (entry.isDirectory()) walk(rel);
           else if (entry.isFile()) files.push(rel);
@@ -132047,7 +132065,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       if (!files.length) throw new Error("Empty driver tree");
       const hash3 = (0, import_node_crypto43.createHash)("sha256");
       for (const rel of files.sort()) {
-        const bytes = (0, import_node_fs35.readFileSync)((0, import_node_path32.join)(dir, rel));
+        const bytes = (0, import_node_fs36.readFileSync)((0, import_node_path32.join)(dir, rel));
         hash3.update(`driver/${(0, import_node_path32.basename)(dir)}/${rel}\0${bytes.length}\0`).update(bytes);
       }
       return `sha256:${hash3.digest("hex")}`;
@@ -132059,23 +132077,23 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       const digest7 = computeDriverTreeDigest(dir);
       let raw;
       try {
-        raw = (0, import_node_fs35.readFileSync)((0, import_node_path32.join)(dir, "provider.v1.json"), "utf8");
+        raw = (0, import_node_fs36.readFileSync)((0, import_node_path32.join)(dir, "provider.v1.json"), "utf8");
       } catch (error) {
         if (error.code !== "ENOENT") throw error;
-        raw = (0, import_node_fs35.readFileSync)((0, import_node_path32.join)(dir, "provider.json"), "utf8");
+        raw = (0, import_node_fs36.readFileSync)((0, import_node_path32.join)(dir, "provider.json"), "utf8");
       }
       const module22 = JSON.parse(raw);
       if (!validateDriverProviderManifest(module22).ok || module22.type !== type2 || digest7 !== computeDriverTreeDigest(dir)) return null;
       return { module: { ...module22, _sourceTrust: meta2._sourceTrust }, treeDigest: digest7 };
     }
     var import_node_crypto43;
-    var import_node_fs35;
+    var import_node_fs36;
     var import_node_path32;
     var init_installed_driver = __esm2({
       "src/drivers/installed-driver.ts"() {
         "use strict";
         import_node_crypto43 = require("crypto");
-        import_node_fs35 = require("fs");
+        import_node_fs36 = require("fs");
         import_node_path32 = require("path");
         init_manifest();
       }
@@ -132128,20 +132146,20 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         }
       };
     }
-    var import_node_fs36;
+    var import_node_fs37;
     var text2;
     var canon3;
     var init_driver_artifact_port = __esm2({
       "src/commands/med-family/driver-artifact-port.ts"() {
         "use strict";
-        import_node_fs36 = require("fs");
+        import_node_fs37 = require("fs");
         init_transcript_publisher();
         init_artifact_runtime();
         init_artifact_sharing();
         text2 = (v) => typeof v === "string" ? v.trim() : "";
         canon3 = (p) => {
           try {
-            return (0, import_node_fs36.realpathSync)(p);
+            return (0, import_node_fs37.realpathSync)(p);
           } catch {
             return null;
           }
@@ -136787,7 +136805,7 @@ ${detail.join("\n")}` : stripped;
     });
     function buildRefineExecutorStamp(nowIso) {
       return {
-        host: (0, import_node_os10.hostname)(),
+        host: (0, import_node_os11.hostname)(),
         pid: process.pid,
         bootId: BOOT_ID,
         stampedAt: nowIso ?? (/* @__PURE__ */ new Date()).toISOString()
@@ -136815,7 +136833,7 @@ ${detail.join("\n")}` : stripped;
       if (!pid || !host) {
         return { liveness: "unknown", reason: "incomplete_executor_stamp" };
       }
-      const localHost = opts.localHost ?? (0, import_node_os10.hostname)();
+      const localHost = opts.localHost ?? (0, import_node_os11.hostname)();
       if (host !== localHost) {
         return { liveness: "unknown", reason: `executor_stamp_from_other_host:${host}` };
       }
@@ -136841,12 +136859,12 @@ ${detail.join("\n")}` : stripped;
       if (!stamp2 || typeof stamp2 !== "object") return void 0;
       return stamp2;
     }
-    var import_node_os10;
+    var import_node_os11;
     var BOOT_ID;
     var init_mesh_refine_executor_liveness = __esm2({
       "src/mesh/mesh-refine-executor-liveness.ts"() {
         "use strict";
-        import_node_os10 = require("os");
+        import_node_os11 = require("os");
         BOOT_ID = `${process.pid}-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
       }
     });
@@ -137580,7 +137598,7 @@ ${detail.join("\n")}` : stripped;
           throw new Error("local_pinned_physical_context_required");
         }
         try {
-          if (!host.sessionWorkspace || import_node_fs38.realpathSync.native(host.sessionWorkspace) !== import_node_fs38.realpathSync.native(host.workspace)) throw new Error("mismatch");
+          if (!host.sessionWorkspace || import_node_fs39.realpathSync.native(host.sessionWorkspace) !== import_node_fs39.realpathSync.native(host.workspace)) throw new Error("mismatch");
         } catch {
           throw new Error("active_workspace_unproven: the assigned session is not running in the node checkout");
         }
@@ -137607,11 +137625,11 @@ ${detail.join("\n")}` : stripped;
         return next;
       });
     }
-    var import_node_fs38;
+    var import_node_fs39;
     var init_mesh_active_ownership = __esm2({
       "src/mesh/mesh-active-ownership.ts"() {
         "use strict";
-        import_node_fs38 = require("fs");
+        import_node_fs39 = require("fs");
         init_mesh_runtime_store();
         init_mesh_physical_ownership();
         init_mesh_pinned_node_identity();
@@ -137968,7 +137986,7 @@ ${detail.join("\n")}` : stripped;
       else if (mode === "ff-only" && args.approvedPublishShas === void 0) code = "publish_approval_required";
       else if (mode === "ff-only" || preserve) {
         try {
-          await execFileAsync10("git", ["--no-replace-objects", "merge-base", "--is-ancestor", baseHead, branchHead], { cwd: repoRoot, encoding: "utf8", windowsHide: true, env: { ...gitChildEnv(), GIT_NO_REPLACE_OBJECTS: "1", GIT_GRAFT_FILE: import_node_os11.devNull } });
+          await execFileAsync10("git", ["--no-replace-objects", "merge-base", "--is-ancestor", baseHead, branchHead], { cwd: repoRoot, encoding: "utf8", windowsHide: true, env: { ...gitChildEnv(), GIT_NO_REPLACE_OBJECTS: "1", GIT_GRAFT_FILE: import_node_os12.devNull } });
         } catch {
           code = mode === "ff-only" ? "ff_only_required" : "approved_history_requires_ff";
         }
@@ -138078,7 +138096,7 @@ ${detail.join("\n")}` : stripped;
       const run5 = p.execFileAsync ?? (0, import_node_util13.promisify)(import_node_child_process28.execFile);
       const git12 = async (cwd, gitArgs, timeout) => (await run5("git", gitArgs, { cwd, encoding: "utf8", windowsHide: true, env: gitChildEnv(), ...timeout ? { timeout } : {} })).stdout.trim();
       try {
-        if (!node?.workspace || !(0, import_node_fs39.existsSync)(node.workspace)) return void 0;
+        if (!node?.workspace || !(0, import_node_fs40.existsSync)(node.workspace)) return void 0;
         const sourceNode = node.clonedFromNodeId ? mesh?.nodes?.find((n) => meshNodeIdMatches7(n, node.clonedFromNodeId)) : mesh?.nodes?.find((n) => !n.isLocalWorktree);
         const repoRoot = sourceNode?.repoRoot || sourceNode?.workspace || node.workspace;
         if (!repoRoot) return void 0;
@@ -138122,8 +138140,8 @@ ${detail.join("\n")}` : stripped;
         ...extra
       };
     }
-    var import_node_os11;
-    var import_node_fs39;
+    var import_node_os12;
+    var import_node_fs40;
     var import_node_child_process28;
     var import_node_util13;
     var own;
@@ -138137,8 +138155,8 @@ ${detail.join("\n")}` : stripped;
       "src/mesh/mesh-refine-publication-contract.ts"() {
         "use strict";
         init_git_locale();
-        import_node_os11 = require("os");
-        import_node_fs39 = require("fs");
+        import_node_os12 = require("os");
+        import_node_fs40 = require("fs");
         import_node_child_process28 = require("child_process");
         import_node_util13 = require("util");
         init_dist();
@@ -138407,7 +138425,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       if (!node.isLocalWorktree || !node.workspace) {
         return { kind: "terminal", result: { success: false, error: `Refinery requires a local worktree node`, refineStages } };
       }
-      if (!(0, import_node_fs40.existsSync)(node.workspace)) {
+      if (!(0, import_node_fs41.existsSync)(node.workspace)) {
         recordMeshRefineStage(refineStages, "resolve_refs", "failed", Date.now(), {
           workspace: node.workspace,
           workspaceMissing: true
@@ -138781,14 +138799,14 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       if (!Array.isArray(refineStages)) return false;
       return refineStages.some((stage) => stage?.stage === "sync_base" && stage?.rebased === true);
     }
-    var import_node_fs40;
+    var import_node_fs41;
     var init_router_refine_sync_stages = __esm2({
       "src/commands/router-refine-sync-stages.ts"() {
         "use strict";
         init_mesh_refine_publication_contract();
         init_mesh_refine_gates();
         init_dist();
-        import_node_fs40 = require("fs");
+        import_node_fs41 = require("fs");
         init_mesh_refine_landing();
         init_git_locale();
         init_git_status();
@@ -138816,7 +138834,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
           callSite,
           gitArgs,
           cwd,
-          cwdExists: (0, import_node_fs41.existsSync)(cwd),
+          cwdExists: (0, import_node_fs42.existsSync)(cwd),
           code: error?.code ?? null,
           syscall: error?.syscall ?? null,
           path: error?.path ?? null,
@@ -138926,7 +138944,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       return { order: ranked2.map((a) => a.nodeId), changeAreas: areaById, rationale };
     }
     var import_node_child_process29;
-    var import_node_fs41;
+    var import_node_fs42;
     var import_node_util14;
     var execFileAsync7;
     var GIT2;
@@ -138935,7 +138953,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       "src/mesh/mesh-refine-batch.ts"() {
         "use strict";
         import_node_child_process29 = require("child_process");
-        import_node_fs41 = require("fs");
+        import_node_fs42 = require("fs");
         import_node_util14 = require("util");
         init_resolve_executable();
         init_logger();
@@ -138957,7 +138975,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
     }
     async function assessScope(cwd, path144, baseRef, branchRef) {
       try {
-        if (!(0, import_node_fs42.existsSync)(cwd)) return { path: path144, verdict: "unknown", error: `path does not exist: ${cwd}` };
+        if (!(0, import_node_fs43.existsSync)(cwd)) return { path: path144, verdict: "unknown", error: `path does not exist: ${cwd}` };
         const liveBaseHead = await git9(cwd, ["rev-parse", baseRef]);
         const branchHead = await git9(cwd, ["rev-parse", branchRef]);
         if (!liveBaseHead || !branchHead) {
@@ -139048,12 +139066,12 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       return { verdict, scopes: scopes2, touchedSubmodulePaths, durationMs: Date.now() - started };
     }
     var import_node_path36;
-    var import_node_fs42;
+    var import_node_fs43;
     var init_mesh_refine_base_divergence = __esm2({
       "src/mesh/mesh-refine-base-divergence.ts"() {
         "use strict";
         import_node_path36 = require("path");
-        import_node_fs42 = require("fs");
+        import_node_fs43 = require("fs");
         init_mesh_refine_batch();
         init_git_executor();
       }
@@ -139364,7 +139382,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
     function refineWorktreeVanishedOutcome(ctx, nextStage) {
       const workspace = ctx?.node?.workspace;
       if (typeof workspace !== "string" || !workspace) return null;
-      if ((0, import_node_fs43.existsSync)(workspace)) return null;
+      if ((0, import_node_fs44.existsSync)(workspace)) return null;
       recordMeshRefineStage(ctx.refineStages, nextStage, "failed", Date.now(), {
         workspace,
         workspaceMissing: true,
@@ -139384,12 +139402,12 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         }
       };
     }
-    var import_node_fs43;
+    var import_node_fs44;
     var REFINE_INFLIGHT_FRESHNESS_MS;
     var init_mesh_refine_inflight = __esm2({
       "src/mesh/mesh-refine-inflight.ts"() {
         "use strict";
-        import_node_fs43 = require("fs");
+        import_node_fs44 = require("fs");
         init_mesh_refine_zombie_sweep();
         init_mesh_refine_landing();
         init_mesh_refine_gates();
@@ -140413,7 +140431,7 @@ ${hintLines.join("\n")}` : "",
       const mergeStarted = Date.now();
       try {
         const mergeArgs = args?.mergeMode === "ff-only" || hasRefineApprovalContract(args) ? ["merge", "--ff-only", ctx.branchHead] : ["merge", "--no-ff", ctx.branchHead, "-m", `Auto-merge branch '${branch}' via Refinery`];
-        const result = await execFileAsync10("git", mergeArgs, { cwd: repoRoot, encoding: "utf8", windowsHide: true, env: { ...gitChildEnv(), GIT_NO_REPLACE_OBJECTS: "1", GIT_GRAFT_FILE: import_node_os12.devNull } });
+        const result = await execFileAsync10("git", mergeArgs, { cwd: repoRoot, encoding: "utf8", windowsHide: true, env: { ...gitChildEnv(), GIT_NO_REPLACE_OBJECTS: "1", GIT_GRAFT_FILE: import_node_os13.devNull } });
         mergeResult = {
           stdout: truncateValidationOutput(result.stdout),
           stderr: truncateValidationOutput(result.stderr),
@@ -140747,7 +140765,7 @@ ${e?.stderr || ""}`;
         finalBranchConvergenceState
       } };
     }
-    var import_node_os12;
+    var import_node_os13;
     var init_router_refine_merge = __esm2({
       "src/commands/router-refine-merge.ts"() {
         "use strict";
@@ -140762,7 +140780,7 @@ ${e?.stderr || ""}`;
         init_mesh_refine_gitlink_utils();
         init_repo_mesh_types();
         init_mesh_refine_publication_contract();
-        import_node_os12 = require("os");
+        import_node_os13 = require("os");
         init_mesh_refine_pinned_push();
       }
     });
@@ -143133,18 +143151,18 @@ ${tail}` : ""
       if (bytes > MAX_BYTES) throw new Error("approval files exceed byte bound");
     }
     function safeDir(configDir, area, create) {
-      const root = (0, import_node_fs48.realpathSync)(configDir);
+      const root = (0, import_node_fs49.realpathSync)(configDir);
       for (const component of ["assistant", area]) {
         const parent = component === "assistant" ? configDir : (0, import_node_path40.join)(configDir, "assistant");
         const path144 = (0, import_node_path40.join)(parent, component);
-        if ((0, import_node_fs48.existsSync)(path144)) {
-          const stat2 = (0, import_node_fs48.lstatSync)(path144);
+        if ((0, import_node_fs49.existsSync)(path144)) {
+          const stat2 = (0, import_node_fs49.lstatSync)(path144);
           if (!stat2.isDirectory() || stat2.isSymbolicLink()) throw new Error("approval directory is not a local directory");
-        } else if (create) (0, import_node_fs48.mkdirSync)(path144, { mode: 448 });
+        } else if (create) (0, import_node_fs49.mkdirSync)(path144, { mode: 448 });
         else return path144;
       }
       const dir = (0, import_node_path40.join)(configDir, "assistant", area);
-      const rel = (0, import_node_path40.relative)(root, (0, import_node_fs48.realpathSync)(dir));
+      const rel = (0, import_node_path40.relative)(root, (0, import_node_fs49.realpathSync)(dir));
       if (rel === ".." || rel.startsWith(`..${import_node_path40.sep}`)) throw new Error("approval directory escaped config");
       return dir;
     }
@@ -143152,13 +143170,13 @@ ${tail}` : ""
       const files = [];
       for (const area of ["staged", "staged-control"]) {
         const dir = safeDir(configDir, area, false);
-        if (!(0, import_node_fs48.existsSync)(dir)) continue;
-        for (const name of (0, import_node_fs48.readdirSync)(dir).sort()) {
+        if (!(0, import_node_fs49.existsSync)(dir)) continue;
+        for (const name of (0, import_node_fs49.readdirSync)(dir).sort()) {
           if (!/^[A-Za-z0-9_-]+\.json$/.test(name)) continue;
           const path144 = (0, import_node_path40.join)(dir, name);
-          const stat2 = (0, import_node_fs48.lstatSync)(path144);
+          const stat2 = (0, import_node_fs49.lstatSync)(path144);
           if (!stat2.isFile() || stat2.isSymbolicLink() || stat2.size > MAX_FILE_BYTES) throw new Error("approval file is not a bounded local file");
-          const data = (0, import_node_fs48.readFileSync)(path144, "utf8");
+          const data = (0, import_node_fs49.readFileSync)(path144, "utf8");
           const value = record5(JSON.parse(data));
           if (!value) throw new Error("approval record is unreadable");
           if (value.kind === "memory" && value.op?.scope !== "project" || value.kind === "session_control" && value.role === "assistant") continue;
@@ -143174,12 +143192,12 @@ ${tail}` : ""
     }
     function assertDestination(path144, data) {
       const consumed = `${path144}.consumed`;
-      if ((0, import_node_fs48.existsSync)(consumed)) {
-        const stat2 = (0, import_node_fs48.lstatSync)(consumed);
+      if ((0, import_node_fs49.existsSync)(consumed)) {
+        const stat2 = (0, import_node_fs49.lstatSync)(consumed);
         if (!stat2.isFile() || stat2.isSymbolicLink()) throw new Error("approval consent receipt is not a local file");
         throw new Error("approval consent receipt already retained");
       }
-      if ((0, import_node_fs48.existsSync)(path144)) verifyExisting(path144, data);
+      if ((0, import_node_fs49.existsSync)(path144)) verifyExisting(path144, data);
     }
     function assertProjectApprovalDestinations(configDir, files) {
       for (const file of files) assertDestination((0, import_node_path40.join)(configDir, "assistant", file.area, file.name), file.data);
@@ -143192,37 +143210,37 @@ ${tail}` : ""
         return { file, path: path144 };
       });
       for (const { file, path: path144 } of destinations) {
-        if ((0, import_node_fs48.existsSync)(path144)) {
+        if ((0, import_node_fs49.existsSync)(path144)) {
           verifyExisting(path144, file.data);
           continue;
         }
         const staged = `${path144}.handoff-${file.sha256}`;
-        if (!(0, import_node_fs48.existsSync)(staged)) {
-          const fd = (0, import_node_fs48.openSync)(staged, "wx", 384);
+        if (!(0, import_node_fs49.existsSync)(staged)) {
+          const fd = (0, import_node_fs49.openSync)(staged, "wx", 384);
           try {
-            (0, import_node_fs48.writeFileSync)(fd, file.data);
-            (0, import_node_fs48.fsyncSync)(fd);
+            (0, import_node_fs49.writeFileSync)(fd, file.data);
+            (0, import_node_fs49.fsyncSync)(fd);
           } finally {
-            (0, import_node_fs48.closeSync)(fd);
+            (0, import_node_fs49.closeSync)(fd);
           }
-        } else if ((0, import_node_fs48.lstatSync)(staged).isSymbolicLink() || (0, import_node_fs48.readFileSync)(staged, "utf8") !== file.data) throw new Error("approval staging conflict");
+        } else if ((0, import_node_fs49.lstatSync)(staged).isSymbolicLink() || (0, import_node_fs49.readFileSync)(staged, "utf8") !== file.data) throw new Error("approval staging conflict");
         try {
-          (0, import_node_fs48.linkSync)(staged, path144);
+          (0, import_node_fs49.linkSync)(staged, path144);
         } catch (e) {
           if (e.code !== "EEXIST") throw e;
           verifyExisting(path144, file.data);
         }
         if (process.platform !== "win32") {
-          const fd = (0, import_node_fs48.openSync)((0, import_node_path40.join)(configDir, "assistant", file.area), "r");
+          const fd = (0, import_node_fs49.openSync)((0, import_node_path40.join)(configDir, "assistant", file.area), "r");
           try {
-            (0, import_node_fs48.fsyncSync)(fd);
+            (0, import_node_fs49.fsyncSync)(fd);
           } finally {
-            (0, import_node_fs48.closeSync)(fd);
+            (0, import_node_fs49.closeSync)(fd);
           }
         }
       }
     }
-    var import_node_fs48;
+    var import_node_fs49;
     var import_node_path40;
     var import_node_crypto63;
     var MAX_FILE_BYTES;
@@ -143234,7 +143252,7 @@ ${tail}` : ""
     var init_project_files = __esm2({
       "src/mesh/host-handoff/project-files.ts"() {
         "use strict";
-        import_node_fs48 = require("fs");
+        import_node_fs49 = require("fs");
         import_node_path40 = require("path");
         import_node_crypto63 = require("crypto");
         MAX_FILE_BYTES = 1024 * 1024;
@@ -143243,8 +143261,8 @@ ${tail}` : ""
         digest6 = (data) => (0, import_node_crypto63.createHash)("sha256").update(data).digest("hex");
         record5 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : null;
         verifyExisting = (path144, data) => {
-          const stat2 = (0, import_node_fs48.lstatSync)(path144);
-          if (!stat2.isFile() || stat2.isSymbolicLink() || (0, import_node_fs48.readFileSync)(path144, "utf8") !== data) throw new Error("approval destination conflicts with retained data");
+          const stat2 = (0, import_node_fs49.lstatSync)(path144);
+          if (!stat2.isFile() || stat2.isSymbolicLink() || (0, import_node_fs49.readFileSync)(path144, "utf8") !== data) throw new Error("approval destination conflicts with retained data");
         };
       }
     });
@@ -144331,7 +144349,7 @@ ${tail}` : ""
             let hasHostInventory = false;
             if (projectId) {
               try {
-                (0, import_node_fs49.statSync)(getMeshConfigPath());
+                (0, import_node_fs50.statSync)(getMeshConfigPath());
                 hasHostInventory = true;
               } catch (error) {
                 if (error.code !== "ENOENT") throw error;
@@ -144383,11 +144401,11 @@ ${tail}` : ""
         }
       };
     }
-    var import_node_fs49;
+    var import_node_fs50;
     var init_consumer = __esm2({
       "src/launch-defaults/consumer.ts"() {
         "use strict";
-        import_node_fs49 = require("fs");
+        import_node_fs50 = require("fs");
         init_mesh_config_store();
         init_ports();
         init_resolve();
@@ -146862,18 +146880,18 @@ ${grant.exp}`).digest("hex");
     });
     function syncDir2(dir) {
       if (process.platform === "win32") return;
-      const fd = (0, import_node_fs51.openSync)(dir, "r");
+      const fd = (0, import_node_fs52.openSync)(dir, "r");
       try {
-        (0, import_node_fs51.fsyncSync)(fd);
+        (0, import_node_fs52.fsyncSync)(fd);
       } finally {
-        (0, import_node_fs51.closeSync)(fd);
+        (0, import_node_fs52.closeSync)(fd);
       }
     }
     function getStagedControlStore() {
       return shared2 ?? (shared2 = new StagedControlStore());
     }
     var import_node_crypto65;
-    var import_node_fs51;
+    var import_node_fs52;
     var import_node_path42;
     var STAGED_CONTROL_TTL_MS;
     var ID_RE4;
@@ -146883,7 +146901,7 @@ ${grant.exp}`).digest("hex");
       "src/assistant/staged-control.ts"() {
         "use strict";
         import_node_crypto65 = require("crypto");
-        import_node_fs51 = require("fs");
+        import_node_fs52 = require("fs");
         import_node_path42 = require("path");
         init_project_write_cut();
         init_config();
@@ -146911,16 +146929,16 @@ ${grant.exp}`).digest("hex");
             const at = this.now();
             const id4 = `ctl-${(0, import_node_crypto65.randomBytes)(12).toString("hex")}`;
             const record8 = { version: 1, id: id4, createdAt: at, expiresAt: at + STAGED_CONTROL_TTL_MS, ...proposal };
-            (0, import_node_fs51.mkdirSync)(this.dir, { recursive: true, mode: 448 });
+            (0, import_node_fs52.mkdirSync)(this.dir, { recursive: true, mode: 448 });
             const tmp = `${this.path(id4)}.tmp-${(0, import_node_crypto65.randomBytes)(6).toString("hex")}`;
-            const fd = (0, import_node_fs51.openSync)(tmp, "wx", 384);
+            const fd = (0, import_node_fs52.openSync)(tmp, "wx", 384);
             try {
-              (0, import_node_fs51.writeFileSync)(fd, JSON.stringify(record8, null, 2));
-              (0, import_node_fs51.fsyncSync)(fd);
+              (0, import_node_fs52.writeFileSync)(fd, JSON.stringify(record8, null, 2));
+              (0, import_node_fs52.fsyncSync)(fd);
             } finally {
-              (0, import_node_fs51.closeSync)(fd);
+              (0, import_node_fs52.closeSync)(fd);
             }
-            (0, import_node_fs51.renameSync)(tmp, this.path(id4));
+            (0, import_node_fs52.renameSync)(tmp, this.path(id4));
             syncDir2(this.dir);
             return record8;
           }
@@ -146928,7 +146946,7 @@ ${grant.exp}`).digest("hex");
           read(id4) {
             if (!ID_RE4.test(id4)) return null;
             try {
-              const value = JSON.parse((0, import_node_fs51.readFileSync)(this.path(id4), "utf8"));
+              const value = JSON.parse((0, import_node_fs52.readFileSync)(this.path(id4), "utf8"));
               if (!value || value.version !== 1 || value.id !== id4 || value.kind !== "session_control" && value.kind !== "host_handoff") return null;
               return { record: value, expired: this.now() >= value.expiresAt };
             } catch {
@@ -146937,9 +146955,9 @@ ${grant.exp}`).digest("hex");
           }
           /** Live (unexpired) proposals, oldest first; expired ones are removed. */
           list() {
-            if (!(0, import_node_fs51.existsSync)(this.dir)) return [];
+            if (!(0, import_node_fs52.existsSync)(this.dir)) return [];
             const out = [];
-            for (const name of (0, import_node_fs51.readdirSync)(this.dir)) {
+            for (const name of (0, import_node_fs52.readdirSync)(this.dir)) {
               if (!name.startsWith("ctl-") || !name.endsWith(".json")) continue;
               const id4 = name.slice(0, -5);
               const read2 = this.read(id4);
@@ -146962,7 +146980,7 @@ ${grant.exp}`).digest("hex");
           }
           removeUnlocked(id4) {
             try {
-              (0, import_node_fs51.unlinkSync)(this.path(id4));
+              (0, import_node_fs52.unlinkSync)(this.path(id4));
             } catch {
             }
           }
@@ -146980,7 +146998,7 @@ ${grant.exp}`).digest("hex");
                   const current5 = this.read(id4);
                   if (!current5) return { success: false, code: "staged_not_found", error: "Control proposal not found." };
                   if (current5.expired) return { success: false, code: "staged_expired", error: "Control proposal expired (1 hour); ask again." };
-                  (0, import_node_fs51.renameSync)(this.path(id4), `${this.path(id4)}.consumed`);
+                  (0, import_node_fs52.renameSync)(this.path(id4), `${this.path(id4)}.consumed`);
                   syncDir2(this.dir);
                   accepted = current5.record;
                   return void 0;
@@ -147026,8 +147044,8 @@ ${grant.exp}`).digest("hex");
           }
           restore(record8) {
             try {
-              (0, import_node_fs51.mkdirSync)(this.dir, { recursive: true, mode: 448 });
-              (0, import_node_fs51.writeFileSync)(this.path(record8.id), JSON.stringify(record8, null, 2), { mode: 384 });
+              (0, import_node_fs52.mkdirSync)(this.dir, { recursive: true, mode: 448 });
+              (0, import_node_fs52.writeFileSync)(this.path(record8.id), JSON.stringify(record8, null, 2), { mode: 384 });
             } catch {
             }
           }
@@ -154588,10 +154606,10 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
     });
     function inventory(configDir, meshId) {
       const path144 = (0, import_node_path43.join)(configDir, "meshes.json");
-      if (!(0, import_node_fs52.existsSync)(path144)) return { ok: false, detail: "project inventory unavailable" };
+      if (!(0, import_node_fs53.existsSync)(path144)) return { ok: false, detail: "project inventory unavailable" };
       let parsed;
       try {
-        parsed = JSON.parse((0, import_node_fs52.readFileSync)(path144, "utf8"));
+        parsed = JSON.parse((0, import_node_fs53.readFileSync)(path144, "utf8"));
       } catch {
         return { ok: false, detail: "project inventory unreadable" };
       }
@@ -154607,10 +154625,10 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
     function consumedAmbiguity(configDir) {
       for (const area of ["staged", "staged-control"]) {
         const dir = (0, import_node_path43.join)(configDir, "assistant", area);
-        if (!(0, import_node_fs52.existsSync)(dir)) continue;
+        if (!(0, import_node_fs53.existsSync)(dir)) continue;
         let names;
         try {
-          names = (0, import_node_fs52.readdirSync)(dir);
+          names = (0, import_node_fs53.readdirSync)(dir);
         } catch {
           return "approval directory is unreadable";
         }
@@ -154619,9 +154637,9 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           const live = name.slice(0, -".consumed".length);
           if (!/^[A-Za-z0-9_-]+\.json$/.test(live)) return "approval consent receipt name is not exact";
           const receipt = (0, import_node_path43.join)(dir, name);
-          const stat2 = (0, import_node_fs52.lstatSync)(receipt);
+          const stat2 = (0, import_node_fs53.lstatSync)(receipt);
           if (!stat2.isFile() || stat2.isSymbolicLink()) return "approval consent receipt is not a local file";
-          if ((0, import_node_fs52.existsSync)((0, import_node_path43.join)(dir, live))) return "approval has both a live proposal and a consumed receipt";
+          if ((0, import_node_fs53.existsSync)((0, import_node_path43.join)(dir, live))) return "approval has both a live proposal and a consumed receipt";
         }
       }
       return null;
@@ -154708,13 +154726,13 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         insert.run(meshId, eventId, hash3, provenance.handoffId, provenance.epoch);
       }
     }
-    var import_node_fs52;
+    var import_node_fs53;
     var import_node_path43;
     var fail11;
     var init_preservation_boundary = __esm2({
       "src/mesh/host-handoff/preservation-boundary.ts"() {
         "use strict";
-        import_node_fs52 = require("fs");
+        import_node_fs53 = require("fs");
         import_node_path43 = require("path");
         init_assistant_projects();
         init_project_files();
@@ -154990,7 +155008,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         findProbeConflicts: (meshId, probe) => findProbeConflicts(db2(), meshId, probe),
         freeDiskBytes: () => {
           try {
-            const s2 = (0, import_node_fs53.statfsSync)(getConfigDir2());
+            const s2 = (0, import_node_fs54.statfsSync)(getConfigDir2());
             return Number(s2.bavail) * Number(s2.bsize);
           } catch {
             return 0;
@@ -155107,13 +155125,13 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         })
       };
     }
-    var import_node_fs53;
+    var import_node_fs54;
     var import_node_crypto69;
     var HOLD_TTL_MS;
     var init_live_env = __esm2({
       "src/mesh/host-handoff/live-env.ts"() {
         "use strict";
-        import_node_fs53 = require("fs");
+        import_node_fs54 = require("fs");
         import_node_crypto69 = require("crypto");
         init_dist();
         init_config();
@@ -155255,10 +155273,10 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       const refusal2 = describeCanaryContract(provider, selection);
       if (refusal2) return result(false, true, "canary_contract_unsupported", refusal2);
       const spec = provider.hostHandoffCanary;
-      const root = (0, import_node_fs54.mkdtempSync)((0, import_node_path44.join)(options.parentDir ?? (0, import_node_os13.tmpdir)(), "adhdev-host-canary-"));
+      const root = (0, import_node_fs55.mkdtempSync)((0, import_node_path44.join)(options.parentDir ?? (0, import_node_os14.tmpdir)(), "adhdev-host-canary-"));
       const config = (0, import_node_path44.join)(root, "config"), workspace = (0, import_node_path44.join)(root, "workspace");
-      (0, import_node_fs54.mkdirSync)(config, { mode: 448 });
-      (0, import_node_fs54.mkdirSync)(workspace, { mode: 448 });
+      (0, import_node_fs55.mkdirSync)(config, { mode: 448 });
+      (0, import_node_fs55.mkdirSync)(workspace, { mode: 448 });
       let args;
       try {
         args = substituteCanaryArgs(spec, selection, workspace, config);
@@ -155341,8 +155359,8 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       });
     }
     var import_node_child_process36;
-    var import_node_fs54;
-    var import_node_os13;
+    var import_node_fs55;
+    var import_node_os14;
     var import_node_path44;
     var import_node_crypto70;
     var HANDOFF_CANARY_PROMPT;
@@ -155354,8 +155372,8 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       "src/mesh/host-handoff/target-canary.ts"() {
         "use strict";
         import_node_child_process36 = require("child_process");
-        import_node_fs54 = require("fs");
-        import_node_os13 = require("os");
+        import_node_fs55 = require("fs");
+        import_node_os14 = require("os");
         import_node_path44 = require("path");
         import_node_crypto70 = require("crypto");
         init_host_handoff_canary_contract();
@@ -155377,9 +155395,9 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       let workspace;
       if (node?.workspace) {
         try {
-          workspace = (0, import_node_fs55.realpathSync)(node.workspace);
-          if (!(0, import_node_fs55.statSync)(workspace).isDirectory()) workspace = void 0;
-          else (0, import_node_fs55.accessSync)(workspace, import_node_fs55.constants.R_OK | import_node_fs55.constants.W_OK | import_node_fs55.constants.X_OK);
+          workspace = (0, import_node_fs56.realpathSync)(node.workspace);
+          if (!(0, import_node_fs56.statSync)(workspace).isDirectory()) workspace = void 0;
+          else (0, import_node_fs56.accessSync)(workspace, import_node_fs56.constants.R_OK | import_node_fs56.constants.W_OK | import_node_fs56.constants.X_OK);
         } catch {
           workspace = void 0;
         }
@@ -155394,7 +155412,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           );
           const root = (await git12(["rev-parse", "--show-toplevel"])).stdout.trim();
           const remote = (await git12(["config", "--get", "remote.origin.url"])).stdout.trim();
-          add("repository_identity", (0, import_node_fs55.realpathSync)(root) === workspace && !!p.mesh.repoIdentity && normalizeRepoIdentity(remote) === normalizeRepoIdentity(p.mesh.repoIdentity));
+          add("repository_identity", (0, import_node_fs56.realpathSync)(root) === workspace && !!p.mesh.repoIdentity && normalizeRepoIdentity(remote) === normalizeRepoIdentity(p.mesh.repoIdentity));
         } catch {
           add("repository_identity", false, "A registered repository with matching identity is required.");
         }
@@ -155426,7 +155444,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       return { ok: checks.every((c) => c.ok), checks };
     }
     var import_node_child_process37;
-    var import_node_fs55;
+    var import_node_fs56;
     var import_node_util19;
     var CENSUS_TIMEOUT_MS;
     var exec6;
@@ -155434,7 +155452,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       "src/mesh/host-handoff/target-readiness.ts"() {
         "use strict";
         import_node_child_process37 = require("child_process");
-        import_node_fs55 = require("fs");
+        import_node_fs56 = require("fs");
         import_node_util19 = require("util");
         init_dist();
         init_mesh_config_store();
@@ -188129,6 +188147,25 @@ ${marker2}`,
     init_dist();
     init_track_identity();
     init_command_registry();
+    var import_node_fs28 = require("fs");
+    var import_node_os9 = require("os");
+    var UPGRADE_MIN_FREE_BYTES = 1024 * 1024 * 1024;
+    function readFreeDiskBytes(dir = (0, import_node_os9.homedir)()) {
+      try {
+        const s2 = (0, import_node_fs28.statfsSync)(dir);
+        const free = Number(s2.bavail) * Number(s2.bsize);
+        return Number.isFinite(free) && free >= 0 ? free : void 0;
+      } catch {
+        return void 0;
+      }
+    }
+    function upgradeDiskShortfall(freeBytes2, minBytes = UPGRADE_MIN_FREE_BYTES) {
+      if (freeBytes2 === void 0 || freeBytes2 >= minBytes) return void 0;
+      return { freeBytes: freeBytes2, requiredBytes: minBytes };
+    }
+    function formatGiB(bytes) {
+      return `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
+    }
     var ARGV_STANDALONE_PATH_SEGMENT = /[\\/]daemon-standalone[\\/]/;
     function isStandaloneArgv(argv1) {
       return !!argv1 && ARGV_STANDALONE_PATH_SEGMENT.test(argv1);
@@ -188208,6 +188245,27 @@ ${marker2}`,
           }
           if (direction !== null && direction < 0) {
             LOG.warn("Upgrade", `allowDowngrade set \u2014 proceeding with DOWNGRADE from v${runningVersion} to v${latest} on the ${TRACK} track`);
+          }
+          if (currentInstalled !== latest && args?.ignoreDiskCheck !== true) {
+            const shortfall = upgradeDiskShortfall(readFreeDiskBytes());
+            if (shortfall) {
+              LOG.warn("Upgrade", `Refusing upgrade to v${latest}: only ${formatGiB(shortfall.freeBytes)} free, need ${formatGiB(shortfall.requiredBytes)}`);
+              return withChannelNotice({
+                success: false,
+                upgraded: false,
+                restarting: false,
+                code: "insufficient_disk",
+                outcome: "insufficient_disk",
+                ...runningVersion ? { version: runningVersion, currentVersion: runningVersion } : {},
+                targetVersion: latest,
+                channel: TRACK,
+                npmTag,
+                freeBytes: shortfall.freeBytes,
+                requiredBytes: shortfall.requiredBytes,
+                reason: `Upgrade refused: only ${formatGiB(shortfall.freeBytes)} of disk is free on this machine and the install needs about ${formatGiB(shortfall.requiredBytes)}. An install that runs out of space midway can leave the daemon unable to restart.`,
+                clientHint: "Free some disk space on this machine and try again \u2014 no restart happened and the daemon is untouched. Pass ignoreDiskCheck:true to try anyway."
+              });
+            }
           }
           const killSessionHost = args?.killSessionHost === true;
           spawnDetachedDaemonUpgradeHelper({
@@ -191415,7 +191473,7 @@ ${marker2}`,
       };
     }
     init_outgoing_receipt();
-    var import_node_fs37 = __toESM2(require("fs"));
+    var import_node_fs38 = __toESM2(require("fs"));
     var import_node_path34 = __toESM2(require("path"));
     var import_node_crypto45 = require("crypto");
     init_logger();
@@ -191427,7 +191485,7 @@ ${marker2}`,
         if (!directory2) return;
         let names;
         try {
-          names = import_node_fs37.default.readdirSync(directory2);
+          names = import_node_fs38.default.readdirSync(directory2);
         } catch (error) {
           if (error.code === "ENOENT") return;
           throw error;
@@ -191443,16 +191501,16 @@ ${marker2}`,
       }
       syncDirectory() {
         if (!this.directory || process.platform === "win32") return;
-        const fd = import_node_fs37.default.openSync(this.directory, "r");
+        const fd = import_node_fs38.default.openSync(this.directory, "r");
         try {
-          import_node_fs37.default.fsyncSync(fd);
+          import_node_fs38.default.fsyncSync(fd);
         } finally {
-          import_node_fs37.default.closeSync(fd);
+          import_node_fs38.default.closeSync(fd);
         }
       }
       locked(id4, operation) {
         if (!this.directory) return operation();
-        import_node_fs37.default.mkdirSync(this.directory, { recursive: true });
+        import_node_fs38.default.mkdirSync(this.directory, { recursive: true });
         const lock = this.filename(id4) + ".lock";
         const deadline = performance.now() + 10;
         let waitBudget = 10;
@@ -191473,11 +191531,11 @@ ${marker2}`,
         }
       }
       isUnverified(messageId) {
-        return !!this.directory && import_node_fs37.default.existsSync(this.filename(messageId) + ".invalid");
+        return !!this.directory && import_node_fs38.default.existsSync(this.filename(messageId) + ".invalid");
       }
       markInvalid(file, source2 = file) {
         try {
-          import_node_fs37.default.linkSync(source2, file + ".invalid");
+          import_node_fs38.default.linkSync(source2, file + ".invalid");
         } catch (error) {
           if (error.code === "EEXIST") return;
           throw error;
@@ -191485,14 +191543,14 @@ ${marker2}`,
         this.syncDirectory();
       }
       hasAcceptance(messageId) {
-        return this.records.has(messageId) || !!this.directory && (import_node_fs37.default.existsSync(this.filename(messageId)) || this.isUnverified(messageId));
+        return this.records.has(messageId) || !!this.directory && (import_node_fs38.default.existsSync(this.filename(messageId)) || this.isUnverified(messageId));
       }
       read(messageId) {
         if (!this.directory) return this.records.get(messageId);
         const file = this.filename(messageId);
         let bytes;
         try {
-          bytes = import_node_fs37.default.readFileSync(file, "utf8");
+          bytes = import_node_fs38.default.readFileSync(file, "utf8");
         } catch (error) {
           if (error.code !== "ENOENT") throw error;
           const known2 = this.isUnverified(messageId) ? this.records.get(messageId) : void 0;
@@ -191509,9 +191567,9 @@ ${marker2}`,
         }
         let timestamp2 = Date.now();
         let quarantine2 = `${file}.invalid-${timestamp2}`;
-        while (import_node_fs37.default.existsSync(quarantine2)) quarantine2 = `${file}.invalid-${++timestamp2}`;
+        while (import_node_fs38.default.existsSync(quarantine2)) quarantine2 = `${file}.invalid-${++timestamp2}`;
         this.markInvalid(file);
-        import_node_fs37.default.renameSync(file, quarantine2);
+        import_node_fs38.default.renameSync(file, quarantine2);
         LOG.warn("OutgoingReceipt", `Invalid outgoing receipt journal quarantined at ${quarantine2}; delivery unverified, automatic resend suppressed`);
         this.syncDirectory();
         const known = this.records.get(messageId);
@@ -191519,7 +191577,7 @@ ${marker2}`,
       }
       get(messageId) {
         if (!this.directory) return this.records.get(messageId);
-        if (!import_node_fs37.default.existsSync(this.directory)) return void 0;
+        if (!import_node_fs38.default.existsSync(this.directory)) return void 0;
         return this.locked(messageId, () => this.read(messageId));
       }
       write(receipt) {
@@ -191530,19 +191588,19 @@ ${marker2}`,
         }
         const file = this.filename(receipt.messageId);
         const staging = `${file}.${(0, import_node_crypto45.randomUUID)()}.tmp`;
-        const fd = import_node_fs37.default.openSync(staging, "wx", 384);
+        const fd = import_node_fs38.default.openSync(staging, "wx", 384);
         try {
           try {
-            import_node_fs37.default.writeFileSync(fd, JSON.stringify(receipt));
-            import_node_fs37.default.fsyncSync(fd);
+            import_node_fs38.default.writeFileSync(fd, JSON.stringify(receipt));
+            import_node_fs38.default.fsyncSync(fd);
           } finally {
-            import_node_fs37.default.closeSync(fd);
+            import_node_fs38.default.closeSync(fd);
           }
-          import_node_fs37.default.renameSync(staging, file);
+          import_node_fs38.default.renameSync(staging, file);
           this.records.set(receipt.messageId, receipt);
           this.syncDirectory();
         } finally {
-          if (import_node_fs37.default.existsSync(staging)) import_node_fs37.default.unlinkSync(staging);
+          if (import_node_fs38.default.existsSync(staging)) import_node_fs38.default.unlinkSync(staging);
         }
       }
       accept(messageId, sessionId, input) {
@@ -200583,7 +200641,7 @@ ${marker2}`,
       // The owner's own surfaces only: a mesh peer has no reason to slow another machine down.
       get_daemon_cpu_profile: { sources: ["ipc", "standalone", "p2p"] }
     }, { meshSender: "authenticated_peer" });
-    var import_node_fs44 = require("fs");
+    var import_node_fs45 = require("fs");
     var path115 = __toESM2(require("path"));
     init_dist();
     init_config();
@@ -200648,7 +200706,7 @@ ${marker2}`,
             workingDir = text4(ctx.components().cliManager?.adapters?.get(sessionId)?.workingDir);
           } catch {
           }
-          if (workingDir && import_node_fs44.realpathSync.native(workingDir) !== import_node_fs44.realpathSync.native(workspace)) {
+          if (workingDir && import_node_fs45.realpathSync.native(workingDir) !== import_node_fs45.realpathSync.native(workspace)) {
             return refuse5("active_workspace_unproven", `Session ${sessionId} is not running in the node checkout`);
           }
         }
@@ -202760,7 +202818,7 @@ ${marker2}`,
         session: { scope: "optional", aliasSessionId: true }
       }
     }, { meshSender: "authenticated_peer" });
-    var import_node_fs45 = require("fs");
+    var import_node_fs46 = require("fs");
     var import_node_path37 = require("path");
     init_dist();
     init_hidden_spawn();
@@ -202783,7 +202841,7 @@ ${marker2}`,
     }
     function canonicalWorkspace(node) {
       const path144 = node.workspace;
-      requireProof(typeof path144 === "string" && (0, import_node_path37.isAbsolute)(path144) && (0, import_node_fs45.realpathSync)(path144) === (0, import_node_path37.resolve)(path144), "source_parent_untrusted_path");
+      requireProof(typeof path144 === "string" && (0, import_node_path37.isAbsolute)(path144) && (0, import_node_fs46.realpathSync)(path144) === (0, import_node_path37.resolve)(path144), "source_parent_untrusted_path");
       requireProof(!node.repoRoot || (0, import_node_path37.resolve)(node.repoRoot) === path144, "source_parent_repo_root_mismatch");
       requireProof(git10(path144, "rev-parse", "--show-toplevel") === path144, "source_parent_untrusted_path");
       return path144;
@@ -202797,13 +202855,13 @@ ${marker2}`,
       }
       const workspace = canonicalWorkspace(node);
       const base = canonicalWorkspace(parent);
-      const common2 = (0, import_node_fs45.realpathSync)(git10(workspace, "rev-parse", "--path-format=absolute", "--git-common-dir"));
-      requireProof(common2 === (0, import_node_path37.join)(base, ".git") && (0, import_node_fs45.lstatSync)(common2).isDirectory() && !(0, import_node_fs45.lstatSync)(common2).isSymbolicLink(), "source_parent_cross_repo");
-      requireProof((0, import_node_fs45.realpathSync)(git10(base, "rev-parse", "--absolute-git-dir")) === common2, "source_parent_not_main_checkout");
-      const gitDir = (0, import_node_fs45.realpathSync)(git10(workspace, "rev-parse", "--absolute-git-dir"));
+      const common2 = (0, import_node_fs46.realpathSync)(git10(workspace, "rev-parse", "--path-format=absolute", "--git-common-dir"));
+      requireProof(common2 === (0, import_node_path37.join)(base, ".git") && (0, import_node_fs46.lstatSync)(common2).isDirectory() && !(0, import_node_fs46.lstatSync)(common2).isSymbolicLink(), "source_parent_cross_repo");
+      requireProof((0, import_node_fs46.realpathSync)(git10(base, "rev-parse", "--absolute-git-dir")) === common2, "source_parent_not_main_checkout");
+      const gitDir = (0, import_node_fs46.realpathSync)(git10(workspace, "rev-parse", "--absolute-git-dir"));
       const entry = (0, import_node_path37.relative)((0, import_node_path37.join)(common2, "worktrees"), gitDir);
       requireProof(entry && !entry.startsWith(`..${import_node_path37.sep}`) && entry !== ".." && !(0, import_node_path37.isAbsolute)(entry) && !entry.includes(import_node_path37.sep), "source_parent_external_worktree");
-      requireProof(!(0, import_node_fs45.lstatSync)((0, import_node_path37.join)(workspace, ".git")).isSymbolicLink() && (0, import_node_fs45.realpathSync)((0, import_node_fs45.readFileSync)((0, import_node_path37.join)(gitDir, "gitdir"), "utf8").trim()) === (0, import_node_path37.join)(workspace, ".git"), "source_parent_invalid_backlink");
+      requireProof(!(0, import_node_fs46.lstatSync)((0, import_node_path37.join)(workspace, ".git")).isSymbolicLink() && (0, import_node_fs46.realpathSync)((0, import_node_fs46.readFileSync)((0, import_node_path37.join)(gitDir, "gitdir"), "utf8").trim()) === (0, import_node_path37.join)(workspace, ".git"), "source_parent_invalid_backlink");
       requireProof(git10(base, "symbolic-ref", "--short", "HEAD") === (mesh.defaultBranch || "main"), "source_parent_wrong_default_branch");
       const identity5 = normalizeRepoIdentity(mesh.repoIdentity || "");
       requireProof(identity5 && normalizeRepoIdentity(git10(base, "remote", "get-url", "origin")) === identity5 && normalizeRepoIdentity(git10(workspace, "remote", "get-url", "origin")) === identity5, "source_parent_repo_identity_mismatch");
@@ -203394,20 +203452,20 @@ ${marker2}`,
       },
       remove_mesh_node: (ctx, args) => removeMeshNode(ctx, args)
     };
-    var import_node_fs47 = require("fs");
+    var import_node_fs48 = require("fs");
     var import_node_path39 = require("path");
     var import_node_child_process34 = require("child_process");
     var import_node_util17 = require("util");
     init_git_locale();
     var import_node_child_process33 = require("child_process");
-    var import_node_fs46 = require("fs");
+    var import_node_fs47 = require("fs");
     var import_node_path38 = require("path");
     var import_node_util16 = require("util");
     init_git_executor();
     init_git_locale();
     async function initializeWorktreeSubmodules(worktreePath) {
       const initializer = (0, import_node_path38.join)(worktreePath, "scripts/bootstrap-submodules.mjs");
-      if ((0, import_node_fs46.existsSync)(initializer)) {
+      if ((0, import_node_fs47.existsSync)(initializer)) {
         await (0, import_node_util16.promisify)(import_node_child_process33.execFile)(process.execPath, [initializer], {
           cwd: worktreePath,
           env: gitChildEnv(),
@@ -203682,7 +203740,7 @@ ${marker2}`,
       try {
         await initializeWorktreeSubmodules(worktreePath);
         const hookInstaller = (0, import_node_path39.join)(worktreePath, "scripts/setup-hooks.mjs");
-        if ((0, import_node_fs47.existsSync)(hookInstaller)) await (0, import_node_util17.promisify)(import_node_child_process34.execFile)(process.execPath, [hookInstaller], { cwd: worktreePath, env: gitChildEnv(), timeout: 3e4, windowsHide: true });
+        if ((0, import_node_fs48.existsSync)(hookInstaller)) await (0, import_node_util17.promisify)(import_node_child_process34.execFile)(process.execPath, [hookInstaller], { cwd: worktreePath, env: gitChildEnv(), timeout: 3e4, windowsHide: true });
         submodulesInitialized = true;
         if (gitUserName && gitUserEmail) {
           console.log("gitUserName is", gitUserName);
@@ -206555,7 +206613,7 @@ ${ptyResult.output.slice(-2e3)}`);
     init_mesh_routing();
     init_mesh_host_ownership();
     init_hidden_spawn();
-    var import_node_fs50 = require("fs");
+    var import_node_fs51 = require("fs");
     init_git_locale();
     var import_node_path41 = require("path");
     var PREVIEW_DEPLOY_RECORD = ".adhdev/preview-deploy.json";
@@ -206566,17 +206624,17 @@ ${ptyResult.output.slice(-2e3)}`);
     ];
     function hasDeployPreviewNpmScript(repoRoot) {
       const pkgPath = (0, import_node_path41.resolve)(repoRoot, "package.json");
-      if (!(0, import_node_fs50.existsSync)(pkgPath)) return false;
+      if (!(0, import_node_fs51.existsSync)(pkgPath)) return false;
       try {
-        const pkg = JSON.parse((0, import_node_fs50.readFileSync)(pkgPath, "utf8"));
+        const pkg = JSON.parse((0, import_node_fs51.readFileSync)(pkgPath, "utf8"));
         return typeof pkg?.scripts?.["deploy:preview"] === "string";
       } catch {
         return false;
       }
     }
     function hasPreviewDriverEvidence(repoRoot) {
-      if ((0, import_node_fs50.existsSync)((0, import_node_path41.resolve)(repoRoot, PREVIEW_DEPLOY_RECORD))) return true;
-      return PREVIEW_PIPELINE_SCRIPTS.some((rel) => (0, import_node_fs50.existsSync)((0, import_node_path41.resolve)(repoRoot, rel)));
+      if ((0, import_node_fs51.existsSync)((0, import_node_path41.resolve)(repoRoot, PREVIEW_DEPLOY_RECORD))) return true;
+      return PREVIEW_PIPELINE_SCRIPTS.some((rel) => (0, import_node_fs51.existsSync)((0, import_node_path41.resolve)(repoRoot, rel)));
     }
     function isPreviewPipelineConfigured(repoRoot) {
       return hasPreviewDriverEvidence(repoRoot) || hasDeployPreviewNpmScript(repoRoot);
@@ -206596,9 +206654,9 @@ ${ptyResult.output.slice(-2e3)}`);
     }
     function readRecord3(repoRoot) {
       const path144 = (0, import_node_path41.resolve)(repoRoot, PREVIEW_DEPLOY_RECORD);
-      if (!(0, import_node_fs50.existsSync)(path144)) return null;
+      if (!(0, import_node_fs51.existsSync)(path144)) return null;
       try {
-        const parsed = JSON.parse((0, import_node_fs50.readFileSync)(path144, "utf8"));
+        const parsed = JSON.parse((0, import_node_fs51.readFileSync)(path144, "utf8"));
         return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
       } catch {
         return null;
@@ -207457,7 +207515,7 @@ ${ptyResult.output.slice(-2e3)}`);
     }, { meshSender: "authenticated_peer" });
     init_assistant_store();
     init_drivers();
-    var import_node_fs58 = require("fs");
+    var import_node_fs59 = require("fs");
     var import_node_path47 = require("path");
     init_command_registry();
     init_worker_report();
@@ -207467,11 +207525,11 @@ ${ptyResult.output.slice(-2e3)}`);
     init_logger();
     init_config();
     var import_node_crypto73 = require("crypto");
-    var import_node_fs57 = require("fs");
+    var import_node_fs58 = require("fs");
     var import_node_path46 = require("path");
     init_installed_driver();
     var import_node_crypto72 = require("crypto");
-    var import_node_fs56 = require("fs");
+    var import_node_fs57 = require("fs");
     var import_node_path45 = require("path");
     init_manifest();
     init_activation_store();
@@ -207509,20 +207567,20 @@ ${ptyResult.output.slice(-2e3)}`);
       return `sha256:${hash3.digest("hex")}`;
     }
     function readDriverPackageDir(dir) {
-      const root = (0, import_node_fs56.lstatSync)(dir);
+      const root = (0, import_node_fs57.lstatSync)(dir);
       if (!root.isDirectory() || root.isSymbolicLink()) throw new DriverPackageError("invalid_directory", "Driver package must be a real directory");
       const out = [];
       const walk = (sub) => {
-        for (const entry of (0, import_node_fs56.readdirSync)((0, import_node_path45.join)(dir, sub), { withFileTypes: true })) {
+        for (const entry of (0, import_node_fs57.readdirSync)((0, import_node_path45.join)(dir, sub), { withFileTypes: true })) {
           if (EXCLUDED_NAMES2.has(entry.name)) continue;
           const rel = sub ? `${sub}/${entry.name}` : entry.name;
-          const stat2 = (0, import_node_fs56.lstatSync)((0, import_node_path45.join)(dir, rel));
+          const stat2 = (0, import_node_fs57.lstatSync)((0, import_node_path45.join)(dir, rel));
           if (stat2.isSymbolicLink()) throw new DriverPackageError("symlink_refused", `Symbolic link in driver package: ${rel}`);
           if (stat2.isDirectory()) walk(rel);
           else if (stat2.isFile()) {
             if (out.length >= DRIVER_BUNDLE_MAX_FILES) throw new DriverPackageError("too_many_files", `More than ${DRIVER_BUNDLE_MAX_FILES} files`);
             if (stat2.size > DRIVER_BUNDLE_MAX_FILE_BYTES) throw new DriverPackageError("file_too_large", `${rel} exceeds ${DRIVER_BUNDLE_MAX_FILE_BYTES} bytes`);
-            out.push({ path: rel, bytes: (0, import_node_fs56.readFileSync)((0, import_node_path45.join)(dir, rel)) });
+            out.push({ path: rel, bytes: (0, import_node_fs57.readFileSync)((0, import_node_path45.join)(dir, rel)) });
           } else throw new DriverPackageError("non_regular_entry", `Non-regular entry in driver package: ${rel}`);
         }
       };
@@ -207669,7 +207727,7 @@ ${lines.join("\n")}
       }
       let legacy = false;
       try {
-        legacy = (0, import_node_fs57.readdirSync)(externalRoot2, { withFileTypes: true }).some((e) => e.isDirectory() && LEGACY_CATEGORIES.has(e.name));
+        legacy = (0, import_node_fs58.readdirSync)(externalRoot2, { withFileTypes: true }).some((e) => e.isDirectory() && LEGACY_CATEGORIES.has(e.name));
       } catch {
       }
       const dest = legacy ? (0, import_node_path46.join)(externalRoot2, "driver", type2) : (0, import_node_path46.join)(externalRoot2, INSTALL_SOURCE_NAME, "driver", type2);
@@ -207683,23 +207741,23 @@ ${lines.join("\n")}
       try {
         for (const file of pkg.files) {
           const target2 = (0, import_node_path46.join)(staged, file.path);
-          (0, import_node_fs57.mkdirSync)((0, import_node_path46.dirname)(target2), { recursive: true });
-          (0, import_node_fs57.writeFileSync)(target2, file.bytes, { mode: 420 });
+          (0, import_node_fs58.mkdirSync)((0, import_node_path46.dirname)(target2), { recursive: true });
+          (0, import_node_fs58.writeFileSync)(target2, file.bytes, { mode: 420 });
         }
         if (computeDriverTreeDigest(staged) !== treeDigest) throw new DriverPackageError("bundle_digest_mismatch", "Written tree does not match the verified digest");
-        (0, import_node_fs57.mkdirSync)((0, import_node_path46.dirname)(dest), { recursive: true });
+        (0, import_node_fs58.mkdirSync)((0, import_node_path46.dirname)(dest), { recursive: true });
         const old = (0, import_node_path46.join)(work, "previous");
-        if ((0, import_node_fs57.existsSync)(dest)) (0, import_node_fs57.renameSync)(dest, old);
+        if ((0, import_node_fs58.existsSync)(dest)) (0, import_node_fs58.renameSync)(dest, old);
         try {
-          (0, import_node_fs57.renameSync)(staged, dest);
+          (0, import_node_fs58.renameSync)(staged, dest);
         } catch (error) {
-          if ((0, import_node_fs57.existsSync)(old)) (0, import_node_fs57.renameSync)(old, dest);
+          if ((0, import_node_fs58.existsSync)(old)) (0, import_node_fs58.renameSync)(old, dest);
           throw error;
         }
         return { dest, replaced };
       } finally {
         try {
-          (0, import_node_fs57.rmSync)(work, { recursive: true, force: true });
+          (0, import_node_fs58.rmSync)(work, { recursive: true, force: true });
         } catch {
         }
       }
@@ -207714,7 +207772,7 @@ ${lines.join("\n")}
       let probe = full;
       for (; ; ) {
         try {
-          (0, import_node_fs58.lstatSync)(probe);
+          (0, import_node_fs59.lstatSync)(probe);
           break;
         } catch (error) {
           if (error.code !== "ENOENT") throw error;
@@ -207723,7 +207781,7 @@ ${lines.join("\n")}
           probe = parent;
         }
       }
-      const real2 = (0, import_node_path47.relative)(root, (0, import_node_fs58.realpathSync)(probe));
+      const real2 = (0, import_node_path47.relative)(root, (0, import_node_fs59.realpathSync)(probe));
       if (real2.startsWith("..") || (0, import_node_path47.isAbsolute)(real2)) throw new DriverPackageError("path_outside_workspace", "Path resolves outside the workspace");
       return full;
     }
@@ -207738,16 +207796,16 @@ ${lines.join("\n")}
       });
       if (!ws.workspaceRoot) return { failure: fail12("workspace_unavailable", "The worker session workspace could not be resolved") };
       try {
-        return { root: (0, import_node_fs58.realpathSync)(ws.workspaceRoot) };
+        return { root: (0, import_node_fs59.realpathSync)(ws.workspaceRoot) };
       } catch {
         return { failure: fail12("workspace_unavailable", "The worker session workspace is not readable") };
       }
     }
     function readBundleFile(path144) {
-      const stat2 = (0, import_node_fs58.lstatSync)(path144);
+      const stat2 = (0, import_node_fs59.lstatSync)(path144);
       if (!stat2.isFile() || stat2.isSymbolicLink()) throw new DriverPackageError("invalid_path", "Bundle path must be a regular file");
       if (stat2.size > DRIVER_BUNDLE_MAX_JSON_BYTES) throw new DriverPackageError("package_too_large", "Bundle exceeds the 4 MiB limit");
-      return (0, import_node_fs58.readFileSync)(path144, "utf8");
+      return (0, import_node_fs59.readFileSync)(path144, "utf8");
     }
     async function fetchBundleArtifact(ctx, args) {
       const res = await artifactHandlers.artifact_fetch(ctx, args);
@@ -207789,7 +207847,7 @@ ${lines.join("\n")}
           if (typeof input.name !== "string" || !input.name.trim() || typeof input.command !== "string" || !input.command.trim() || !Array.isArray(input.actions) || !input.actions.length || input.actions.length > 100) throw new DriverPackageError("invalid_arguments", "name, command and at least one action are required");
           const dir = resolveInsideWorkspace(w.root, input.dir ?? `drivers/${input.type}`);
           try {
-            (0, import_node_fs58.lstatSync)(dir);
+            (0, import_node_fs59.lstatSync)(dir);
             throw new DriverPackageError("already_exists", "Target directory already exists");
           } catch (error) {
             if (error instanceof DriverPackageError) throw error;
@@ -207799,8 +207857,8 @@ ${lines.join("\n")}
           const pkg = verifyDriverFiles(files, { checkReferences: false });
           for (const file of pkg.files) {
             const target2 = (0, import_node_path47.join)(dir, file.path);
-            (0, import_node_fs58.mkdirSync)((0, import_node_path47.dirname)(target2), { recursive: true });
-            (0, import_node_fs58.writeFileSync)(target2, file.bytes);
+            (0, import_node_fs59.mkdirSync)((0, import_node_path47.dirname)(target2), { recursive: true });
+            (0, import_node_fs59.writeFileSync)(target2, file.bytes);
           }
           return {
             success: true,
@@ -207830,15 +207888,15 @@ ${lines.join("\n")}
           const out = resolveInsideWorkspace(w.root, args?.out ?? `driver-bundles/${pkg.report.type}.driver-bundle.json`);
           if (!out.endsWith(".json")) throw new DriverPackageError("invalid_path", "out must be a .json file (artifact kind json)");
           try {
-            const stat2 = (0, import_node_fs58.lstatSync)(out);
+            const stat2 = (0, import_node_fs59.lstatSync)(out);
             if (!stat2.isFile() || stat2.isSymbolicLink()) throw new DriverPackageError("invalid_path", "out exists and is not a regular file");
           } catch (error) {
             if (error instanceof DriverPackageError) throw error;
             if (error.code !== "ENOENT") throw error;
           }
           const text10 = encodeDriverBundle(pkg);
-          (0, import_node_fs58.mkdirSync)((0, import_node_path47.dirname)(out), { recursive: true });
-          (0, import_node_fs58.writeFileSync)(out, text10);
+          (0, import_node_fs59.mkdirSync)((0, import_node_path47.dirname)(out), { recursive: true });
+          (0, import_node_fs59.writeFileSync)(out, text10);
           const path144 = (0, import_node_path47.relative)(w.root, out);
           return {
             success: true,
@@ -207928,7 +207986,7 @@ ${lines.join("\n")}
     });
     init_assistant_session_control();
     init_mesh_host_handoff();
-    var import_node_os14 = require("os");
+    var import_node_os15 = require("os");
     init_dist();
     init_command_registry();
     init_assistant_store();
@@ -207938,7 +207996,7 @@ ${lines.join("\n")}
       const daemonId = typeof ctx.deps?.statusInstanceId === "string" ? ctx.deps.statusInstanceId : null;
       return {
         success: true,
-        machine: { daemonId, hostname: (0, import_node_os14.hostname)() },
+        machine: { daemonId, hostname: (0, import_node_os15.hostname)() },
         executionEnabled: s2.enabled,
         restriction: assistantExecution.toolRestriction() ?? "prompt_only",
         supportedActions: ["local_pty_approve", "local_pty_reject"],
@@ -208946,9 +209004,9 @@ ${lines.join("\n")}
     init_dist();
     init_owned_lock();
     var import_session_host_core14 = require_dist();
-    var import_node_fs59 = require("fs");
+    var import_node_fs60 = require("fs");
     async function readPersistedRuntimeRecord(file) {
-      const stream = (0, import_node_fs59.createReadStream)(file, { encoding: "utf8", highWaterMark: 16 * 1024 });
+      const stream = (0, import_node_fs60.createReadStream)(file, { encoding: "utf8", highWaterMark: 16 * 1024 });
       let text10 = "", cursor = 0, start = -1, depth = 0;
       let quoted = false, escaped = false;
       try {
@@ -209204,7 +209262,7 @@ ${lines.join("\n")}
     init_worker_private_home();
     init_mcp_tool_allow();
     var import_node_crypto77 = require("crypto");
-    var import_node_fs60 = require("fs");
+    var import_node_fs61 = require("fs");
     var os41 = __toESM2(require("os"));
     var import_node_path50 = require("path");
     init_mesh_coordinator_config();
@@ -209268,7 +209326,7 @@ ${lines.join("\n")}
       return contents.split(/\r?\n/).some((line) => line.trim() === needle);
     }
     init_assistant_launch_plan();
-    var O_NOFOLLOW_FLAG = typeof import_node_fs60.constants.O_NOFOLLOW === "number" ? import_node_fs60.constants.O_NOFOLLOW : 0;
+    var O_NOFOLLOW_FLAG = typeof import_node_fs61.constants.O_NOFOLLOW === "number" ? import_node_fs61.constants.O_NOFOLLOW : 0;
     function unsafePathError(message) {
       return new Error(`assistant_unsafe_path: ${message}`);
     }
@@ -209285,7 +209343,7 @@ ${lines.join("\n")}
     }
     function lstatOrNull(targetPath) {
       try {
-        return (0, import_node_fs60.lstatSync)(targetPath);
+        return (0, import_node_fs61.lstatSync)(targetPath);
       } catch (err2) {
         if (err2?.code === "ENOENT") return null;
         throw err2;
@@ -209298,7 +209356,7 @@ ${lines.join("\n")}
         const p = (0, import_node_path50.join)(home, rel);
         candidates.push((0, import_node_path50.resolve)(p));
         try {
-          candidates.push((0, import_node_fs60.realpathSync)(p));
+          candidates.push((0, import_node_fs61.realpathSync)(p));
         } catch {
         }
       }
@@ -209323,7 +209381,7 @@ ${lines.join("\n")}
       }
       let rootStat = lstatOrNull(resolvedRoot);
       if (!rootStat) {
-        (0, import_node_fs60.mkdirSync)(resolvedRoot, { recursive: true, mode: 448 });
+        (0, import_node_fs61.mkdirSync)(resolvedRoot, { recursive: true, mode: 448 });
         rootStat = lstatOrNull(resolvedRoot);
       }
       if (!rootStat || rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
@@ -209339,7 +209397,7 @@ ${lines.join("\n")}
         cursor = (0, import_node_path50.join)(cursor, seg);
         let stat2 = lstatOrNull(cursor);
         if (!stat2) {
-          (0, import_node_fs60.mkdirSync)(cursor, { mode: 448 });
+          (0, import_node_fs61.mkdirSync)(cursor, { mode: 448 });
           stat2 = lstatOrNull(cursor);
         }
         if (!stat2 || stat2.isSymbolicLink() || !stat2.isDirectory()) {
@@ -209347,8 +209405,8 @@ ${lines.join("\n")}
         }
         assertOwnedByCurrentUser(stat2, cursor);
       }
-      const realRoot = (0, import_node_fs60.realpathSync)(resolvedRoot);
-      const realTarget = (0, import_node_fs60.realpathSync)(resolvedTarget);
+      const realRoot = (0, import_node_fs61.realpathSync)(resolvedRoot);
+      const realTarget = (0, import_node_fs61.realpathSync)(resolvedTarget);
       if (realTarget !== realRoot && !realTarget.startsWith(realRoot + import_node_path50.sep)) {
         throw unsafePathError(`canonical directory ${realTarget} escapes canonical root ${realRoot}`);
       }
@@ -209382,17 +209440,17 @@ ${lines.join("\n")}
       }
       let fd = null;
       try {
-        fd = (0, import_node_fs60.openSync)(canonicalFilePath, import_node_fs60.constants.O_RDONLY | O_NOFOLLOW_FLAG);
-        const fstat = (0, import_node_fs60.fstatSync)(fd);
+        fd = (0, import_node_fs61.openSync)(canonicalFilePath, import_node_fs61.constants.O_RDONLY | O_NOFOLLOW_FLAG);
+        const fstat = (0, import_node_fs61.fstatSync)(fd);
         if (!fstat.isFile() || fstat.nlink > 1 || fstat.ino !== lstat2.ino || fstat.dev !== lstat2.dev) {
           throw unsafePathError(`config file ${canonicalFilePath} changed or failed descriptor verification on open`);
         }
         assertOwnedByCurrentUser(fstat, canonicalFilePath);
-        const realFile = (0, import_node_fs60.realpathSync)(canonicalFilePath);
+        const realFile = (0, import_node_fs61.realpathSync)(canonicalFilePath);
         if (realFile !== canonicalFilePath || (0, import_node_path50.dirname)(realFile) !== expectedRealParent) {
           throw unsafePathError(`canonical config file ${realFile} does not match expected ${canonicalFilePath}`);
         }
-        const content = (0, import_node_fs60.readFileSync)(fd, "utf-8");
+        const content = (0, import_node_fs61.readFileSync)(fd, "utf-8");
         return {
           exists: true,
           content,
@@ -209404,7 +209462,7 @@ ${lines.join("\n")}
       } finally {
         if (fd !== null) {
           try {
-            (0, import_node_fs60.closeSync)(fd);
+            (0, import_node_fs61.closeSync)(fd);
           } catch {
           }
         }
@@ -209433,12 +209491,12 @@ ${lines.join("\n")}
         let tmpFd = null;
         let renamed2 = false;
         try {
-          tmpFd = (0, import_node_fs60.openSync)(
+          tmpFd = (0, import_node_fs61.openSync)(
             tmpPath,
-            import_node_fs60.constants.O_CREAT | import_node_fs60.constants.O_EXCL | import_node_fs60.constants.O_WRONLY | O_NOFOLLOW_FLAG,
+            import_node_fs61.constants.O_CREAT | import_node_fs61.constants.O_EXCL | import_node_fs61.constants.O_WRONLY | O_NOFOLLOW_FLAG,
             384
           );
-          const tmpStat = (0, import_node_fs60.fstatSync)(tmpFd);
+          const tmpStat = (0, import_node_fs61.fstatSync)(tmpFd);
           if (!tmpStat.isFile() || tmpStat.nlink !== 1) {
             throw unsafePathError(`temporary config file ${tmpPath} is not an isolated regular file`);
           }
@@ -209446,14 +209504,14 @@ ${lines.join("\n")}
           const buf = Buffer.from(next, "utf-8");
           let offset = 0;
           while (offset < buf.length) {
-            const writtenBytes = options.onWriteTempChunkForTest ? options.onWriteTempChunkForTest(tmpFd, buf, offset) : (0, import_node_fs60.writeSync)(tmpFd, buf, offset, buf.length - offset);
+            const writtenBytes = options.onWriteTempChunkForTest ? options.onWriteTempChunkForTest(tmpFd, buf, offset) : (0, import_node_fs61.writeSync)(tmpFd, buf, offset, buf.length - offset);
             if (!Number.isInteger(writtenBytes) || writtenBytes <= 0) {
               throw new Error("EIO: short or zero-byte write while writing temporary assistant config");
             }
             offset += writtenBytes;
           }
-          (0, import_node_fs60.fsyncSync)(tmpFd);
-          (0, import_node_fs60.closeSync)(tmpFd);
+          (0, import_node_fs61.fsyncSync)(tmpFd);
+          (0, import_node_fs61.closeSync)(tmpFd);
           tmpFd = null;
           options.onBeforeRenameForTest?.(attempt, canonicalFilePath, tmpPath);
           const recheckedParent = ensurePrivateAssistantDirectoryChain(options.rootDir, parentDir);
@@ -209464,7 +209522,7 @@ ${lines.join("\n")}
           const changedConcurrently = preRenameSnapshot.exists !== snapshot.exists || snapshot.exists && (preRenameSnapshot.ino !== snapshot.ino || preRenameSnapshot.dev !== snapshot.dev || preRenameSnapshot.size !== snapshot.size || preRenameSnapshot.mtimeMs !== snapshot.mtimeMs || preRenameSnapshot.content !== snapshot.content);
           if (changedConcurrently) {
             try {
-              (0, import_node_fs60.unlinkSync)(tmpPath);
+              (0, import_node_fs61.unlinkSync)(tmpPath);
             } catch {
             }
             if (attempt + 1 < maxRetries) {
@@ -209472,18 +209530,18 @@ ${lines.join("\n")}
             }
             throw conflictError(`concurrent modification detected on ${canonicalFilePath} after ${maxRetries} attempts`);
           }
-          (0, import_node_fs60.renameSync)(tmpPath, canonicalFilePath);
+          (0, import_node_fs61.renameSync)(tmpPath, canonicalFilePath);
           renamed2 = true;
           if (process.platform !== "win32") {
             let dirFd = null;
             try {
-              dirFd = (0, import_node_fs60.openSync)(realParent, import_node_fs60.constants.O_RDONLY | O_NOFOLLOW_FLAG);
-              (0, import_node_fs60.fsyncSync)(dirFd);
+              dirFd = (0, import_node_fs61.openSync)(realParent, import_node_fs61.constants.O_RDONLY | O_NOFOLLOW_FLAG);
+              (0, import_node_fs61.fsyncSync)(dirFd);
             } catch {
             } finally {
               if (dirFd !== null) {
                 try {
-                  (0, import_node_fs60.closeSync)(dirFd);
+                  (0, import_node_fs61.closeSync)(dirFd);
                 } catch {
                 }
               }
@@ -209493,13 +209551,13 @@ ${lines.join("\n")}
         } finally {
           if (tmpFd !== null) {
             try {
-              (0, import_node_fs60.closeSync)(tmpFd);
+              (0, import_node_fs61.closeSync)(tmpFd);
             } catch {
             }
           }
           if (!renamed2) {
             try {
-              (0, import_node_fs60.unlinkSync)(tmpPath);
+              (0, import_node_fs61.unlinkSync)(tmpPath);
             } catch {
             }
           }
@@ -211316,7 +211374,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       }
     }
     var fs123 = __toESM2(require("fs"));
-    var import_node_os15 = require("os");
+    var import_node_os16 = require("os");
     var import_path48 = require("path");
     init_logger();
     init_git_locale();
@@ -211459,7 +211517,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     }
     var TRACK_CONFIG_DIR_NAMES = [".adhdev", ".adhdev-preview"];
     function looksLikeCrossTrackWorktreePath(actualPath, normalizePath2) {
-      const home = normalizePath2((0, import_node_os15.homedir)());
+      const home = normalizePath2((0, import_node_os16.homedir)());
       return TRACK_CONFIG_DIR_NAMES.some((trackDirName) => {
         const trackWorktreesDir = (0, import_path48.join)(home, trackDirName, "worktrees");
         return actualPath === normalizePath2(trackWorktreesDir) || actualPath.startsWith(normalizePath2(trackWorktreesDir) + import_path48.sep);
@@ -213704,7 +213762,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     init_logger();
     init_mask_daemon_id();
     init_mesh_host_endpoints();
-    var import_node_os16 = require("os");
+    var import_node_os17 = require("os");
     var MESH_JOIN_TRANSPORT = Object.freeze({
       wsPath: MESH_RPC_WS_PATH,
       seqscribePath: MESH_SEQSCRIBE_WS_PATH,
@@ -213744,7 +213802,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       if (!listen) return {};
       let interfaces = {};
       try {
-        interfaces = (0, import_node_os16.networkInterfaces)();
+        interfaces = (0, import_node_os17.networkInterfaces)();
       } catch {
       }
       return computeMeshHostAddressCandidates(listen, interfaces);
@@ -239590,10 +239648,10 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     init_fsm_evaluator();
     init_fsm_loader();
     var crypto23 = __toESM2(require("crypto"));
-    var import_node_fs61 = require("fs");
+    var import_node_fs62 = require("fs");
     var import_node_path51 = require("path");
     init_provider_cli_shared();
-    var import_node_fs62 = require("fs");
+    var import_node_fs63 = require("fs");
     var import_node_path52 = require("path");
     init_manifest();
     var V1_PRIMITIVE_CATALOG = Object.freeze({
@@ -241269,7 +241327,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     init_mesh_runtime_store();
     init_logger();
     init_config();
-    var import_node_fs63 = require("fs");
+    var import_node_fs64 = require("fs");
     init_logger();
     var LEGACY_OWNER_MARKER = "operator-recovery-owner";
     var LEGACY_LOCK_RECLAIM_MIN_AGE_MS = 10 * 6e4;
@@ -241280,7 +241338,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       try {
         let st;
         try {
-          st = (0, import_node_fs63.lstatSync)(lock);
+          st = (0, import_node_fs64.lstatSync)(lock);
         } catch (e) {
           if (e.code === "ENOENT") return { reclaimed: false, reason: "absent" };
           throw e;
@@ -241288,8 +241346,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (!st.isDirectory()) return { reclaimed: false, reason: "not_directory" };
         const ageMs2 = now - st.mtimeMs;
         if (!(ageMs2 > minAgeMs)) return { reclaimed: false, reason: "fresh" };
-        if ((0, import_node_fs63.readdirSync)(lock).length > 0) return { reclaimed: false, reason: "has_contents" };
-        (0, import_node_fs63.rmdirSync)(lock);
+        if ((0, import_node_fs64.readdirSync)(lock).length > 0) return { reclaimed: false, reason: "has_contents" };
+        (0, import_node_fs64.rmdirSync)(lock);
         LOG.warn("MeshConfig", `Removed abandoned legacy mesh write lock ${lock} (age ${Math.round(ageMs2 / 1e3)}s, no ${LEGACY_OWNER_MARKER} marker); left by a crashed older ADHDev version`);
         return { reclaimed: true, ageMs: ageMs2 };
       } catch (e) {
@@ -246533,7 +246591,7 @@ var isStageBlockedReason = makeGuard4(STAGE_BLOCKED_REASONS);
 var isRecord4 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 function resolveStagePlan(raw, task, opts = {}) {
   const eligible = isStageEligibleTask(task);
-  if (raw === void 0 || raw === null) return (opts.defaultOn ?? true) && defaultsOnFor(task) ? defaultStagePlan() : null;
+  if (raw === void 0 || raw === null) return (opts.defaultOn ?? false) && defaultsOnFor(task) ? defaultStagePlan() : null;
   if (raw === false) return null;
   if (raw === true) {
     if (!eligible) throw new Error(`invalid_review_option: review requires a non-readonly code_change task (got taskMode=${task.taskMode ?? "unset"}${task.readonly ? ", readonly" : ""})`);
@@ -249623,7 +249681,7 @@ var MESH_ENQUEUE_TASK_TOOL = {
       depends_on: { type: "array", items: { type: "string" }, description: "Task ids that must finish first; summaries appended. Cycles rejected." },
       input_artifact_ids: { type: "array", items: { type: "string" }, description: "Artifact ids this task may read (any mission)." },
       inherit_artifacts: { type: "boolean", description: "Default true: mission tasks also get the \u226412 newest earlier same-mission artifacts; false = off." },
-      review: { type: ["boolean", "object"], description: "In-task review; default on for medium/difficult code_change. false=off." },
+      review: { type: ["boolean", "object"], description: "In-task review; off by default. true=on." },
       mission_id: { type: "string", description: "Full mission id; unknown id rejected." },
       priority: { ...enumOf(MESH_TASK_PRIORITIES), description: "high jumps older normal/low work; default normal." },
       model: { type: "string", description: "Model override, e.g. opus (best-effort)." },
@@ -249662,7 +249720,7 @@ var MESH_ENQUEUE_BATCH_TOOL = {
             depends_on: { type: "array", items: { type: "string" }, description: "Sibling refs and/or existing task ids that must complete first." },
             input_artifact_ids: { type: "array", items: { type: "string" }, description: "Artifact ids this task may read (any mission)." },
             inherit_artifacts: { type: "boolean", description: "As mesh_enqueue_task: false opts out of same-mission artifact auto-inherit." },
-            review: { type: ["boolean", "object"], description: "As mesh_enqueue_task: review-in-task option (default on for medium/difficult code_change)." },
+            review: { type: ["boolean", "object"], description: "As mesh_enqueue_task: review-in-task option (off by default; true to opt in)." },
             mission_id: { type: "string", description: "Overrides the top-level mission_id." },
             priority: enumOf(MESH_TASK_PRIORITIES),
             model: { type: "string" },

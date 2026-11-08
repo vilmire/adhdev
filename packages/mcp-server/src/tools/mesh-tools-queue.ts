@@ -340,8 +340,8 @@ async function normalizeEnqueueTaskArgs(
     const rawInputArtifactIds = args.inputArtifactIds ?? args.input_artifact_ids;
     const inputArtifactIds = Array.isArray(rawInputArtifactIds) ? (rawInputArtifactIds as string[]) : undefined;
     const inheritArtifacts = (args.inheritArtifacts ?? args.inherit_artifacts) === false ? false as const : undefined;
-    // Review-in-task (docs/design/2026-11-01-review-in-task.md §9.1, R5): resolve the option (and its
-    // medium/difficult code_change default) here, so the daemon only ever sees an explicit decision.
+    // Review-in-task (docs/design/2026-11-01-review-in-task.md §9.1): resolve the option here (off unless asked,
+    // owner decision 2026-11-08), so the daemon only ever sees an explicit decision.
     let review: NormalizedEnqueueTaskArgs['review'];
     // A light task works in a private worktree that no reviewer session can be launched into yet, so in-task review
     // can never start for it: no default, and an explicit request is refused instead of stalling the task later.

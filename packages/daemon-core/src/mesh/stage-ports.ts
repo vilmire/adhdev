@@ -71,6 +71,8 @@ export interface StageQueuePort {
     /** Re-dispatch the parent with a revise memo: same session when alive, else same provider. */
     requeueForRevision(parent: MeshWorkQueueEntry, memo: string, opts: { sameSessionId?: string; inputArtifactIds: string[] }): void;
     sessionAlive(sessionId: string | undefined): boolean;
+    /** Whether a live session could claim a task of this difficulty (owner slot floor). Absent = no floor check. */
+    sessionMeetsDifficulty?(meshId: string, sessionId: string, difficulty: 'medium' | 'difficult'): boolean;
 }
 
 export interface StageEventPort {

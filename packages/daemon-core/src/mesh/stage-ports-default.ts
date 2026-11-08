@@ -37,6 +37,8 @@ import { loadLightWorkspaceConfig } from './light-workspace-config.js';
 import { attestStageReviewInput, stageReviewArtifactGrantsWithheld, currentStageReviewScope } from './stage-review-input.js';
 import { reviewInputBusy } from './mesh-task-routing-contract.js';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
+import { allowedClassifiedDifficultiesForSession, readSessionModel, taskMeetsSessionDifficultyFloor } from './mesh-difficulty-floor.js';
+import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 
 const SELF_CHECK_LOG_MAX = 60_000;
 
@@ -359,6 +361,19 @@ export function createProductionStagePorts(components: Pick<DaemonComponents, 's
             sessionAlive: sessionId => {
                 if (!sessionId) return false;
                 try { return !!(components.sessionRegistry?.has(sessionId) || components.instanceManager?.getInstance?.(sessionId)); } catch { return false; }
+            },
+            sessionMeetsDifficulty: (meshId, sessionId, difficulty) => {
+                try {
+                    const state: any = components.instanceManager?.getInstance?.(sessionId)?.getState?.();
+                    if (!state) return true; // not observable here: let the claim side judge, as before
+                    const settings = state.settings || {};
+                    const nodeId = String(settings.meshNodeId || settings.nodeId || '');
+                    const node = getMesh(meshId)?.nodes?.find(n => daemonIdsEquivalent(n.id, nodeId));
+                    if (!node) return true;
+                    const providerType = String(state.type || settings.providerType || '');
+                    const allowed = allowedClassifiedDifficultiesForSession(node, resolveNodeCapabilitySlots(node, meshId), providerType, readSessionModel(state));
+                    return taskMeetsSessionDifficultyFloor({ difficulty }, allowed);
+                } catch { return true; }
             },
         },
         events: {

@@ -331,7 +331,11 @@ export class StagePipelineRuntime {
                 const ws = workspace && head
                     ? await this.ports.reviewerWorkspace.prepare({ meshId, parentTaskId: id, reviewTaskId: reviewId, round: effect.round, rootSha: head, baseSha: st.baseSha, sourceWorkspace: workspace })
                     : null;
-                const reuse = effect.reuseSessionId && this.ports.queue.sessionAlive(effect.reuseSessionId) ? effect.reuseSessionId : undefined;
+                // Reuse the prior reviewer only when it can actually claim this round: a session below the
+                // review's difficulty floor would sit pinned, never claim, and park the review after the TTL.
+                const reviewDifficulty = parent.difficulty === 'difficult' ? 'difficult' as const : 'medium' as const;
+                const reuse = effect.reuseSessionId && this.ports.queue.sessionAlive(effect.reuseSessionId)
+                    && (this.ports.queue.sessionMeetsDifficulty?.(meshId, effect.reuseSessionId, reviewDifficulty) ?? true) ? effect.reuseSessionId : undefined;
                 const stash = peekStageReport(meshId, id);
                 const msg = buildReviewerMessage({
                     originalMessage: st.originalMessage ?? parent.message, implementerSummary: stash?.summary ?? '(see artifacts)', round: effect.round,

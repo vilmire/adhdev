@@ -40,7 +40,7 @@ function harness(opts: { maxRevisions?: 0 | 1 | 2 | 3; selfChecks?: SelfCheckRes
             listStageParents: () => [...rows.values()].filter(r => r.stagePlan),
             enqueueReviewChild: (p, spec) => {
                 const id = `${p.id}:child${rows.size}`;
-                const c: MeshWorkQueueEntry = { id, meshId: MESH, message: spec.message, status: 'pending', origin: 'stage', parentTaskId: p.id, stageRole: 'review', stageRound: spec.round, inputArtifactIds: spec.inputArtifactIds, readonly: true, review: { sourceTaskId: p.id, independence: spec.independence }, ...(spec.reviewerWorkspace ? { reviewerWorkspace: spec.reviewerWorkspace } : {}), createdAt: '', updatedAt: '' };
+                const c: MeshWorkQueueEntry = { id, meshId: MESH, message: spec.message, status: 'pending', origin: 'stage', parentTaskId: p.id, stageRole: 'review', stageRound: spec.round, inputArtifactIds: spec.inputArtifactIds, readonly: true, review: { sourceTaskId: p.id, independence: spec.independence }, ...(spec.reviewerWorkspace ? { reviewerWorkspace: spec.reviewerWorkspace } : {}), ...(spec.targetSessionId ? { targetSessionId: spec.targetSessionId } : {}), createdAt: '', updatedAt: '' };
                 rows.set(id, c); return c;
             },
             cancel: (_m, id, reason) => { const e = rows.get(id); if (e) { e.status = 'cancelled'; e.cancelReason = reason; } log.cancelled.push(id); },
@@ -177,6 +177,22 @@ describe('stage pipeline runtime', () => {
         await h.review({ verdict: 'approve_with_nits', findings: [h.f('n1', 'nit')], priorFindings: [{ id: 'f1', status: 'resolved' }] });
         expect(h.log.commits).toHaveLength(1);
         expect(h.log.commits[0].text).toMatch(/2 rounds.*1 finding fixed, 1 nit open/);
+    });
+
+    // Live 2026-11-08: round 2 was pinned to the round-1 reviewer, which sat below the review's difficulty
+    // floor, never claimed, and parked the review after the pin TTL (task idle for 2h).
+    it('pins the next round to the prior reviewer only when that session can claim its difficulty', async () => {
+        for (const meets of [true, false]) {
+            const h = harness();
+            h.ports.queue.sessionMeetsDifficulty = () => meets;
+            await h.implDone('a1');
+            const c = h.lastChild(); c.status = 'assigned'; c.assignedSessionId = 'rev-s';
+            await h.rt.onChildClaimed(MESH, c.id); await h.rt.idle();
+            await h.review({ verdict: 'changes_requested', findings: [h.f('f1')] });
+            await h.implDone('a2', 'fixed it');
+            expect(h.lastChild().stageRound).toBe(2);
+            expect(h.lastChild().targetSessionId).toBe(meets ? 'rev-s' : undefined);
+        }
     });
 
     it('claiming the review child moves the parent awaiting_review → reviewing and records the reviewer session', async () => {

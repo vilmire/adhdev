@@ -68,10 +68,14 @@ describe('validateFindingResponses', () => {
     })
 })
 
-describe('resolveStagePlan (R5 defaults)', () => {
-    it('is on by default for medium/difficult code_change only', () => {
-        expect(resolveStagePlan(undefined, { taskMode: 'code_change', difficulty: 'medium' })).toMatchObject({ review: true, maxRevisions: 2, independence: 'fresh_session_ok' })
-        expect(resolveStagePlan(undefined, { taskMode: 'code_change', difficulty: 'difficult' })).not.toBeNull()
+describe('resolveStagePlan (opt-in review)', () => {
+    it('is off by default; defaultOn restores the medium/difficult code_change default', () => {
+        // Owner decision 2026-11-08: review is opt-in — an unset option never starts a pipeline.
+        expect(resolveStagePlan(undefined, { taskMode: 'code_change', difficulty: 'medium' })).toBeNull()
+        expect(resolveStagePlan(undefined, { taskMode: 'code_change', difficulty: 'difficult' })).toBeNull()
+        expect(resolveStagePlan(true, { taskMode: 'code_change', difficulty: 'medium' })).toMatchObject({ review: true, maxRevisions: 2, independence: 'fresh_session_ok' })
+        expect(resolveStagePlan(undefined, { taskMode: 'code_change', difficulty: 'medium' }, { defaultOn: true })).toMatchObject({ review: true, maxRevisions: 2, independence: 'fresh_session_ok' })
+        expect(resolveStagePlan(undefined, { taskMode: 'code_change', difficulty: 'difficult' }, { defaultOn: true })).not.toBeNull()
         expect(resolveStagePlan(undefined, { taskMode: 'code_change', difficulty: 'easy' })).toBeNull()
         expect(resolveStagePlan(undefined, { taskMode: 'code_change', difficulty: 'freeform' })).toBeNull()
         expect(resolveStagePlan(undefined, { taskMode: 'validation', difficulty: 'medium' })).toBeNull()
