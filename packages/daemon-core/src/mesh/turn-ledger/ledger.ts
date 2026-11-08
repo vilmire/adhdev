@@ -199,7 +199,7 @@ export interface TurnLedger {
     counters(): TurnLedgerCounters;
 }
 
-const REPORT_GATE_RULES: ReadonlySet<string> = new Set(['R9r', 'R15p', 'R12r', 'R13r', 'R13d', 'R13u', 'R13x', 'R13z', 'R13c', 'R17c', 'R17g', 'R9t', 'R13t']);
+const REPORT_GATE_RULES: ReadonlySet<string> = new Set(['R9r', 'R15p', 'R12r', 'R13r', 'R13d', 'R13m', 'R13u', 'R13x', 'R13z', 'R13c', 'R17c', 'R17g', 'R9t', 'R13t']);
 
 const DEFAULT_LOG: TurnLedgerLog = { info: () => {}, warn: () => {}, error: () => {} };
 const PUBLISH_BATCH = 256;
@@ -222,6 +222,8 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
     // This capability exists only around a validated reply from the locally
     // configured stop port. Received topics and operator evidence cannot mint it.
     const confirmedStops = new Set<string>();
+    // Subset of the above whose quiescence came from the force-end bound (recorded as settledBy 'forced').
+    const forcedStops = new Set<string>();
     // Same capability shape for a bounded-unreachable settlement (see settleUnreachableWriter).
     const unreachableSettles = new Map<string, 'unreachable_bound' | 'node_removed'>();
     const store = deps.store ?? new TurnStore(deps.db);
@@ -243,7 +245,7 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
     const stopInspectDelayMs = (unsettled: number): number =>
         unsettled <= 3 ? 0 : Math.min(STOP_INSPECT_BACKOFF_CAP_MS, STOP_INSPECT_BACKOFF_BASE_MS * 2 ** (unsettled - 4));
 
-    function settleWriterStop(request: CancelDispatchRequest, receipt: unknown): void {
+    function settleWriterStop(request: CancelDispatchRequest, receipt: unknown, forced = false): void {
         const r = receipt as Record<string, unknown> | null;
         const current = store.getAttempt(request.attemptId);
         if (!r || r.success !== true || r.quiescent !== true || typeof r.incarnation !== 'string' || !r.incarnation
@@ -265,13 +267,52 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
             && (typeof evidence.hostBootId !== 'string' || !evidence.hostBootId.trim())) return;
         const eventId = `writer_settled:${request.stopRequestId}:${randomUUID()}`;
         confirmedStops.add(eventId);
+        if (forced) forcedStops.add(eventId);
         try {
             const settled = observe({ eventId, kind: 'operator_status', source: 'scheduler', at: now(),
                 observedBy: deps.selfDaemonId, sessionId: request.sessionId,
                 attemptRef: { attemptId: request.attemptId, generation: request.generation },
                 status: 'failed', reason: 'operator_update' }, { writerStopReceipt: r });
             if (settled.rule === 'writer_settled') ports.revokeWorkerBind?.(request);
-        } finally { confirmedStops.delete(eventId); }
+        } finally { confirmedStops.delete(eventId); forcedStops.delete(eventId); }
+    }
+
+    /**
+     * Past `stoppingForceAfterMs` a stopping attempt must end: ask the host to force-stop the writer
+     * and settle either way. A success settles as quiescent (the stored terminal outcome is kept, a
+     * reclaim cause requeues); anything else settles through the unreachable path. One coordinator
+     * notice per stop request. Returns true when the attempt left `stopping`.
+     */
+    async function forceSettle(a: TurnAttempt, base: CancelDispatchRequest): Promise<boolean> {
+        const stop = a.data.writerStop;
+        if (!stop || !ports.forceStopWriter) return false;
+        const request: CancelDispatchRequest = { ...base, inspectOnly: false, force: true };
+        let receipt: unknown;
+        let forceError: unknown;
+        try { receipt = await ports.forceStopWriter(request); }
+        catch (error) { forceError = error; }
+        const answer = receipt as Record<string, unknown> | null | undefined;
+        let ended = false;
+        if (answer && typeof answer === 'object' && answer.success === true) {
+            settleWriterStop(request, { ...request, ...answer, success: true, quiescent: true,
+                incarnation: typeof answer.incarnation === 'string' && answer.incarnation ? answer.incarnation
+                    : createHash('sha256').update(`forced:${stop.requestId}`).digest('hex') }, true);
+            ended = store.getAttempt(a.attemptId)?.state !== 'stopping';
+        }
+        const how = ended ? 'forced_stop' : 'forced_unreachable';
+        if (!ended) {
+            log.warn(`turn-ledger: forced stop of ${a.attemptId} not confirmed (${forceError ? String(forceError) : String(answer?.reason ?? 'refused')}); settling`);
+            ended = settleUnreachable(a, 'unreachable_bound');
+        }
+        if (a.meshId && a.ownerDaemonId) {
+            try {
+                notifyMeshEvent({ meshId: a.meshId, event: 'writer_stop_forced', targetDaemonId: a.ownerDaemonId,
+                    ...(a.taskId ? { taskId: a.taskId } : {}),
+                    attemptId: a.attemptId, eventId: `writer_forced:${stop.requestId}`,
+                    payload: { sessionId: a.sessionId, how, afterMs: now() - stop.requestedAt } });
+            } catch (error) { log.warn(`turn-ledger: forced-stop notice failed: ${String(error)}`); }
+        }
+        return ended;
     }
 
     // First time (this process) a stopping attempt's writer node was seen unreachable; any
@@ -379,6 +420,7 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
         else if (rule === 'R15p') log.info(`turn-ledger: transcript of ${who} reads finished but the worker has not ended its turn — awaiting the worker report (await_report hold ${Math.round(policy.awaitReportMs / 1000)}s)`);
         else if (rule === 'R12r') log.info(`turn-ledger: false idle: worker resumed — ${who} back to generating (falseIdleCount=${attempt.data.falseIdleCount ?? 0})`);
         else if (rule === 'R17c') log.info(`turn-ledger: invalid report for ${who} has a fixed correction deadline ${attempt.data.reportCorrection?.until ?? '?'}`);
+        else if (rule === 'R13m') log.info(`turn-ledger: ${who} still filed no report after the nudge — accepted as a weak completion (report_missing_timeout)`);
         else if (rule === 'R13d') log.info(`turn-ledger: direct worker ${who} has no accepted report — incomplete; recover report_completion for this attempt`);
         else if (rule === 'R13c') log.info(`turn-ledger: correction deadline of ${who} expired — failed, no report recovery accepted`);
         else if (rule === 'R13z') log.info(`turn-ledger: probe deadline of ${who} expired without a fresh observation — failed inconclusive, not completed`);
@@ -439,7 +481,14 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
                 }
             }
         }
+        // A generating worker holding a live (unreleased) background process is working, not hung:
+        // the stall ceiling re-arms instead of reclaiming (the background guard releases a truly idle one).
+        const stallWithLiveBackgroundWork = !!attempt && evidence.kind === 'hold_expired' && evidence.reason === 'stall_ceiling'
+            && deps.backgroundWorkReleased?.(attempt.attemptId, attempt.generation) !== true
+            && (deps.inspectBackgroundProcesses?.(evidence.sessionId, { startedAfterMs: backgroundWorkBaselineMs(attempt) })?.length ?? 0) > 0;
         let result = reduce({ attempt, holds, evidence, policy, nowMs, stopConfirmed: confirmedStops.has(evidence.eventId),
+            ...(stallWithLiveBackgroundWork ? { backgroundWorkLive: true } : {}),
+            ...(forcedStops.has(evidence.eventId) ? { writerForced: true } : {}),
             ...(unreachableSettles.has(evidence.eventId) ? { writerUnreachable: unreachableSettles.get(evidence.eventId)! } : {}) });
         if (triggerBackgroundWorkProbe && attempt) {
             result = {
@@ -781,6 +830,18 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
                 if ((attemptId && a.attemptId !== attemptId) || a.state !== 'stopping' || !a.data.writerStop) continue;
                 const backoffKey = `${a.attemptId}:${a.data.writerStop.requestId}`;
                 stillStopping.add(backoffKey);
+                // Bounded wait: past the force bound the stop is forced and settled, never retried again.
+                if (ports.forceStopWriter && policy.stoppingForceAfterMs > 0
+                    && nowMs - a.data.writerStop.requestedAt >= policy.stoppingForceAfterMs) {
+                    const base: CancelDispatchRequest = { attemptId: a.attemptId, generation: a.generation,
+                        sessionId: a.sessionId, meshId: a.meshId, taskId: a.taskId, nodeId: a.nodeId,
+                        dispatchNonce: a.dispatchNonce, providerType: a.providerType, ownerDaemonId: a.ownerDaemonId,
+                        messageId: a.messageId, revokeBind: false, stopRequestId: a.data.writerStop.requestId };
+                    if (await forceSettle(a, base)) {
+                        stopInspectBackoff.delete(backoffKey); unreachableSince.delete(backoffKey); removedSeen.delete(backoffKey);
+                        continue;
+                    }
+                }
                 // Repeated unsettled inspections back off; an explicit attempt is probed now.
                 const backoff = stopInspectBackoff.get(backoffKey);
                 if (!attemptId && backoff && nowMs < backoff.nextDueAt) continue;

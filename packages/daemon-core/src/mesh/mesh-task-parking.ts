@@ -42,14 +42,24 @@ export function __resetTargetPinClearedMetricsForTests(): void {
 //   - TTL EXPIRY (the RC.20 rule) cleared the pin and made the row claimable by
 //     ANY compatible session.
 //
-// The owner's decision (2026-08-19) is that the first path is right and the
+// The owner's 2026-08-19 decision was that the first path is right and the
 // second is worse than dropping the task outright. A task pinned with
 // targetSessionId is, by construction, a DELTA — a correction addressed to work
 // already in flight in one specific session's context ("also handle the null
 // case in the function you just wrote"). Handing that to a different session
-// does not degrade to "delivered late"; it degrades to a context-free
-// instruction landing on unrelated work. A silent succession is an incorrect
-// delivery wearing the costume of a successful one.
+// immediately does not degrade to "delivered late"; it degrades to a context-free
+// instruction landing on unrelated work.
+//
+// ★ OWNER REVERSAL (2026-11-09): progress by default, unpin after the bound. The
+// 2026-08-19 rule "never re-home a delta to another session" left work waiting up
+// to 24h for a coordinator that was busy. The default is now: a pin-derived park
+// (PARK_REASON_PIN_EXPIRED, or `owner_hard_pin_unavailable:*`) that nobody
+// resolved within {@link PARK_AUTO_UNPIN_MS} is UNPINNED by the reconcile scan and
+// returned to the claimable pool, with one coordinator notice saying so. Parking
+// itself is unchanged and still gives the coordinator that window to re-target,
+// re-word or cancel first. The unpin does not spend the retry budget. Parks that
+// are not pin-derived (spawn-cap / dispatch-failure-cap) are NOT auto-unpinned:
+// they mean launching itself is broken and re-opening them would just loop.
 //
 // So the expiry now moves the row to PARKED: still durable, still addressed,
 // but claimable by nobody until the coordinator decides. Parking preserves the
@@ -95,6 +105,24 @@ export function __resetTargetPinClearedMetricsForTests(): void {
  */
 export const PARKED_TASK_RETENTION_MS = 24 * 60 * 60_000;
 
+/**
+ * How long a pin-derived park waits for the coordinator before the reconcile scan
+ * unpins it so any eligible session can claim it (owner 2026-11-09). Env override
+ * ADHDEV_PARK_AUTO_UNPIN_MS (milliseconds); 0 disables auto-unpin entirely.
+ */
+export const PARK_AUTO_UNPIN_MS = 20 * 60_000;
+
+/** Reason stamped on the requeue that auto-unpins a parked task. */
+export const PARK_AUTO_UNPIN_REASON = 'park_auto_unpin';
+
+/** Effective auto-unpin bound, read at call time (0 = disabled). */
+export function resolveParkAutoUnpinMs(env: NodeJS.ProcessEnv = process.env): number {
+    const raw = env.ADHDEV_PARK_AUTO_UNPIN_MS;
+    if (raw === undefined || raw.trim() === '') return PARK_AUTO_UNPIN_MS;
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n : PARK_AUTO_UNPIN_MS;
+}
+
 /** Reason recorded on the row when a pin TTL expiry parks a task. */
 export const PARK_REASON_PIN_EXPIRED = 'target_session_pin_expired_parked';
 
@@ -108,6 +136,16 @@ export const PARKED_SKIP_REASON = 'target_session_pin_parked';
 
 /** Terminal reason stamped when a parked task outlives the retention window. */
 export const PARK_RETENTION_EXPIRED_REASON = 'parked_task_retention_expired';
+
+/**
+ * Park reasons whose cause is a stale/unavailable pin, i.e. the ones auto-unpin may
+ * release. Everything else (spawn-cap, dispatch-failure-cap, unknown reasons) stays
+ * held for the coordinator.
+ */
+export function parkReasonIsAutoUnpinnable(reason: string | undefined): boolean {
+    const r = readText(reason);
+    return r === PARK_REASON_PIN_EXPIRED || r.startsWith('owner_hard_pin_unavailable:');
+}
 
 /** True when the entry is currently parked (awaiting an explicit coordinator decision). */
 export function taskIsParked(task: Pick<MeshWorkQueueEntry, 'parked'> | null | undefined): boolean {
@@ -219,6 +257,44 @@ export function notifyCoordinatorOfParkedTaskDropped(
 }
 
 /**
+ * Tell the coordinator that a parked task was auto-unpinned and is claimable again.
+ * Best-effort: failures are logged, never thrown.
+ */
+export function notifyCoordinatorOfParkedTaskUnpinned(
+    meshId: string,
+    task: Pick<MeshWorkQueueEntry, 'id' | 'parked' | 'targetNodeId' | 'sourceCoordinatorSessionId'>,
+    boundMs: number,
+): void {
+    const taskId = task.id;
+    const addressee = readText(task.parked?.targetSessionId);
+    const minutes = Math.round(boundMs / 60_000);
+    const coordinatorMessage = `[System] Task ${taskId} was pinned to a session that never took it for ${minutes} min; unpinned so another worker can take it.`;
+    const nodeLabel = readText(task.targetNodeId) || readText(task.parked?.targetNodeId) || meshId;
+    try {
+        const targetCoordinatorDaemonId = readText(getMachineId());
+        const targetCoordinatorSessionId = readText(task.sourceCoordinatorSessionId);
+        notifyMeshCoordinator({
+            event: 'mesh:dispatch_blocked',
+            meshId,
+            nodeLabel,
+            metadataEvent: {
+                source: 'mesh_parked_task_auto_unpin',
+                taskId,
+                reason: PARK_AUTO_UNPIN_REASON,
+                ...(addressee ? { parkedTargetSessionId: addressee } : {}),
+                coordinatorMessage,
+            },
+            coordinatorMessage,
+            queuedAt: Date.now(),
+            ...(targetCoordinatorDaemonId ? { targetCoordinatorDaemonId } : {}),
+            ...(targetCoordinatorSessionId ? { targetCoordinatorSessionId } : {}),
+        });
+    } catch (e: any) {
+        LOG.warn('MeshQueue', `Failed to surface parked-task auto-unpin for task ${taskId} (mesh ${meshId}): ${e?.message || e}`);
+    }
+}
+
+/**
  * Park a task whose target pin has exhausted its TTL, if it has.
  *
  * Returns true when the caller should record the parked skip for this tick —
@@ -293,11 +369,25 @@ export function settleParkedQueueTask(
     task: MeshWorkQueueEntry,
     markSkip: (reason: string) => void,
     sweep: (meshId: string, taskId: string) => MeshWorkQueueEntry | null,
-): 'swept' | 'held' {
+    // Injected for the same cycle reason as `sweep`. Returns the row only when the
+    // requeue actually reopened it (a refused requeue returns null → stays parked).
+    unpin?: (meshId: string, taskId: string) => MeshWorkQueueEntry | null,
+    nowMs: number = Date.now(),
+): 'swept' | 'held' | 'unpinned' {
     const swept = sweep(meshId, task.id);
     if (swept) {
         notifyCoordinatorOfParkedTaskDropped(meshId, task);
         return 'swept';
+    }
+    // Owner 2026-11-09: progress by default. A pin-derived park older than the
+    // auto-unpin bound is released (before the 24h sweep could ever matter).
+    const boundMs = resolveParkAutoUnpinMs();
+    if (unpin && boundMs > 0 && parkReasonIsAutoUnpinnable(task.parked?.reason)) {
+        const age = parkedAgeMs(task, nowMs);
+        if (age !== null && age >= boundMs && unpin(meshId, task.id)) {
+            notifyCoordinatorOfParkedTaskUnpinned(meshId, task, boundMs);
+            return 'unpinned';
+        }
     }
     // AUTOLAUNCH-SPAWN-CAP (P3) / AUTOLAUNCH-DISPATCH-CAP: a capped park re-asserts
     // its OWN skip reason, not the pin one — the coordinator guidance differs per

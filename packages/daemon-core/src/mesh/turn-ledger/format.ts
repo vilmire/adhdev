@@ -131,6 +131,8 @@ export interface TurnNotifyScalars {
     noProgressReconciled?: boolean;
     /** True when the completion was forced by finalization-timeout with no response. */
     forcedTimeoutNoResponse?: boolean;
+    /** Completed weak because the nudged worker never called report_completion (`report_missing_timeout`). */
+    acceptedWithoutReport?: boolean;
 
     /** Hollow-completion counters (`hollowCompletion.{requeueCount,maxRetries,maxRetriesExhausted}`). */
     hollow?: { requeueCount: number; maxRetries: number; maxRetriesExhausted: boolean };
@@ -328,7 +330,9 @@ function renderCompleted(input: RenderTurnNotifyInput, missing: SummaryRef[]): s
     }
 
     const weakCompletion = s.strength === 'weak';
-    const completionLead = weakCompletion
+    const completionLead = s.acceptedWithoutReport
+        ? `[System] ${nodeLabel} went idle without calling report_completion and did not answer the nudge — accepted as completed WITHOUT a report${metadata}.`
+        : weakCompletion
         ? `[System] ${nodeLabel} reported a possible completion (weak evidence) — awaiting confirmation${metadata}.`
         : `[System] ${nodeLabel} has completed its task and is now idle${metadata}.`;
     const verifyTextNote = ' Completion evidence is weak — verify via mesh_read_chat or git status before declaring the task done; the worker may still be mid-turn or parked on an approval/modal.';

@@ -108,6 +108,9 @@ export default function AssistantWatchedProjects({
         const seen = new Map<string, RemoteHostCandidate>()
         for (const machine of ides) {
             if (!machine?.id || (daemonId && daemonIdsEquivalent(machine.id, daemonId))) continue
+            // Only machines: `ides` also carries per-session/IDE entries, which have no
+            // hostname and used to show up as repeated "Machine-daemon_m" hosts.
+            if (machine.type !== 'adhdev-daemon' && !(machine as { daemonMode?: boolean }).daemonMode) continue
             const key = canonicalDaemonId(machine.id) ?? machine.id
             const statusStr = String(machine.status || '').toLowerCase()
             const online = statusStr !== 'offline' && statusStr !== 'disconnected'
@@ -117,7 +120,7 @@ export default function AssistantWatchedProjects({
                 seen.set(key, { id: machine.id, label, online })
             }
         }
-        return [...seen.values()]
+        return [...seen.values()].sort((a, b) => Number(b.online) - Number(a.online) || a.label.localeCompare(b.label))
     }, [remoteHostsProp, daemonCtx?.ides, daemonId])
 
     useEffect(() => {
@@ -592,21 +595,40 @@ export default function AssistantWatchedProjects({
                                 </p>
                             ) : (
                                 <>
-                                    <label className="mb-2 flex items-center gap-2">
-                                        <span className="shrink-0 text-text-muted">{t('assistantWatched.selectRemoteHost')}</span>
-                                        <select
+                                    <div className="mb-2 flex flex-col gap-1">
+                                        <span className="text-text-muted">{t('assistantWatched.selectRemoteHost')}</span>
+                                        <div
+                                            role="radiogroup"
+                                            aria-label={t('assistantWatched.selectRemoteHost')}
                                             data-testid="assistant-remote-host-select"
-                                            className="min-w-0 flex-1 rounded border border-border-default bg-bg-subtle px-2 py-1 text-xs text-text-primary"
-                                            value={selectedHost?.id ?? ''}
-                                            onChange={e => setSelectedHostId(e.target.value)}
+                                            className="flex flex-wrap gap-1"
                                         >
-                                            {remoteHosts.map(h => (
-                                                <option key={h.id} value={h.id}>
-                                                    {h.label} ({h.online ? t('assistantWatched.hostStateOnline') : t('assistantWatched.hostStateOffline')})
-                                                </option>
-                                            ))}
-                                        </select>
-                                    </label>
+                                            {remoteHosts.map(h => {
+                                                const selected = selectedHost ? daemonIdsEquivalent(h.id, selectedHost.id) : false
+                                                return (
+                                                    <button
+                                                        key={h.id}
+                                                        type="button"
+                                                        role="radio"
+                                                        aria-checked={selected}
+                                                        data-testid={`assistant-remote-host-${h.id}`}
+                                                        title={h.online ? t('assistantWatched.hostStateOnline') : t('assistantWatched.hostStateOffline')}
+                                                        onClick={() => setSelectedHostId(h.id)}
+                                                        className={cn(
+                                                            'flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs',
+                                                            selected
+                                                                ? 'border-accent-primary bg-accent-primary/15 text-text-primary'
+                                                                : 'border-border-default bg-bg-subtle text-text-secondary hover:text-text-primary',
+                                                            !h.online && 'opacity-60',
+                                                        )}
+                                                    >
+                                                        <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', h.online ? 'bg-status-online' : 'bg-text-muted')} />
+                                                        <span className="truncate">{h.label}</span>
+                                                    </button>
+                                                )
+                                            })}
+                                        </div>
+                                    </div>
                                     {selectedHost && !selectedHost.online && (
                                         <p className="m-0 text-text-muted" data-testid="assistant-remote-host-offline">
                                             {t('assistantWatched.hostOffline')}
@@ -653,7 +675,7 @@ export default function AssistantWatchedProjects({
                                                                 <div className="truncate text-[11px] leading-4 text-text-muted">{project.sanitizedRepoIdentity}</div>
                                                             )}
                                                             {isFollowed && (
-                                                                <div className="text-[11px] leading-4 text-status-success">{t('assistantWatched.stateFollowed')}</div>
+                                                                <div className="text-[11px] leading-4 text-status-online">{t('assistantWatched.stateFollowed')}</div>
                                                             )}
                                                             {isUnfollowed && (
                                                                 <div className="text-[11px] leading-4 text-text-muted">{t('assistantWatched.stateUnfollowed')}</div>

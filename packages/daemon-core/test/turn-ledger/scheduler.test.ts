@@ -578,7 +578,7 @@ describe('weak expiry requires a fresh completed probe', () => {
 // genuine at the first idle; with the report gate the attempt stays open through
 // the false idle and commits ONCE, on the report.
 describe('report gate — the rc.40 false-idle sequence commits once, on the report', () => {
-    it.each(['report', 'hard_ceiling'] as const)('direct missing-report expiry releases its hold once and preserves %s authority', async (resolution) => {
+    it.each(['report', 'accepted_without_report'] as const)('direct missing-report expiry nudges once, re-arms its hold and preserves %s authority', async (resolution) => {
         const r = rig();
         toGenerating(r, 'mesh_direct');
         r.ledger.observe(evd('turn_end', { strength: 'weak' }));
@@ -586,7 +586,9 @@ describe('report gate — the rc.40 false-idle sequence commits once, on the rep
         r.ledger.observe(evd('liveness', { result: 'alive' }, { at: r.now }));
         await r.scheduler.tick();
         expect(r.ledger.getAttempt('a1')).toMatchObject({ state: 'finalizing', terminal: null });
-        expect(r.ledger.store.activeHolds('a1').some(h => h.reason === 'weak_candidate')).toBe(false);
+        // First expiry: the worker is nudged once and the SAME hold re-armed for the short grace.
+        expect(r.ledger.store.activeHolds('a1').some(h => h.reason === 'weak_candidate')).toBe(true);
+        expect(r.ports.calls.filter(c => c === 'nudge:s1')).toHaveLength(1);
         const candidates = () => rowsOf(r.db, 'notify', 'a1').filter(row =>
             (JSON.parse(String(row.payload_json)) as { notify?: string }).notify === 'candidate');
         expect(candidates()).toHaveLength(1);
@@ -604,11 +606,10 @@ describe('report gate — the rc.40 false-idle sequence commits once, on the rep
                 { source: 'worker_tool', at: r.now }));
             expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'tool_report' });
         } else {
-            r.advance(P.hardCeilingMs);
+            // No report within the nudge grace: the direct attempt is accepted weak, never left open to the ceiling.
+            r.advance(P.reportMissingNudgeGraceMs);
             await r.scheduler.tick();
-            expect(r.ledger.getAttempt('a1')).toMatchObject({ state: 'stopping', terminal: null });
-            await confirmFixtureWriterQuiescence(r.ledger);
-            expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'failed', reason: 'hard_ceiling' });
+            expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'weak', reason: 'report_missing_timeout' });
         }
         expect(rowsOf(r.db, 'committed', 'a1')).toHaveLength(1);
         expect(candidates()).toHaveLength(1);
@@ -647,12 +648,20 @@ describe('report gate — the rc.40 false-idle sequence commits once, on the rep
         r.ledger.observe(evd('liveness', { result: 'alive' }, { at: r.now }));
         await r.scheduler.tick();
         expectReportMissing(r);
-        r.advance(P.awaitReportMs);
+        expect(r.ports.calls.filter(c => c === 'nudge:s1')).toHaveLength(1);
+        // Still inside the nudge grace: nothing is accepted yet and the worker is not nudged twice.
+        r.advance(P.reportMissingNudgeGraceMs - 10_000);
         await r.scheduler.tick();
         expectReportMissing(r);
+        // Grace over without a report: the held answer is accepted (weak) instead of waiting forever.
+        r.advance(10_001);
+        r.ledger.observe(evd('liveness', { result: 'alive' }, { at: r.now }));
+        await r.scheduler.tick();
+        expect(r.ledger.getAttempt('a1')).toMatchObject({ state: 'completed', terminal: { outcome: 'completed', strength: 'weak', reason: 'report_missing_timeout' } });
+        expect(r.ports.calls.filter(c => c === 'nudge:s1')).toHaveLength(1);
         const notices = rowsOf(r.db, 'notify', 'a1').map(row => JSON.parse(String(row.payload_json)));
         expect(notices.filter(n => n.notify === 'candidate')).toHaveLength(1);
-        expect(notices.filter(n => n.notify === 'completed')).toHaveLength(0);
+        expect(notices.filter(n => n.notify === 'completed')).toHaveLength(1);
     });
 });
 

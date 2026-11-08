@@ -244,6 +244,7 @@ describe('mesh_direct reclaim → failed at once (nothing redelivers a direct di
         { rule: 'R31', state: 'generating', evidence: ev('liveness', { result: 'dead' }), holds: [makeHold('liveness'), makeHold('hard_ceiling')], cause: 'session_dead' },
         { rule: 'H1', state: 'accepted', evidence: expired('await_delivery'), holds: [makeHold('await_delivery', { onExpire: 'reclaim' }), makeHold('hard_ceiling')], cause: 'assigned_stranded_dispatch_unconfirmed' },
         { rule: 'H2r', state: 'delivered', evidence: expired('await_consume'), holds: [makeHold('await_consume', { onExpire: 'redeliver' }), makeHold('await_turn'), makeHold('hard_ceiling')], cause: 'delivered_not_consumed_redrive', overrides: { redriveCount: MAX_REDRIVES_PER_GENERATION } },
+        { rule: 'H8', state: 'generating', evidence: expired('stall_ceiling'), holds: [makeHold('liveness'), makeHold('stall_ceiling', { onExpire: 'reclaim' }), makeHold('hard_ceiling')], cause: 'stalled_no_output' },
         { rule: 'H3', state: 'delivered', evidence: expired('await_turn'), holds: [makeHold('await_consume'), makeHold('await_turn', { onExpire: 'reclaim' }), makeHold('hard_ceiling')], cause: 'delivered_no_turn_deadline' },
     ];
 
@@ -414,7 +415,7 @@ describe('holds', () => {
     it('a live-pending transcript is held and its expiry asks for a re-evaluation of that evidence (R16 → H7)', () => {
         const pending = ev('transcript_final', { selfAttributing: false, nativeRead: false, live: { ...LIVE_IDLE, adapterPending: true }, summary: REF }, { eventId: 'probe-7' });
         const held = step(makeAttempt('generating'), pending);
-        expect(held.holds).toEqual([expect.objectContaining({ reason: 'live_pending', onExpire: 'reevaluate', until: NOW + 12_000, data: { evidenceId: 'probe-7', decline: 'session_not_idle' } })]);
+        expect(held.holds.filter((h) => h.reason !== 'stall_ceiling')).toEqual([expect.objectContaining({ reason: 'live_pending', onExpire: 'reevaluate', until: NOW + 12_000, data: { evidenceId: 'probe-7', decline: 'session_not_idle' } })]);
         const [expiry] = expireHolds(held.holds, NOW + 12_000, { observedBy: 'dc', sessionIdFor: () => 's1' });
         const re = step(held.attempt, expiry!, held.holds, NOW + 12_000);
         expect(re.effects).toContainEqual({ kind: 'reevaluate', attemptId: 'a1', evidenceId: 'probe-7', forceLiveFalse: true });

@@ -52,7 +52,7 @@ export interface TurnAttemptData {
     /** A cap/reclaim retains the exact writer until the stop port proves quiescence. */
     writerStop?: { requestId: string; reason: TurnReason; requestedAt: number; tries: number; escalated: boolean; confirmed?: boolean;
         /** Settled without a quiescence receipt: the writer node was unreachable past the bound, or removed from the mesh. */
-        settledBy?: 'unreachable_bound' | 'node_removed';
+        settledBy?: 'unreachable_bound' | 'node_removed' | 'forced';
         terminal?: { outcome: TurnOutcome; strength: CommitStrength; adoptSessionId?: string; summary?: SummaryRef; textEventId?: string; source?: EvidenceSourceId } };
     providerSuspension?: { generation: number; modalKey: string | null; providerSetup?: boolean; at: number | null; resolvedAt: number | null;
         /** Reminder approval/choice notices sent for this still-parked suspension (R30p). */
@@ -65,6 +65,11 @@ export interface TurnAttemptData {
      * verdict was unconfirmed (re-probe + short re-arm). Scoped to `generation`.
      */
     unconfirmedEndDeferral?: { generation: number; count: number; requestedAt?: number };
+    /**
+     * R13q/R13d: a report-owing worker that went idle without report_completion was nudged
+     * (once per generation); the re-armed hold's second expiry accepts its last answer (R13m).
+     */
+    reportMissingNudge?: { generation: number; count: number; at: number };
     /** Legacy observations without a session identity cannot authorize weak completion. */
     livenessObservation?: { generation: number; sessionId?: string; at: number; probeStartedAt: number };
     /** Session changes cut liveness without changing report ownership or its deadline. */
@@ -188,6 +193,8 @@ export type TurnEffect =
     | { kind: 'queue_status'; meshId: string; taskId: string; status: TurnOutcome | 'pending'; reason: TurnReason }
     /** The terminal choke point (output version + row flip) for a committed task. */
     | { kind: 'task_terminal'; meshId: string; taskId: string; outcome: TurnOutcome }
+    /** Post-commit: type `text` into the worker session (idempotent by `messageId`). */
+    | { kind: 'nudge_worker'; attemptId: string; generation: number; sessionId: string; messageId: string; text: string }
     /** Scheduler must probe the session now (H4). */
     | { kind: 'probe'; attemptId: string; sessionId: string }
     /** Re-reduce held evidence (R16 hold expiry, H7). */

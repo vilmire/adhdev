@@ -31,8 +31,6 @@ import {
 import {
     admissionHoldUntil,
     admitTranscriptFinal,
-    admitTurnEnd,
-    type EvidenceAdmission,
 } from './admission.js';
 import {
     DEFAULT_MAX_TASK_RETRIES,
@@ -70,12 +68,45 @@ import {
     type TurnHold,
 } from './types.js';
 import { adoptedTerminal, newAttempt } from './reducer-attempt.js';
+import {
+    admissionOf,
+    expiredHold,
+    holdIs,
+    activityAt,
+    afterWeakSince,
+    turnEnd,
+    completionEnd,
+    notHeld,
+    reportAwaitedEnd,
+    reportedThisGeneration,
+    exitAfterReport,
+    finishedAfterReport,
+    finalWeak,
+    ownerScrapedMeshFinal,
+    ownerProbedQueueNativeCompletion,
+    awaitReportHeld,
+    freshEndProbe,
+    correctionPending,
+    settleIdleReportOwed,
+    queueReportMissing,
+    reportMissingNudged,
+    endTimer,
+    freshAlive,
+    unconfirmedEndDeferrals,
+    PINNED_FOLLOWUP_SETTLE_EVENT_PREFIX,
+    type GuardCtx,
+} from './reducer-guard-ctx.js';
+export { PINNED_FOLLOWUP_SETTLE_EVENT_PREFIX };
 
 export interface ReduceInput {
     /** Local executor capability, never derived from received evidence fields. */
     stopConfirmed?: boolean;
     /** Local executor capability like `stopConfirmed`: the ledger proved the writer node unreachable past the bound / removed. */
     writerUnreachable?: 'unreachable_bound' | 'node_removed';
+    /** Local executor capability: the stop was settled by the force-end past `stoppingForceAfterMs`. */
+    writerForced?: boolean;
+    /** Ledger-computed for a stall_ceiling expiry: the session holds a live, unreleased background process. */
+    backgroundWorkLive?: boolean;
     attempt: TurnAttempt | null;
     /** Active holds of this attempt. */
     holds: readonly TurnHold[];
@@ -139,195 +170,7 @@ export function classifyLane(attempt: TurnAttempt | null, evidence: TurnEvidence
     }
     return { rejection: 'session_mismatch' };
 }
-
 // ─── guards ──────────────────────────────────────────────────────────────
-
-interface GuardCtx {
-    attempt: TurnAttempt | null;
-    holds: readonly TurnHold[];
-    evidence: TurnEvidence;
-    policy: TurnPolicy;
-    nowMs: number;
-    effectiveGeneration: number | null;
-}
-
-function admissionOf(ctx: GuardCtx): EvidenceAdmission | null {
-    const ev = ctx.evidence;
-    if (ev.kind === 'transcript_final') return admitTranscriptFinal(ev, ctx.policy);
-    if (ev.kind === 'turn_end') return admitTurnEnd(ev, ctx.policy);
-    return null;
-}
-
-function expiredHold(ctx: GuardCtx): TurnHold | undefined {
-    const ev = ctx.evidence;
-    if (ev.kind !== 'hold_expired') return undefined;
-    const hold = ctx.holds.find((h) => h.holdId === ev.holdId);
-    if (!hold || hold.reason !== ev.reason || (ctx.attempt && hold.attemptId !== ctx.attempt.attemptId)) return undefined;
-    return hold;
-}
-
-function holdIs(ctx: GuardCtx, ...reasons: HoldReason[]): boolean {
-    const hold = expiredHold(ctx);
-    return !!hold && reasons.includes(hold.reason);
-}
-
-function activityAt(ev: TurnEvidence): number {
-    return ev.kind === 'transcript_activity' ? ev.newestActivityAt : ev.at;
-}
-
-function afterWeakSince(ctx: GuardCtx): boolean {
-    const since = ctx.attempt?.weakSince;
-    return since !== null && since !== undefined && activityAt(ctx.evidence) > since;
-}
-
-function turnEnd(ctx: GuardCtx): TurnEvidenceOf<'turn_end'> | null {
-    return ctx.evidence.kind === 'turn_end' ? ctx.evidence : null;
-}
-
-/**
- * A turn_end the worker's daemon stamped `providerFailure` (its whole reply was
- * an auth/billing failure banner — 2026-10-06 preview incident, claude-cli
- * "Login expired · Please run /login" committed task_completed). R9f fails it;
- * every completion-shaped turn_end guard below excludes it.
- */
-function completionEnd(ctx: GuardCtx): TurnEvidenceOf<'turn_end'> | null {
-    const e = turnEnd(ctx);
-    return e && !e.providerFailure && e.nativeOutcome !== 'failed' ? e : null;
-}
-
-function notHeld(ctx: GuardCtx): boolean {
-    return admissionOf(ctx)?.kind !== 'hold';
-}
-
-/**
- * A genuine end stamped `reportExpected` by the worker's daemon (live
- * worker-MCP bind) on a mesh attempt: the structured report, not the idle
- * edge, commits it (R9r). Plain attempts never await a report.
- */
-function reportAwaitedEnd(ctx: GuardCtx): boolean {
-    const e = completionEnd(ctx);
-    return !!e && e.strength === 'genuine' && !e.hollow && e.reportExpected === true
-        && !!ctx.attempt && isMeshScope(ctx.attempt);
-}
-
-/**
- * R17g recorded a worker report for the attempt's CURRENT generation (the
- * report arrived before the idle edge). A reclaim bumps the generation, so a
- * report of a cut generation never satisfies this.
- */
-function reportedThisGeneration(ctx: GuardCtx): boolean {
-    const attempt = ctx.attempt;
-    return !!attempt && attempt.data.report?.generation === attempt.generation;
-}
-
-/**
- * A clean process exit while a report recorded for this generation still waits
- * on its `await_end` hold (R20r): the exit ends the turn, so the report commits.
- */
-function exitAfterReport(ctx: GuardCtx): boolean {
-    const attempt = ctx.attempt;
-    return ctx.evidence.kind === 'process_exit' && !ctx.evidence.providerFailure && reportedThisGeneration(ctx)
-        && ctx.holds.some((h) => h.reason === 'await_end' && (!attempt || h.attemptId === attempt.attemptId));
-}
-
-/**
- * An idle signal after a recorded report (R9t): any admitted turn_end (strong
- * or weak, hollow or not — the report is the verdict), a transcript_final that
- * is either admitted OR declined on content grounds (native_marker_absent /
- * no_final_assistant_summary — the scrape's own completion proof is exactly
- * what the report already supplies, so its absence is not evidence the turn is
- * still running), or a no-progress watchdog that sees the final message. A
- * live-pending/quiet HOLD admission (modal parked, adapter still busy,
- * trailing tool activity, or the transcript still growing) is a genuine sign
- * of continued activity, not just a missing marker — that is not an idle
- * signal; it still goes to R16 and re-reduces (R9t) once the hold clears.
- */
-function finishedAfterReport(ctx: GuardCtx): boolean {
-    if (!reportedThisGeneration(ctx)) return false;
-    const ev = ctx.evidence;
-    if (ev.kind === 'turn_end' || ev.kind === 'transcript_final') {
-        const admission = admissionOf(ctx);
-        return admission?.kind === 'strong' || admission?.kind === 'weak' || admission?.kind === 'decline';
-    }
-    return ev.kind === 'no_progress' && ev.finalAssistantPresent;
-}
-
-/** A weakly admitted transcript_final (R15 / R15p / R10a). */
-function finalWeak(ctx: GuardCtx): boolean {
-    return ctx.evidence.kind === 'transcript_final' && admissionOf(ctx)?.kind === 'weak' && !reportedThisGeneration(ctx);
-}
-
-/** Evidence the owner read itself — never the worker daemon's turn verdict. */
-const OWNER_SCRAPE_SOURCES: ReadonlySet<string> = new Set(['coordinator_probe', 'mcp_probe']);
-
-/**
- * R15p: a transcript_final the owner scraped on a mesh attempt. The worker's
- * daemon emits its own turn_end (and withholds it while its completion gate
- * holds), so a scrape alone awaits the report instead of committing weak.
- */
-function ownerScrapedMeshFinal(ctx: GuardCtx): boolean {
-    return ctx.evidence.kind === 'transcript_final' && OWNER_SCRAPE_SOURCES.has(ctx.evidence.source)
-        && !!ctx.attempt && isMeshScope(ctx.attempt);
-}
-
-/** A native marker ends the provider turn, but an owner probe cannot use it as
- * the task verdict for a report-owning queue worker. R15p waits for the report. */
-function ownerProbedQueueNativeCompletion(ctx: GuardCtx): boolean {
-    const ev = ctx.evidence;
-    return ev.kind === 'transcript_final' && ev.nativeRead && ev.nativeMarker?.outcome === 'completed'
-        && OWNER_SCRAPE_SOURCES.has(ev.source) && ctx.attempt?.scope === 'mesh_queue'
-        && admissionOf(ctx)?.kind === 'strong';
-}
-
-/** The attempt is inside an R9r window (an active `await_report` hold). */
-function awaitReportHeld(ctx: GuardCtx): boolean {
-    const attempt = ctx.attempt;
-    return !!attempt && ctx.holds.some((h) => h.reason === 'await_report' && h.attemptId === attempt.attemptId);
-}
-
-/** A timer may use only a recent observation from a probe begun after its hold/request. */
-function freshEndProbe(ctx: GuardCtx): boolean {
-    const a = ctx.attempt;
-    const o = a?.data.livenessObservation;
-    const request = a?.data.unconfirmedEndDeferral;
-    const boundary = request?.generation === a?.generation && request?.requestedAt !== undefined
-        ? request.requestedAt : expiredHold(ctx)?.createdAt;
-    const cut = a?.data.livenessSessionCut;
-    const since = Math.max(boundary ?? 0, cut && cut.generation === a?.generation ? cut.at : 0);
-    return !!a && !!o && o.generation === a.generation && !!o.sessionId
-        && sessionIdsEquivalent(o.sessionId, a.sessionId) && boundary !== undefined
-        && o.probeStartedAt >= since && o.at >= since && o.at <= ctx.nowMs
-        && ctx.nowMs - o.at <= endProbeGraceMs(ctx.policy);
-}
-function correctionPending(ctx: GuardCtx): boolean {
-    const r = ctx.attempt?.data.reportCorrection;
-    return r?.generation === ctx.attempt?.generation && !reportedThisGeneration(ctx);
-}
-/** Event-id prefix of the scheduler's idle-settle (mesh-pinned-followup-supersede.ts). */
-export const PINNED_FOLLOWUP_SETTLE_EVENT_PREFIX = 'pinned_followup_supersede:';
-/** R23s: the scheduler settles a queue attempt that is finalizing and still owes its report, writer kept alive. */
-function settleIdleReportOwed(ctx: GuardCtx): boolean {
-    const e = ctx.evidence;
-    return e.kind === 'operator_status' && e.source === 'scheduler' && e.eventId.startsWith(PINNED_FOLLOWUP_SETTLE_EVENT_PREFIX)
-        && ctx.attempt?.scope === 'mesh_queue' && ctx.attempt.state === 'finalizing'
-        && !ctx.attempt.data.writerStop && !reportedThisGeneration(ctx);
-}
-function queueReportMissing(ctx: GuardCtx): boolean {
-    return ctx.attempt?.scope === 'mesh_queue' && holdIs(ctx, 'await_report')
-        && !reportedThisGeneration(ctx);
-}
-function endTimer(ctx: GuardCtx): boolean {
-    return holdIs(ctx, 'weak_candidate', 'await_report')
-        && ctx.attempt?.scope !== 'mesh_direct'
-        && expiredHold(ctx)?.data.nativeProbeReportOnly !== true && !correctionPending(ctx) && !queueReportMissing(ctx);
-}
-function freshAlive(ctx: GuardCtx): boolean { return freshEndProbe(ctx) && ctx.attempt?.lastLiveness === 'alive'; }
-
-/** How many times R13u already deferred a weak/await_report expiry in this generation. */
-function unconfirmedEndDeferrals(ctx: GuardCtx): number {
-    const d = ctx.attempt?.data.unconfirmedEndDeferral;
-    return d && d.generation === ctx.attempt!.generation && d.requestedAt !== undefined ? d.count : 0;
-}
 
 const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> = {
     unbound: (ctx) => !ctx.evidence.attemptRef && !ctx.evidence.taskId,
@@ -409,13 +252,21 @@ const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> 
     hold_hard_ceiling: (ctx) => holdIs(ctx, 'hard_ceiling'),
     hold_suspension_before_consumed: (ctx) => holdIs(ctx, 'suspension_before_consumed'),
     hold_direct_report_missing: (ctx) => ctx.attempt?.scope === 'mesh_direct'
-        && holdIs(ctx, 'weak_candidate', 'await_report') && !correctionPending(ctx) && !reportedThisGeneration(ctx),
+        && holdIs(ctx, 'weak_candidate', 'await_report') && !correctionPending(ctx) && !reportedThisGeneration(ctx)
+        && !reportMissingNudged(ctx.attempt),
     hold_weak_candidate: (ctx) => holdIs(ctx, 'weak_candidate') && ctx.attempt?.scope !== 'mesh_direct'
         && !correctionPending(ctx) && freshAlive(ctx),
     hold_admission: (ctx) => holdIs(ctx, 'live_pending', 'transcript_quiet'),
     settle_idle_report_owed: settleIdleReportOwed,
     hold_queue_report_missing: (ctx) => queueReportMissing(ctx)
-        && expiredHold(ctx)?.data.nativeProbeReportOnly !== true && !correctionPending(ctx),
+        && expiredHold(ctx)?.data.nativeProbeReportOnly !== true && !correctionPending(ctx)
+        && !reportMissingNudged(ctx.attempt),
+    hold_report_missing_accept: (ctx) => reportMissingNudged(ctx.attempt) && !reportedThisGeneration(ctx) && !correctionPending(ctx)
+        && expiredHold(ctx)?.data.nativeProbeReportOnly !== true
+        && (ctx.attempt?.scope === 'mesh_direct' ? holdIs(ctx, 'weak_candidate', 'await_report') : queueReportMissing(ctx)),
+    hold_stall_ceiling: (ctx) => holdIs(ctx, 'stall_ceiling') && ctx.attempt?.state === 'generating' && !ctx.attempt.suspension
+        && !ctx.backgroundWorkLive,
+    hold_stall_background_work: (ctx) => holdIs(ctx, 'stall_ceiling') && ctx.attempt?.state === 'generating' && !!ctx.backgroundWorkLive,
     hold_await_report: (ctx) => holdIs(ctx, 'await_report') && ctx.attempt?.scope !== 'mesh_direct'
         && expiredHold(ctx)?.data.nativeProbeReportOnly !== true && !correctionPending(ctx) && !queueReportMissing(ctx) && freshAlive(ctx),
     hold_native_probe_report_only: (ctx) => holdIs(ctx, 'await_report') && ctx.attempt?.scope !== 'mesh_direct'
@@ -489,7 +340,8 @@ function resolveUntil(expr: UntilExpr, draft: Draft): number | null {
         case 'liveness': return nowMs + policy.livenessDeadlineMs;
         case 'hard_ceiling': return nowMs + policy.hardCeilingMs;
         case 'weak_confirm': return nowMs + weakConfirmMs(policy);
-        case 'await_report': return nowMs + policy.awaitReportMs;
+        // After the nudge the re-opened wait is the short grace: the worker already had its long window.
+        case 'await_report': return nowMs + (reportMissingNudged(attempt) ? policy.reportMissingNudgeGraceMs : policy.awaitReportMs);
         case 'await_end': return nowMs + policy.awaitEndMs;
         case 'unknown_grace': return nowMs + unknownLivenessGraceMs(policy);
         // H4 / R32u re-arm: the normal 3×tick cadence, except while `await_report`
@@ -695,6 +547,9 @@ function reclaim(draft: Draft, reason: TurnReason): void {
     });
 }
 
+/** Typed into a report-owing worker that went idle without calling report_completion. */
+export const REPORT_MISSING_NUDGE_TEXT = 'Your task looks finished but report_completion was not called. Call report_completion now with your result.';
+
 const WRITER_STOP_RETRY_MS = 30_000;
 const WRITER_STOP_MAX_TRIES = 3;
 
@@ -778,6 +633,7 @@ function reduceStopping(input: ReduceInput): ReduceResult {
         settleUnreachableWriter(draft, stop, input.writerUnreachable);
     } else if (input.stopConfirmed) {
         stop.confirmed = true;
+        if (input.writerForced) stop.settledBy = 'forced';
         adoptReportHeldDuringStop(a, stop);
         if (stop.terminal) {
             if (stop.terminal.adoptSessionId) {
@@ -949,6 +805,21 @@ const ACTIONS: Record<ActionId, (draft: Draft) => void> = {
         const count = prior && prior.generation === attempt.generation && prior.requestedAt !== undefined ? prior.count : 0;
         attempt.data = { ...attempt.data, unconfirmedEndDeferral: { generation: attempt.generation, count: count + 1, requestedAt: draft.ctx.nowMs } };
         addHold(draft, { ...hold, until: draft.ctx.nowMs + endProbeGraceMs(draft.ctx.policy), createdAt: draft.ctx.nowMs });
+    },
+    rearm_stall_ceiling: (draft) => {
+        const hold = expiredHold(draft.ctx);
+        if (hold) addHold(draft, { ...hold, until: draft.ctx.nowMs + draft.ctx.policy.stallReclaimMs, createdAt: draft.ctx.nowMs });
+    },
+    nudge_for_report: (draft) => {
+        // R13q/R13d first expiry: ask the idle worker for its report once, re-arm the SAME hold
+        // (opener's text pointer kept in `data`) for reportMissingNudgeGraceMs.
+        const attempt = draft.attempt!;
+        const hold = expiredHold(draft.ctx);
+        if (!hold || reportMissingNudged(attempt)) return;
+        attempt.data = { ...attempt.data, reportMissingNudge: { generation: attempt.generation, count: 1, at: draft.ctx.nowMs } };
+        addHold(draft, { ...hold, until: draft.ctx.nowMs + draft.ctx.policy.reportMissingNudgeGraceMs, createdAt: draft.ctx.nowMs });
+        draft.effects.push({ kind: 'nudge_worker', attemptId: attempt.attemptId, generation: attempt.generation, sessionId: attempt.sessionId,
+            messageId: `report-nudge:${attempt.attemptId}:g${attempt.generation}`, text: REPORT_MISSING_NUDGE_TEXT });
     },
     open_report_correction: (draft) => {
         const a = draft.attempt!;
@@ -1223,6 +1094,32 @@ function applyTemplate(template: EffectTemplate, draft: Draft): void {
 
 // ─── reduce ──────────────────────────────────────────────────────────────
 
+/**
+ * The generating-stall ceiling: while a mesh attempt is `generating` a `stall_ceiling` hold
+ * (stallReclaimMs) exists, re-armed by every real output (turn_started / transcript_activity;
+ * a liveness `alive` only proves the process exists) and dropped on any other state.
+ * Re-arms are throttled to once per `min(60 s, stallReclaimMs/10)` so a streaming worker does
+ * not rewrite the hold on every chunk.
+ */
+function syncStallCeiling(draft: Draft, previousState: TurnAttempt['state'] | undefined): void {
+    const attempt = draft.attempt!;
+    const key = holdId(attempt.attemptId, 'stall_ceiling');
+    const existing = draft.holds.get(key);
+    const ms = draft.ctx.policy.stallReclaimMs;
+    if (attempt.state !== 'generating' || !isMeshScope(attempt) || attempt.data.writerStop || ms <= 0) {
+        if (existing) releaseHolds(draft, ['stall_ceiling']);
+        return;
+    }
+    const kind = draft.ctx.evidence.kind;
+    const output = kind === 'turn_started' || kind === 'transcript_activity';
+    const entered = previousState !== 'generating';
+    if (existing && !entered && !output) return;
+    const slack = Math.min(60_000, Math.floor(ms / 10));
+    if (existing && !entered && existing.until !== null && draft.ctx.nowMs + ms - existing.until < slack) return;
+    addHold(draft, { holdId: key, attemptId: attempt.attemptId, generation: attempt.generation, reason: 'stall_ceiling',
+        until: draft.ctx.nowMs + ms, onExpire: 'reclaim', data: {}, createdAt: draft.ctx.nowMs });
+}
+
 export function reduce(input: ReduceInput): ReduceResult {
     const { attempt, holds, evidence } = input;
     const lane = classifyLane(attempt, evidence, holds);
@@ -1253,6 +1150,7 @@ export function reduce(input: ReduceInput): ReduceResult {
             // Reclaim already moved the state; a held suspension already moved R4 to `suspended`.
             draft.attempt.state = target;
         }
+        if (!draft.committed) syncStallCeiling(draft, attempt?.state);
     }
     return {
         attempt: draft.attempt,

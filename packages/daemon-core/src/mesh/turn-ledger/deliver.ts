@@ -460,6 +460,7 @@ export function renderNotice(ctx: RenderContext, meshId: string, entry: Record<s
         ...(isUnredeliveredDirectFailure(attempt) ? { directFailureCause: attempt!.terminal!.reason } : {}),
         ...(notice?.reviewRecommended === true ? { reviewRecommended: true } : {}),
         ...(reason === 'finalization_timeout_no_response' ? { forcedTimeoutNoResponse: true } : {}),
+        ...(reason === 'report_missing_timeout' ? { acceptedWithoutReport: true } : {}),
         ...(reason === 'hollow_max_retries' && attempt
             ? { hollow: { requeueCount: attempt.hollowCount, maxRetries: attempt.maxTaskRetries, maxRetriesExhausted: true } }
             : {}),

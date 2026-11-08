@@ -148,7 +148,7 @@ describe('validateProviderDefinition', () => {
     expect(canarySchema.nativeTurnCap.const).toBe(false)
     expect(canarySchema.nativeOutputTokenCap.const).toBe(false)
     const codex = JSON.parse(readFileSync(new URL('../../../../../adhdev-providers/cli/codex-cli/provider.v1.json', import.meta.url), 'utf8'))
-    expect(codex.providerVersion).toBe('1.1.39')
+    expect(codex.providerVersion).toBe('1.1.41')
     expect(codex.hostHandoffCanary.args.join('\n')).not.toMatch(/maxTurns|maxOutputTokens/)
     expect(codex.hostHandoffCanary.thinkingArgs.join('\n')).toContain('{{thinkingLevel}}')
     expect(describeCanaryContract(codex, { provider: 'codex-cli', model: 'gpt-6.1-sol' })).toBeUndefined()

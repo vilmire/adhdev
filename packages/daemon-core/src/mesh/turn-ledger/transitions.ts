@@ -65,7 +65,8 @@ export type GuardId =
     | 'hold_await_delivery' | 'hold_await_consume_redrive' | 'hold_await_consume_exhausted' | 'hold_await_turn'
     | 'hold_liveness' | 'hold_hard_ceiling' | 'hold_suspension_before_consumed' | 'hold_weak_candidate' | 'hold_admission'
     | 'hold_await_report'
-    | 'hold_native_probe_report_only' | 'hold_direct_report_missing' | 'hold_queue_report_missing'
+    | 'hold_native_probe_report_only' | 'hold_direct_report_missing' | 'hold_queue_report_missing' | 'hold_report_missing_accept'
+    | 'hold_stall_ceiling' | 'hold_stall_background_work'
     | 'hold_end_unconfirmed_defer' | 'hold_end_unconfirmed_exhausted' | 'hold_end_probe_missing' | 'hold_report_correction'
     | 'finished_after_report' | 'hold_await_end' | 'exit_after_report' | 'settle_idle_report_owed';
 
@@ -78,7 +79,7 @@ export type ActionId =
     | 'activity' | 'liveness_unknown' | 'liveness_failure' | 'worker_absent'
     | 'rebind_to_holder' | 'rebind'
     | 'hollow' | 'mark_notified' | 'store_git' | 'redrive' | 'stamp_no_progress_notice'
-    | 'record_report' | 'defer_unconfirmed_end' | 'open_report_correction';
+    | 'record_report' | 'defer_unconfirmed_end' | 'open_report_correction' | 'nudge_for_report' | 'rearm_stall_ceiling';
 
 /** Hold deadline expressions, resolved against policy + ledger clock. */
 export type UntilExpr =
@@ -538,6 +539,16 @@ export const TRANSITIONS: readonly TransitionRule[] = [
         { e: 'probe' },
         { e: 'hold', reason: 'liveness', until: 'liveness_reprobe', onExpire: 'escalate' },
     ] },
+    // A generating worker produced no output for stallReclaimMs: reclaim it (writer stop, requeue
+    // within RECLAIM_BUDGET) instead of waiting for the hard ceiling. A parked approval is the
+    // owner's turn, never a stall (the hold is released on suspension; the guard double-checks).
+    { id: 'H8', lane: 'current', from: [G], on: ['hold_expired'], guard: 'hold_stall_ceiling', to: A, verdict: 'applied', effects: [
+        { e: 'reclaim', reason: 'stalled_no_output' },
+    ] },
+    { id: 'H8b', lane: 'current', from: [G], on: ['hold_expired'], guard: 'hold_stall_background_work', to: 'same', verdict: 'applied', effects: [
+        { e: 'act', act: 'rearm_stall_ceiling' },
+        { e: 'record', note: 'stall_ceiling_background_work_live' },
+    ] },
     { id: 'H5', lane: 'current', from: 'nonterminal', on: ['hold_expired'], guard: 'hold_hard_ceiling', to: 'failed', verdict: 'applied', effects: [
         { e: 'commit', outcome: 'failed', strength: 'genuine', reason: 'hard_ceiling' },
     ] },
@@ -556,6 +567,8 @@ export const TRANSITIONS: readonly TransitionRule[] = [
         { e: 'release', reasons: 'expired_hold' },
         { e: 'record', note: 'direct_completion_report_missing' },
         { e: 'notify', notify: 'candidate', when: 'candidate_once' },
+        // Nudge once and re-arm the same hold for a short grace (R13m accepts on the next expiry).
+        { e: 'act', act: 'nudge_for_report' },
     ] },
     // Queue/plain fallback still requires a fresh probe; missing probes have a bounded timeout.
     { id: 'R13a', lane: 'current', from: [F], on: ['hold_expired'], guard: 'hold_weak_candidate', to: 'completed', verdict: 'applied', effects: [
@@ -571,6 +584,15 @@ export const TRANSITIONS: readonly TransitionRule[] = [
         { e: 'release', reasons: 'expired_hold' },
         { e: 'record', note: 'queue_completion_report_missing' },
         { e: 'notify', notify: 'candidate', when: 'candidate_once' },
+        { e: 'act', act: 'nudge_for_report' },
+    ] },
+    // R13m: the nudged worker still filed no report. Stop waiting forever: accept its held last
+    // answer as a weak completion, named `report_missing_timeout` so the notice says so. A late
+    // report_completion is still taken by the late-report grace (worker-report-late.ts).
+    { id: 'R13m', lane: 'current', from: [F], on: ['hold_expired'], guard: 'hold_report_missing_accept', to: 'completed', verdict: 'applied', effects: [
+        { e: 'release', reasons: 'expired_hold' },
+        { e: 'record', note: 'report_missing_accepted' },
+        { e: 'commit', outcome: 'completed', strength: 'weak', reason: 'report_missing_timeout' },
     ] },
     { id: 'R13r', lane: 'current', from: [F], on: ['hold_expired'], guard: 'hold_await_report', to: 'completed', verdict: 'applied', effects: [
         { e: 'commit', outcome: 'completed', strength: 'weak', reason: 'weak_end_confirmed' },

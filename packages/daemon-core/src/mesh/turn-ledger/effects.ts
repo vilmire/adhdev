@@ -98,6 +98,8 @@ export interface CancelDispatchRequest {
     ownerDaemonId: string | null;
     stopRequestId?: string;
     inspectOnly?: boolean;
+    /** Owner decision: past the force bound the host ends the session by exact compare-and-stop, tree ambiguity notwithstanding. */
+    force?: boolean;
     revokeBind: boolean;
 }
 
@@ -107,6 +109,12 @@ export interface TurnLedgerPorts {
     bus?(event: TurnBusEvent, at: number): void;
     /** Local `SessionInputService.withdraw(messageId)` / `stop_cli`, or remote `dispatchMeshCommand(..., 'stop_cli')`. */
     cancelDispatch?(request: CancelDispatchRequest): unknown | Promise<unknown>;
+    /**
+     * Force-end a writer whose stop stayed unsettled past `stoppingForceAfterMs`. Same envelope as
+     * `cancelDispatch` with `force: true`; a `success` reply ends the stop as quiescent, anything
+     * else settles the attempt as unreachable. Absent port = never forced.
+     */
+    forceStopWriter?(request: CancelDispatchRequest): unknown | Promise<unknown>;
     /** True when `nodeId` is no longer a member of the mesh (the writer can never be asked to stop). */
     writerNodeRemoved?(e: { meshId: string; nodeId: string }): boolean;
     /** Worker-bind + task-token revoke for a cut session (default: worker-mcp-isolation). */
@@ -115,6 +123,8 @@ export interface TurnLedgerPorts {
     releaseAttemptRef?(e: { attemptId: string; sessionId: string }): void;
     /** Same-generation resubmit of the dispatch messageId (D's SessionInputPort). */
     redeliver?(e: RedeliverEffect & { meshId: string | null; taskId: string | null; nodeId: string | null }): void | Promise<void>;
+    /** Type a nudge into the worker session (report-missing R13q/R13d); idempotent by `messageId`. */
+    nudgeWorker?(e: { attemptId: string; generation: number; sessionId: string; messageId: string; text: string }): void | Promise<unknown>;
     /** Scheduler probe now (C-W4 probeDue). */
     probe?(e: { attemptId: string; sessionId: string; meshId: string | null; taskId: string | null }): void;
     /** Task-terminal post-commit: token expiry, mailbox discard. */
@@ -421,6 +431,10 @@ export function runPostCommitEffects(ports: TurnLedgerPorts, effects: readonly T
                 break;
             case 'redeliver':
                 run('redeliver', ports.redeliver ? () => ports.redeliver!({ ...effect, meshId: attempt?.meshId ?? null, taskId: attempt?.taskId ?? null, nodeId: attempt?.nodeId ?? null }) : undefined);
+                break;
+            case 'nudge_worker':
+                run('nudge_worker', ports.nudgeWorker ? () => ports.nudgeWorker!({ attemptId: effect.attemptId, generation: effect.generation,
+                    sessionId: effect.sessionId, messageId: effect.messageId, text: effect.text }) : undefined);
                 break;
             case 'probe':
                 run('probe', ports.probe ? () => ports.probe!({ attemptId: effect.attemptId, sessionId: effect.sessionId, meshId: attempt?.meshId ?? null, taskId: attempt?.taskId ?? null }) : undefined);

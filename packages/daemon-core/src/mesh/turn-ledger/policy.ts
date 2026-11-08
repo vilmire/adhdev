@@ -54,6 +54,22 @@ export interface TurnPolicy {
      */
     stoppingUnreachableMaxMs: number;
     /**
+     * A writer stop still unsettled this long after it began is FORCED: the host ends the session
+     * through its exact compare-and-stop (ignoring the tree-ambiguity refusals that otherwise retry
+     * forever) and the attempt settles either way. 0 disables. Default 15 min.
+     */
+    stoppingForceAfterMs: number;
+    /**
+     * Grace after the first `await_report` expiry in which the nudged worker may still call
+     * report_completion; the second expiry accepts the held answer without a report. Default 180 s.
+     */
+    reportMissingNudgeGraceMs: number;
+    /**
+     * An attempt that has been generating with no activity or output this long is reclaimed
+     * (`stalled_no_output`) through the writer stop. 0 disables. Default 30 min.
+     */
+    stallReclaimMs: number;
+    /**
      * How long a genuine FSM end of a report-capable mesh worker waits for the
      * structured report before committing weak (R9r → R13r; live rc.40: a Bash
      * tool call showed an idle screen 37 s into a 4-minute turn). Added 2026-09-24.
@@ -107,6 +123,9 @@ export const DEFAULT_TURN_POLICY: Readonly<TurnPolicy> = Object.freeze({
     coalesceWindowMs: 30_000,
     hardCeilingMs: 5_400_000,
     stoppingUnreachableMaxMs: 24 * 3_600_000,
+    stoppingForceAfterMs: 15 * 60_000,
+    reportMissingNudgeGraceMs: 180_000,
+    stallReclaimMs: 30 * 60_000,
     awaitReportMs: 600_000,
     livenessProbeIntervalFinalizingMs: 60_000,
     awaitEndMs: 60_000,
@@ -198,6 +217,9 @@ export const TURN_POLICY_ENV_BINDINGS: readonly EnvBinding[] = [
     { field: 'hardCeilingMs', canonical: 'ADHDEV_TURN_HARD_CEILING_MS', min: 0, max: 24 * HOUR,
       aliases: [{ name: 'MESH_INFLIGHT_ACKED_HOLD_HARD_CEILING_MS', min: 0, max: 24 * HOUR }] },
     { field: 'stoppingUnreachableMaxMs', canonical: 'ADHDEV_STOPPING_UNREACHABLE_MAX_MS', min: 0, max: 30 * 24 * HOUR, aliases: [] },
+    { field: 'stoppingForceAfterMs', canonical: 'ADHDEV_STOPPING_FORCE_AFTER_MS', min: 0, max: 30 * 24 * HOUR, aliases: [] },
+    { field: 'reportMissingNudgeGraceMs', canonical: 'ADHDEV_TURN_REPORT_MISSING_NUDGE_GRACE_MS', min: 0, max: HOUR, aliases: [] },
+    { field: 'stallReclaimMs', canonical: 'ADHDEV_TURN_STALL_RECLAIM_MS', min: 0, max: 24 * HOUR, aliases: [] },
     { field: 'awaitReportMs', canonical: 'ADHDEV_TURN_AWAIT_REPORT_MS', min: 0, max: HOUR, aliases: [] },
     { field: 'livenessProbeIntervalFinalizingMs', canonical: 'ADHDEV_TURN_LIVENESS_PROBE_INTERVAL_FINALIZING_MS', min: 0, max: HOUR, aliases: [] },
     { field: 'awaitEndMs', canonical: 'ADHDEV_TURN_AWAIT_END_MS', min: 0, max: HOUR, aliases: [] },

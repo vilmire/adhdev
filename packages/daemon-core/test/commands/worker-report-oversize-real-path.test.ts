@@ -307,7 +307,9 @@ describe('over-limit report_completion — real path (mcp outbox → daemon → 
     expect(r.queueStatus()).toBe('assigned')
     expect(r.reportRows()).toHaveLength(0)
     const holds = ledger!.store.activeHolds(r.attemptId)
-    expect(holds.some(h => h.reason === 'await_report' || h.reason === 'liveness_reprobe')).toBe(false)
+    // Progress by default: the first missing-report expiry nudges the worker and re-arms the wait once
+    // (the weak accept after that grace is covered in test/turn-ledger/direct-report-required.test.ts).
+    expect(holds.some(h => h.reason === 'liveness_reprobe')).toBe(false)
     expect(holds.some(h => h.reason === 'hard_ceiling')).toBe(true)
   })
 })

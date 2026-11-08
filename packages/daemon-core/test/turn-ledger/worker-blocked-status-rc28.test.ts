@@ -351,7 +351,7 @@ describe('combined composition physical writer checkpoints', () => {
                 expect(store.activeProviderAssignmentCount(mesh, 'n1', 'codex')).toBe(held ? 1 : 0);
                 expect(store.activeSlotAssignmentCount(mesh, 'n1', 'codex', 'fixture-model')).toBe(held ? 1 : 0);
                 expect(store.assignedRowsMeshWide(mesh)).toHaveLength(held ? 1 : 0);
-                expect(evaluateTaskOwnedPathsAdmission(store, mesh, candidate).allowed).toBe(!held);
+                expect(evaluateTaskOwnedPathsAdmission(store, mesh, candidate, undefined, undefined, 'same_checkout').allowed).toBe(!held);
                 expect(store.hasActiveAssignment(mesh, 'other-session', 'other-node')).toBe(false);
                 expect(store.hasActiveSessionAssignment(mesh, 'other-session')).toBe(false);
                 expect(store.hasActiveNodeWriteAssignment(mesh, 'other-node')).toBe(false);

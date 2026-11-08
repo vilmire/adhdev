@@ -59,6 +59,7 @@ export function recordingPorts(): RecordingPorts {
         releaseAttemptRef: (e) => { calls.push(`release:${e.attemptId}`); },
         redeliver: (e) => { calls.push(`redeliver:${e.sessionId}`); },
         probe: (e) => { calls.push(`probe:${e.sessionId}`); },
+        nudgeWorker: (e) => { calls.push(`nudge:${e.sessionId}`); },
         afterTaskTerminal: (meshId, taskId) => { calls.push(`after:${meshId}/${taskId}`); },
     };
 }

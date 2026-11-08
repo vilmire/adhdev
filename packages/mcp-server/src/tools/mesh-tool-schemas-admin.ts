@@ -36,7 +36,7 @@ export const MESH_MISSION_UPSERT_TOOL = {
                 items: {
                     type: 'object',
                     properties: {
-                        kind: { type: 'string', enum: ['remaining', 'live_check', 'decision', 'evidence'], description: 'Default remaining. decision = a question for the owner.' },
+                        kind: { type: 'string', enum: ['remaining', 'live_check', 'decision', 'evidence'], description: 'Default remaining. decision = a question for the owner. live_check = something the OWNER checks by hand on a screen in about a minute, in plain words (what to open, what should happen); engineering verification (fixtures, E2E, measurements, release evidence) is remaining. Max 5 open live checks per project — extras are stored as remaining.' },
                         text: { type: 'string', description: 'The item (≤300 chars). For a decision this is the question if `question` is omitted.' },
                         machine: { type: 'string', description: 'live_check: which machine/node to verify on.' },
                         refs: { type: 'array', items: { type: 'object', properties: { kind: { type: 'string', enum: ['commit', 'branch', 'pr', 'task', 'artifact', 'mission', 'url'] }, repo: { type: 'string' }, value: { type: 'string' }, note: { type: 'string' } } }, description: 'Evidence references (≤8): {kind, repo?, value, note?}.' },

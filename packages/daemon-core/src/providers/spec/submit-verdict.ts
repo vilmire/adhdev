@@ -56,12 +56,32 @@
  *   dispatch_failed{submit_unconfirmed}; the ledger reclaims under a new nonce,
  *   i.e. a new messageId) and give the slot back.
  *   Anything else → QUARANTINE: the slot stays held, nothing is reported or
- *   cleared. It has NO local time limit, deliberately — releasing onto content
- *   we cannot attribute is the defect. It ends on exactly three events: the FSM
- *   leaves idle (consumed); the row reads as the baseline (or, with none, as a
- *   strictly empty prompt) for COMPOSER_EMPTY_HOLD_MS at an idle FSM; or the
- *   turn ledger retires the attempt (H2 probe → H2r/H3 reclaim, which
- *   hard-stops the session and with it this driver).
+ *   cleared, and nothing is RELEASED onto content we cannot attribute. It ends
+ *   on: the FSM leaves idle (consumed); the row reads as the baseline (or, with
+ *   none, as a strictly empty prompt) for COMPOSER_EMPTY_HOLD_MS at an idle FSM;
+ *   the turn ledger retires the attempt (H2 probe → H2r/H3 reclaim, which
+ *   hard-stops the session and with it this driver); or the bounded recovery
+ *   below.
+ *
+ *   AMBIGUOUS-SUBMIT TIME BOUND (owner decision: progress by default — "if it
+ *   isn't confirmed the instruction landed, send it once more"). A quarantine
+ *   used to have no local limit, so a worker could sit on a task that was maybe
+ *   never submitted until the ledger's 15-minute no-turn deadline. Now, once a
+ *   quarantine has lasted AMBIGUOUS_SUBMIT_QUARANTINE_MAX_MS with the FSM still
+ *   idle, exactly ONE recovery runs per send (never a loop):
+ *     - the transcript shows agent activity since the first write → nothing is
+ *       sent (duplicate submission is worse than waiting);
+ *     - the composer visibly holds exactly our own body (one chip / the literal
+ *       body), we still own it (no foreign input) → press submit ONCE;
+ *     - the composer is the proven empty baseline, no foreign input, and the
+ *       transcript positively shows nothing started → the existing clear-less
+ *       re-paste (repaste()) with all its duplicate guards;
+ *     - anything else (unknown composer, foreign input, no baseline) → nothing
+ *       is written; the quarantine goes on as before.
+ *   If that one recovery is still unconfirmed after the normal verdict window,
+ *   `unconfirmed` is reported like the proven-unsent path. A body still sitting
+ *   in the composer is NOT cleared on that path (it was never proven ours
+ *   frame by frame), so the slot stays held until the row is empty again.
  *
  * KNOWN LIMIT (accepted, fail-closed — reviews R6/R7). Local recovery may
  * rarely run in practice:
@@ -104,6 +124,9 @@ export const COMPOSER_HOLD_POLL_MS = 1_000;
 /** A quarantined composer is released only after it read as the baseline (or
  *  strictly empty) this long in a row at an idle FSM. */
 export const COMPOSER_EMPTY_HOLD_MS = 10_000;
+/** A quarantine whose evidence stays ambiguous this long (FSM still idle) gets
+ *  its one bounded recovery (see AMBIGUOUS-SUBMIT TIME BOUND in the header). */
+export const AMBIGUOUS_SUBMIT_QUARANTINE_MAX_MS = 120_000;
 /** Blind-fire backstop of a mesh dispatch's paste gate (the first CR waits for
  *  its own chip on the input row; a paste lands in tens of ms when it lands). */
 export const PASTE_GATE_MAX_WAIT_MS = 3_000;
@@ -159,6 +182,8 @@ export interface CurrentSend {
     phase: 'watch' | 'clear' | 'done';
     /** The one re-paste has been spent. */
     repasted: boolean;
+    /** The one ambiguous-quarantine recovery has been attempted (never twice). */
+    ambiguousRecovery?: 'declined' | 'submit' | 'repaste';
     firstWrittenAt: number;
 }
 
@@ -166,6 +191,8 @@ export interface CurrentSend {
 export interface SubmitVerdictHost {
     specTag(): string;
     currentStatus(): string;
+    /** The CLI's submit key (used by the bounded ambiguous-submit recovery). */
+    submitKey?(): string;
     readonly adapter: VerdictScreen;
     /** Write keys as the engine's own input, ONLY if the session host still has
      *  no other input since our accounted point — checked and written by the
@@ -280,7 +307,7 @@ export class SubmitVerdictMachine {
 
     submitState(messageId: string, inFlight: boolean): SubmitState {
         if (this.recovering?.messageId === messageId) return 'in_flight';
-        if (this.hold?.send.messageId === messageId) return 'unknown';
+        if (this.hold?.send.messageId === messageId) return this.outcomes.get(messageId) === 'unconfirmed' ? 'unconfirmed' : 'unknown';
         if (this.current?.messageId === messageId && inFlight) return 'in_flight';
         return this.outcomes.get(messageId) ?? 'unknown';
     }
@@ -333,7 +360,7 @@ export class SubmitVerdictMachine {
             if (!this.host.slotTaken() || this.host.currentStatus() !== 'idle') { this.noteConfirmed(send); return; }
             this.checkFrame(send);
             const why = this.unprovenReason(send);
-            if (why) { this.quarantine(send, why); return; }
+            if (why) { this.quarantineSpent(send, why); return; }
             if (Date.now() < provenUntil) { this.stepTimer = setTimeout(poll, UNSUBMITTED_POLL_MS); return; }
             this.recovering = send;
             void this.decideRecovery(send);
@@ -362,7 +389,7 @@ export class SubmitVerdictMachine {
             this.clearOwn(send, () => (send.repasted ? this.reportUnconfirmed(send) : this.repaste(send)));
             return;
         }
-        if (evidence === 'absent' && why) { this.quarantine(send, why); return; }
+        if (evidence === 'absent' && why) { this.quarantineSpent(send, why); return; }
         LOG.warn('FsmDriver', `[${this.host.specTag()}] submit of ${send.messageId} is not positively unsent (turn evidence ${evidence}${why ? `; ${why}` : ''}) — treating it as consumed; not clearing, re-pasting, or reporting a failure`);
         this.quarantine(send, `treated as consumed — turn evidence ${evidence}; not re-pasting`);
     }
@@ -550,12 +577,13 @@ export class SubmitVerdictMachine {
     }
 
     /** Proven unsent twice and the composer cleared: report, give the slot back. */
-    private reportUnconfirmed(send: CurrentSend): void {
+    private reportUnconfirmed(send: CurrentSend, keepHeld?: string): void {
         LOG.error('FsmDriver', `[${this.host.specTag()}] SUBMIT NOT CONFIRMED for ${send.messageId} after the budget and one re-paste (len=${send.text.length}) — the agent is NOT working on it; the composer was cleared; reporting it to the turn ledger`);
         send.phase = 'done';
         this.recovering = null;
-        if (this.current === send) { this.current = null; this.stopWatching(); }
-        if (!send.messageId) { this.host.releaseSlot(); return; }
+        if (!keepHeld && this.current === send) { this.current = null; this.stopWatching(); }
+        if (keepHeld) this.stopWatching();
+        if (!send.messageId) { if (keepHeld) this.holdAfterReport(send, keepHeld); else this.host.releaseSlot(); return; }
         // Recorded before the observers run, so a watermark read from one already sees it.
         this.acceptance.record('unaccepted', send.messageId);
         bounded(this.outcomes, send.messageId, 'unconfirmed');
@@ -567,8 +595,29 @@ export class SubmitVerdictMachine {
                 LOG.warn('FsmDriver', `[${this.host.specTag()}] submit-verdict observer for ${send.messageId} threw: ${(error as Error)?.message ?? error}`);
             }
         }
+        if (keepHeld) { this.holdAfterReport(send, keepHeld); return; }
         if (!taken) LOG.warn('FsmDriver', `[${this.host.specTag()}] the unconfirmed verdict on ${send.messageId} was not taken by its dispatch (it moved on); the composer is back to its pre-write row, so the slot is released`);
         this.host.releaseSlot();
+    }
+
+    /** Reported, but the composer was not proven cleared: the slot stays held
+     *  until the row is the baseline again (the normal quarantine release). */
+    private holdAfterReport(send: CurrentSend, why: string): void {
+        this.clearStep();
+        this.hold = { send, reason: `composer held — ${why}`, since: Date.now(), matchSince: null };
+        this.armHoldPoll();
+    }
+
+    /** A quarantine reached from the judge of a send whose one ambiguous-quarantine
+     *  re-paste is already spent: report it (no loop, no second write) as long as
+     *  nobody else typed, else quarantine as usual. */
+    private quarantineSpent(send: CurrentSend, why: string): void {
+        if (send.ambiguousRecovery === 'repaste' && send.messageId && send.epoch === this.epoch && this.soleWriter()) {
+            LOG.warn('FsmDriver', `[${this.host.specTag()}] the one ambiguous-quarantine recovery of ${send.messageId} is still unconfirmed (${why}); reporting it unconfirmed`);
+            this.reportUnconfirmed(send, `recovery re-paste unconfirmed — ${why}`);
+            return;
+        }
+        this.quarantine(send, why);
     }
 
     /** Keep the slot taken; nothing reported or cleared. See the header for
@@ -598,14 +647,93 @@ export class SubmitVerdictMachine {
             const hold = this.hold;
             if (!hold) return;
             if (this.host.currentStatus() !== 'idle') return; // the engine's drain releases it as consumed
-            if (!this.holdReleasable(hold.send, readComposer(this.host.adapter))) { hold.matchSince = null; this.armHoldPoll(); return; }
-            hold.matchSince ??= Date.now();
-            if (Date.now() - hold.matchSince < COMPOSER_EMPTY_HOLD_MS) { this.armHoldPoll(); return; }
-            LOG.info('FsmDriver', `[${this.host.specTag()}] input row is back to its pre-write state after ${Date.now() - hold.since}ms — releasing the held slot`);
-            this.releaseHold();
-            if (this.current === hold.send) this.current = null;
-            this.host.releaseSlot();
+            if (!this.holdReleasable(hold.send, readComposer(this.host.adapter))) hold.matchSince = null;
+            else {
+                hold.matchSince ??= Date.now();
+                if (Date.now() - hold.matchSince >= COMPOSER_EMPTY_HOLD_MS) {
+                    LOG.info('FsmDriver', `[${this.host.specTag()}] input row is back to its pre-write state after ${Date.now() - hold.since}ms — releasing the held slot`);
+                    this.releaseHold();
+                    if (this.current === hold.send) this.current = null;
+                    this.host.releaseSlot();
+                    return;
+                }
+            }
+            if (!hold.send.ambiguousRecovery && Date.now() - hold.since >= AMBIGUOUS_SUBMIT_QUARANTINE_MAX_MS) { void this.recoverAmbiguous(hold); return; }
+            this.armHoldPoll();
         }, COMPOSER_HOLD_POLL_MS);
+    }
+
+    /**
+     * The one bounded recovery of a quarantine that stayed ambiguous past
+     * AMBIGUOUS_SUBMIT_QUARANTINE_MAX_MS (see the header). Writes only with
+     * positive ownership evidence; otherwise declines and the quarantine goes on.
+     */
+    private async recoverAmbiguous(hold: { send: CurrentSend; reason: string; since: number; matchSince: number | null }): Promise<void> {
+        const send = hold.send;
+        send.ambiguousRecovery = 'declined';
+        const evidence = await this.nonConsumption(send);
+        if (this.hold !== hold) return;
+        if (this.host.currentStatus() !== 'idle') return; // the engine's drain releases it as consumed
+        const decline = (why: string): void => {
+            LOG.warn('FsmDriver', `[${this.host.specTag()}] ambiguous submit of ${send.messageId ?? '(anonymous)'} still unresolved after ${Date.now() - hold.since}ms — not re-sending: ${why}`);
+            this.armHoldPoll();
+        };
+        if (evidence === 'present') { decline('the transcript shows the turn started'); return; }
+        const read = readComposer(this.host.adapter);
+        const ours = send.ownsComposer && send.epoch === this.epoch && this.soleWriter();
+        if (!ours) { decline('ownership of the composer is not provable (foreign input or no baseline)'); return; }
+        const seen = classifyRender(read, send.text);
+        if ((seen === 'own_chip' || seen === 'own_literal') && read.kind !== 'unknown' && read.kind !== 'empty') {
+            // The composer visibly holds exactly our own body: one submit key.
+            const key = this.host.submitKey?.();
+            if (!key) { decline('no submit key known'); return; }
+            send.ambiguousRecovery = 'submit';
+            this.releaseHold();
+            this.recovering = send;
+            LOG.warn('FsmDriver', `[${this.host.specTag()}] ambiguous submit of ${send.messageId} past ${AMBIGUOUS_SUBMIT_QUARANTINE_MAX_MS}ms, composer still holds exactly its body, nothing started — pressing submit once`);
+            let ok = false;
+            try { ok = await this.host.writeOwnKeysGuarded(key); } catch { ok = false; }
+            if (this.recovering !== send) return;
+            if (!ok) { this.quarantine(send, 'the session host refused the ambiguous-submit recovery key (input changed)'); return; }
+            const deadline = Date.now() + UNCONFIRMED_VERDICT_GAP_MS + UNSUBMITTED_HOLD_MS;
+            const poll = (): void => {
+                this.stepTimer = null;
+                if (this.recovering !== send) return;
+                if (!this.host.slotTaken() || this.host.currentStatus() !== 'idle') { this.noteConfirmed(send); return; }
+                if (Date.now() < deadline) { this.stepTimer = setTimeout(poll, UNSUBMITTED_POLL_MS); return; }
+                void this.finishAmbiguousSubmit(send);
+            };
+            this.stepTimer = setTimeout(poll, UNSUBMITTED_POLL_MS);
+            return;
+        }
+        if (evidence === 'absent' && read.kind === 'empty' && send.baseline && sameVisibleRow(read, send.baseline)) {
+            // Empty baseline row, nothing started: the existing re-paste, with its own guards.
+            send.ambiguousRecovery = 'repaste';
+            this.releaseHold();
+            this.recovering = send;
+            send.tainted = undefined;
+            LOG.warn('FsmDriver', `[${this.host.specTag()}] ambiguous submit of ${send.messageId} past ${AMBIGUOUS_SUBMIT_QUARANTINE_MAX_MS}ms, composer empty, nothing started — re-pasting once`);
+            this.watch(send);
+            this.repaste(send);
+            return;
+        }
+        decline(`composer is not our body or a proven empty baseline (${read.kind}; turn evidence ${evidence})`);
+    }
+
+    /** The recovery key was pressed and the verdict window elapsed at an idle FSM. */
+    private async finishAmbiguousSubmit(send: CurrentSend): Promise<void> {
+        const evidence = await this.nonConsumption(send);
+        if (this.recovering !== send || this.current !== send) return;
+        if (!this.host.slotTaken() || this.host.currentStatus() !== 'idle') { this.noteConfirmed(send); return; }
+        const read = readComposer(this.host.adapter);
+        const seen = classifyRender(read, send.text);
+        const stillOurs = (seen === 'own_chip' || seen === 'own_literal') && send.epoch === this.epoch && this.soleWriter();
+        if (evidence !== 'present' && stillOurs) {
+            LOG.warn('FsmDriver', `[${this.host.specTag()}] the one ambiguous-submit recovery key of ${send.messageId} changed nothing — reporting it unconfirmed (composer not cleared)`);
+            this.reportUnconfirmed(send, 'ambiguous-submit recovery key changed nothing');
+            return;
+        }
+        this.quarantine(send, `ambiguous-submit recovery is still unproven (composer ${read.kind}; turn evidence ${evidence})`);
     }
 
     private releaseHold(): void {

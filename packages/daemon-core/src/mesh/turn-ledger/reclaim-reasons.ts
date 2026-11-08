@@ -13,6 +13,7 @@ export const RECLAIM_TURN_REASONS = [
     'dispatch_refused_session_exited', 'dispatch_refused_no_target', 'dispatch_refused_unsupported_input', 'dispatch_failed',
     'session_exit', 'session_exit_before_turn', 'session_dead', 'hollow_completion',
     'assigned_stranded_dispatch_unconfirmed', 'delivered_not_consumed_redrive', 'delivered_no_turn_deadline',
+    'stalled_no_output',
 ] as const satisfies readonly TurnReason[];
 
 export function isReclaimTurnReason(reason: TurnReason | null | undefined): boolean {

@@ -24,8 +24,7 @@ import { isNewWorkHeld } from '../maintenance/new-work-hold.js';
  */
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import { LOG } from '../logging/logger.js';
-import { spendTaskAutoLaunchSpawnBudget, recordTaskAutoLaunchDispatchFailure } from './mesh-autolaunch-spawn-budget.js';
-import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, getQueue, getQueueEntryById, recordTaskAutoLaunch, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank, parkTaskTargetPin, failRetentionExpiredParkedTask } from './mesh-work-queue.js';
+import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, getQueue, getQueueEntryById, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank, parkTaskTargetPin, failRetentionExpiredParkedTask, requeueTaskWithOutcome } from './mesh-work-queue.js';
 import { clearClaimDeferralForNode, noteClaimDeferredForNode, shouldRedriveDeferredClaim } from './mesh-claim-refusal.js';
 import { waitForRemoteSessionReady } from './mesh-remote-ready-wait.js';
 import { resolveProviderMaxParallel, resolveMaxReadonlyParallelTasks, resolveQuotaRoutingPolicy, resolveNodeMaxConcurrentSessions, resolveMeshPolicy } from '../repo-mesh-types.js';
@@ -33,21 +32,21 @@ import { meshNodeIdMatches, withStatusProbeMarker, type NodeCapabilitySlot, read
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { resolveDaemonSiblingNodeIds, effectiveSlotCap } from './mesh-daemon-slot-axis.js';
 import { quotaFactsContextForLiveRouting } from './mesh-quota-sources.js';
-import { readMeshNodeDaemonId, isMeshNodeFreshEnoughToLaunch } from './mesh-node-identity.js';
+import { isMeshNodeFreshEnoughToLaunch } from './mesh-node-identity.js';
 import { isModelCompatibleWithProvider } from './model-provider-compat.js';
 import { classifyMeshLaunchAxisSource } from '../sessions/launch-record.js';
 import { decideSlotForModel, finalizeSlotSelection } from './slot-model-enforcement.js';
 import { isWorkspaceAutoFastForwardInFlight, resolveAutoFastForwardPolicy } from './mesh-auto-fast-forward.js';
 import { dirtyWriteVerdict, readDirtyWriteGate } from './mesh-dirty-write-verdict.js';
-import { isActionableSkipReason, isTargetNodeTransientlyUnresolved, resolveDeadTargetVerdict, retractActionableSkipIfPreviouslyNotified, notifyCoordinatorOfActionableSkip, resolveTargetPinTtlVerdict, TARGET_SESSION_PIN_TTL_MS, TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON } from './mesh-skip-notify.js';
-import { PARKED_SKIP_REASON, parkExpiredTargetPin, settleParkedQueueTask, taskIsParked } from './mesh-task-parking.js';
+import { isTargetNodeTransientlyUnresolved, resolveDeadTargetVerdict, resolveTargetPinTtlVerdict, TARGET_SESSION_PIN_TTL_MS, TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON } from './mesh-skip-notify.js';
+import { PARKED_SKIP_REASON, PARK_AUTO_UNPIN_REASON, parkExpiredTargetPin, settleParkedQueueTask, taskIsParked } from './mesh-task-parking.js';
 import { activeWriteAssignedCount, activeReadonlyAssignedCount, nodeHasActiveWriteAssignment, resolveSchedulingStrategy, orderEligibleNodes, activeProviderAssignedCount, slotCoversTaskDifficulty, slotHasCapacity, resolveLaunchAxis, taskRequiresDifficultyFloor, type RankableNode } from './mesh-scheduling-fitness.js';
 import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, logAutoLaunchQuotaFallbackSuccess, recordAutoLaunchEvent } from './mesh-queue-observability.js';
 import { buildAutoLaunchRoutingDecision, type ResolvedProviderSelection } from './mesh-routing-decision.js';
 import { selectQuotaBusyFallback } from './mesh-quota-fallback.js';
 import { launchedSessionProvablyGone } from './mesh-pinned-remote-idle.js';
-import { autoLaunchWriteWouldClobberWinner, driveExpiredAwaitClaim, autoLaunchAwaitClaimBackoff, claimAfterRemoteAutoLaunch, AUTO_LAUNCH_AWAIT_CLAIM_MS, isAutoLaunchWithinAwaitClaimWindow, __clearAwaitClaimBackoffForTests, __resetAutoLaunchOrphanNotifiedForTests } from './mesh-autolaunch-integrity.js';
-import { autoLaunchWriteWouldClobberDifficultyFloorWaitClock, handleDifficultyFloorSkip, isDifficultyFloorWaitReason, launchSideDifficultyFloorMismatch } from './mesh-difficulty-floor.js';
+import { driveExpiredAwaitClaim, autoLaunchAwaitClaimBackoff, claimAfterRemoteAutoLaunch, isAutoLaunchWithinAwaitClaimWindow, __clearAwaitClaimBackoffForTests, __resetAutoLaunchOrphanNotifiedForTests } from './mesh-autolaunch-integrity.js';
+import { launchSideDifficultyFloorMismatch } from './mesh-difficulty-floor.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { evaluateTaskOwnedPathsAdmission } from './mesh-runtime-store-claim.js';
 import { maybeParkSpawnCappedTask } from './mesh-autolaunch-spawn-cap.js';
@@ -55,7 +54,6 @@ import { maybeParkDispatchFailureCappedTask, resolveCooldownUntilAfterDispatchFa
 import { normalizeProviderPriority, isLaunchableNode, isLocalAutoLaunchNode, liveSessionCountForNode, nodeHasLiveSessionPendingClaim } from './mesh-candidacy-predicates.js';
 import {
     delegatedWorkerAutoApproveSettingsForNode,
-    localCoordinatorDaemonId,
     readMeshNodeId,
     remoteSessionReadyProbe,
     tryAssignQueueTask,
@@ -63,6 +61,8 @@ import {
 } from './mesh-queue-assignment.js';
 import { resolveUsableProvider } from './mesh-autolaunch-usable-provider.js';
 export { __resolveUsableProviderForTests } from './mesh-autolaunch-usable-provider.js';
+import { markAutoLaunch, resolveAutoLaunchTarget } from './mesh-autolaunch-marking.js';
+export { __markAutoLaunchForTests } from './mesh-autolaunch-marking.js';
 
 // Per-(mesh,NODE) launch lock: two concurrent launches never land on the SAME node. It does
 // NOT cover the same TASK across DIFFERENT nodes — autoLaunchTaskInProgress below closes that.
@@ -131,125 +131,6 @@ function sweepExpiredCooldowns(): void {
         if (now >= until) autoLaunchCooldownUntil.delete(key);
     }
 }
-
-/**
- * Resolve how a pending queue task should be auto-launched onto a node.
- *
- * - `local`: spawn directly on this daemon via router.execute('launch_cli', …, 'mesh').
- * - `remote`: forward `launch_cli` to the node's daemon via dispatchMeshCommand
- *   (mirrors what mesh_launch_session does). Requires dispatchMeshCommand AND a
- *   resolvable coordinator daemonId for relay-safe completion routing.
- * - `skip`: not launchable from here — carries the reason (e.g. a remote node with
- *   no dispatch transport, or no coordinator daemonId to stamp).
- */
-function resolveAutoLaunchTarget(components: DaemonComponents, node: any): {
-    mode: 'local' | 'remote' | 'skip';
-    reason?: string;
-    daemonId?: string;
-    coordinatorDaemonId?: string;
-} {
-    if (isLocalAutoLaunchNode(node)) return { mode: 'local' };
-
-    // Remote node. Forwarding the launch is possible only with a dispatch transport
-    // (cloud mode) plus a coordinator daemonId to stamp into the worker so completion
-    // events route back here. Without either, fall back to a graceful skip.
-    //
-    // CANON-IDENTITY: read the daemonId through the normalizing helper (same defect class
-    // as the dispatch guard above). A raw `node.daemonId` read misses non-top-level-camelCase
-    // serialization forms (daemon_id / machine.daemonId / lastProbe.machine.daemon_id / …),
-    // so a genuinely-remote node arriving in one of those forms read empty here and was
-    // wrongly skipped as `remote_auto_launch_unsupported`. readMeshNodeDaemonId returns
-    // undefined (falsy) when absent — equivalent to the old readNonEmptyString + !daemonId
-    // guard, so local/self auto-launch is unchanged.
-    const daemonId = readMeshNodeDaemonId(node ?? {});
-    if (!daemonId) return { mode: 'skip', reason: 'remote_auto_launch_unsupported' };
-    if (!components.dispatchMeshCommand) return { mode: 'skip', reason: 'remote_auto_launch_unsupported' };
-    // CANON: stamp the canonical `daemon_mach_` coordinator anchor onto the remote
-    // worker (meshCoordinatorDaemonId) so its completion forwards back under the same
-    // form every other dispatch path uses — no producer-side coordinator-id skew.
-    const coordinatorDaemonId = localCoordinatorDaemonId();
-    if (!coordinatorDaemonId) return { mode: 'skip', reason: 'remote_auto_launch_no_coordinator_daemon_id' };
-    return { mode: 'remote', daemonId, coordinatorDaemonId };
-}
-
-function markAutoLaunch(meshId: string, taskId: string, args: {
-    status: 'skipped' | 'started' | 'failed' | 'completed';
-    reason?: string;
-    nodeId?: string;
-    providerType?: string;
-    sessionId?: string;
-    error?: string;
-    // LEDGER-TASK-TRACEABILITY (D): resolved execution profile for started/completed.
-    model?: string;
-    thinkingLevel?: string;
-    /**
-     * SPAWN-CAP-TRANSPORT-AWARE: set by the launch paths at the moment a session is known
-     * to exist (or cannot be proven NOT to exist), to spend one unit of the task's durable
-     * spawn budget. Never set on the pre-dispatch 'started' record — see
-     * recordTaskAutoLaunch for why intent is the wrong thing to charge for.
-     */
-    spendSpawnBudget?: boolean;
-    /**
-     * SPAWN-CAP-TRANSPORT-AWARE: set when the launch dispatch died in this coordinator's
-     * own transport (no session created anywhere). Recorded on its own durable axis so the
-     * park page can name the real failure mode instead of blaming the target node.
-     */
-    dispatchFailedInTransport?: boolean;
-}) {
-    const reason = args.reason || args.error;
-    if (args.status === 'skipped' && reason) recordQueueTaskHold(meshId, taskId, reason, args.nodeId);
-    const difficultyFloorSkip = args.status === 'skipped' && isDifficultyFloorWaitReason(reason);
-    if (difficultyFloorSkip) {
-        handleDifficultyFloorSkip({ meshId, taskId, reason: reason!, nodeId: args.nodeId, coordinatorDaemonId: localCoordinatorDaemonId() });
-    } else if (!autoLaunchWriteWouldClobberWinner(meshId, taskId, args, AUTO_LAUNCH_AWAIT_CLAIM_MS) && !autoLaunchWriteWouldClobberDifficultyFloorWaitClock(meshId, taskId, args.status, reason)) {
-        recordTaskAutoLaunch(meshId, taskId, {
-            status: args.status,
-            reason,
-            nodeId: args.nodeId,
-            providerType: args.providerType,
-            sessionId: args.sessionId,
-        }, { spendSpawnBudget: args.spendSpawnBudget });
-    } else if (args.spendSpawnBudget) {
-        // The clobber guards protect the `autoLaunch` FIELD (which launch owns the record),
-        // NOT the spawn budget. A suppressed write still represents a session that came into
-        // existence, so the budget must be spent regardless — otherwise a racing launch pair
-        // could spawn two sessions and be charged for one, the exact undercount the runaway
-        // defense cannot afford. Spend it without touching the protected field.
-        spendTaskAutoLaunchSpawnBudget(meshId, taskId);
-    }
-    if (args.dispatchFailedInTransport) recordTaskAutoLaunchDispatchFailure(meshId, taskId);
-    recordAutoLaunchEvent(meshId, {
-        phase: args.status,
-        taskId,
-        nodeId: args.nodeId,
-        providerType: args.providerType,
-        sessionId: args.sessionId,
-        reason: args.reason,
-        error: args.error,
-        ...(args.model ? { model: args.model } : {}),
-        ...(args.thinkingLevel ? { thinkingLevel: args.thinkingLevel } : {}),
-    });
-    // Fix (1): actively notify the coordinator of a non-self-resolving skip; re-arm the
-    // notification on any non-skip transition (started/completed) so a later genuine skip
-    // re-notifies.
-    if (args.status === 'skipped') {
-        if (isActionableSkipReason(args.reason)) {
-            notifyCoordinatorOfActionableSkip(meshId, taskId, args.reason, args.nodeId);
-        } else if (!difficultyFloorSkip && args.reason === TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON) {
-            // FALSE-BLOCKER-CLONE-QUEUE (stale-event clear): the unmatch is now known to be a
-            // self-resolving clone/bootstrap window — retract any earlier actionable blocker we
-            // paged for this same task. Other transient/back-pressure reasons (cooldown, caps)
-            // intentionally do NOT retract: they can mask a still-standing real blocker.
-            retractActionableSkipIfPreviouslyNotified(meshId, taskId);
-        }
-    } else {
-        // started/completed: the task is progressing — re-arm the de-dup ledger and retract
-        // any still-undelivered stale blocker for it.
-        retractActionableSkipIfPreviouslyNotified(meshId, taskId);
-    }
-}
-
-export const __markAutoLaunchForTests = markAutoLaunch;
 
 
 /**
@@ -1186,6 +1067,16 @@ async function autoLaunchUnderMaintenanceGate(components: DaemonComponents, mesh
                     task,
                     reason => markAutoLaunch(meshId, task.id, { status: 'skipped', reason }),
                     failRetentionExpiredParkedTask,
+                    (m, t) => {
+                        const out = requeueTaskWithOutcome(m, t, {
+                            reason: PARK_AUTO_UNPIN_REASON,
+                            clearTargetSession: true,
+                            clearTargetNode: true,
+                            preserveRetryBudget: true,
+                        });
+                        // A refused requeue (open attempt) returns the row unchanged, still parked.
+                        return out && !out.refusal && !taskIsParked(out.entry) ? out.entry : null;
+                    },
                 );
                 continue;
             }

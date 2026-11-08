@@ -366,7 +366,11 @@ describe('R1 — never a double run on an unknown state', () => {
             await vi.advanceTimersByTimeAsync(3 * 60_000);
             expect(dels(pty)).toBe(1);
             expect(pastes(pty)).toBe(1);
-            expect(fired).toEqual([]);
+            // AMBIGUOUS-SUBMIT TIME BOUND: past 120 s the chip is still visibly ours, so
+            // submit is pressed ONCE (3 budget keys + 1) — never a second paste — and the
+            // unconfirmed verdict follows; the slot stays held (composer not cleared).
+            expect(crs(pty)).toBe(4);
+            expect(fired).toHaveLength(1);
             expect(wrote(pty, 'NEXT BODY')).toBe(0);
         } finally {
             driver.shutdown();
@@ -1088,5 +1092,119 @@ describe('DISPATCH-ACK PRODUCER — the engine serializes each dispatch\'s input
         } finally {
             driver.shutdown();
         }
+    });
+});
+
+
+describe('AMBIGUOUS-SUBMIT TIME BOUND — one recovery after a quarantine that stays ambiguous', () => {
+    /** Quarantine a send via a DEL that does nothing; returns once the quarantine has begun. */
+    async function quarantined(consumption: 'consumed' | 'not_consumed' | 'unknown', cliOpts: Parameters<typeof fakeCli>[1]) {
+        vi.useFakeTimers();
+        setPlatform('darwin');
+        const { driver, pty } = await readyDriver();
+        const opts = { ...cliOpts };
+        const cli = fakeCli(pty, opts);
+        const fired = observe(driver, 'task:amb:n0', true, consumption);
+        driver.sendMessageWithDisposition(BODY, false, 'task:amb:n0');
+        await until(() => crs(pty) === 3);
+        await vi.advanceTimersByTimeAsync(10_000); // verdict gap + hold + stalled DEL → quarantine begins
+        return { driver, pty, cli, fired, opts };
+    }
+
+    it('ambiguous + nothing started: nothing is sent before the bound, then ONE submit, then dispatch_failed{unconfirmed}; and never again', async () => {
+        const { driver, pty, fired } = await quarantined('not_consumed', { del: 'ignore' });
+        try {
+            await vi.advanceTimersByTimeAsync(100_000);
+            expect(crs(pty)).toBe(3);
+            expect(fired).toEqual([]);
+            await vi.advanceTimersByTimeAsync(30_000);
+            expect(crs(pty)).toBe(4);
+            await until(() => fired.length === 1, 20_000);
+            expect(driver.submitState('task:amb:n0')).toBe('unconfirmed');
+            await vi.advanceTimersByTimeAsync(10 * 60_000);
+            expect(crs(pty)).toBe(4); // once only
+            expect(pastes(pty)).toBe(1);
+            expect(dels(pty)).toBe(1);
+            expect(fired).toHaveLength(1);
+        } finally { driver.shutdown(); }
+    });
+
+    it('ambiguous but the recovery key takes (turn starts): confirmed, no report, no more writes', async () => {
+        const { driver, pty, cli, fired } = await quarantined('not_consumed', { del: 'ignore' });
+        try {
+            await vi.advanceTimersByTimeAsync(110_000);
+            const before = crs(pty);
+            // the CLI takes the next Enter
+            const next = pty.onWrite!;
+            pty.onWrite = (d) => { if (d === '\r') { cli.composer = ''; cli.render(); pty.feed(footer('Thinking')); return; } next(d); };
+            await vi.advanceTimersByTimeAsync(30_000);
+            expect(crs(pty)).toBe(before + 1);
+            expect(fired).toEqual([]);
+            expect(driver.submitState('task:amb:n0')).toBe('confirmed');
+        } finally { driver.shutdown(); }
+    });
+
+    it('the turn started (FSM left idle) before the bound: nothing is ever re-sent', async () => {
+        const { driver, pty, fired } = await quarantined('not_consumed', { del: 'ignore' });
+        try {
+            await vi.advanceTimersByTimeAsync(60_000);
+            pty.feed(footer('Thinking'));
+            await vi.advanceTimersByTimeAsync(10 * 60_000);
+            expect(crs(pty)).toBe(3);
+            expect(pastes(pty)).toBe(1);
+            expect(fired).toEqual([]);
+        } finally { driver.shutdown(); }
+    });
+
+    it('the transcript shows the turn started (consumed) while the footer stays idle: no resend at the bound', async () => {
+        const { driver, pty, fired } = await quarantined('consumed', { del: 'ignore' });
+        try {
+            await vi.advanceTimersByTimeAsync(10 * 60_000);
+            expect(crs(pty)).toBe(3);
+            expect(pastes(pty)).toBe(1);
+            expect(fired).toEqual([]);
+        } finally { driver.shutdown(); }
+    });
+
+    it('foreign input after the write: ownership is not provable, nothing is re-sent at the bound', async () => {
+        const { driver, pty, fired } = await quarantined('not_consumed', { del: 'ignore' });
+        try {
+            driver.dispatch({ kind: 'pty_write', data: 'x' });
+            const before = crs(pty);
+            await vi.advanceTimersByTimeAsync(10 * 60_000);
+            expect(crs(pty)).toBe(before);
+            expect(pastes(pty)).toBe(1);
+            expect(fired).toEqual([]);
+        } finally { driver.shutdown(); }
+    });
+
+    it('composer proven empty at the bound and nothing started: ONE re-paste; a CLI that takes it is confirmed', async () => {
+        const { driver, pty, cli, fired, opts } = await quarantined('not_consumed', { del: 'ignore', takeEnterOnPaste: 2 });
+        try {
+            await vi.advanceTimersByTimeAsync(112_000);
+            cli.composer = ''; cli.render(); // empty for < COMPOSER_EMPTY_HOLD_MS when the bound is crossed
+            await until(() => pastes(pty) === 2, 30_000);
+            await until(() => cli.submitted.length === 1, 20_000);
+            await vi.advanceTimersByTimeAsync(5 * 60_000);
+            expect(pastes(pty)).toBe(2);
+            expect(fired).toEqual([]);
+            expect(driver.submitState('task:amb:n0')).toBe('confirmed');
+            void opts;
+        } finally { driver.shutdown(); }
+    });
+
+    it('composer proven empty at the bound: the re-paste is still unconfirmed → cleared and reported once, no third paste', async () => {
+        const { driver, pty, cli, fired, opts } = await quarantined('not_consumed', { del: 'ignore' });
+        try {
+            await vi.advanceTimersByTimeAsync(112_000);
+            opts.del = 'whole';
+            cli.composer = ''; cli.render();
+            await until(() => pastes(pty) === 2, 30_000);
+            await until(() => fired.length === 1, 60_000);
+            await vi.advanceTimersByTimeAsync(10 * 60_000);
+            expect(pastes(pty)).toBe(2);
+            expect(fired).toHaveLength(1);
+            expect(cli.composer).toBe('');
+        } finally { driver.shutdown(); }
     });
 });

@@ -188,50 +188,61 @@ function resolveHandoffOn(rt: SeqscribeRuntime | null): HandoffResolver {
     };
 }
 
+/**
+ * Type a nudge into a worker session through the input port (queue mode, idempotent by messageId),
+ * falling back to `send_chat`. Shared by the background-work guard and the report-missing nudge.
+ * `components` members are read at call time (built before every component exists).
+ */
+function createRuntimeNudgeWorker(
+    components: Pick<DaemonComponents, 'cliManager' | 'commandHandler' | 'sessionRegistry'>,
+): (sessionId: string, text: string, meta: { messageId: string }) => Promise<boolean> {
+    return async (sessionId, text, meta) => {
+        const target = components.sessionRegistry?.get(sessionId);
+        const resolvedSessionId = target?.adapterKey || target?.instanceKey || sessionId;
+        const inputPort = components.cliManager?.input;
+        if (inputPort) {
+            let out = await inputPort.submit({
+                messageId: meta.messageId,
+                sessionId: resolvedSessionId,
+                origin: 'mesh',
+                policy: { mode: 'queue' },
+                input: { parts: [{ type: 'text', text }], textFallback: text },
+                createdAt: Date.now(),
+            });
+            if (out.kind === 'refused' && out.reason === 'no_target' && resolvedSessionId !== sessionId) {
+                out = await inputPort.submit({
+                    messageId: meta.messageId,
+                    sessionId,
+                    origin: 'mesh',
+                    policy: { mode: 'queue' },
+                    input: { parts: [{ type: 'text', text }], textFallback: text },
+                    createdAt: Date.now(),
+                });
+            }
+            if (out.kind === 'delivered' || out.kind === 'queued' || out.kind === 'duplicate') {
+                return true;
+            }
+        }
+        if (components.commandHandler) {
+            await components.commandHandler.handle('send_chat', {
+                sessionId: resolvedSessionId,
+                messageId: meta.messageId,
+                text,
+                origin: 'mesh',
+            });
+            return true;
+        }
+        return false;
+    };
+}
+
 export function createRuntimeBackgroundWorkMonitor(
     components: Pick<DaemonComponents, 'cliManager' | 'commandHandler' | 'sessionRegistry'>,
 ): BackgroundWorkMonitor {
     return createBackgroundWorkMonitor({
         // `components.cliManager` is read at call time: the monitor is built here,
         // before every component exists, and only nudges once a worker has ended a turn.
-        nudgeWorker: async (sessionId, text, meta) => {
-            const target = components.sessionRegistry?.get(sessionId);
-            const resolvedSessionId = target?.adapterKey || target?.instanceKey || sessionId;
-            const inputPort = components.cliManager?.input;
-            if (inputPort) {
-                let out = await inputPort.submit({
-                    messageId: meta.messageId,
-                    sessionId: resolvedSessionId,
-                    origin: 'mesh',
-                    policy: { mode: 'queue' },
-                    input: { parts: [{ type: 'text', text }], textFallback: text },
-                    createdAt: Date.now(),
-                });
-                if (out.kind === 'refused' && out.reason === 'no_target' && resolvedSessionId !== sessionId) {
-                    out = await inputPort.submit({
-                        messageId: meta.messageId,
-                        sessionId,
-                        origin: 'mesh',
-                        policy: { mode: 'queue' },
-                        input: { parts: [{ type: 'text', text }], textFallback: text },
-                        createdAt: Date.now(),
-                    });
-                }
-                if (out.kind === 'delivered' || out.kind === 'queued' || out.kind === 'duplicate') {
-                    return true;
-                }
-            }
-            if (components.commandHandler) {
-                await components.commandHandler.handle('send_chat', {
-                    sessionId: resolvedSessionId,
-                    messageId: meta.messageId,
-                    text,
-                    origin: 'mesh',
-                });
-                return true;
-            }
-            return false;
-        },
+        nudgeWorker: createRuntimeNudgeWorker(components),
     });
 }
 
@@ -301,6 +312,19 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
                 reason: 'turn_ledger_cancel_dispatch',
             });
         },
+        // Past stoppingForceAfterMs: the same exact-stop envelope with `force: true`, which the host
+        // answers with its session-host compare-and-stop (see forceEndHostedWriter).
+        forceStopWriter: (request) => {
+            if (!request.meshId || !request.stopRequestId) return { success: false, code: 'writer_checkpoint_pending', reason: 'uncaptured_legacy_stop_identity' };
+            return stopStaleMeshWorker(components, {
+                meshId: request.meshId,
+                sessionId: request.sessionId,
+                ...(request.nodeId ? { nodeId: request.nodeId } : {}),
+                ...(request.providerType ? { providerType: request.providerType } : {}),
+                writerStop: { ...request, force: true, inspectOnly: false },
+                reason: 'turn_ledger_force_stop',
+            });
+        },
         // The writer's node left the mesh: nobody can be asked to confirm its stop. Unknown
         // mesh / unreadable membership is never "removed".
         writerNodeRemoved: ({ meshId, nodeId }) => {
@@ -318,6 +342,8 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
             detachLocalMeshTaskStamp(components, request);
         },
         probe: (e) => lateProbe.port(e),
+        // R13q/R13d: ask a report-owing idle worker for report_completion once (see REPORT_MISSING_NUDGE_TEXT).
+        nudgeWorker: (e) => createRuntimeNudgeWorker(components)(e.sessionId, e.text, { messageId: e.messageId }),
         // SUBMIT-UNCONFIRMED-RECLAIM ②: H2 lands here — probe now, never
         // re-send (mesh-dispatch-redelivery.ts explains why).
         redeliver: (e) => {

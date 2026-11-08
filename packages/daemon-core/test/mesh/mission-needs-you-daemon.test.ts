@@ -15,7 +15,7 @@ vi.mock('../../src/config/config.js', () => ({
     getMachineNickname: () => null,
 }));
 
-import { upsertStructuredMission } from '../../src/mesh/mesh-mission-structured.js';
+import { upsertStructuredMission, MAX_OPEN_LIVE_CHECKS_PER_MESH } from '../../src/mesh/mesh-mission-structured.js';
 import { answerMissionDecision, buildOpenLiveChecks } from '../../src/mesh/mesh-mission-decisions.js';
 import { getMeshMission } from '../../src/mesh/mesh-missions.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
@@ -81,5 +81,25 @@ describe('Reopen on the owner_abandoned confirmation (acceptance 11)', () => {
         expect(answerMissionDecision({ meshId, itemId: confirmId, optionId: 'a' }, owner)).toMatchObject({ ok: true });
         expect(getMeshMission(meshId, missionId)!.status).toBe('abandoned');
         expect(store().missionItems().getItem(meshId, confirmId)!.state).toBe('answered');
+    });
+});
+
+describe('open live-check cap per mesh', () => {
+    it('stores live checks past the cap as remaining, and dedupes/revives the existing ones', () => {
+        const adds = Array.from({ length: MAX_OPEN_LIVE_CHECKS_PER_MESH + 2 }, (_, i) => ({ kind: 'live_check', text: `check ${i}` }));
+        const { record, result } = write({ title: 'Cap', goal: 'g', itemsAdd: adds });
+        const kinds = result.itemResults.map(r => r.kind);
+        expect(kinds.filter(k => k === 'live_check')).toHaveLength(MAX_OPEN_LIVE_CHECKS_PER_MESH);
+        expect(kinds.slice(MAX_OPEN_LIVE_CHECKS_PER_MESH)).toEqual(['remaining', 'remaining']);
+        expect(result.itemResults[MAX_OPEN_LIVE_CHECKS_PER_MESH].note).toMatch(/^live_check_cap/);
+        expect(buildOpenLiveChecks(meshId)).toHaveLength(MAX_OPEN_LIVE_CHECKS_PER_MESH);
+        // Re-adding an existing open live check is still a plain dedupe, not a downgrade.
+        const again = write({ id: record.id, title: '', itemsAdd: [{ kind: 'live_check', text: 'check 0' }] });
+        expect(again.result.itemResults[0]).toMatchObject({ kind: 'live_check', deduped: true });
+        expect(again.result.itemResults[0].note).toBeUndefined();
+        // Closing one frees a slot.
+        write({ id: record.id, title: '', itemsUpdate: [{ id: result.itemResults[0].id, state: 'done' }] });
+        const fresh = write({ id: record.id, title: '', itemsAdd: [{ kind: 'live_check', text: 'new owner check' }] });
+        expect(fresh.result.itemResults[0].kind).toBe('live_check');
     });
 });

@@ -55,6 +55,9 @@ import {
 } from './fsm-driver-frame.js';
 import { deriveModal, deriveTitle, pressModalButton } from './fsm-driver-modal.js';
 import { FocusPrimer } from './fsm-focus-primer.js';
+import {
+    attachImageToTmpAndSend, deriveControls, logShadowDivergence, pickerWaitSatisfied, pushFsmSnapshot, runControlAction, soonestPendingTransitionMs,
+} from './fsm-driver-controls.js';
 
 
 // ── send_message serialization (SEND-OVERLAP) ────────────────────────────────
@@ -73,7 +76,6 @@ let fsmDriverSeq = 0;
 // the win32 modal-confirm resend cadence (an approval CR, not a send_message
 // submit — see scheduleWin32ModalConfirm) and guessExt for attach_image.
 import {
-    guessExt,
     WIN32_SUBMIT_RESEND_GAP_MS,
     WIN32_SUBMIT_MAX_RESENDS,
 } from './submit-policy.js';
@@ -660,35 +662,8 @@ export class FsmDriver implements ISpecDriver {
         return evaluateFsm(this.spec, this.currentStateId, guard.screen, cursor, prev, this.buildClock(now), this.signalObservation, viewportStartRow);
     }
 
-    /**
-     * TX-FSM Stage 0 (shadow): compare each signal-guarded transition's
-     * counterfactual verdict against the real (PTY-only) one and log on FLIP.
-     * This is the "만약 적용했다면" half of the shadow log — the Stage 1-3
-     * evidence for whether signal gating would have changed any verdict, and
-     * in which direction. Read-only: runs after the evaluation is complete
-     * and never feeds back into it.
-     */
     private logShadowDivergence(ev: FsmEvaluation): void {
-        for (const t of ev.transitions) {
-            if (!t.shadow) continue;
-            const key = `${this.currentStateId}→${t.to}`;
-            const diverges = t.shadow.fires !== t.fires;
-            if ((this.shadowDivergenceLast.get(key) ?? false) === diverges) continue;
-            this.shadowDivergenceLast.set(key, diverges);
-            if (diverges) {
-                LOG.info(
-                    'FsmDriver',
-                    `[${this.specTag()}] [shadow] ${key} (${t.label}): real fires=${t.fires}`
-                    + ` but signal-gated verdict would be fires=${t.shadow.fires}`
-                    + ` (shadowCond=${t.shadow.condResult}${t.shadow.unknown ? ', signal unknown/fail-open' : ''})`,
-                );
-            } else {
-                LOG.info(
-                    'FsmDriver',
-                    `[${this.specTag()}] [shadow] ${key} (${t.label}): shadow verdict realigned with real fires=${t.fires}`,
-                );
-            }
-        }
+        logShadowDivergence(ev, this.currentStateId, this.shadowDivergenceLast, this.specTag());
     }
 
     private reevaluate(forceEmit = false): void {
@@ -833,21 +808,8 @@ export class FsmDriver implements ISpecDriver {
         if (!this.tornDown && this.adapter.hasActivePty()) { this.reevaluate(true); this.armPostTransitionReevaluate(); } else this.emitStateChanged(true);
     }
 
-    /** Snapshot the full FSM evaluation that produced a transition into the
-     *  separate fsmSnapshotHistory ring buffer (max 20). The transitions[]
-     *  table is captured by reference — it is freshly built per evaluation in
-     *  evaluateFsm and never mutated after, so no clone is needed. */
     private pushFsmSnapshot(from: string, fired: TransitionEval, now: number, ev: FsmEvaluation): void {
-        this.fsmSnapshotHistory.push({
-            stateFrom: from,
-            stateTo: fired.to,
-            at: now,
-            firedTo: fired.to,
-            firedLabel: fired.label,
-            reason: summarizeTransition(fired),
-            transitions: ev.transitions,
-        });
-        if (this.fsmSnapshotHistory.length > 20) this.fsmSnapshotHistory.shift();
+        pushFsmSnapshot(this.fsmSnapshotHistory, from, fired, now, ev);
     }
 
     /** Re-derive the visible modal + controls for the current state and emit a
@@ -936,12 +898,7 @@ export class FsmDriver implements ISpecDriver {
     }
 
     private deriveControls(stateId: string): VisibleControl[] {
-        const out: VisibleControl[] = [];
-        for (const c of this.spec.control_bar ?? []) {
-            if (c.visible_when_state && !c.visible_when_state.includes(stateId)) continue;
-            out.push({ id: c.id, label: c.label, actionType: c.action.type });
-        }
-        return out;
+        return deriveControls(this.spec, stateId);
     }
 
     /** Schedule a re-evaluation for the soonest pending time-condition on any
@@ -952,15 +909,7 @@ export class FsmDriver implements ISpecDriver {
         if (this.wakeTimer) { clearTimeout(this.wakeTimer); this.wakeTimer = null; }
         const ev = this.lastFsmEval;
         if (!ev) return;
-        let soonest = Infinity;
-        for (const t of ev.transitions) {
-            if (t.fires) continue;
-            if (!t.holdSatisfied) soonest = Math.min(soonest, t.holdRemainingMs);
-            const condRemain = t.cond ? t.cond.remainingMs ?? Infinity : Infinity;
-            // Only treat the cond countdown as a wake source when the rest of
-            // the guard (hold) is already or will be satisfied.
-            if (Number.isFinite(condRemain) && condRemain > 0) soonest = Math.min(soonest, condRemain);
-        }
+        let soonest = soonestPendingTransitionMs(ev);
         // APPROVE-LATCH-STALE fix ② (defence in depth): an approval state whose
         // exits are pure CONTENT guards contributes nothing finite above, so the
         // loop leaves `soonest = Infinity` and NO timer is armed — the latched
@@ -1166,31 +1115,8 @@ export class FsmDriver implements ISpecDriver {
         const ctl = (this.spec.control_bar ?? []).find(c => c.id === controlId);
         if (!ctl) return;
         if (ctl.visible_when_state && !ctl.visible_when_state.includes(this.currentStateId)) return;
-        const a = ctl.action;
-        switch (a.type) {
-            case 'send_keys': this.adapter.send_keys(a.keys); return;
-            case 'open_picker':
-                // Some TUIs (e.g. codex) don't register a slash command if its
-                // text and the submitting Enter arrive in the same write — the
-                // composer needs a beat to recognise the command before the CR.
-                // Split a trailing CR/LF off the trigger and send it after a
-                // short delay, mirroring send_message's delay_ms_before_submit.
-                {
-                    const m = /^([\s\S]*?)([\r\n]+)$/.exec(a.trigger_keys);
-                    if (m && m[1]) {
-                        this.adapter.send_keys(m[1]);
-                        setTimeout(() => this.adapter.send_keys(m[2]), 200);
-                    } else {
-                        this.adapter.send_keys(a.trigger_keys);
-                    }
-                }
-                this.pickerInProgress = { control_id: ctl.id, spec: ctl };
-                return;
-            case 'attach_image': {
-                const p = typeof payload === 'object' && payload && (payload as any).path;
-                if (typeof p === 'string') this.adapter.send_keys(a.keys_template.replace(/\{path\}/g, p));
-                return;
-            }
+        if (runControlAction(ctl, payload, keys => this.adapter.send_keys(keys))) {
+            this.pickerInProgress = { control_id: ctl.id, spec: ctl };
         }
     }
 
@@ -1269,25 +1195,13 @@ export class FsmDriver implements ISpecDriver {
     }
 
     private handleAttachImage(blob: string, mime: string): void {
-        const ctl = (this.spec.control_bar ?? []).find(c => c.action.type === 'attach_image');
-        if (!ctl || ctl.action.type !== 'attach_image') return;
-        const ext = guessExt(mime);
-        const tmp = path.join(os.tmpdir(), `adhdev-attach-${Date.now()}${ext}`);
-        try { fs.writeFileSync(tmp, Buffer.from(blob, 'base64')); } catch { return; }
-        this.adapter.send_keys(ctl.action.keys_template.replace(/\{path\}/g, tmp));
+        attachImageToTmpAndSend(this.spec, blob, mime, keys => this.adapter.send_keys(keys));
     }
 
     private tryAdvancePicker(screen: string): void {
         const picker = this.pickerInProgress;
         if (!picker) return;
-        const action = picker.spec.action;
-        if (action.type !== 'open_picker' || !action.wait_for.regex) return;
-        const lines = screen.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
-        const sections = resolveSections(this.spec.sections ?? {}, lines);
-        const hay = sectionText(sections, action.wait_for.section, lines.join('\n'));
-        const re = new RegExp(action.wait_for.regex, action.wait_for.flags ?? 'i');
-        if (!re.test(hay)) return;
-        this.pickerInProgress = null;
+        if (pickerWaitSatisfied(picker, this.spec, screen)) this.pickerInProgress = null;
     }
 
     private handleExit(info: PtyRuntimeExitInfo): void {

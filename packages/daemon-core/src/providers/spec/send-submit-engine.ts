@@ -360,6 +360,7 @@ export class SendSubmitEngine {
         this.verdicts = new SubmitVerdictMachine({
             specTag: () => host.specTag(),
             currentStatus: () => host.currentStatus(),
+            submitKey: () => host.spec.send_message?.submit_key ?? '\r',
             adapter: host.adapter,
             writeOwnKeysGuarded: (keys) => {
                 const written = this.host.adapter.writeIfInputUnchanged(keys);

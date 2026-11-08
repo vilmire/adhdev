@@ -218,6 +218,8 @@ describe('(b) attempt-less assigned rows are reclaimed by housekeeping', () => {
     });
 
     it('a confirmed dead correlated worker is reclaimed through the ledger and releases the node write gate', async () => {
+        // The clock jumps past the 30-min no-output reclaim; turn it off so this case proves the dead-session path.
+        vi.stubEnv('ADHDEV_TURN_STALL_RECLAIM_MS', '0');
         let now = NOW;
         const ledger = createMeshRuntimeTurnLedger({ selfDaemonId: 'test-machine', publisher: fakePublisher(), now: () => now });
         const id = assignedRow({ ageMs: STALE_ASSIGNED_QUEUE_MS + 1000, sessionId: 'sess_gone' });
@@ -244,6 +246,7 @@ describe('(b) attempt-less assigned rows are reclaimed by housekeeping', () => {
         expect(ledger.getAttempt(attemptId)).toMatchObject({ generation: 1, reclaimCount: 1 });
         expect(nodeHasActiveWriteAssignment(meshId, NODE)).toBe(false);
         scheduler.stop();
+        vi.unstubAllEnvs();
     });
 
     it('never touches a row whose session is live, or whose liveness is unknown', () => {

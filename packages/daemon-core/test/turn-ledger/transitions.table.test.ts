@@ -47,6 +47,8 @@ interface Fixture {
     state: TurnState | null;
     effects?: TurnEffectKind[];
     generation?: number;
+    /** Ledger-computed reducer inputs (capabilities), when the rule needs one. */
+    extra?: { backgroundWorkLive?: boolean };
 }
 
 const G = (o: Partial<TurnAttempt> = {}) => makeAttempt('generating', o);
@@ -96,8 +98,9 @@ const FIRES: Record<string, Fixture> = {
     R11d: { attempt: makeAttempt('finalizing'), holds: [makeHold('await_report')], evidence: ev('transcript_final', { selfAttributing: false, nativeRead: true, nativeMarker: { outcome: 'completed' }, live: LIVE_IDLE }), state: 'finalizing', effects: ['record'] },
     R12r: { attempt: makeAttempt('finalizing'), holds: [makeHold('await_report')], evidence: ev('turn_started', { retro: false }), state: 'generating', effects: ['release_hold', 'hold', 'bus', 'record'] },
     R13r: { attempt: makeAttempt('finalizing', { scope: 'plain', lastLiveness: 'alive', data: { livenessObservation: { generation: 1, sessionId: 's1', at: NOW, probeStartedAt: NOW } } }), holds: [makeHold('await_report')], evidence: expired('await_report'), state: 'completed', effects: ['commit'] },
-    R13q: { attempt: makeAttempt('finalizing'), holds: [makeHold('await_report')], evidence: expired('await_report'), state: 'finalizing', effects: ['release_hold', 'record', 'notify_coordinator'] },
-    R13d: { attempt: makeAttempt('finalizing', { scope: 'mesh_direct' }), holds: [makeHold('await_report')], evidence: expired('await_report'), state: 'finalizing', effects: ['release_hold', 'record', 'notify_coordinator'] },
+    R13q: { attempt: makeAttempt('finalizing'), holds: [makeHold('await_report')], evidence: expired('await_report'), state: 'finalizing', effects: ['release_hold', 'record', 'notify_coordinator', 'hold', 'nudge_worker'] },
+    R13d: { attempt: makeAttempt('finalizing', { scope: 'mesh_direct' }), holds: [makeHold('await_report')], evidence: expired('await_report'), state: 'finalizing', effects: ['release_hold', 'record', 'notify_coordinator', 'hold', 'nudge_worker'] },
+    R13m: { attempt: makeAttempt('finalizing', { data: { reportMissingNudge: { generation: 1, count: 1, at: NOW - 1 } } }), holds: [makeHold('await_report')], evidence: expired('await_report'), state: 'completed', effects: ['release_hold', 'record', 'commit', 'notify_coordinator'] },
     R13n: { attempt: makeAttempt('finalizing'), holds: [makeHold('await_report', { data: { nativeProbeReportOnly: true } })], evidence: expired('await_report'), state: 'finalizing', effects: ['release_hold', 'record'] },
     R13a: { attempt: makeAttempt('finalizing', { lastLiveness: 'alive', data: { livenessObservation: { generation: 1, sessionId: 's1', at: NOW, probeStartedAt: NOW } } }), holds: [makeHold('weak_candidate')], evidence: expired('weak_candidate'), state: 'completed', effects: ['commit'] },
     R13u: { attempt: makeAttempt('finalizing', { scope: 'plain', lastLiveness: 'unknown' }), holds: [makeHold('await_report')], evidence: expired('await_report'), state: 'finalizing', effects: ['hold', 'probe'] },
@@ -145,6 +148,8 @@ const FIRES: Record<string, Fixture> = {
     H3: { attempt: makeAttempt('delivered'), holds: [makeHold('await_turn')], evidence: expired('await_turn'), state: 'stopping', generation: 1, effects: ['cancel_dispatch', 'hold'] },
     H4: { attempt: G(), holds: [makeHold('liveness')], evidence: expired('liveness'), state: 'generating', effects: ['probe', 'hold'] },
     H5: { attempt: G(), holds: [makeHold('hard_ceiling')], evidence: expired('hard_ceiling'), state: 'stopping', effects: ['cancel_dispatch', 'hold'] },
+    H8: { attempt: G(), holds: [makeHold('stall_ceiling')], evidence: expired('stall_ceiling'), state: 'stopping', effects: ['cancel_dispatch', 'hold'] },
+    H8b: { attempt: G(), holds: [makeHold('stall_ceiling')], evidence: expired('stall_ceiling'), state: 'generating', effects: ['hold', 'record'], extra: { backgroundWorkLive: true } },
     H6: { attempt: makeAttempt('delivered'), holds: [makeHold('suspension_before_consumed')], evidence: expired('suspension_before_consumed'), state: 'delivered', effects: ['release_hold'] },
     H7: { attempt: G(), holds: [makeHold('live_pending')], evidence: expired('live_pending'), state: 'generating', effects: ['release_hold', 'reevaluate'] },
 };
@@ -163,7 +168,7 @@ describe('TRANSITIONS table', () => {
     for (const rule of TRANSITIONS) {
         it(`${rule.id} fires from its minimal fixture`, () => {
             const fx = FIRES[rule.id]!;
-            const result = reduce({ attempt: fx.attempt, holds: fx.holds ?? [], evidence: fx.evidence, policy: POLICY, nowMs: NOW });
+            const result = reduce({ attempt: fx.attempt, holds: fx.holds ?? [], evidence: fx.evidence, policy: POLICY, nowMs: NOW, ...fx.extra });
             expect(result.rule).toBe(rule.id);
             expect(result.verdict).toBe(rule.verdict);
             expect(result.attempt?.state ?? null).toBe(fx.state ?? null);
@@ -194,6 +199,8 @@ describe('rule matching is unambiguous', () => {
         // 2026-10-13: an unconfirmed last liveness verdict gates R13a/R13r → R13u (re-probe) / R13x (deferral spent).
         makeAttempt(state, { lastLiveness: 'unknown' }),
         makeAttempt(state, { lastLiveness: 'read_failed', data: { unconfirmedEndDeferral: { generation: 1, count: 1 } } }),
+        // The report-missing nudge was sent: R13q/R13d yield to R13m (exclusive guards).
+        makeAttempt(state, { data: { reportMissingNudge: { generation: 1, count: 1, at: NOW - 1 } } }),
     ];
 
     it('at most one rule matches any (state, kind, guard variant, attempt variant)', () => {
@@ -220,11 +227,12 @@ describe('rule matching is unambiguous', () => {
         expect(ambiguous).toEqual([]);
         // 65 evidence variants (all 24 kinds; +correction request/expiry, +6 report-gate variants 2026-09-24, +1 await_end expiry 2026-09-25,
         // +3 auth-failed turn_end variants 2026-10-06 — R9f, +2 owner-scraped transcript_final 2026-10-08 — R15p)
-        // × (1 no-attempt + 62 attempt variants (including stopping and blocked terminal) (+6 reported, 2026-09-25; +18 liveness-gated, 2026-10-13) × 2 lanes).
+        // +1 stall_ceiling expiry variant (2026-11-08), +11 nudged attempt variants (1 per state)
+        // × (1 no-attempt + 73 attempt variants (including stopping and blocked terminal) (+6 reported, 2026-09-25; +18 liveness-gated, 2026-10-13) × 2 lanes).
         const variantCount = TURN_EVIDENCE_KINDS.reduce((n, kind) => n + variantsFor(kind).length, 0);
-        expect(variantCount).toBe(65);
+        expect(variantCount).toBe(66);
         expect(TURN_STATES).toHaveLength(11);
-        expect(visited).toBe(65 * (1 + 62 * 2));
+        expect(visited).toBe(66 * (1 + 73 * 2));
     });
 });
 

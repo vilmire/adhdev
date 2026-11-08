@@ -698,6 +698,12 @@ export function requeueTaskWithOutcome(
          * only instruction would produce a row that can be dispatched but says nothing.
          */
         message?: string;
+        /**
+         * Reopen the row WITHOUT spending the retry budget: skips the maxRetries
+         * cap check and leaves requeueCount unchanged. For daemon-initiated
+         * releases that are not execution attempts (park auto-unpin).
+         */
+        preserveRetryBudget?: boolean;
         /** Replace the task's required capability tags (provider pin etc.); [] clears them. */
         requiredTags?: string[];
     } & MeshQueueMutationOptions,
@@ -801,7 +807,7 @@ export function requeueTaskWithOutcome(
 
         const currentCount = entry.requeueCount || 0;
         const maxRetries = opts?.maxRetries ?? entry.maxRetries ?? 1;
-        if (!opts?.force && currentCount >= maxRetries) {
+        if (!opts?.force && !opts?.preserveRetryBudget && currentCount >= maxRetries) {
             // Auto-fail: cap exceeded without explicit force override.
             // (failTaskAsUndeliverable reaches this with maxRetries:0.)
             entry.cancelReason = `max_retries_exceeded: requeued ${currentCount} time(s), limit is ${maxRetries}`;
@@ -822,7 +828,7 @@ export function requeueTaskWithOutcome(
         if (opts?.clearTargetSession !== false) delete entry.targetSessionId;
         if (typeof opts?.targetSessionId === 'string') entry.targetSessionId = opts.targetSessionId;
         entry.requeuedAt = new Date().toISOString();
-        entry.requeueCount = currentCount + 1;
+        entry.requeueCount = opts?.preserveRetryBudget ? currentCount : currentCount + 1;
         if (opts?.reason) entry.requeueReason = opts.reason;
         applyRequeueMessageEdit(entry, opts?.message);
             applyRequeueRequiredTags(entry, opts?.requiredTags);

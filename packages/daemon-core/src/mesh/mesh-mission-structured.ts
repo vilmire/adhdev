@@ -73,7 +73,16 @@ export interface MissionItemResult {
     answer?: unknown;
     truncated?: string[];
     error?: string;
+    /** Why the stored kind differs from the requested one (e.g. a live check over the open cap became remaining). */
+    note?: string;
 }
+
+/**
+ * Open live checks per mesh. A live check is something the OWNER checks by hand on a screen; past
+ * this many, a new one is stored as `remaining` instead so Needs You stays a short, answerable list
+ * (2026-11-09: 45 open live checks, nearly all engineering verification the owner cannot answer).
+ */
+export const MAX_OPEN_LIVE_CHECKS_PER_MESH = 5;
 
 export interface StructuredWriteResult {
     missionId: string;
@@ -140,7 +149,14 @@ export function addNormalizedItem(
     actor: MissionWriteActor,
 ): MissionItemResult {
     const items = store().missionItems();
-    const base: MissionItemResult = { op: 'add', kind: n.kind, ...(n.truncated.length ? { truncated: n.truncated } : {}) };
+    let capNote: string | undefined;
+    if (n.kind === 'live_check'
+        && !items.findByDedupeKey(missionId, n.dedupeKey)
+        && items.listOpenByKind(meshId, 'live_check').length >= MAX_OPEN_LIVE_CHECKS_PER_MESH) {
+        n = { ...n, kind: 'remaining' };
+        capNote = `live_check_cap: ${MAX_OPEN_LIVE_CHECKS_PER_MESH} live checks are already open on this mesh — stored as remaining. Keep live checks for what the owner can check on a screen in a minute; close stale ones first.`;
+    }
+    const base: MissionItemResult = { op: 'add', kind: n.kind, ...(n.truncated.length ? { truncated: n.truncated } : {}), ...(capNote ? { note: capNote } : {}) };
     // A decision re-asked ANYWHERE on the mesh returns the earlier item — and its answer if it has one.
     if (n.kind === 'decision') {
         const found = items.findDecisionByKey(meshId, n.dedupeKey, ['open', 'answered']);

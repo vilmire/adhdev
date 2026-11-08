@@ -182,6 +182,9 @@ export const HOLD_REASONS = [
     // a session whose FSM never shows the idle edge again does not wait for
     // liveness / hard_ceiling.
     'await_end', 'report_correction',
+    // A generating mesh attempt with no output/activity for `stallReclaimMs`: expiry reclaims it
+    // (`stalled_no_output`) instead of waiting for the hard ceiling. Re-armed by every output.
+    'stall_ceiling',
 ] as const
 export type HoldReason = typeof HOLD_REASONS[number]
 
@@ -195,7 +198,7 @@ export type CommitStrength = typeof COMMIT_STRENGTHS[number]
 export const TURN_REASONS = [
     // commits
     'turn_end', 'weak_end_confirmed', 'transcript_final', 'worker_reported',
-    'finalization_timeout_no_response', 'weak_end_liveness_unconfirmed', 'weak_end_probe_unobserved', 'report_correction_expired', 'session_error', 'provider_auth_failed', 'provider_billing_failed', 'provider_usage_limit_exceeded', 'provider_server_overloaded', 'provider_error',
+    'finalization_timeout_no_response', 'weak_end_liveness_unconfirmed', 'weak_end_probe_unobserved', 'report_correction_expired', 'report_missing_timeout', 'session_error', 'provider_auth_failed', 'provider_billing_failed', 'provider_usage_limit_exceeded', 'provider_server_overloaded', 'provider_error',
     'operator_cancel', 'intentional_cleanup', 'task_removed', 'mission_abandoned', 'superseded',
     'operator_update', 'refine_terminal', 'validation_terminal',
     'hard_ceiling', 'reclaim_budget_exhausted', 'hollow_max_retries', 'migration_orphan',
@@ -205,6 +208,8 @@ export const TURN_REASONS = [
     'dispatch_refused_session_exited', 'dispatch_refused_no_target', 'dispatch_refused_unsupported_input', 'dispatch_failed',
     'session_exit', 'session_exit_before_turn', 'session_dead', 'hollow_completion',
     'assigned_stranded_dispatch_unconfirmed', 'delivered_not_consumed_redrive', 'delivered_no_turn_deadline',
+    // a generating worker produced no output/activity for the stall reclaim bound
+    'stalled_no_output',
 ] as const
 export type TurnReason = typeof TURN_REASONS[number]
 

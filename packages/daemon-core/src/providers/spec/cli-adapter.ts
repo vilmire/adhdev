@@ -27,11 +27,13 @@ import { invokeSpecControl } from './picker-controls.js';
 import { executeNativeHistory } from './native-history-executor.js';
 import type { NativeHistoryInput } from './native-history-types.js';
 import { expandToolBlock, type ToolBlockExpandResult } from './tool-block-expand.js';
-import { createCodexNativeTurnHold } from './native-turn-hold.js'; import { detectBackgroundTaskActive, backgroundTaskSnapshot, type BackgroundTaskDetection } from './background-task-detector.js';
+import { createCodexNativeTurnHold } from './native-turn-hold.js'; import type { BackgroundTaskDetection } from './background-task-detector.js';
 import {
-    buildSpecDebugSnapshot, buildSpecTraceState, extractCodexSessionIdFromScreen,
-    scrapeScreenAssistantMessages, screenScrapeSupported, type SpecDebugView,
+    buildSpecDebugSnapshot, buildSpecTraceState, type SpecDebugView,
 } from './spec-adapter-readouts.js';
+import {
+    detectSpecBackgroundTask, extractProviderSessionIdFromScreen, readScreenAssistantMessages,
+} from './spec-adapter-screen-reads.js';
 import * as fs from 'node:fs';
 import type { NativeHistoryConfig, Control } from './types.js';
 import { resolveInterruptCapability, type InterruptCapability } from './interrupt-capability.js';
@@ -558,37 +560,12 @@ export class SpecCliAdapter implements CliAdapter {
     }
 
     private detectBackgroundTask(): BackgroundTaskDetection {
-        if (this.cliType === 'kimi' && (this.spec.native_history?.source?.kind === 'jsonl' || this.kimiBackgroundReader)) {
-            const reader = (this.kimiBackgroundReader ??= new KimiPendingQuestionReader(
+        return detectSpecBackgroundTask(
+            this.cliType, this.spec.native_history, this.kimiBackgroundReader,
+            () => (this.kimiBackgroundReader ??= new KimiPendingQuestionReader(
                 () => this.notifyChange('fsm_state'), this.specPath, header => Object.assign(this.spec, header),
-                () => this.nativeHistoryInput({ withOwner: false }), true));
-            const view = reader.read(this.spec.native_history, this.nativeHistoryInput({ withOwner: false }));
-            return backgroundTaskSnapshot(view.state, view.background);
-        }
-        if (!this.spec.native_history?.source) {
-            // antigravity-cli declares no declarative `source` (its authority is
-            // the per-session conversations/<uuid>.db, read via the built-in
-            // reader) — the detector dispatches on agentType and resolves the
-            // store itself. Without this branch antigravity reported
-            // support:'unknown' and the background_task_active hold was silently
-            // inert (the early-completion defect: a worker ending its turn with
-            // an async run_command still running projected completed).
-            if (this.cliType === 'antigravity-cli') {
-                try {
-                    return detectBackgroundTaskActive(undefined, this.nativeHistoryInput({ withOwner: true }));
-                } catch {
-                    return { active: false, count: 0, ids: [], support: 'unknown' };
-                }
-            }
-            // No transcript source: only the detector can say whether this
-            // provider is tracked at all (claude-cli/kimi) or unknown.
-            return { active: false, count: 0, ids: [], support: this.cliType === 'claude-cli' || this.cliType === 'kimi' ? 'tracked' : 'unknown' };
-        }
-        try {
-            return detectBackgroundTaskActive(this.spec.native_history, this.nativeHistoryInput({ withOwner: false }));
-        } catch {
-            return { active: false, count: 0, ids: [], support: 'unknown' };
-        }
+                () => this.nativeHistoryInput({ withOwner: false }), true)),
+            opts => this.nativeHistoryInput(opts));
     }
 
     shutdown(): void {
@@ -1153,40 +1130,15 @@ export class SpecCliAdapter implements CliAdapter {
         }
     }
 
-    private readCurrentScreenSections(screenText: string): Record<string, string> {
-        try {
-            // Resolve against the caller's screen, not a fresh read.
-            const sections = this.driver.getSections(screenText) ?? [];
-            return Object.fromEntries(sections.map(section => [section.id, section.text]));
-        } catch {
-            return {};
-        }
-    }
-
     private extractProviderSessionIdFromScreen(): string | undefined {
-        if (this.cliType !== 'codex-cli') return this.providerSessionId;
-        let screenText = '';
-        try {
-            screenText = this.driver.snapshot();
-        } catch {
-            return this.providerSessionId;
-        }
-        return extractCodexSessionIdFromScreen(screenText) || this.providerSessionId;
+        return extractProviderSessionIdFromScreen(this.driver, this.cliType, this.providerSessionId);
     }
 
     /** cursor-cli only: settled-screen final answer (completion last resort; see cursor-screen-messages.ts). */
     readSettledScreenFinalAssistant(): ChatMessage[] { return this.cliType === 'cursor-cli' ? readSettledCursorScreen(() => this.driver.snapshot(), this.owningSessionId) : []; }
     /** PTY-scrape assistant bubbles — see scrapeScreenAssistantMessages. */
     private readScreenAssistantMessages(): ChatMessage[] {
-        if (!screenScrapeSupported(this.cliType)) return [];
-        let screenText = '';
-        try {
-            screenText = this.driver.snapshot();
-        } catch {
-            return [];
-        }
-        const body = this.cliType === 'claude-cli' ? this.readCurrentScreenSections(screenText).body : undefined;
-        return scrapeScreenAssistantMessages(this.cliType, screenText, body);
+        return readScreenAssistantMessages(this.driver, this.cliType);
     }
 
     /**

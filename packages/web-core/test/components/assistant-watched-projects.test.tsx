@@ -198,7 +198,7 @@ describe('AssistantWatchedProjects', () => {
         // Catalog item is rendered with minimal scope note and 'Allow this assistant and follow'
         expect(container.textContent).toContain('AlphaSim')
         expect(container.textContent).toContain('github.com/acme/alpha-sim')
-        expect(container.textContent).toContain('Minimal follower scope')
+        expect(container.textContent).toContain('receive progress reports from the project')
 
         // 1. Test partial success when host grant succeeds but local follow fails
         // 0. Pre-grant artifact-read checkbox defaults OFF; ticking it sends allowArtifactRead:true on grant
@@ -288,11 +288,8 @@ describe('AssistantWatchedProjects', () => {
         expect(container.textContent).toContain('Access removed on host')
 
         // 5. Selecting an offline host shows truthful offline status without calling catalog
-        const select = container.querySelector<HTMLSelectElement>('[data-testid="assistant-remote-host-select"]')!
-        await act(async () => {
-            select.value = HOST_OFFLINE
-            select.dispatchEvent(new Event('change', { bubbles: true }))
-        })
+        const offlineChip = container.querySelector<HTMLButtonElement>(`[data-testid="assistant-remote-host-${HOST_OFFLINE}"]`)!
+        await act(async () => { offlineChip.click() })
         await flush()
         expect(container.querySelector('[data-testid="assistant-remote-host-offline"]')).not.toBeNull()
     })

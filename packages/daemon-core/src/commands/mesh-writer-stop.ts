@@ -38,6 +38,45 @@ async function stopUnboundWriter(control: WriterStopHostControl | undefined, ses
     return stopped?.lifecycle === 'stopped' || stopped?.lifecycle === 'stopping';
 }
 
+/**
+ * Force-end: stop this writer's session through the host's compare-and-stop, built from the host's
+ * own record of the running incarnation. Still refuses a session that is not this mesh's worker or
+ * that a different attempt currently owns; it no longer refuses on process-tree ambiguity.
+ */
+async function forceEndHostedWriter(
+    host: Pick<DaemonCliManager, 'adapters' | 'deps'>,
+    request: CancelDispatchRequest,
+    pending: (reason: string) => { success: boolean; [key: string]: unknown },
+): Promise<{ success: boolean; [key: string]: unknown }> {
+    const control = host.deps.idleSessionLifetimeControl;
+    const hostBootId = await writerStopHostBootId(control);
+    if (!control || !hostBootId || typeof control.stopSessionIfExpected !== 'function') return pending('force_host_unavailable');
+    const receipt = (extra: Record<string, unknown>) => ({ ...request, success: true, quiescent: true, forced: true,
+        incarnation: createHash('sha256').update(JSON.stringify([request.stopRequestId, request.sessionId, extra])).digest('hex'), ...extra });
+    try {
+        const record = (await control.listSessions()).find(r => r.sessionId === request.sessionId);
+        if (!record) return receipt({ evidence: { kind: 'host_session_absent', sessionId: request.sessionId, hostBootId, observedAt: Date.now() } });
+        const meta = (record.meta ?? {}) as Record<string, any>;
+        const active = meta.meshActiveAssignment as Record<string, unknown> | undefined;
+        const bound = typeof active?.taskId === 'string' && !!active.taskId;
+        if (meta.meshNodeFor !== request.meshId || meta.assistant === true || meta.meshCoordinatorFor
+            || (bound ? active!.attemptId !== request.attemptId : meta.launchedByCoordinator !== true)) {
+            return pending('foreign_or_unbound_writer');
+        }
+        if (record.lifecycle === 'stopped') return receipt({ evidence: { kind: 'host_session_absent', sessionId: request.sessionId, hostBootId, observedAt: Date.now() } });
+        if (!record.runtimeKey || !record.startedAt) return pending('native_incarnation_unknown');
+        const stopped = await control.stopSessionIfExpected(request.sessionId, {
+            sessionId: request.sessionId, hostBootId, runtimeKey: record.runtimeKey, startedAt: record.startedAt,
+            taskId: bound ? String(active!.taskId) : null,
+            attemptId: bound ? (active!.attemptId as string | null) ?? null : null,
+            generation: bound ? (active!.generation as number | null) ?? null : null,
+            dispatchNonce: bound ? (active!.dispatchNonce as number | null) ?? null : null,
+        });
+        if (stopped?.lifecycle !== 'stopped' && stopped?.lifecycle !== 'stopping') return pending('force_stop_unconfirmed');
+        return receipt({});
+    } catch { return pending('force_stop_failed'); }
+}
+
 /** Inspection answer: this writer is live and no exact stop has reached it, so the owner may send one. */
 export const WRITER_STOP_NEVER_ATTEMPTED = 'exact_stop_never_attempted';
 
@@ -106,6 +145,9 @@ export async function stopExactMeshWriter(
     const live = host.deps.getInstanceManager()?.getInstance(request.sessionId)?.getState().settings;
     const launch = host.deps.getSessionRegistry?.()?.get(request.sessionId)?.launch;
     if (live?.assistant || live?.meshCoordinatorFor || launch?.launchedBy === 'assistant' || launch?.roleLaunch) return pending('protected_role');
+    // Owner decision: past the ledger's force bound the stop must end. The session host's exact
+    // compare-and-stop is the authority; the tree-ambiguity refusals below are skipped.
+    if (request.force === true && request.inspectOnly !== true) return forceEndHostedWriter(host, request, pending);
     let previous;
     try { previous = readWriterStopCapture(request); } catch { return pending('capture_identity_mismatch'); }
     if (previous) {
