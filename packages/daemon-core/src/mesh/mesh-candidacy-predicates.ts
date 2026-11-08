@@ -355,6 +355,10 @@ export function nodeHasLiveSessionPendingClaim(components: DaemonComponents, mes
         if (!daemonIdsEquivalent(instNodeId, nodeId)) return false;
         const status = readText(state.status).toLowerCase();
         if (isTerminalSessionStatus(status)) return false; // dead → no claimer here, allow launch
+        // An errored session never claims (claiming needs an idle session), so it is not a pending
+        // claimer either. Live 2026-11-08: a claude session left in `error` on the mesh host's base node
+        // held every launch there behind node_has_live_session_pending_claim indefinitely.
+        if (status === 'error') return false;
         const sessionId = readText(state.instanceId);
         if (sessionId && busySessionIds.has(sessionId)) return false; // busy with its own assigned task
         // PROVIDER-MATCH gate (DISPATCH-DEADLOCK-PROVIDER-MISMATCH): only count this session as a

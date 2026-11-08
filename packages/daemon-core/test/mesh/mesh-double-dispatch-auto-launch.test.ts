@@ -154,6 +154,22 @@ describe('DOUBLE-DISPATCH Layer (a) — auto-launch suppressed when node has a l
     }
   })
 
+  // Live 2026-11-08: a session stuck in `error` on the mesh host's base node held every launch there behind
+  // node_has_live_session_pending_claim. An errored session can never claim, so it is not a pending claimer.
+  it('launches (no pending-claim skip) when the node\'s only session is in error', async () => {
+    const meshId = `mesh_al_err_${randomUUID().slice(0, 8)}`
+    try {
+      setMesh(meshId)
+      const components = createComponents([liveSession(meshId, 'errored-sess', 'error')])
+      const task = enqueueTask(meshId, 'do work', { taskMode: 'code_change', difficulty: 'medium' })
+      await triggerMeshQueue(components, meshId)
+      expect(autoLaunchReason(meshId, task.id)).not.toBe('node_has_live_session_pending_claim')
+      expect(launchCliCalls(components)).toBe(1)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
   it('regression: launches normally (no skip) when the node has NO live session', async () => {
     const meshId = `mesh_al_spawn_${randomUUID().slice(0, 8)}`
     try {

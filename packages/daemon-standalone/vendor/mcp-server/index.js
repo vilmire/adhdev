@@ -74373,6 +74373,7 @@ ${mergeTreeErr?.stderr || ""}`;
         if (!daemonIdsEquivalent5(instNodeId, nodeId)) return false;
         const status = readText(state2.status).toLowerCase();
         if (isTerminalSessionRecordStatus(status)) return false;
+        if (status === "error") return false;
         const sessionId = readText(state2.instanceId);
         if (sessionId && busySessionIds.has(sessionId)) return false;
         const sessionProviderType = state2.type || readText(settings2.providerType);
