@@ -34,6 +34,7 @@ import { resolveWorktreeNodeRetentionGraceMs } from './mesh-retention-config.js'
 import { runPendingCoordinatorCatchupScan } from './mesh-auto-fast-forward.js';
 import { sweepQueueDependencyStalls } from './mesh-queue-dependency-notice.js';
 import { runOrphanedDispatchSweep } from './mesh-orphaned-dispatch-sweep.js';
+import { sweepStaleBlockedTasks, type StaleBlockedSweepState } from './mesh-stale-blocked-expiry.js';
 import { componentsDecisionTransport, runDecisionTick } from './mesh-mission-decision-delivery.js';
 import { readText } from '@adhdev/mesh-shared';
 import { contractHousekeeping } from './contract-runtime.js';
@@ -47,7 +48,7 @@ export const DISK_RETENTION_INTERVAL_MS = 60 * 60 * 1000;
 /** Idle delegated-session reaper: bounds a 30 min TTL's overshoot to +5 min. */
 export const IDLE_SESSION_REAP_INTERVAL_MS = 5 * 60 * 1000;
 
-export interface HousekeepingState {
+export interface HousekeepingState extends StaleBlockedSweepState {
     lastDiskRetentionRunAt?: number;
     lastIdleSessionReapRunAt?: number;
 }
@@ -150,6 +151,8 @@ export async function runMeshHousekeepingTick(
                 LOG.warn('MeshHousekeeping', `Orphaned dispatch sweep failed for mesh ${mesh.id}: ${e?.message || e}`);
             }
         }
+        // ── stale blocked rows (3 days, host only; throttled per mesh inside) ──
+        for (const { mesh } of hosted) sweepStaleBlockedTasks(mesh.id, state, nowMs);
         // ── owner decisions (design 2026-10-28 §6.3/§6.5) ──
         // Past-due decisions auto-apply / remind, and answers whose coordinator
         // delivery failed (or was armed by an auto-apply) are (re)sent. Idle cost:

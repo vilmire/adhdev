@@ -146166,6 +146166,81 @@ ${tail}` : ""
         deadInventoryAnchors = /* @__PURE__ */ new Map();
       }
     });
+    function resolveStaleBlockedTaskMs(env2 = process.env) {
+      const raw = env2.ADHDEV_STALE_BLOCKED_TASK_MS;
+      if (raw === void 0 || raw.trim() === "") return STALE_BLOCKED_TASK_MS;
+      const n = Number(raw);
+      return Number.isFinite(n) && n >= 0 ? n : STALE_BLOCKED_TASK_MS;
+    }
+    function hasLiveFollowUp(row2, all) {
+      return all.some((o) => (o.status === "pending" || o.status === "assigned") && (o.parentTaskId === row2.id || Array.isArray(o.dependsOn) && o.dependsOn.includes(row2.id)));
+    }
+    function sweepStaleBlockedTasks(meshId, state2, nowMs2 = Date.now()) {
+      const ttl = resolveStaleBlockedTaskMs();
+      if (ttl <= 0) return [];
+      const last = state2.lastStaleBlockedSweepAt ??= {};
+      if (last[meshId] !== void 0 && nowMs2 - last[meshId] < STALE_BLOCKED_SWEEP_INTERVAL_MS) return [];
+      last[meshId] = nowMs2;
+      const cancelled = [];
+      try {
+        const store5 = MeshRuntimeStore.getInstance();
+        const blocked = store5.getQueueEntries(meshId, ["blocked"]);
+        if (blocked.length === 0) return [];
+        const live = store5.getQueueEntries(meshId, ["pending", "assigned"]);
+        for (const row2 of blocked) {
+          if (cancelled.length >= STALE_BLOCKED_SWEEP_CAP) break;
+          const updatedMs = Date.parse(row2.updatedAt);
+          if (!Number.isFinite(updatedMs) || nowMs2 - updatedMs < ttl) continue;
+          if (hasLiveFollowUp(row2, live)) continue;
+          try {
+            if (cancelTask(meshId, row2.id, { reason: STALE_BLOCKED_REASON })) cancelled.push(row2.id);
+          } catch (e) {
+            LOG.warn("MeshQueue", `Stale-blocked cancel failed for task ${row2.id} (mesh ${meshId}): ${e?.message || e}`);
+          }
+        }
+      } catch (e) {
+        LOG.warn("MeshQueue", `Stale-blocked sweep failed for mesh ${meshId}: ${e?.message || e}`);
+      }
+      if (cancelled.length > 0) {
+        const shown = cancelled.slice(0, 5).map((id4) => id4.slice(0, 8)).join(", ");
+        const coordinatorMessage = `[System] Retired ${cancelled.length} task${cancelled.length === 1 ? "" : "s"} that stayed blocked for over 3 days: ${shown}${cancelled.length > 5 ? "\u2026" : ""}`;
+        try {
+          const target2 = readText(getMachineId());
+          notifyMeshCoordinator({
+            event: "mesh:dispatch_blocked",
+            meshId,
+            nodeLabel: meshId,
+            eventId: `stale_blocked_expired:${meshId}:${nowMs2}`,
+            metadataEvent: { source: "mesh_stale_blocked_expiry", reason: "stale_blocked_expired", count: cancelled.length, coordinatorMessage },
+            coordinatorMessage,
+            queuedAt: nowMs2,
+            ...target2 ? { targetCoordinatorDaemonId: target2 } : {}
+          });
+        } catch (e) {
+          LOG.warn("MeshQueue", `Failed to surface stale-blocked retirement (mesh ${meshId}): ${e?.message || e}`);
+        }
+      }
+      return cancelled;
+    }
+    var STALE_BLOCKED_TASK_MS;
+    var STALE_BLOCKED_SWEEP_INTERVAL_MS;
+    var STALE_BLOCKED_SWEEP_CAP;
+    var STALE_BLOCKED_REASON;
+    var init_mesh_stale_blocked_expiry = __esm2({
+      "src/mesh/mesh-stale-blocked-expiry.ts"() {
+        "use strict";
+        init_config();
+        init_logger();
+        init_dist();
+        init_mesh_runtime_store();
+        init_mesh_work_queue();
+        init_deliver();
+        STALE_BLOCKED_TASK_MS = 3 * 24 * 60 * 60 * 1e3;
+        STALE_BLOCKED_SWEEP_INTERVAL_MS = 10 * 60 * 1e3;
+        STALE_BLOCKED_SWEEP_CAP = 50;
+        STALE_BLOCKED_REASON = "stale_blocked_expired: blocked for 3 days with no follow-up";
+      }
+    });
     function applyOwnerConfirmationAnswer(meshId, itemId) {
       const item = MeshRuntimeStore.getInstance().missionItems().getItem(meshId, itemId);
       const key7 = item?.dedupeKey ?? "";
@@ -152016,6 +152091,7 @@ ${committed.block}`;
             LOG.warn("MeshHousekeeping", `Orphaned dispatch sweep failed for mesh ${mesh.id}: ${e?.message || e}`);
           }
         }
+        for (const { mesh } of hosted) sweepStaleBlockedTasks(mesh.id, state2, nowMs2);
         const decisionTransport = componentsDecisionTransport(components);
         for (const { mesh } of hosted) {
           await runDecisionTick(mesh.id, decisionTransport.send, nowMs2, decisionTransport.check);
@@ -152142,6 +152218,7 @@ ${committed.block}`;
         init_mesh_auto_fast_forward();
         init_mesh_queue_dependency_notice();
         init_mesh_orphaned_dispatch_sweep();
+        init_mesh_stale_blocked_expiry();
         init_mesh_mission_decision_delivery();
         init_dist();
         init_contract_runtime();

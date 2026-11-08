@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
     trigger: vi.fn(async () => ({})),
     pendingCount: vi.fn(() => 0),
     runtimeRetention: vi.fn(),
+    staleBlocked: vi.fn(() => []),
 }));
 
 vi.mock('../../src/config/config.js', () => ({ getMachineId: () => 'mach_self', getConfigDir: () => '/tmp/adhdev-hk-test', loadConfig: () => ({ machineId: 'mach_self' }), getMachineNickname: () => null }));
@@ -29,6 +30,7 @@ vi.mock('../../src/mesh/mesh-worktree-retention.js', () => ({ runWorktreeNodeRet
 vi.mock('../../src/mesh/mesh-idle-session-reaper.js', () => ({ runIdleSessionReapPass: mocks.reap }));
 vi.mock('../../src/mesh/mesh-retention-config.js', () => ({ resolveWorktreeNodeRetentionGraceMs: () => 0 }));
 vi.mock('../../src/mesh/mesh-queue-dependency-notice.js', () => ({ sweepQueueDependencyStalls: mocks.stalls }));
+vi.mock('../../src/mesh/mesh-stale-blocked-expiry.js', () => ({ sweepStaleBlockedTasks: mocks.staleBlocked }));
 vi.mock('../../src/mesh/mesh-orphaned-dispatch-sweep.js', () => ({ runOrphanedDispatchSweep: mocks.orphanedDispatch }));
 vi.mock('../../src/mesh/mesh-events-coordinator.js', () => ({ triggerMeshQueue: mocks.trigger }));
 vi.mock('../../src/mesh/mesh-runtime-store.js', () => ({
@@ -68,6 +70,12 @@ beforeEach(() => {
 });
 
 describe('mesh housekeeping tick', () => {
+    it('runs the stale-blocked expiry sweep for hosted meshes only', async () => {
+        await runMeshHousekeepingTick(components(), {}, 1_000);
+        expect(mocks.staleBlocked).toHaveBeenCalledTimes(1);
+        expect((mocks.staleBlocked.mock.calls[0] as any[])[0]).toBe('mesh-hosted');
+    });
+
     it('reads meshes.json ONCE per tick and runs every phase only for meshes this daemon hosts', async () => {
         await runMeshHousekeepingTick(components(), {}, 1_000);
         expect(mocks.listMeshes).toHaveBeenCalledTimes(1);
