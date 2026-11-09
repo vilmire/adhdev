@@ -337,7 +337,7 @@ const LEGACY_HIGH_FAMILY_COMMANDS = [
     // push ingest and the coordinator-routed node git log. Fresh additions, not
     // a legacy-table migration. mesh_node_state_nudge: the coordinator's
     // explicit-refresh "push now" request to a subscribed member.
-    'mesh_node_git_report', 'mesh_node_git_log', 'mesh_node_state_nudge',
+    'mesh_node_git_report', 'mesh_node_git_log', 'mesh_node_state_nudge', 'mesh_member_worktree_nodes', 'mesh_adopt_member_worktree',
     // Tool answers composed by the coordinator (high-family/mesh-status-view.ts):
     // the MCP mesh_status tool's ONE call, the direct-dispatch route decision,
     // and the same decision for every node a tool reasons over (mesh_node_route).

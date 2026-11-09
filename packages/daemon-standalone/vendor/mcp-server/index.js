@@ -186187,9 +186187,22 @@ ${output}` : "";
         if (!meshId || !nodeId) return { success: false, error: "meshId and nodeId required" };
         const record8 = await ctx.getMeshForCommand(meshId, void 0, { preferInline: true });
         const rostered = Array.isArray(record8?.mesh?.nodes) ? record8.mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId)) : void 0;
-        const described = readOptionalRecord2(args?.node);
-        const node = rostered ?? (described && meshNodeIdMatches7(described, nodeId) ? described : void 0);
-        if (!node) return { success: false, code: "mesh_node_unknown", error: `Node ${nodeId} is not on mesh ${meshId}` };
+        let node = rostered;
+        if (!node) {
+          const described = readOptionalRecord2(args?.node);
+          const claimedOwner = described && meshNodeIdMatches7(described, nodeId) ? readText(described.daemonId) : "";
+          const adopted = claimedOwner && ctx.adoptWorktreeNodeFromOwner ? await ctx.adoptWorktreeNodeFromOwner(meshId, nodeId, claimedOwner).catch(() => null) : null;
+          if (adopted?.adopted) {
+            node = adopted.node;
+          } else {
+            return {
+              success: false,
+              code: "mesh_node_unknown",
+              error: `Node ${nodeId} is not on mesh ${meshId}'s roster on the coordinator daemon` + (adopted ? ` and its claimed owner could not be adopted from (${adopted.reason}).` : "."),
+              action: "Run mesh_status to see the roster. If the node was just cloned, retry mesh_clone_node or wait for its owning daemon to report it; do not keep dispatching to it."
+            };
+          }
+        }
         const callerDaemonId = readText(args?.callerDaemonId);
         const selfId = readText(ctx.deps.statusInstanceId);
         if (callerDaemonId && selfId && !daemonIdsEquivalent5(callerDaemonId, selfId)) {
@@ -208251,6 +208264,32 @@ ${ptyResult.output.slice(-2e3)}`);
         const subscribed = !!coordinatorDaemonId && ctx.meshNodeStatePusher?.nudge(coordinatorDaemonId, meshId, nodeId, readText(args?.workspace)) === true;
         return { success: true, subscribed };
       },
+      /**
+       * Member side of the host's pull-adopt: the worktree nodes THIS daemon owns on a mesh.
+       * Answers only about this daemon's own nodes (collectMemberWorktreeNodes filters by
+       * owner); the asker (the mesh host) re-validates every record before adopting it.
+       */
+      mesh_member_worktree_nodes: async (ctx, args) => {
+        const meshId = readText(args?.meshId);
+        if (!meshId) return { success: false, error: "meshId required" };
+        if (!ctx.readOwnWorktreeNodes) return { success: false, error: "worktree node listing unavailable" };
+        return { success: true, meshId, nodes: await ctx.readOwnWorktreeNodes(meshId) };
+      },
+      /**
+       * Tool side (the coordinator's MCP right after it cloned onto a remote member):
+       * ask THIS host to learn the node from its owner, so the roster holds it durably
+       * instead of relying on the in-memory cache seed. Never trusts the caller's
+       * description of the node.
+       */
+      mesh_adopt_member_worktree: async (ctx, args) => {
+        const meshId = readText(args?.meshId);
+        const nodeId = readText(args?.nodeId);
+        const ownerDaemonId = readText(args?.ownerDaemonId);
+        if (!meshId || !nodeId || !ownerDaemonId) return { success: false, error: "meshId, nodeId and ownerDaemonId required" };
+        if (!ctx.adoptWorktreeNodeFromOwner) return { success: false, error: "adoption unavailable" };
+        const outcome = await ctx.adoptWorktreeNodeFromOwner(meshId, nodeId, ownerDaemonId);
+        return outcome.adopted ? { success: true, adopted: true, nodeId: outcome.nodeId } : { success: false, adopted: false, code: "mesh_node_adopt_refused", reason: outcome.reason, error: `Node ${nodeId} was not adopted onto mesh ${meshId}: ${outcome.reason}` };
+      },
       mesh_node_git_log: async (ctx, args) => {
         const meshId = readText(args?.meshId);
         const nodeId = readText(args?.nodeId);
@@ -208287,7 +208326,11 @@ ${ptyResult.output.slice(-2e3)}`);
       mesh_node_git_report: { meshSender: "node_owner" },
       // Coordinator → member: a worker daemon may hold no roster to check the sender
       // against; the pusher answers only for subscriptions THIS sender registered.
-      mesh_node_state_nudge: { meshSender: "authenticated_peer" }
+      mesh_node_state_nudge: { meshSender: "authenticated_peer" },
+      // Host → owner query: any authenticated mesh peer may ask; the answer is only this daemon's own nodes.
+      mesh_member_worktree_nodes: { sources: ["mesh"], meshSender: "authenticated_peer" },
+      // Local tool only: never accepted from a mesh peer or the dashboard.
+      mesh_adopt_member_worktree: { sources: ["ipc", "standalone"] }
     }, { meshSender: "authenticated_peer" });
     init_assistant_store();
     init_drivers();
@@ -213319,6 +213362,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     init_mesh_event_forwarding();
     init_mesh_remote_worktree_membership();
     init_dist();
+    init_command_args();
+    init_mesh_relay_result();
     init_logger();
     init_mesh_host_ownership();
     init_repo_mesh_types();
@@ -213628,6 +213673,54 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       if (result.adopted.length > 0) host.invalidateAggregateMeshStatus(meshId);
       return result;
     }
+    var ADOPT_FROM_OWNER_TIMEOUT_MS = 15e3;
+    async function adoptWorktreeNodeFromOwner(host, meshId, nodeId, ownerDaemonId, opts = {}) {
+      const no = (reason) => ({ adopted: false, reason });
+      const owner = readStringValue(ownerDaemonId);
+      if (!meshId || !nodeId || !owner) return no("invalid_request");
+      const dispatch2 = host.deps.dispatchMeshCommand;
+      if (typeof dispatch2 !== "function") return no("no_mesh_transport");
+      const self = readStringValue(host.deps.statusInstanceId);
+      if (self && daemonIdsEquivalent5(owner, self)) return no("owner_is_this_daemon");
+      const record8 = await getMeshForCommand(host, meshId, void 0, { preferInline: true });
+      if (!record8?.mesh) return no("mesh_not_found");
+      const hostStatus = resolveMeshHostStatus(record8.mesh);
+      if (!hostStatus.canOwnCoordinator || !hostStatus.canOwnQueue) return no("not_mesh_host");
+      const roster = Array.isArray(record8.mesh.nodes) ? [...record8.mesh.nodes] : [];
+      try {
+        const { getMesh: getMesh2 } = await Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports));
+        const local = getMesh2(meshId);
+        if (local) roster.push(...local.nodes);
+      } catch {
+      }
+      const ownerIsMember = roster.some((entry) => typeof entry?.daemonId === "string" && daemonIdsEquivalent5(entry.daemonId, owner));
+      if (!ownerIsMember) return no("owner_not_a_mesh_member");
+      let timer = null;
+      let answer2;
+      try {
+        const raw = await Promise.race([
+          dispatch2(owner, "mesh_member_worktree_nodes", withMeshDirectDispatch({ meshId })),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error("owner_query_timeout")), opts.timeoutMs ?? ADOPT_FROM_OWNER_TIMEOUT_MS);
+          })
+        ]);
+        answer2 = unwrapMeshRelayResult(raw, { command: "mesh_member_worktree_nodes", peerDaemonId: owner });
+      } catch (error) {
+        return no(`owner_unreachable:${error?.message || "dispatch_failed"}`);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+      if (answer2.success !== true) return no("owner_cannot_answer");
+      const claimed = sanitizeMemberWorktreeNodes(answer2.nodes).find((n) => meshNodeIdMatches7(n, nodeId));
+      if (!claimed) return no("owner_does_not_own_node");
+      const result = await adoptMemberWorktreeNodes(host, meshId, { reported: [claimed], senderDaemonId: owner, ownerDaemonId: owner });
+      if (result.adopted.includes(claimed.id)) {
+        LOG.info("Mesh", `[PullAdopt] mesh=${meshId} adoptedNodeId=${claimed.id} owner=${owner.slice(0, 24)}`);
+        return { adopted: true, nodeId: claimed.id, node: { ...claimed } };
+      }
+      const rejected = result.rejected.find((r) => r.nodeId === claimed.id);
+      return no(rejected ? rejected.reason : "already_on_roster");
+    }
     function tombstoneRemovedMeshNode(host, meshId, nodeId) {
       if (!meshId || !nodeId) return;
       tombstoneRemovedInlineMeshNode(host, meshId, nodeId);
@@ -213851,18 +213944,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           watchGit: (workspace, onChange, onError) => watchWorkspaceGit(workspace, onChange, { onError }),
           // Worktree nodes this daemon owns on the mesh (inline view ∪ config), reported
           // once per coordinator boot so the coordinator can adopt any it lost.
-          readWorktreeNodes: async (meshId) => {
-            const nodes = [];
-            const cached5 = this.inlineMeshCache.get(meshId);
-            if (Array.isArray(cached5?.nodes)) nodes.push(...cached5.nodes);
-            try {
-              const { getMesh: getMesh2 } = await Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports));
-              const local = getMesh2(meshId);
-              if (local) nodes.push(...local.nodes);
-            } catch {
-            }
-            return collectMemberWorktreeNodes(nodes, this.deps.statusInstanceId);
-          }
+          readWorktreeNodes: (meshId) => this.readOwnWorktreeNodes(meshId)
         });
         subscribeMeshNodeRuntimePush(deps.bus, this.meshNodeStatePusher);
         this.localMeshNodeGitWatch = new LocalMeshNodeGitWatch({
@@ -214011,6 +214093,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           localMeshNodeGitWatch: this.localMeshNodeGitWatch,
           meshCoordinatorBootId: this.meshCoordinatorBootId,
           adoptMemberWorktreeNodes: this.adoptMemberWorktreeNodes.bind(this),
+          adoptWorktreeNodeFromOwner: this.adoptWorktreeNodeFromOwner.bind(this),
+          readOwnWorktreeNodes: this.readOwnWorktreeNodes.bind(this),
           selfHealNodeFromFacts: (meshId, nodeId, nodeFacts) => {
             void this.selfHealNodeFromFacts(meshId, nodeId, nodeFacts);
           },
@@ -214046,6 +214130,22 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       }
       adoptMemberWorktreeNodes(meshId, input) {
         return adoptMemberWorktreeNodes(this, meshId, input);
+      }
+      adoptWorktreeNodeFromOwner(meshId, nodeId, ownerDaemonId) {
+        return adoptWorktreeNodeFromOwner(this, meshId, nodeId, ownerDaemonId);
+      }
+      /** The worktree nodes THIS daemon owns on `meshId` (inline view ∪ config). */
+      async readOwnWorktreeNodes(meshId) {
+        const nodes = [];
+        const cached5 = this.inlineMeshCache.get(meshId);
+        if (Array.isArray(cached5?.nodes)) nodes.push(...cached5.nodes);
+        try {
+          const { getMesh: getMesh2 } = await Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports));
+          const local = getMesh2(meshId);
+          if (local) nodes.push(...local.nodes);
+        } catch {
+        }
+        return collectMemberWorktreeNodes(nodes, this.deps.statusInstanceId);
       }
       tombstoneRemovedMeshNode(meshId, nodeId) {
         tombstoneRemovedMeshNode(this, meshId, nodeId);
@@ -249716,7 +249816,12 @@ async function resolveMeshDispatchRoute(ctx, nodeId) {
   const result = unwrapCommandPayload(raw) ?? raw;
   const route = result?.route;
   if (result?.success === false || route !== "local" && route !== "remote" && route !== "unreachable") {
-    return { route: "error", reason: typeof result?.error === "string" ? result.error : "no route in the daemon answer" };
+    return {
+      route: "error",
+      reason: typeof result?.error === "string" ? result.error : "no route in the daemon answer",
+      ...typeof result?.code === "string" ? { code: result.code } : {},
+      ...typeof result?.action === "string" ? { action: result.action } : {}
+    };
   }
   return {
     route,
@@ -257469,7 +257574,8 @@ async function meshSendTask(ctx, args) {
     if (route.route === "unreachable" || route.route === "error") {
       return JSON.stringify({
         success: false,
-        code: route.route === "unreachable" ? "mesh_node_unreachable" : "mesh_dispatch_route_unavailable",
+        code: route.route === "unreachable" ? "mesh_node_unreachable" : route.route === "error" && route.code === "mesh_node_unknown" ? "mesh_node_not_on_coordinator_roster" : "mesh_dispatch_route_unavailable",
+        ...route.route === "error" && route.action ? { action: route.action } : {},
         nodeId: args.node_id,
         ...args.session_id ? { sessionId: args.session_id } : {},
         taskMode: req.taskMode || "unspecified",
@@ -258812,6 +258918,15 @@ async function buildSharedBaseWorktreeAdvisoryForClone(ctx, clonedNode) {
   }
   return buildSharedBaseWorktreeAdvisory({ sourceRepoRoot, baseBranch, worktrees: resolvedWorktrees });
 }
+async function adoptRemoteCloneOnHost(ctx, node) {
+  const ownerDaemonId = readNodeString(node, "daemonId", "daemon_id");
+  const nodeId = readNodeString(node, "id", "nodeId", "node_id");
+  if (!ownerDaemonId || !nodeId || isLocalControlPlaneNode(ctx, node)) return;
+  try {
+    await ctx.transport.command("mesh_adopt_member_worktree", { meshId: ctx.mesh.id, nodeId, ownerDaemonId });
+  } catch {
+  }
+}
 async function meshCloneNode(ctx, args) {
   const sourceNode = await findNodeWithRefresh(ctx, args.source_node_id);
   const planned = unwrapCommandPayload(await commandForNode(ctx, sourceNode, "plan_mesh_onboarding", {
@@ -258927,6 +259042,7 @@ async function meshCloneNode(ctx, args) {
     else ctx.mesh.nodes.push(clonePayload.node);
     ctx.mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
     await syncCoordinatorDaemonMeshCache(ctx);
+    await adoptRemoteCloneOnHost(ctx, clonePayload.node);
     try {
       sharedBaseWorktreeAdvisory = await buildSharedBaseWorktreeAdvisoryForClone(ctx, clonePayload.node);
     } catch {

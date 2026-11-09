@@ -26,7 +26,8 @@ import type { DaemonComponentsAccessor } from '../daemon-components-port.js';
 import type { MeshNodeGitStateStore } from '../../mesh/mesh-node-git-state.js';
 import type { MeshNodeStatePusher } from '../../mesh/mesh-node-state-pusher.js';
 import type { MeshNodeGitRefresher } from '../../mesh/mesh-node-git-refresher.js';
-import type { MemberWorktreeAdoptionResult } from '../../mesh/mesh-remote-worktree-membership.js';
+import type { MemberWorktreeAdoptionResult, MemberWorktreeNodeRecord } from '../../mesh/mesh-remote-worktree-membership.js';
+import type { AdoptFromOwnerOutcome } from '../router-inline-mesh-roster.js';
 import type { LocalMeshNodeGitWatch } from '../../mesh/local-mesh-node-git-watch.js';
 
 /**
@@ -137,6 +138,15 @@ export interface HighFamilyContext {
         meshId: string,
         input: { reported: unknown; senderDaemonId: string; ownerDaemonId: string },
     ) => Promise<MemberWorktreeAdoptionResult>;
+
+    /**
+     * Pull-adopt: register a worktree node this roster lacks by asking the daemon
+     * that claims to own it (see adoptWorktreeNodeFromOwner).
+     */
+    adoptWorktreeNodeFromOwner?: (meshId: string, nodeId: string, ownerDaemonId: string) => Promise<AdoptFromOwnerOutcome>;
+
+    /** Member side: the worktree nodes THIS daemon owns on a mesh (inline view ∪ config). */
+    readOwnWorktreeNodes?: (meshId: string) => Promise<MemberWorktreeNodeRecord[]>;
 
     /**
      * Self-heal a node's config record (platform / arch / nickname / versions /

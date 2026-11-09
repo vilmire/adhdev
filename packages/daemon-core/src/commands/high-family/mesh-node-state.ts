@@ -203,6 +203,36 @@ export const meshNodeStateHandlers: Record<string, HighFamilyHandler> = {
         return { success: true, subscribed };
     },
 
+    /**
+     * Member side of the host's pull-adopt: the worktree nodes THIS daemon owns on a mesh.
+     * Answers only about this daemon's own nodes (collectMemberWorktreeNodes filters by
+     * owner); the asker (the mesh host) re-validates every record before adopting it.
+     */
+    mesh_member_worktree_nodes: async (ctx: HighFamilyContext, args: any) => {
+        const meshId = readText(args?.meshId);
+        if (!meshId) return { success: false, error: 'meshId required' };
+        if (!ctx.readOwnWorktreeNodes) return { success: false, error: 'worktree node listing unavailable' };
+        return { success: true, meshId, nodes: await ctx.readOwnWorktreeNodes(meshId) };
+    },
+
+    /**
+     * Tool side (the coordinator's MCP right after it cloned onto a remote member):
+     * ask THIS host to learn the node from its owner, so the roster holds it durably
+     * instead of relying on the in-memory cache seed. Never trusts the caller's
+     * description of the node.
+     */
+    mesh_adopt_member_worktree: async (ctx: HighFamilyContext, args: any) => {
+        const meshId = readText(args?.meshId);
+        const nodeId = readText(args?.nodeId);
+        const ownerDaemonId = readText(args?.ownerDaemonId);
+        if (!meshId || !nodeId || !ownerDaemonId) return { success: false, error: 'meshId, nodeId and ownerDaemonId required' };
+        if (!ctx.adoptWorktreeNodeFromOwner) return { success: false, error: 'adoption unavailable' };
+        const outcome = await ctx.adoptWorktreeNodeFromOwner(meshId, nodeId, ownerDaemonId);
+        return outcome.adopted
+            ? { success: true, adopted: true, nodeId: outcome.nodeId }
+            : { success: false, adopted: false, code: 'mesh_node_adopt_refused', reason: outcome.reason, error: `Node ${nodeId} was not adopted onto mesh ${meshId}: ${outcome.reason}` };
+    },
+
     mesh_node_git_log: async (ctx: HighFamilyContext, args: any) => {
         const meshId = readText(args?.meshId);
         const nodeId = readText(args?.nodeId);
@@ -244,4 +274,8 @@ export const meshNodeStateSpecs = defineCommandSpecs('high', meshNodeStateHandle
     // Coordinator → member: a worker daemon may hold no roster to check the sender
     // against; the pusher answers only for subscriptions THIS sender registered.
     mesh_node_state_nudge: { meshSender: 'authenticated_peer' },
+    // Host → owner query: any authenticated mesh peer may ask; the answer is only this daemon's own nodes.
+    mesh_member_worktree_nodes: { sources: ['mesh'], meshSender: 'authenticated_peer' },
+    // Local tool only: never accepted from a mesh peer or the dashboard.
+    mesh_adopt_member_worktree: { sources: ['ipc', 'standalone'] },
 }, { meshSender: 'authenticated_peer' });

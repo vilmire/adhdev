@@ -42,7 +42,7 @@ import { watchWorkspaceGit } from '../mesh/workspace-git-watcher.js';
 import { LocalMeshNodeGitWatch } from '../mesh/local-mesh-node-git-watch.js';
 import { createFileMeshNodeStatePushPersistence } from '../mesh/mesh-node-state-push-store.js';
 import { handshakeMeshMemberDaemon, restoreMemberNodeStatePush, type MeshNodeStateLifecyclePort } from './mesh-node-state-lifecycle.js';
-import { collectMemberWorktreeNodes, type MemberWorktreeAdoptionResult, type PersistRemoteWorktreeNodeOutcome } from '../mesh/mesh-remote-worktree-membership.js';
+import { collectMemberWorktreeNodes, type MemberWorktreeNodeRecord, type MemberWorktreeAdoptionResult, type PersistRemoteWorktreeNodeOutcome } from '../mesh/mesh-remote-worktree-membership.js';
 import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
 import { randomUUID } from 'crypto';
 import { MESH_NODE_STATE_NUDGE_TIMEOUT_MS, nudgeMeshNodeStatePush, readLocalMeshNodeRuntime, subscribeMeshNodeRuntimePush } from './mesh-node-runtime-io.js';
@@ -83,7 +83,7 @@ import { evaluateMeshSender, markVerifiedMeshSender, meshSenderRefusalResult, ME
 import { listMeshHostRecords, readMeshHostRecord, writeMeshHostRecord } from '../mesh/mesh-host-memory.js';
 import { unwrapMeshRelayResult } from './mesh-relay-result.js';
 import { resolveForwardedEventMeshId } from '../mesh/mesh-event-forwarding.js';
-import { syncInlineMeshPoliciesFromDisk, getCachedInlineMeshNodes, getCachedInlineMeshNodesWithVisibility, getCachedInlineMesh, getMeshForCommand, updateInlineMeshNode, removeInlineMeshNode, markWorktreeBootstrapTerminalState, seedRemoteClonedWorktreeNode, persistRemoteClonedWorktreeNode, adoptMemberWorktreeNodes, tombstoneRemovedMeshNode } from './router-inline-mesh-roster.js';
+import { syncInlineMeshPoliciesFromDisk, getCachedInlineMeshNodes, getCachedInlineMeshNodesWithVisibility, getCachedInlineMesh, getMeshForCommand, updateInlineMeshNode, removeInlineMeshNode, markWorktreeBootstrapTerminalState, seedRemoteClonedWorktreeNode, persistRemoteClonedWorktreeNode, adoptMemberWorktreeNodes, adoptWorktreeNodeFromOwner, tombstoneRemovedMeshNode, type AdoptFromOwnerOutcome } from './router-inline-mesh-roster.js';
 
 // ─── Barrel re-exports: node-identity / git-freshness, refine gates, coordinator config ───
 // These modules were split out of router.ts. Re-export their public surface so the
@@ -412,17 +412,7 @@ export class DaemonCommandRouter {
             watchGit: (workspace, onChange, onError) => watchWorkspaceGit(workspace, onChange, { onError }),
             // Worktree nodes this daemon owns on the mesh (inline view ∪ config), reported
             // once per coordinator boot so the coordinator can adopt any it lost.
-            readWorktreeNodes: async (meshId) => {
-                const nodes: unknown[] = [];
-                const cached = this.inlineMeshCache.get(meshId);
-                if (Array.isArray(cached?.nodes)) nodes.push(...cached.nodes);
-                try {
-                    const { getMesh } = await import('../config/mesh-config.js');
-                    const local = getMesh(meshId);
-                    if (local) nodes.push(...local.nodes);
-                } catch { /* no config twin */ }
-                return collectMemberWorktreeNodes(nodes, this.deps.statusInstanceId);
-            },
+            readWorktreeNodes: (meshId) => this.readOwnWorktreeNodes(meshId),
         });
         // Session lifecycle facts wake the (debounced) runtime push to subscribed coordinators.
         subscribeMeshNodeRuntimePush(deps.bus, this.meshNodeStatePusher);
@@ -579,6 +569,8 @@ export class DaemonCommandRouter {
             localMeshNodeGitWatch: this.localMeshNodeGitWatch,
             meshCoordinatorBootId: this.meshCoordinatorBootId,
             adoptMemberWorktreeNodes: this.adoptMemberWorktreeNodes.bind(this),
+            adoptWorktreeNodeFromOwner: this.adoptWorktreeNodeFromOwner.bind(this),
+            readOwnWorktreeNodes: this.readOwnWorktreeNodes.bind(this),
             selfHealNodeFromFacts: (meshId, nodeId, nodeFacts) => { void this.selfHealNodeFromFacts(meshId, nodeId, nodeFacts); },
             invalidateAggregateMeshStatus: this.invalidateAggregateMeshStatus.bind(this),
         };
@@ -602,6 +594,19 @@ export class DaemonCommandRouter {
     public seedRemoteClonedWorktreeNode(meshId: string, node: any): boolean { return seedRemoteClonedWorktreeNode(this, meshId, node); }
     public persistRemoteClonedWorktreeNode(meshId: string, node: any): Promise<PersistRemoteWorktreeNodeOutcome | 'tombstoned'> { return persistRemoteClonedWorktreeNode(this, meshId, node); }
     public adoptMemberWorktreeNodes(meshId: string, input: { reported: unknown; senderDaemonId: string; ownerDaemonId: string }): Promise<MemberWorktreeAdoptionResult> { return adoptMemberWorktreeNodes(this, meshId, input); }
+    public adoptWorktreeNodeFromOwner(meshId: string, nodeId: string, ownerDaemonId: string): Promise<AdoptFromOwnerOutcome> { return adoptWorktreeNodeFromOwner(this, meshId, nodeId, ownerDaemonId); }
+    /** The worktree nodes THIS daemon owns on `meshId` (inline view ∪ config). */
+    public async readOwnWorktreeNodes(meshId: string): Promise<MemberWorktreeNodeRecord[]> {
+        const nodes: unknown[] = [];
+        const cached = this.inlineMeshCache.get(meshId);
+        if (Array.isArray(cached?.nodes)) nodes.push(...cached.nodes);
+        try {
+            const { getMesh } = await import('../config/mesh-config.js');
+            const local = getMesh(meshId);
+            if (local) nodes.push(...local.nodes);
+        } catch { /* no config twin */ }
+        return collectMemberWorktreeNodes(nodes, this.deps.statusInstanceId);
+    }
     public tombstoneRemovedMeshNode(meshId: string, nodeId: string): void { tombstoneRemovedMeshNode(this, meshId, nodeId); }
 
     normalizeMeshSessionCleanupMode(value: unknown): RepoMeshSessionCleanupMode {

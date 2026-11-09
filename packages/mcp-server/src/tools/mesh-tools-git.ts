@@ -447,6 +447,24 @@ async function buildSharedBaseWorktreeAdvisoryForClone(
     return buildSharedBaseWorktreeAdvisory({ sourceRepoRoot, baseBranch, worktrees: resolvedWorktrees });
 }
 
+/**
+ * The clone RPC above went straight to the member that owns the source checkout, so the
+ * coordinator daemon's own clone handler (which persists a forwarded clone) never ran: the
+ * node would live only in the coordinator's in-memory cache. Ask the coordinator daemon to
+ * learn it from its owner (it verifies with the owner, never on this process's word).
+ * Best-effort: the dispatch-time self-heal retries the same adoption.
+ */
+async function adoptRemoteCloneOnHost(ctx: MeshContext, node: any): Promise<void> {
+    const ownerDaemonId = readNodeString(node, 'daemonId', 'daemon_id');
+    const nodeId = readNodeString(node, 'id', 'nodeId', 'node_id');
+    if (!ownerDaemonId || !nodeId || isLocalControlPlaneNode(ctx, node)) return;
+    try {
+        await ctx.transport.command('mesh_adopt_member_worktree', { meshId: ctx.mesh.id, nodeId, ownerDaemonId });
+    } catch {
+        /* best-effort */
+    }
+}
+
 export async function meshCloneNode(
     ctx: MeshContext,
     args: { source_node_id: string; branch: string; base_branch?: string; task_id?: string; reason?: string },
@@ -580,6 +598,7 @@ export async function meshCloneNode(
         else ctx.mesh.nodes.push(clonePayload.node);
         ctx.mesh.updatedAt = new Date().toISOString();
         await syncCoordinatorDaemonMeshCache(ctx);
+        await adoptRemoteCloneOnHost(ctx, clonePayload.node);
         try {
             sharedBaseWorktreeAdvisory = await buildSharedBaseWorktreeAdvisoryForClone(ctx, clonePayload.node);
         } catch {

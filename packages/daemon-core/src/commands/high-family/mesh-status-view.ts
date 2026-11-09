@@ -212,12 +212,31 @@ export const meshStatusViewHandlers: Record<string, HighFamilyHandler> = {
         const nodeId = readText(args?.nodeId);
         if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
         const record = await ctx.getMeshForCommand(meshId, undefined, { preferInline: true });
-        // The roster record is authoritative; a node the tool just learned of (a
-        // clone another tool process made) is judged from the record it sends.
+        // The roster record is authoritative.
         const rostered = Array.isArray(record?.mesh?.nodes) ? record!.mesh.nodes.find((n: any) => meshNodeIdMatches(n, nodeId)) : undefined;
-        const described = readOptionalRecord(args?.node);
-        const node = rostered ?? (described && meshNodeIdMatches(described, nodeId) ? described : undefined);
-        if (!node) return { success: false, code: 'mesh_node_unknown', error: `Node ${nodeId} is not on mesh ${meshId}` };
+        let node: any = rostered;
+        if (!node) {
+            // A node this roster lacks is never dispatched to on the caller's description
+            // alone (that sent work blind to a member while the host could neither stop,
+            // match nor settle it). If the caller names its owner daemon, ask THAT daemon
+            // whether it owns the node and adopt it (owner-gated, durable); otherwise refuse.
+            const described = readOptionalRecord(args?.node);
+            const claimedOwner = described && meshNodeIdMatches(described, nodeId) ? readText(described.daemonId) : '';
+            const adopted = claimedOwner && ctx.adoptWorktreeNodeFromOwner
+                ? await ctx.adoptWorktreeNodeFromOwner(meshId, nodeId, claimedOwner).catch(() => null)
+                : null;
+            if (adopted?.adopted) {
+                node = adopted.node;
+            } else {
+                return {
+                    success: false,
+                    code: 'mesh_node_unknown',
+                    error: `Node ${nodeId} is not on mesh ${meshId}'s roster on the coordinator daemon`
+                        + (adopted ? ` and its claimed owner could not be adopted from (${adopted.reason}).` : '.'),
+                    action: 'Run mesh_status to see the roster. If the node was just cloned, retry mesh_clone_node or wait for its owning daemon to report it; do not keep dispatching to it.',
+                };
+            }
+        }
         // The daemon the caller believes it is talking to: a mismatch means the tool is
         // attached to the wrong daemon — refuse rather than route from someone else's view.
         const callerDaemonId = readText(args?.callerDaemonId);

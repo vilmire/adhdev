@@ -615,7 +615,7 @@ export async function collectRelatedRepoStatuses(
 /** The coordinator daemon's routing decision for a direct dispatch (`mesh_dispatch_route`). */
 type MeshDispatchRoute =
     | { route: 'local' | 'remote' | 'unreachable'; ownerDaemonId?: string; reason: string }
-    | { route: 'error'; reason: string };
+    | { route: 'error'; reason: string; code?: string; action?: string };
 
 /**
  * Ask the coordinator daemon how to reach `nodeId` — it decides from its roster
@@ -641,7 +641,12 @@ export async function resolveMeshDispatchRoute(ctx: MeshContext, nodeId: string)
     const result = unwrapCommandPayload(raw) ?? raw;
     const route = result?.route;
     if (result?.success === false || (route !== 'local' && route !== 'remote' && route !== 'unreachable')) {
-        return { route: 'error', reason: typeof result?.error === 'string' ? result.error : 'no route in the daemon answer' };
+        return {
+            route: 'error',
+            reason: typeof result?.error === 'string' ? result.error : 'no route in the daemon answer',
+            ...(typeof result?.code === 'string' ? { code: result.code } : {}),
+            ...(typeof result?.action === 'string' ? { action: result.action } : {}),
+        };
     }
     return {
         route,

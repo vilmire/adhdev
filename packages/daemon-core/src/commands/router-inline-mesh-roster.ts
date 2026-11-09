@@ -12,7 +12,9 @@ import {
     type MemberWorktreeAdoptionResult,
     type PersistRemoteWorktreeNodeOutcome,
 } from '../mesh/mesh-remote-worktree-membership.js';
-import { normalizeMeshNodeId, meshNodeIdMatches } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, normalizeMeshNodeId, meshNodeIdMatches } from '@adhdev/mesh-shared';
+import { withMeshDirectDispatch } from './command-args.js';
+import { unwrapMeshRelayResult } from './mesh-relay-result.js';
 import { LOG } from '../logging/logger.js';
 import { resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
 import type { RepoMeshSpawnedSessionVisibility } from '../repo-mesh-types.js';
@@ -519,6 +521,82 @@ export async function adoptMemberWorktreeNodes(host: InlineMeshRosterHost, meshI
     }
     if (result.adopted.length > 0) host.invalidateAggregateMeshStatus(meshId);
     return result;
+}
+
+/** How long the host waits for the owner's answer when it verifies a node it does not hold. */
+export const ADOPT_FROM_OWNER_TIMEOUT_MS = 15_000;
+
+export type AdoptFromOwnerOutcome =
+    | { adopted: true; nodeId: string; node: Record<string, unknown> }
+    | { adopted: false; reason: string };
+
+/**
+ * PULL-ADOPT (host side): register a worktree node this roster lacks by asking the daemon
+ * that claims to own it. Closes the gap the push-based reconcile leaves: a member reports its
+ * worktree nodes only once per coordinator boot, so a worktree cloned LATER (the MCP clone
+ * goes straight to the member, bypassing this host's clone handler and its persist) was
+ * known to the member alone.
+ *
+ * Authority is the same as the push path and nothing is taken on the caller's word: this
+ * daemon hosts the mesh, the claimed owner is already a member of it (it owns a node on this
+ * roster), and the node record is read from the OWNER's own answer over the authenticated
+ * mesh channel, then run through planMemberWorktreeAdoption with sender = owner = the
+ * record's daemonId (so a record naming any other daemon, this one included, is rejected),
+ * tombstones and workspace collisions included.
+ */
+export async function adoptWorktreeNodeFromOwner(
+    host: InlineMeshRosterHost,
+    meshId: string,
+    nodeId: string,
+    ownerDaemonId: string,
+    opts: { timeoutMs?: number } = {},
+): Promise<AdoptFromOwnerOutcome> {
+    const no = (reason: string): AdoptFromOwnerOutcome => ({ adopted: false, reason });
+    const owner = readStringValue(ownerDaemonId);
+    if (!meshId || !nodeId || !owner) return no('invalid_request');
+    const dispatch = host.deps.dispatchMeshCommand;
+    if (typeof dispatch !== 'function') return no('no_mesh_transport');
+    const self = readStringValue(host.deps.statusInstanceId);
+    if (self && daemonIdsEquivalent(owner, self)) return no('owner_is_this_daemon');
+    const record = await getMeshForCommand(host, meshId, undefined, { preferInline: true });
+    if (!record?.mesh) return no('mesh_not_found');
+    const hostStatus = resolveMeshHostStatus(record.mesh);
+    if (!hostStatus.canOwnCoordinator || !hostStatus.canOwnQueue) return no('not_mesh_host');
+    const roster: unknown[] = Array.isArray(record.mesh.nodes) ? [...record.mesh.nodes] : [];
+    try {
+        const { getMesh } = await import('../config/mesh-config.js');
+        const local = getMesh(meshId);
+        if (local) roster.push(...local.nodes);
+    } catch { /* no config twin */ }
+    const ownerIsMember = roster.some((entry: any) => typeof entry?.daemonId === 'string'
+        && daemonIdsEquivalent(entry.daemonId, owner));
+    if (!ownerIsMember) return no('owner_not_a_mesh_member');
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let answer: Record<string, unknown>;
+    try {
+        const raw = await Promise.race([
+            dispatch(owner, 'mesh_member_worktree_nodes', withMeshDirectDispatch({ meshId })),
+            new Promise<never>((_, reject) => {
+                timer = setTimeout(() => reject(new Error('owner_query_timeout')), opts.timeoutMs ?? ADOPT_FROM_OWNER_TIMEOUT_MS);
+            }),
+        ]);
+        answer = unwrapMeshRelayResult(raw, { command: 'mesh_member_worktree_nodes', peerDaemonId: owner }) as Record<string, unknown>;
+    } catch (error: any) {
+        return no(`owner_unreachable:${error?.message || 'dispatch_failed'}`);
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+    if (answer.success !== true) return no('owner_cannot_answer');
+    const claimed = sanitizeMemberWorktreeNodes(answer.nodes).find(n => meshNodeIdMatches(n as any, nodeId));
+    if (!claimed) return no('owner_does_not_own_node');
+    const result = await adoptMemberWorktreeNodes(host, meshId, { reported: [claimed], senderDaemonId: owner, ownerDaemonId: owner });
+    if (result.adopted.includes(claimed.id)) {
+        LOG.info('Mesh', `[PullAdopt] mesh=${meshId} adoptedNodeId=${claimed.id} owner=${owner.slice(0, 24)}`);
+        return { adopted: true, nodeId: claimed.id, node: { ...claimed } };
+    }
+    const rejected = result.rejected.find(r => r.nodeId === claimed.id);
+    return no(rejected ? rejected.reason : 'already_on_roster');
 }
 
 /** Public seam for remove_mesh_node's config branch (no warmed inline cache to splice). */

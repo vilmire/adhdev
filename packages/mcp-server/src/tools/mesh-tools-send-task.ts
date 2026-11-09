@@ -1208,7 +1208,10 @@ export async function meshSendTask(
         if (route.route === 'unreachable' || route.route === 'error') {
             return JSON.stringify({
                 success: false,
-                code: route.route === 'unreachable' ? 'mesh_node_unreachable' : 'mesh_dispatch_route_unavailable',
+                code: route.route === 'unreachable'
+                    ? 'mesh_node_unreachable'
+                    : (route.route === 'error' && route.code === 'mesh_node_unknown' ? 'mesh_node_not_on_coordinator_roster' : 'mesh_dispatch_route_unavailable'),
+                ...(route.route === 'error' && route.action ? { action: route.action } : {}),
                 nodeId: args.node_id,
                 ...(args.session_id ? { sessionId: args.session_id } : {}),
                 taskMode: req.taskMode || 'unspecified',
