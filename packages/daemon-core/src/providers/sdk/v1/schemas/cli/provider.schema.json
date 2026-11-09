@@ -1279,6 +1279,9 @@
             "post-boot-command"
           ]
         },
+        "ptyFallback": {
+          "type": "boolean"
+        },
         "risk": {
           "enum": [
             "safe",

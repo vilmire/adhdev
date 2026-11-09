@@ -1134,7 +1134,9 @@ export class CliProviderInstance implements ProviderInstance {
 
     shouldUsePtyAutoApprove(): boolean {
         const resolved = this.resolveAutoApproveMode();
-        return this.shouldAutoApprove() && resolved.strategy === 'pty-parse-default';
+        // launch-args modes that opt in via ptyFallback still answer residual PTY
+        // prompts (the CLI flag does not suppress every approval screen).
+        return this.shouldAutoApprove() && (resolved.strategy === 'pty-parse-default' || resolved.ptyFallback === true);
     }
 
     /** @see ProviderInstance.noteManualInteraction */

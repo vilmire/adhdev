@@ -262,6 +262,10 @@ export function validateAutoApproveModes(raw: unknown, errors: string[]): void {
       errors.push(`${prefix}.risk must be one of: safe, caution, dangerous`)
     }
 
+    if (mode.ptyFallback !== undefined && typeof mode.ptyFallback !== 'boolean') {
+      errors.push(`${prefix}.ptyFallback must be a boolean when provided`)
+    }
+
     for (const field of ['launchArgs', 'removeArgs'] as const) {
       const value = mode[field]
       if (value !== undefined && (!Array.isArray(value) || value.some((arg) => typeof arg !== 'string' || !arg.trim()))) {

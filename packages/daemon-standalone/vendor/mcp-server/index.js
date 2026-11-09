@@ -30254,9 +30254,9 @@ ${renderWorkerProtocolFooter2(input)}`;
       if (mode.strategy === "post-boot-command") return inactiveMode(mode.id);
       if (settings2?.launchedByCoordinator === true && settings2.delegatedWorkerDangerousModeAllow !== true && deriveAutoApproveModeRisk(mode) === "dangerous") {
         const fallback = provider.autoApproveModes?.modes.find((candidate) => candidate.strategy === "pty-parse-default" && deriveAutoApproveModeRisk(candidate) !== "dangerous");
-        return fallback ? { active: true, strategy: fallback.strategy, modeId: fallback.id } : inactiveMode(mode.id);
+        return fallback ? { active: true, strategy: fallback.strategy, modeId: fallback.id, ...fallback.ptyFallback === true ? { ptyFallback: true } : {} } : inactiveMode(mode.id);
       }
-      return { active: true, strategy: mode.strategy, modeId: mode.id };
+      return { active: true, strategy: mode.strategy, modeId: mode.id, ...mode.ptyFallback === true ? { ptyFallback: true } : {} };
     }
     function resolveProviderAutoApproveMode(provider, settings2) {
       if (!provider) return inactiveMode();
@@ -114814,6 +114814,9 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
                     "post-boot-command"
                   ]
                 },
+                ptyFallback: {
+                  type: "boolean"
+                },
                 risk: {
                   enum: [
                     "safe",
@@ -175868,6 +175871,9 @@ ${defangRelayBody(text10)}`;
         if (!["safe", "caution", "dangerous"].includes(String(risk))) {
           errors.push(`${prefix}.risk must be one of: safe, caution, dangerous`);
         }
+        if (mode.ptyFallback !== void 0 && typeof mode.ptyFallback !== "boolean") {
+          errors.push(`${prefix}.ptyFallback must be a boolean when provided`);
+        }
         for (const field3 of ["launchArgs", "removeArgs"]) {
           const value = mode[field3];
           if (value !== void 0 && (!Array.isArray(value) || value.some((arg) => typeof arg !== "string" || !arg.trim()))) {
@@ -230617,7 +230623,7 @@ ${buttons.join("\n")}`;
       }
       shouldUsePtyAutoApprove() {
         const resolved = this.resolveAutoApproveMode();
-        return this.shouldAutoApprove() && resolved.strategy === "pty-parse-default";
+        return this.shouldAutoApprove() && (resolved.strategy === "pty-parse-default" || resolved.ptyFallback === true);
       }
       /** @see ProviderInstance.noteManualInteraction */
       noteManualInteraction(now = Date.now(), opts) {

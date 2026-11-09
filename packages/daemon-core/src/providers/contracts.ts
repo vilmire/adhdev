@@ -391,6 +391,12 @@ export interface AutoApproveMode {
   label: string;
   strategy: AutoApproveModeStrategy;
   risk: AutoApproveModeRisk;
+  /**
+   * When the mode is active and the CLI still raises a PTY approval prompt
+   * (launch-args modes do not suppress every prompt), the daemon answers it
+   * through the PTY auto-approve path (one-time option only).
+   */
+  ptyFallback?: boolean;
   warning?: string;
   launchArgs?: string[];
   removeArgs?: string[];

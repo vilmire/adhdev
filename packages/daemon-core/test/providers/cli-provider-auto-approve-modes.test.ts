@@ -21,6 +21,14 @@ const mockProvider: ProviderModule = {
         launchArgs: ['--trust-session'],
         removeArgs: ['--permission-mode'],
       },
+      {
+        id: 'auto',
+        label: 'Auto with PTY fallback',
+        strategy: 'launch-args',
+        risk: 'caution',
+        ptyFallback: true,
+        launchArgs: ['--permission-mode', 'auto'],
+      },
     ],
   },
 }
@@ -106,6 +114,61 @@ describe('CliProviderInstance.resolveAutoApproveMode', () => {
     expect(instance.pendingAutoApprovalSince).toBe(0)
     expect(instance.adapter.resolveModal).not.toHaveBeenCalled()
     expect(instance.autoApproveEffectivelyActive('waiting_approval', 1_000)).toBe(false)
+  })
+})
+
+describe('ptyFallback on launch-args modes', () => {
+  it('keeps resolving ptyFallback onto the resolved mode only when the flag is set', () => {
+    expect(instanceWith({ autoApproveMode: 'auto' }).resolveAutoApproveMode()).toEqual({
+      active: true,
+      strategy: 'launch-args',
+      modeId: 'auto',
+      ptyFallback: true,
+    })
+    expect(instanceWith({ autoApproveMode: 'launch' }).resolveAutoApproveMode().ptyFallback).toBeUndefined()
+  })
+
+  it('answers PTY prompts for a launch-args mode with ptyFallback, but not without it', () => {
+    expect(instanceWith({ autoApproveMode: 'auto' }).shouldUsePtyAutoApprove()).toBe(true)
+    expect(instanceWith({ autoApproveMode: 'launch' }).shouldUsePtyAutoApprove()).toBe(false)
+    expect(instanceWith({ autoApproveMode: 'parsed' }).shouldUsePtyAutoApprove()).toBe(true)
+    expect(instanceWith({ autoApprove: false }).shouldUsePtyAutoApprove()).toBe(false)
+    expect(instanceWith({ autoApproveMode: 'stale' }).shouldUsePtyAutoApprove()).toBe(false)
+  })
+
+  it('presses the one-time Yes on a 2-button approval under the auto mode', async () => {
+    const instance = instanceWith({ autoApproveMode: 'auto' })
+    instance.adapter.resolveModalMatched = vi.fn(() => true)
+    instance.appendRuntimeSystemMessage = vi.fn()
+    const status = {
+      status: 'waiting_approval',
+      approvalEntrySeq: 1,
+      activeModal: {
+        message: 'Reads outside the working directories are blocked. Allow this read?',
+        buttons: ['Yes', 'No'],
+      },
+    }
+    instance.maybeAutoApproveStatus(status, 1_000)
+    expect(instance.adapter.resolveModalMatched).not.toHaveBeenCalled()
+    expect(instance.maybeAutoApproveStatus(status, 1_700)).toBe(true)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(instance.adapter.resolveModalMatched).toHaveBeenCalledTimes(1)
+    expect(instance.adapter.resolveModalMatched).toHaveBeenCalledWith(0)
+  })
+
+  it('refuses a "don\'t ask again" option under the auto mode', async () => {
+    const instance = instanceWith({ autoApproveMode: 'auto' })
+    instance.adapter.resolveModalMatched = vi.fn(() => true)
+    instance.appendRuntimeSystemMessage = vi.fn()
+    const status = {
+      status: 'waiting_approval',
+      approvalEntrySeq: 1,
+      activeModal: { message: 'Allow command?', buttons: ["Yes, and don't ask again", 'Yes', 'No'] },
+    }
+    instance.maybeAutoApproveStatus(status, 1_000)
+    instance.maybeAutoApproveStatus(status, 1_700)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(instance.adapter.resolveModalMatched).not.toHaveBeenCalledWith(0)
   })
 })
 

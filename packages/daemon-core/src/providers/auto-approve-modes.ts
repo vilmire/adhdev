@@ -21,6 +21,8 @@ export interface ResolvedAutoApproveMode {
   active: boolean;
   strategy: AutoApproveModeStrategy;
   modeId: string;
+  /** Mirror of the mode's ptyFallback flag: answer residual PTY prompts despite a non-PTY strategy. */
+  ptyFallback?: boolean;
 }
 
 function isKnownDangerousLaunchArg(arg: string): boolean {
@@ -54,10 +56,10 @@ function resolveConfiguredMode(
       candidate.strategy === 'pty-parse-default'
       && deriveAutoApproveModeRisk(candidate) !== 'dangerous');
     return fallback
-      ? { active: true, strategy: fallback.strategy, modeId: fallback.id }
+      ? { active: true, strategy: fallback.strategy, modeId: fallback.id, ...(fallback.ptyFallback === true ? { ptyFallback: true } : {}) }
       : inactiveMode(mode.id);
   }
-  return { active: true, strategy: mode.strategy, modeId: mode.id };
+  return { active: true, strategy: mode.strategy, modeId: mode.id, ...(mode.ptyFallback === true ? { ptyFallback: true } : {}) };
 }
 
 /**
