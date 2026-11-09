@@ -84612,8 +84612,8 @@ ${block3.text}`,
       resolveRemoteWorkerIdentity: () => resolveRemoteWorkerIdentity
     });
     function resolveRemoteWorkerIdentity(credential, deps) {
-      const trim = (v) => typeof v === "string" ? v.trim() : "";
-      const hasRawToken = trim(credential.token).length > 0;
+      const trim2 = (v) => typeof v === "string" ? v.trim() : "";
+      const hasRawToken = trim2(credential.token).length > 0;
       const binding = verifyWorkerSessionBind(credential.bind);
       const directToken = verifyWorkerTaskToken(credential.token);
       if (hasRawToken && !directToken) return null;
@@ -84630,7 +84630,7 @@ ${block3.text}`,
         stamp2 = null;
       }
       let fallbackStamp = null;
-      if ((!stamp2 || !trim(stamp2.ownerDaemonId)) && deps.resolveMeshHostOwner) {
+      if ((!stamp2 || !trim2(stamp2.ownerDaemonId)) && deps.resolveMeshHostOwner) {
         try {
           fallbackStamp = deps.resolveMeshHostOwner(
             expectedMeshId,
@@ -84641,28 +84641,28 @@ ${block3.text}`,
           fallbackStamp = null;
         }
       }
-      const effectiveStamp = stamp2 && trim(stamp2.ownerDaemonId) ? stamp2 : fallbackStamp;
+      const effectiveStamp = stamp2 && trim2(stamp2.ownerDaemonId) ? stamp2 : fallbackStamp;
       if (!effectiveStamp) return null;
-      const meshId = trim(effectiveStamp.meshId);
-      const ownerDaemonId = trim(effectiveStamp.ownerDaemonId);
+      const meshId = trim2(effectiveStamp.meshId);
+      const ownerDaemonId = trim2(effectiveStamp.ownerDaemonId);
       if (!meshId || !ownerDaemonId) return null;
       if (meshId !== expectedMeshId) return null;
       if (deps.isSelfDaemon(ownerDaemonId)) return null;
-      const reqTaskId = trim(credential.taskId);
-      const reqAttemptId = trim(credential.attemptId);
-      const tokenTaskId = trim(directToken?.taskId);
-      const tokenAttemptId = trim(directToken?.attemptId);
-      const stampTaskId = trim(effectiveStamp.taskId) || trim(stamp2?.taskId);
-      const stampAttemptId = trim(effectiveStamp.attemptId) || trim(stamp2?.attemptId);
+      const reqTaskId = trim2(credential.taskId);
+      const reqAttemptId = trim2(credential.attemptId);
+      const tokenTaskId = trim2(directToken?.taskId);
+      const tokenAttemptId = trim2(directToken?.attemptId);
+      const stampTaskId = trim2(effectiveStamp.taskId) || trim2(stamp2?.taskId);
+      const stampAttemptId = trim2(effectiveStamp.attemptId) || trim2(stamp2?.attemptId);
       if (reqTaskId && tokenTaskId && reqTaskId !== tokenTaskId || reqTaskId && stampTaskId && reqTaskId !== stampTaskId || tokenTaskId && stampTaskId && tokenTaskId !== stampTaskId) {
         return null;
       }
       if (reqAttemptId && tokenAttemptId && reqAttemptId !== tokenAttemptId || reqAttemptId && stampAttemptId && reqAttemptId !== stampAttemptId || tokenAttemptId && stampAttemptId && tokenAttemptId !== stampAttemptId) {
         return null;
       }
-      const taskId = tokenTaskId || reqTaskId || stampTaskId || (!stamp2 ? trim(binding?.spawnedForTaskId) : "");
+      const taskId = tokenTaskId || reqTaskId || stampTaskId || (!stamp2 ? trim2(binding?.spawnedForTaskId) : "");
       const attemptId = tokenAttemptId || reqAttemptId || stampAttemptId;
-      const nodeId = trim(effectiveStamp.nodeId) || trim(stamp2?.nodeId) || binding?.nodeId || directToken?.nodeId;
+      const nodeId = trim2(effectiveStamp.nodeId) || trim2(stamp2?.nodeId) || binding?.nodeId || directToken?.nodeId;
       const generation = Number.isInteger(effectiveStamp.generation) ? effectiveStamp.generation : Number.isInteger(stamp2?.generation) ? stamp2?.generation : void 0;
       return {
         meshId,
@@ -111018,6 +111018,113 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         "use strict";
         KNOWN_PREFIXES = ["standalone_mach_", "daemon_mach_", "mach_"];
         KEEP = 8;
+      }
+    });
+    function answeredSession(result) {
+      let current5 = result;
+      for (let depth = 0; depth < 6 && current5 && typeof current5 === "object"; depth += 1) {
+        const rec8 = current5;
+        if (rec8.success === false) return "";
+        const id4 = trim(rec8.sessionId);
+        if (id4) return id4;
+        current5 = rec8.result;
+      }
+      return "";
+    }
+    function defaultNodeDaemonId(meshId, nodeId) {
+      const node = getMesh(meshId)?.nodes?.find((n) => n.id === nodeId);
+      return typeof node?.daemonId === "string" ? node.daemonId : void 0;
+    }
+    function ownedOpenDirectAttempt(ledger, meshId, taskId, attemptId) {
+      const attempt = ledger.getAttempt(attemptId);
+      if (!attempt) return "attempt_unknown";
+      if (attempt.scope !== "mesh_direct") return "not_mesh_direct";
+      if (attempt.meshId !== meshId || attempt.taskId !== taskId) return "attempt_mismatch";
+      if (!daemonIdsEquivalent5(attempt.ownerDaemonId, ledger.selfDaemonId)) return "not_owner";
+      if (attempt.terminal) return "attempt_terminal";
+      return attempt;
+    }
+    function bindSessionlessDirectSendAnswer(relay, deps = {}) {
+      const no = (reason) => ({ bound: false, reason });
+      try {
+        const args = relay.args;
+        if (relay.command !== "agent_command" || !args || typeof args !== "object") return no("not_agent_command");
+        if (args.action !== "send_chat") return no("not_send_chat");
+        if (trim(args.targetSessionId) || trim(args.sessionId) || trim(args.session_id)) return no("session_named");
+        const mc = args.meshContext && typeof args.meshContext === "object" ? args.meshContext : null;
+        const meshId = trim(mc?.meshId);
+        const taskId = trim(mc?.taskId);
+        const attemptId = trim(mc?.attemptId);
+        if (!meshId || !taskId || !attemptId) return no("no_dispatch_context");
+        const messageId = trim(args.messageId);
+        if (messageId && messageId !== taskId) return no("message_task_mismatch");
+        const sessionId = answeredSession(relay.result);
+        if (!sessionId) return no("no_answered_session");
+        const ledger = deps.ledger === void 0 ? getActiveTurnLedger() : deps.ledger;
+        if (!ledger) return no("no_ledger");
+        const found = ownedOpenDirectAttempt(ledger, meshId, taskId, attemptId);
+        if (typeof found === "string") return no(found);
+        const attempt = found;
+        const generation = mc?.attemptGeneration;
+        if (typeof generation === "number" && generation !== attempt.generation) return no("generation_mismatch");
+        const nodeId = trim(mc?.nodeId);
+        if (nodeId && attempt.nodeId && nodeId !== attempt.nodeId) return no("node_mismatch");
+        const rosterNode = attempt.nodeId || nodeId;
+        const ownerOfNode = rosterNode ? (deps.nodeDaemonId ?? defaultNodeDaemonId)(meshId, rosterNode) : void 0;
+        if (!ownerOfNode || !daemonIdsEquivalent5(ownerOfNode, relay.targetDaemonId)) return no("target_not_node_owner");
+        const alreadyBound = sessionIdsEquivalent(attempt.sessionId, sessionId);
+        if (!alreadyBound && !sessionIdsEquivalent(attempt.sessionId, taskId)) return no("attempt_bound_to_other_session");
+        if (!alreadyBound) {
+          const verdict = ledger.observe({
+            // Same event id as the MCP side's delivered evidence: whichever lands second is a duplicate.
+            eventId: `${taskId}:delivered`,
+            at: (deps.now ?? Date.now)(),
+            source: "dispatch",
+            sessionId,
+            attemptRef: { attemptId: attempt.attemptId, generation: attempt.generation },
+            observedBy: ledger.selfDaemonId,
+            kind: "delivered",
+            messageId: taskId,
+            outcome: "delivered",
+            via: "p2p"
+          }).verdict;
+          if (verdict !== "applied" && verdict !== "recorded" && verdict !== "duplicate") return no(`ledger_${verdict}`);
+          if (verdict === "duplicate") return no("delivered_already_recorded");
+        }
+        bindTaskRowSession(meshId, taskId, sessionId);
+        return { bound: true, sessionId };
+      } catch (e) {
+        LOG.warn("RemoteDirectBinding", `bind failed: ${e?.message ?? String(e)}`);
+        return no("error");
+      }
+    }
+    function bindTaskRowSession(meshId, taskId, sessionId) {
+      const store5 = MeshRuntimeStore.getInstance();
+      const row2 = store5.findQueueEntryById(meshId, taskId);
+      if (!row2 || row2.assignedSessionId || row2.targetSessionId) return;
+      store5.updateQueueEntry({ ...row2, assignedSessionId: sessionId, targetSessionId: sessionId });
+    }
+    function resolveBoundDirectSession(meshId, taskId, attemptId, deps = {}) {
+      try {
+        const ledger = deps.ledger === void 0 ? getActiveTurnLedger() : deps.ledger;
+        if (!ledger || !meshId || !taskId || !attemptId) return "";
+        const found = ownedOpenDirectAttempt(ledger, meshId, taskId, attemptId);
+        if (typeof found === "string") return "";
+        return sessionIdsEquivalent(found.sessionId, taskId) ? "" : found.sessionId;
+      } catch {
+        return "";
+      }
+    }
+    var trim;
+    var init_remote_direct_session_binding = __esm2({
+      "src/mesh/remote-direct-session-binding.ts"() {
+        "use strict";
+        init_dist();
+        init_active_ledger();
+        init_mesh_runtime_store();
+        init_mesh_config();
+        init_logger();
+        trim = (v) => typeof v === "string" ? v.trim() : "";
       }
     });
     function trimStr(value) {
@@ -142139,6 +142246,7 @@ ${tail}` : ""
         init_mesh_writer_stop_diagnostics();
         init_stage_guards();
         init_mesh_config();
+        init_remote_direct_session_binding();
         init_dist();
         init_config();
         init_mesh_physical_ownership();
@@ -142445,6 +142553,10 @@ ${tail}` : ""
               delete task.phase;
               delete task.workspace;
               delete task.machineId;
+              if (!(typeof task.assignedSessionId === "string" && task.assignedSessionId.trim()) && typeof task.attemptId === "string") {
+                const bound = resolveBoundDirectSession(req.meshId, req.taskId, task.attemptId);
+                if (bound) task.assignedSessionId = bound;
+              }
               let attested;
               try {
                 const mesh = getMesh(req.meshId);
@@ -167428,6 +167540,7 @@ ${defangRelayBody(text10)}`;
       beginLifecycleSource: () => beginLifecycleSource,
       bindMeshNoticeRuntime: () => bindMeshNoticeRuntime,
       bindSeqscribeRuntime: () => bindSeqscribeRuntime,
+      bindSessionlessDirectSendAnswer: () => bindSessionlessDirectSendAnswer,
       bootDaemonRuntime: () => bootDaemonRuntime,
       bootSessionHost: () => bootSessionHost,
       buildAssistantChatMessage: () => buildAssistantChatMessage,
@@ -171087,6 +171200,7 @@ ${defangRelayBody(text10)}`;
       }
     };
     init_mask_daemon_id();
+    init_remote_direct_session_binding();
     var import_node_crypto28 = require("crypto");
     var import_ws2 = __toESM2(require_ws());
     init_dist();

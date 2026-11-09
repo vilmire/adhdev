@@ -373,6 +373,7 @@ export {
 } from './mesh/transport/mesh-rpc-timeouts.js';
 export { summarizeMeshCommandArgs, summarizeMeshCommandGitResult, summarizeMeshCommandResult } from './mesh/transport/mesh-command-summarizer.js';
 export { maskDaemonId } from './mesh/transport/mask-daemon-id.js';
+export { bindSessionlessDirectSendAnswer } from './mesh/remote-direct-session-binding.js';
 export type { MeshPeerSnapshot, MeshPeerConnectionState } from './mesh/transport/mesh-peer-types.js';
 // Standalone multi-machine mesh (design 2026-10-07 §4): the direct-WebSocket
 // transport, the pairing peer-secret store, the HMAC handshake and the

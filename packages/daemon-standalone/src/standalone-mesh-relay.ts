@@ -31,6 +31,7 @@
 import {
   LOG,
   buildP2pRelayFailurePayload,
+  bindSessionlessDirectSendAnswer,
   daemonIdsEquivalent,
   maskDaemonId,
 } from '@adhdev/daemon-core';
@@ -89,7 +90,11 @@ export async function runStandaloneMeshRelay(
     throw new Error('mesh_relay_command: this standalone daemon has no mesh link to other machines');
   }
   try {
-    return asRecord(await deps.dispatchRemote(request.targetDaemonId, request.command, request.args));
+    const result = asRecord(await deps.dispatchRemote(request.targetDaemonId, request.command, request.args));
+    // Older coordinator MCP servers never adopt the session the worker daemon picked for a
+    // sessionless direct send: bind it on this (owner) daemon (idempotent with the MCP side).
+    bindSessionlessDirectSendAnswer({ command: request.command, args: request.args, targetDaemonId: request.targetDaemonId, result });
+    return result;
   } catch (error) {
     if (error && typeof error === 'object' && (error as { transport?: unknown }).transport === 'p2p') {
       LOG.info('Mesh', `[Mesh] Relay '${request.command}' to ${maskDaemonId(request.targetDaemonId)} failed: ${(error as Error).message}`);

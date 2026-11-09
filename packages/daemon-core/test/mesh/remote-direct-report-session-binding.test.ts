@@ -26,6 +26,8 @@ import type { TurnLedger } from '../../src/mesh/turn-ledger/ledger.js';
 import { acceptForwardedWorkerCompletionReport, type ForwardedWorkerReportClaim } from '../../src/mesh/worker-report-forwarded.js';
 import { __resetReportedSummariesForTest, __setHandoffNoteSinkForTests } from '../../src/mesh/worker-report.js';
 import { __resetWorkerSessionBindsForTest, __resetWorkerTaskTokensForTest } from '../../src/mesh/worker-mcp-isolation.js';
+import { bindSessionlessDirectSendAnswer } from '../../src/mesh/remote-direct-session-binding.js';
+import { meshStoreIpcHandlers } from '../../src/commands/low-family/mesh-store-ipc.js';
 import { agentCommand } from '../../src/commands/cli-manager-agent-command.js';
 import type { DaemonCliManager } from '../../src/commands/cli-manager.js';
 import { evd, T0 } from '../turn-ledger/ledger-harness.js';
@@ -148,5 +150,100 @@ describe('remote sessionless direct send → forwarded worker report', () => {
         const result = forward(WORKER_SESSION);
         expect(result.accepted).toBe(false);
         expect((result as any).detail ?? (result as any).refusal).toMatch(/no_live_task/);
+    });
+});
+
+/**
+ * The coordinator's MCP server may run OLD code that never adopts the answered session
+ * (it records the delivery under the task-id stand-in and writes the task row with no
+ * session). The owner DAEMON binds the session on the relay path instead.
+ */
+describe('owner daemon binds the answered session itself (old MCP caller)', () => {
+    const nodeDaemonId = (_mesh: string, nodeId: string) => nodeId === NODE ? 'remote' : undefined;
+    const meshContext = { meshId: MESH, nodeId: NODE, taskId: TASK, attemptId: ATTEMPT, attemptGeneration: 0 };
+    const relayArgs = (extra: Record<string, unknown> = {}) => ({
+        action: 'send_chat', agentType: PROVIDER, message: 'do the work', messageId: TASK, meshContext, ...extra,
+    });
+
+    function openStandInAttempt(): void {
+        expect(ledger.observe(ev(evd('dispatch_accepted', {
+            scope: 'mesh_direct', meshId: MESH, nodeId: NODE, providerType: PROVIDER,
+            messageId: TASK, dispatchNonce: 1, consumeProfile: 'default',
+        }, { source: 'dispatch' }), TASK)).verdict).toBe('applied');
+        now += 1_000;
+    }
+
+    /** Exactly what an old mcp-server does after the relay answer: delivered under the stand-in + a row with no session. */
+    async function oldMcpRecords(): Promise<void> {
+        ledger.observe({
+            eventId: `${TASK}:delivered`, at: now, source: 'dispatch', sessionId: TASK,
+            attemptRef: { attemptId: ATTEMPT, generation: 0 }, observedBy: 'owner',
+            kind: 'delivered', messageId: TASK, outcome: 'delivered', via: 'p2p',
+        } as TurnEvidence);
+        const res: any = await meshStoreIpcHandlers.direct_dispatch_record({ deps: { statusInstanceId: 'owner' } } as any, {
+            v: 1, meshId: MESH, taskId: TASK, message: 'do the work',
+            task: { assignedNodeId: NODE, taskMode: 'general', difficulty: 'easy', attemptId: ATTEMPT },
+        });
+        expect(res).toMatchObject({ success: true, taskRecorded: true });
+    }
+
+    it('accepts the forwarded report although the MCP side never adopted the session', async () => {
+        openStandInAttempt();
+        const answer = await workerAnswer();
+        expect(bindSessionlessDirectSendAnswer(
+            { command: 'agent_command', args: relayArgs(), targetDaemonId: 'remote', result: answer }, { nodeDaemonId },
+        )).toEqual({ bound: true, sessionId: WORKER_SESSION });
+        await oldMcpRecords();
+        expect(forward(WORKER_SESSION).accepted).toBe(true);
+    });
+
+    it('is idempotent: a second bind of the same answer changes nothing', async () => {
+        openStandInAttempt();
+        const relay = { command: 'agent_command', args: relayArgs(), targetDaemonId: 'remote', result: { success: true, sessionId: WORKER_SESSION } };
+        expect(bindSessionlessDirectSendAnswer(relay, { nodeDaemonId }).bound).toBe(true);
+        expect(bindSessionlessDirectSendAnswer(relay, { nodeDaemonId })).toEqual({ bound: true, sessionId: WORKER_SESSION });
+        await oldMcpRecords();
+        expect(forward(WORKER_SESSION).accepted).toBe(true);
+    });
+
+    it('still refuses a different session', async () => {
+        openStandInAttempt();
+        bindSessionlessDirectSendAnswer(
+            { command: 'agent_command', args: relayArgs(), targetDaemonId: 'remote', result: { success: true, sessionId: WORKER_SESSION } }, { nodeDaemonId },
+        );
+        await oldMcpRecords();
+        expect(forward('some-other-session').accepted).toBe(false);
+    });
+
+    it('never binds when the request named a session, the answer failed, or the answering daemon does not own the node', () => {
+        openStandInAttempt();
+        const ok = { success: true, sessionId: WORKER_SESSION };
+        expect(bindSessionlessDirectSendAnswer({ command: 'agent_command', args: relayArgs({ targetSessionId: 'named' }), targetDaemonId: 'remote', result: ok }, { nodeDaemonId }))
+            .toEqual({ bound: false, reason: 'session_named' });
+        expect(bindSessionlessDirectSendAnswer({ command: 'agent_command', args: relayArgs(), targetDaemonId: 'remote', result: { success: false, sessionId: WORKER_SESSION } }, { nodeDaemonId }).bound).toBe(false);
+        expect(bindSessionlessDirectSendAnswer({ command: 'agent_command', args: relayArgs(), targetDaemonId: 'someone-else', result: ok }, { nodeDaemonId }))
+            .toEqual({ bound: false, reason: 'target_not_node_owner' });
+    });
+
+    it('never binds a task this daemon did not dispatch (unknown attempt, other mesh)', () => {
+        const ok = { success: true, sessionId: WORKER_SESSION };
+        const ctx = (m: Record<string, unknown>) => relayArgs({ meshContext: { ...meshContext, ...m } });
+        expect(bindSessionlessDirectSendAnswer({ command: 'agent_command', args: ctx({}), targetDaemonId: 'remote', result: ok }, { nodeDaemonId }))
+            .toEqual({ bound: false, reason: 'attempt_unknown' });
+        openStandInAttempt();
+        expect(bindSessionlessDirectSendAnswer({ command: 'agent_command', args: ctx({ meshId: 'other-mesh' }), targetDaemonId: 'remote', result: ok }, { nodeDaemonId }))
+            .toEqual({ bound: false, reason: 'attempt_mismatch' });
+        expect(bindSessionlessDirectSendAnswer({ command: 'agent_command', args: ctx({ taskId: 'other-task' }), targetDaemonId: 'remote', result: ok }, { nodeDaemonId }).bound).toBe(false);
+        // message id and task id agree but name a task the attempt is not for
+        expect(bindSessionlessDirectSendAnswer({ command: 'agent_command', args: relayArgs({ messageId: 'other-task', meshContext: { ...meshContext, taskId: 'other-task' } }), targetDaemonId: 'remote', result: ok }, { nodeDaemonId }))
+            .toEqual({ bound: false, reason: 'attempt_mismatch' });
+    });
+
+    it('never re-points an attempt already bound to another session', () => {
+        openStandInAttempt();
+        const relay = (sessionId: string) => ({ command: 'agent_command', args: relayArgs(), targetDaemonId: 'remote', result: { success: true, sessionId } });
+        expect(bindSessionlessDirectSendAnswer(relay(WORKER_SESSION), { nodeDaemonId }).bound).toBe(true);
+        expect(bindSessionlessDirectSendAnswer(relay('another-session'), { nodeDaemonId }))
+            .toEqual({ bound: false, reason: 'attempt_bound_to_other_session' });
     });
 });

@@ -3,6 +3,7 @@ import { withMissionReadForward } from './mission-read-forward.js';
 import { writerCancelRefusalHint } from '../../mesh/mesh-writer-stop-diagnostics.js';
 import { assertNotStageChild } from '../../mesh/stage-guards.js';
 import { getMesh } from '../../config/mesh-config.js';
+import { resolveBoundDirectSession } from '../../mesh/remote-direct-session-binding.js';
 import { decodeQueueReviseRequest, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { getMachineId } from '../../config/config.js';
 import { attestLocalOwnership } from '../../mesh/mesh-physical-ownership.js';
@@ -515,6 +516,13 @@ const directDispatchRecord: LowFamilyHandler = async (ctx: LowFamilyContext, arg
             delete task.phase;
             delete task.workspace;
             delete task.machineId;
+            // A sessionless direct send is bound to the session that took it by the relay
+            // path (bindSessionlessDirectSendAnswer) even when an older MCP server wrote no
+            // session here: read it back from the attempt rather than leave the row unassigned.
+            if (!(typeof task.assignedSessionId === 'string' && task.assignedSessionId.trim()) && typeof task.attemptId === 'string') {
+                const bound = resolveBoundDirectSession(req.meshId, req.taskId, task.attemptId);
+                if (bound) task.assignedSessionId = bound;
+            }
             let attested: { ownershipScope: import('@adhdev/mesh-shared').PhysicalOwnershipScope; phase: 'source' } | undefined;
             try {
                 const mesh = getMesh(req.meshId);
