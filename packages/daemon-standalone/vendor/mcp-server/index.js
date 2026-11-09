@@ -232420,6 +232420,11 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         case "delivered":
           return {
             success: true,
+            // The session that actually took the prompt: a sessionless direct
+            // dispatch lets THIS daemon pick it, and the dispatching coordinator
+            // can only learn the real id from this answer (it binds its attempt
+            // and task row to it, which is what authorises this session's reports).
+            sessionId: sessionKey2,
             status: "generating",
             submitted: outcome.route !== "agent_queue",
             ...outcome.route ? { route: outcome.route } : {},
@@ -232428,6 +232433,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         case "queued":
           return {
             success: true,
+            sessionId: sessionKey2,
             status: "queued",
             queued: true,
             queuedReason: "driver_fifo_parked",
@@ -232438,7 +232444,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           };
         case "duplicate":
           LOG.warn("MeshDispatch", `Suppressed duplicate submission on session ${sessionKey2}: messageId ${outcome.of} was already submitted \u2014 not re-injecting`);
-          return { success: true, status: "generating", duplicateSuppressed: true, messageId: outcome.of };
+          return { success: true, sessionId: sessionKey2, status: "generating", duplicateSuppressed: true, messageId: outcome.of };
         case "refused": {
           const error = new Error(outcome.message || `send refused: ${outcome.reason}`);
           error.reason = outcome.reason;
@@ -256534,7 +256540,8 @@ async function sendDirectAgentTask(ctx, node, route, target, send) {
       const errorMessage = dispatchPayload?.error || dispatchResult?.error || "agent_command rejected the task";
       return directDispatchFailure(node, route, sessionId, source?.error || errorMessage, errorMessage, source ?? {});
     }
-    return { success: true, dispatched: true, sessionId, providerType };
+    const answered = [dispatchPayload?.sessionId, dispatchResult?.sessionId].find((v) => typeof v === "string" && v.trim().length > 0);
+    return { success: true, dispatched: true, sessionId: sessionId || answered?.trim() || "", providerType };
   } catch (e) {
     return directDispatchFailure(node, route, sessionId, e, e?.message || String(e));
   }

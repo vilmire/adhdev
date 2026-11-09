@@ -701,7 +701,14 @@ export async function sendDirectAgentTask(
         // poison assigned_session_id downstream, breaking findAssignedBySession and
         // orphaning the task_completed match. Leave it empty so completion matching
         // falls back to taskId via the meshContext.taskId carried in the dispatch.
-        return { success: true, dispatched: true, sessionId, providerType };
+        // A sessionless dispatch lets the worker daemon pick the session; it names the
+        // one that took the prompt in its answer. Recording that id is what lets the
+        // owner authorise this exact session's later report_completion (forwarded
+        // reports are matched against the owner's attempt/task row by session). An
+        // explicit target always wins — the answer never re-points a named session.
+        const answered = [dispatchPayload?.sessionId, dispatchResult?.sessionId]
+            .find((v): v is string => typeof v === 'string' && v.trim().length > 0);
+        return { success: true, dispatched: true, sessionId: sessionId || answered?.trim() || '', providerType };
     } catch (e: any) {
         return directDispatchFailure(node, route, sessionId, e, e?.message || String(e));
     }

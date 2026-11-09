@@ -98,6 +98,11 @@ function meshSubmitResult(outcome: SubmitOutcome, sessionKey: string): CommandRe
         case 'delivered':
             return {
                 success: true,
+                // The session that actually took the prompt: a sessionless direct
+                // dispatch lets THIS daemon pick it, and the dispatching coordinator
+                // can only learn the real id from this answer (it binds its attempt
+                // and task row to it, which is what authorises this session's reports).
+                sessionId: sessionKey,
                 status: 'generating',
                 submitted: outcome.route !== 'agent_queue',
                 ...(outcome.route ? { route: outcome.route } : {}),
@@ -106,6 +111,7 @@ function meshSubmitResult(outcome: SubmitOutcome, sessionKey: string): CommandRe
         case 'queued':
             return {
                 success: true,
+                sessionId: sessionKey,
                 status: 'queued',
                 queued: true,
                 queuedReason: 'driver_fifo_parked',
@@ -116,7 +122,7 @@ function meshSubmitResult(outcome: SubmitOutcome, sessionKey: string): CommandRe
             };
         case 'duplicate':
             LOG.warn('MeshDispatch', `Suppressed duplicate submission on session ${sessionKey}: messageId ${outcome.of} was already submitted — not re-injecting`);
-            return { success: true, status: 'generating', duplicateSuppressed: true, messageId: outcome.of };
+            return { success: true, sessionId: sessionKey, status: 'generating', duplicateSuppressed: true, messageId: outcome.of };
         case 'refused': {
             const error = new Error(outcome.message || `send refused: ${outcome.reason}`) as Error & { reason?: string; code?: string; restored?: boolean };
             error.reason = outcome.reason;
