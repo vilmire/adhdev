@@ -425,9 +425,16 @@ export async function ensureSessionHostReady(options: {
         options.assertLifecycleAdmission?.();
         const source = options.replacementAuthority;
         const legacyContext = typeof source === 'function' ? source() : source;
-        if (state !== 'dead' || resolveHostState() !== 'dead' || currentGeneration !== generation
-            || options.isCancelled?.() || legacyContext?.isCancelled?.()) {
-            throw new SessionHostUnavailableTransientError(endpoint);
+        const stateAgain = resolveHostState();
+        const cancelled = Boolean(options.isCancelled?.() || legacyContext?.isCancelled?.());
+        if (state !== 'dead' || stateAgain !== 'dead' || currentGeneration !== generation || cancelled) {
+            const reasons: string[] = [];
+            if (state !== 'dead' || stateAgain !== 'dead') reasons.push(`existing host state is ${state}/${stateAgain} (spawn only allowed when dead)`);
+            if (currentGeneration !== generation) reasons.push('host generation changed since the readiness probe began');
+            if (cancelled) reasons.push('replacement cancelled');
+            const lastDetail = lastError instanceof Error && lastError.message ? `; last probe error: ${lastError.message}` : '';
+            throw new SessionHostUnavailableTransientError(endpoint, new Error(
+                `readiness probe failed and spawn admission refused: ${reasons.join('; ')}${lastDetail}`));
         }
     };
 

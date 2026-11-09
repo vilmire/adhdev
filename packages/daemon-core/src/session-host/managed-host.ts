@@ -26,6 +26,7 @@ import {
     recordSessionHostProbeFailure,
     recordSessionHostProbeSuccess,
     SessionHostUnavailableTransientError,
+    isSessionHostUnavailableTransientError,
     createSessionHostProbeInvocation,
     type SessionHostReplacementAuthorization,
 } from './runtime-support.js';
@@ -242,19 +243,48 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         }
     }
 
+    const GENERATION_PART_NAMES = [
+        'configDir', 'canonicalConfigDir', 'ipcKey', 'configDirIdentity', 'pidFile', 'staleLock',
+        'processBirth', 'pidAlive', 'endpointKind', 'endpointPath', 'endpointIdentity',
+        'canonicalConfigDir2', 'pidFile2',
+    ] as const;
+
     function getExistingHostGeneration(): string {
         const context = instance();
         const endpoint = getEndpoint();
         const pidState = readPidFileState();
         const pid = pidState.status === 'ok' ? pidState.pid : null;
+        // A Windows named pipe has no stable file identity: lstat on the pipe path
+        // opens a handle on the live pipe, and its dev/ino/mode can differ between
+        // two calls even though the same host owns it. Host identity is carried by
+        // the pid file, process birth and lock state instead.
+        const endpointIdentity = endpoint.kind === 'pipe' ? 'pipe' : pathIdentity(endpoint.path);
         return JSON.stringify([
             context.configDir, context.canonicalConfigDir, context.ipcKey,
             pathIdentity(context.configDir), pidState, staleLockIdentity(),
             pid === null ? null : getProcessBirth(pid),
             pid === null ? false : isPidAlive(pid),
-            endpoint.kind, endpoint.path, pathIdentity(endpoint.path),
+            endpoint.kind, endpoint.path, endpointIdentity,
             instance().canonicalConfigDir, readPidFileState(),
         ]);
+    }
+
+    /** Names which generation components differ, for precise failure reasons. */
+    function describeGenerationChange(before: string, after: string): string {
+        if (before === after) return 'unchanged';
+        try {
+            const a = JSON.parse(before) as unknown[];
+            const b = JSON.parse(after) as unknown[];
+            const diffs: string[] = [];
+            for (let i = 0; i < Math.max(a.length, b.length); i++) {
+                if (JSON.stringify(a[i]) !== JSON.stringify(b[i])) {
+                    diffs.push(`${GENERATION_PART_NAMES[i] ?? `part${i}`}: ${JSON.stringify(a[i])} -> ${JSON.stringify(b[i])}`);
+                }
+            }
+            return diffs.join('; ') || 'changed';
+        } catch {
+            return 'changed';
+        }
     }
 
     function assertAutomaticStart(generation: string, isCancelled?: () => boolean, deadline = Infinity): void {
@@ -264,8 +294,15 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         assertManagedHostBridgeAdmission('session_host_spawn');
         // Check cancellation after all blocking native/disk reads, immediately
         // before the caller's effect. A dead receipt never authorizes a new PID.
-        if (state !== 'dead' || generation !== currentGeneration || Date.now() >= deadline || isCancelled?.()) {
-            throw new SessionHostUnavailableTransientError(getEndpoint());
+        const cancelled = Boolean(isCancelled?.());
+        if (state !== 'dead' || generation !== currentGeneration || Date.now() >= deadline || cancelled) {
+            const reasons: string[] = [];
+            if (state !== 'dead') reasons.push(`existing host state is ${state} (spawn only allowed when dead)`);
+            if (generation !== currentGeneration) reasons.push(`host generation changed (${describeGenerationChange(generation, currentGeneration)})`);
+            if (Date.now() >= deadline) reasons.push('ensure deadline reached');
+            if (cancelled) reasons.push('replacement cancelled');
+            throw new SessionHostUnavailableTransientError(
+                getEndpoint(), new Error(`assertAutomaticStart refused spawn: ${reasons.join('; ')}`));
         }
     }
 
@@ -825,6 +862,23 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
     async function ensureReady(ensureOptions?: {
         replacementAuthority?: SessionHostReplacementAuthorization | (() => SessionHostReplacementAuthorization | undefined);
     }): Promise<SessionHostEndpoint> {
+        try {
+            return await ensureReadyInner(ensureOptions);
+        } catch (error) {
+            if (isSessionHostUnavailableTransientError(error)) {
+                LOG.warn('SessionHost', `ensureReady gave up: ${error.message} [hostState=${safeHostState()}]`);
+            }
+            throw error;
+        }
+    }
+
+    function safeHostState(): string {
+        try { return inspectExistingHostState(); } catch (e) { return `error:${(e as Error)?.message}`; }
+    }
+
+    async function ensureReadyInner(ensureOptions?: {
+        replacementAuthority?: SessionHostReplacementAuthorization | (() => SessionHostReplacementAuthorization | undefined);
+    }): Promise<SessionHostEndpoint> {
         const ensureDeadline = Date.now() + timeoutMs;
         const probeInvocation = createSessionHostProbeInvocation();
         const maintenance = readCooperativeMaintenance(instance().configDir);
@@ -882,7 +936,13 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
 
         const isExistingHostAlive = (): boolean => inspectExistingHostState() === 'alive';
 
-        if (getExistingHostGeneration() !== generation) throw new SessionHostUnavailableTransientError(getEndpoint());
+        {
+            const generationNow = getExistingHostGeneration();
+            if (generationNow !== generation) {
+                throw new SessionHostUnavailableTransientError(getEndpoint(), new Error(
+                    `host generation changed during ensureReady preflight (${describeGenerationChange(generation, generationNow)})`));
+            }
+        }
         const isCancelled = (): boolean => {
             const source = ensureOptions?.replacementAuthority ?? options.replacementAuthority;
             const auth = typeof source === 'function' ? source() : source;

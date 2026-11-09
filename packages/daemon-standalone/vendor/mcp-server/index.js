@@ -239406,8 +239406,17 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         options.assertLifecycleAdmission?.();
         const source2 = options.replacementAuthority;
         const legacyContext = typeof source2 === "function" ? source2() : source2;
-        if (state2 !== "dead" || resolveHostState() !== "dead" || currentGeneration !== generation || options.isCancelled?.() || legacyContext?.isCancelled?.()) {
-          throw new SessionHostUnavailableTransientError(endpoint);
+        const stateAgain = resolveHostState();
+        const cancelled = Boolean(options.isCancelled?.() || legacyContext?.isCancelled?.());
+        if (state2 !== "dead" || stateAgain !== "dead" || currentGeneration !== generation || cancelled) {
+          const reasons = [];
+          if (state2 !== "dead" || stateAgain !== "dead") reasons.push(`existing host state is ${state2}/${stateAgain} (spawn only allowed when dead)`);
+          if (currentGeneration !== generation) reasons.push("host generation changed since the readiness probe began");
+          if (cancelled) reasons.push("replacement cancelled");
+          const lastDetail = lastError instanceof Error && lastError.message ? `; last probe error: ${lastError.message}` : "";
+          throw new SessionHostUnavailableTransientError(endpoint, new Error(
+            `readiness probe failed and spawn admission refused: ${reasons.join("; ")}${lastDetail}`
+          ));
         }
       };
       let lastError;
@@ -239699,11 +239708,27 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           throw error;
         }
       }
+      const GENERATION_PART_NAMES = [
+        "configDir",
+        "canonicalConfigDir",
+        "ipcKey",
+        "configDirIdentity",
+        "pidFile",
+        "staleLock",
+        "processBirth",
+        "pidAlive",
+        "endpointKind",
+        "endpointPath",
+        "endpointIdentity",
+        "canonicalConfigDir2",
+        "pidFile2"
+      ];
       function getExistingHostGeneration() {
         const context2 = instance();
         const endpoint = getEndpoint();
         const pidState = readPidFileState();
         const pid = pidState.status === "ok" ? pidState.pid : null;
+        const endpointIdentity = endpoint.kind === "pipe" ? "pipe" : pathIdentity(endpoint.path);
         return JSON.stringify([
           context2.configDir,
           context2.canonicalConfigDir,
@@ -239715,18 +239740,43 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           pid === null ? false : isPidAlive2(pid),
           endpoint.kind,
           endpoint.path,
-          pathIdentity(endpoint.path),
+          endpointIdentity,
           instance().canonicalConfigDir,
           readPidFileState()
         ]);
+      }
+      function describeGenerationChange(before, after) {
+        if (before === after) return "unchanged";
+        try {
+          const a = JSON.parse(before);
+          const b = JSON.parse(after);
+          const diffs = [];
+          for (let i = 0; i < Math.max(a.length, b.length); i++) {
+            if (JSON.stringify(a[i]) !== JSON.stringify(b[i])) {
+              diffs.push(`${GENERATION_PART_NAMES[i] ?? `part${i}`}: ${JSON.stringify(a[i])} -> ${JSON.stringify(b[i])}`);
+            }
+          }
+          return diffs.join("; ") || "changed";
+        } catch {
+          return "changed";
+        }
       }
       function assertAutomaticStart(generation, isCancelled, deadline = Infinity) {
         assertManagedHostBridgeAdmission("session_host_spawn");
         const state2 = inspectExistingHostState();
         const currentGeneration = getExistingHostGeneration();
         assertManagedHostBridgeAdmission("session_host_spawn");
-        if (state2 !== "dead" || generation !== currentGeneration || Date.now() >= deadline || isCancelled?.()) {
-          throw new SessionHostUnavailableTransientError(getEndpoint());
+        const cancelled = Boolean(isCancelled?.());
+        if (state2 !== "dead" || generation !== currentGeneration || Date.now() >= deadline || cancelled) {
+          const reasons = [];
+          if (state2 !== "dead") reasons.push(`existing host state is ${state2} (spawn only allowed when dead)`);
+          if (generation !== currentGeneration) reasons.push(`host generation changed (${describeGenerationChange(generation, currentGeneration)})`);
+          if (Date.now() >= deadline) reasons.push("ensure deadline reached");
+          if (cancelled) reasons.push("replacement cancelled");
+          throw new SessionHostUnavailableTransientError(
+            getEndpoint(),
+            new Error(`assertAutomaticStart refused spawn: ${reasons.join("; ")}`)
+          );
         }
       }
       function readPidFileState() {
@@ -240125,6 +240175,23 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         throw new SessionHostUnavailableTransientError(endpoint, new Error("session_host_foreign_entry"));
       }
       async function ensureReady(ensureOptions) {
+        try {
+          return await ensureReadyInner(ensureOptions);
+        } catch (error) {
+          if (isSessionHostUnavailableTransientError(error)) {
+            LOG.warn("SessionHost", `ensureReady gave up: ${error.message} [hostState=${safeHostState()}]`);
+          }
+          throw error;
+        }
+      }
+      function safeHostState() {
+        try {
+          return inspectExistingHostState();
+        } catch (e) {
+          return `error:${e?.message}`;
+        }
+      }
+      async function ensureReadyInner(ensureOptions) {
         const ensureDeadline = Date.now() + timeoutMs;
         const probeInvocation = createSessionHostProbeInvocation();
         const maintenance = readCooperativeMaintenance2(instance().configDir);
@@ -240178,7 +240245,14 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         }
         if (process.platform === "win32") verifyConptyPrebuildBeforeSpawn(resolveEntry());
         const isExistingHostAlive = () => inspectExistingHostState() === "alive";
-        if (getExistingHostGeneration() !== generation) throw new SessionHostUnavailableTransientError(getEndpoint());
+        {
+          const generationNow = getExistingHostGeneration();
+          if (generationNow !== generation) {
+            throw new SessionHostUnavailableTransientError(getEndpoint(), new Error(
+              `host generation changed during ensureReady preflight (${describeGenerationChange(generation, generationNow)})`
+            ));
+          }
+        }
         const isCancelled = () => {
           const source2 = ensureOptions?.replacementAuthority ?? options.replacementAuthority;
           const auth = typeof source2 === "function" ? source2() : source2;
