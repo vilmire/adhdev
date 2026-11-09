@@ -270,4 +270,5 @@ it.each(['foreign', 'valid'])('round4 P1-C: git_push refuses without approval an
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-useSyntheticPublicPushPatterns()
+// Explicit committed identity policy (product default is none) so the foreign-identity control still blocks.
+useSyntheticPublicPushPatterns(undefined, { identity: { name: 'vilmire', email: 'vilmire@users.noreply.github.com' } })

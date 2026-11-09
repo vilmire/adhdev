@@ -1,9 +1,9 @@
 export function loadPublicPushPatternsForRepo(repo: string, privateRoot?: string, options?: { requireAuthorityPin?: boolean }): Promise<PublicPushPatterns>;
-export interface PublicPushPatterns { ownerNames: string[]; knownHosts: string[]; blockedText: string[]; repositories?: Record<string, 'public' | 'private'> }
+export interface PublicPushPatterns { ownerNames: string[]; knownHosts: string[]; blockedText: string[]; repositories?: Record<string, 'public' | 'private'>; identity?: PublicPushIdentityPolicy }
 export function loadPublicPushPatterns(repo: string, options?: { forRepo?: string; expectedDigest?: string; requireAuthorityPin?: boolean }): PublicPushPatterns;
 export function parseRemoteUrl(url: string): { protocol: string; host: string; port: string; path: string } | null;
-export const REQUIRED_NAME: string;
-export const REQUIRED_EMAIL: string;
+export interface PublicPushIdentityPolicy { name: string; email: string }
+export function resolveIdentityPolicy(patterns?: { identity?: unknown } | null): PublicPushIdentityPolicy | null;
 export const BLOCKED_HINT: string;
 export interface PushEntry { localRef?: string; localSha: string; remoteRef?: string; remoteSha?: string }
 export interface PushViolation { kind: 'identity' | 'path' | 'source_phase'; sha: string; ref?: string; detail: string; file?: string; line?: number }

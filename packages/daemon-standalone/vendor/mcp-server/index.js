@@ -33585,6 +33585,15 @@ ${renderWorkerProtocolFooter2(input)}`;
         A = "(?![A-Za-z0-9])";
       }
     });
+    function resolveIdentityPolicy(patterns) {
+      if (!patterns || patterns.identity === void 0) return null;
+      const id4 = patterns.identity;
+      if (!id4 || typeof id4 !== "object" || Array.isArray(id4)) throw identityPolicyError();
+      if (Object.keys(id4).some((k) => !IDENTITY_KEYS.includes(k))) throw identityPolicyError();
+      for (const k of IDENTITY_KEYS) if (typeof id4[k] !== "string" || !id4[k] || id4[k] !== id4[k].trim() || /[\x00-\x1f<>\n]/.test(id4[k])) throw identityPolicyError();
+      if (!/^[^@\s]+@[^@\s]+$/.test(id4.email)) throw identityPolicyError();
+      return { name: id4.name, email: id4.email };
+    }
     function loadPublicPushPatterns(repo, { forRepo = repo, expectedDigest = process.env.ADHDEV_PUBLIC_PUSH_PATTERNS_SHA256, requireAuthorityPin = false } = {}) {
       try {
         const git12 = (args) => (0, import_node_child_process3.execFileSync)("git", ["--no-replace-objects", "-C", repo, ...args], { encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "ignore"] });
@@ -33607,9 +33616,11 @@ ${renderWorkerProtocolFooter2(input)}`;
         if ((requireAuthorityPin || !containsTarget) && !expectedDigest) throw new Error();
         if (expectedDigest !== void 0 && (!/^[0-9a-f]{64}$/.test(expectedDigest) || (0, import_node_crypto32.createHash)("sha256").update(blob).digest("hex") !== expectedDigest)) throw new Error();
         const patterns = JSON.parse(blob);
+        resolveIdentityPolicy(patterns);
         if (!["ownerNames", "knownHosts", "blockedText"].every((key7) => Array.isArray(patterns[key7]) && patterns[key7].length && patterns[key7].every((v) => typeof v === "string" && v.trim()))) throw new Error();
         return patterns;
-      } catch {
+      } catch (error) {
+        if (error?.code === "IDENTITY_POLICY_INVALID") throw error;
         throw new Error("public push pattern config unavailable, uncommitted, unpinned or invalid at private root; refusing public publish");
       }
     }
@@ -33900,12 +33911,13 @@ ${renderWorkerProtocolFooter2(input)}`;
       const revisions = [tip, ...bases.map((sha8) => `^${sha8}`)].join("\n") + "\n";
       return (await runGit2(cwd, ["rev-list", "--stdin"], { input: revisions })).split("\n").filter(Boolean);
     }
-    async function identityViolations(cwd, shas) {
+    async function identityViolations(cwd, shas, policy) {
       const out = [];
+      if (!policy) return out;
       for (const rec8 of await readCommits(cwd, shas)) {
         for (const [role, n, e] of [["author", rec8.an, rec8.ae], ["committer", rec8.cn, rec8.ce]]) {
-          if (n !== REQUIRED_NAME || e !== REQUIRED_EMAIL) {
-            out.push({ kind: "identity", sha: rec8.sha, detail: `${role} is "${n} <${e}>", required "${REQUIRED_NAME} <${REQUIRED_EMAIL}>"` });
+          if (n !== policy.name || e !== policy.email) {
+            out.push({ kind: "identity", sha: rec8.sha, detail: `${role} is "${n} <${e}>", required ${describeRequired(policy)}` });
           }
         }
       }
@@ -33927,19 +33939,19 @@ ${renderWorkerProtocolFooter2(input)}`;
       if (text10.includes("\0")) hits.push(...scan2(text10.replaceAll("\0", "")));
       return hits;
     }
-    async function messageViolations(cwd, shas, scan2) {
+    async function messageViolations(cwd, shas, scan2, policy) {
       const out = [];
       for (const rec8 of await readCommits(cwd, shas)) {
         for (const l of scanText(scan2, rec8.message)) out.push({ kind: "path", sha: rec8.sha, file: "(commit message)", line: l.line, detail: l.name || l.match });
       }
-      out.push(...await headerViolations(cwd, shas, scan2));
+      out.push(...await headerViolations(cwd, shas, scan2, policy));
       return out;
     }
-    async function headerViolations(cwd, shas, scan2) {
+    async function headerViolations(cwd, shas, scan2, policy) {
       if (!shas.length) return [];
       const raw = await runGit2(cwd, ["rev-list", "--header", "--no-walk=unsorted", "--stdin"], { input: shas.join("\n") + "\n" });
       const out = [];
-      const identityOk = (name, email) => name === REQUIRED_NAME && email === REQUIRED_EMAIL;
+      const identityOk = (name, email) => !policy || name === policy.name && email === policy.email;
       for (const record8 of raw.split("\0")) {
         const nl = record8.indexOf("\n");
         if (nl === -1) continue;
@@ -33953,7 +33965,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         for (const line of lines) {
           const m = /^(author|committer) (.*) <(.*)> \d+ [+-]\d{4}$/.exec(line);
           if (!m) continue;
-          if (++counts2[m[1]] > 1 && !identityOk(m[2], m[3])) out.push({ kind: "identity", sha: sha8, detail: `raw ${m[1]} header is "${m[2]} <${m[3]}>", required "${REQUIRED_NAME} <${REQUIRED_EMAIL}>"` });
+          if (++counts2[m[1]] > 1 && !identityOk(m[2], m[3])) out.push({ kind: "identity", sha: sha8, detail: `raw ${m[1]} header is "${m[2]} <${m[3]}>", required ${describeRequired(policy)}` });
         }
         for (const role of ["author", "committer"]) {
           if (counts2[role] !== 1) out.push({ kind: "identity", sha: sha8, detail: `expected exactly one ${role} header, found ${counts2[role]}` });
@@ -33963,8 +33975,8 @@ ${renderWorkerProtocolFooter2(input)}`;
           const tagLines = [];
           while (i + 1 < lines.length && lines[i + 1].startsWith(" ")) tagLines.push(lines[++i].slice(1));
           const tagger = /^tagger (.*) <(.*)> \d+ [+-]\d{4}$/m.exec(tagLines.join("\n"));
-          if (!tagger || !identityOk(tagger[1], tagger[2])) {
-            out.push({ kind: "identity", sha: sha8, detail: `mergetag tagger is ${tagger ? `"${tagger[1]} <${tagger[2]}>"` : "missing"}, required "${REQUIRED_NAME} <${REQUIRED_EMAIL}>"` });
+          if (policy && (!tagger || !identityOk(tagger[1], tagger[2]))) {
+            out.push({ kind: "identity", sha: sha8, detail: `mergetag tagger is ${tagger ? `"${tagger[1]} <${tagger[2]}>"` : "missing"}, required ${describeRequired(policy)}` });
           }
         }
       }
@@ -34124,7 +34136,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         }
       };
     }
-    async function tagViolations(reader, objectSha, scan2, scanRef) {
+    async function tagViolations(reader, objectSha, scan2, scanRef, policy) {
       const out = [];
       let cur = objectSha;
       const seen2 = /* @__PURE__ */ new Set();
@@ -34140,8 +34152,8 @@ ${renderWorkerProtocolFooter2(input)}`;
         const header = sep30 === -1 ? raw : raw.slice(0, sep30);
         const message = sep30 === -1 ? "" : raw.slice(sep30 + 2);
         const tagger = /^tagger (.*) <(.*)> \d+ [+-]\d{4}$/m.exec(header);
-        if (!tagger || tagger[1] !== REQUIRED_NAME || tagger[2] !== REQUIRED_EMAIL) {
-          out.push({ kind: "identity", sha: cur, detail: `tagger is ${tagger ? `"${tagger[1]} <${tagger[2]}>"` : "missing"}, required "${REQUIRED_NAME} <${REQUIRED_EMAIL}>"` });
+        if (policy && (!tagger || tagger[1] !== policy.name || tagger[2] !== policy.email)) {
+          out.push({ kind: "identity", sha: cur, detail: `tagger is ${tagger ? `"${tagger[1]} <${tagger[2]}>"` : "missing"}, required ${describeRequired(policy)}` });
         }
         for (const l of scanText(scan2, `${header.replace(/^tagger .*$/m, "")}
 ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.line, detail: l.name || l.match });
@@ -34156,9 +34168,10 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
     }
     async function checkPush(entries3, { cwd = process.cwd(), remoteName = "origin", remoteUrl, findLeaksFn, ownerNames = currentUserNames(), patterns, integrationBase } = {}) {
       if (!patterns && !findLeaksFn) patterns = await loadPublicPushPatternsForRepo(cwd);
+      const identityPolicy = resolveIdentityPolicy(patterns);
       const names = /* @__PURE__ */ new Set([...currentUserNames(), ...ownerNames, ...patterns?.ownerNames || []]);
       const scan2 = findLeaksFn || ((t) => patterns ? findLeaksWithPatterns(t, patterns, names) : findLeaks(t, names));
-      const refOwners = /* @__PURE__ */ new Set([REQUIRED_NAME, ...names]);
+      const refOwners = new Set(names);
       const scanRef = (name) => {
         const hits = scanText(scan2, `/${name}`);
         for (const owner of refOwners) {
@@ -34186,7 +34199,7 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
           if (e.localRef?.startsWith("refs/tags/")) {
             for (const l of scanRef(e.localRef)) add([{ kind: "path", sha: e.localSha, file: "(tag name)", line: l.line, detail: l.name || l.match }]);
           }
-          if (e.localSha !== e.remoteSha) add(await tagViolations(reader(), e.localSha, scan2, scanRef));
+          if (e.localSha !== e.remoteSha) add(await tagViolations(reader(), e.localSha, scan2, scanRef, identityPolicy));
           if (integrationBase !== void 0 && !ZERO.test(integrationBase)) await runGit2(cwd, ["merge-base", "--is-ancestor", integrationBase, e.localSha]);
           const pending = await newCommits(cwd, remoteName, e.localSha, integrationBase ?? e.remoteSha, proven);
           const shas = pending.filter((s2) => !seen2.has(s2));
@@ -34204,8 +34217,8 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
             }
           }
           shas.forEach((s2) => seen2.add(s2));
-          add(await identityViolations(cwd, shas));
-          add(await messageViolations(cwd, shas, scan2));
+          add(await identityViolations(cwd, shas, identityPolicy));
+          add(await messageViolations(cwd, shas, scan2, identityPolicy));
           add(await patchViolations(cwd, shas, scan2));
         }
         return { violations, checked: seen2.size };
@@ -34219,15 +34232,15 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
     var import_node_os32;
     var import_node_fs4;
     var import_node_path5;
-    var REQUIRED_NAME;
-    var REQUIRED_EMAIL;
+    var IDENTITY_KEYS;
+    var identityPolicyError;
+    var describeRequired;
     var ZERO;
     var REPO_KEYS;
     var REPO_LOCATION_VARS2;
     var tryGit;
     var PublishDestinationError;
     var SHA_LINE;
-    var BLOCKED_HINT;
     var init_public_push_guard = __esm2({
       "src/git/public-push-guard.mjs"() {
         "use strict";
@@ -34239,8 +34252,9 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
         import_node_fs4 = require("fs");
         import_node_path5 = require("path");
         init_personal_paths();
-        REQUIRED_NAME = "vilmire";
-        REQUIRED_EMAIL = "vilmire@users.noreply.github.com";
+        IDENTITY_KEYS = ["name", "email"];
+        identityPolicyError = () => Object.assign(new Error('public push identity policy is malformed (expected "identity": { "name": <string>, "email": <string> } or absent); refusing publish'), { code: "IDENTITY_POLICY_INVALID" });
+        describeRequired = (policy) => `"${policy.name} <${policy.email}>"`;
         ZERO = /^0+$/;
         REPO_KEYS = /* @__PURE__ */ new Map([["vilmire/adhdev-cloud", "root"], ["vilmire/adhdev", "oss"], ["vilmire/adhdev-providers", "adhdev-providers"], ["vilmire/homebrew-adhdev", "homebrew-adhdev"]]);
         REPO_LOCATION_VARS2 = ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_PREFIX", "GIT_CEILING_DIRECTORIES"];
@@ -34258,7 +34272,6 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
           }
         };
         SHA_LINE = /^([0-9a-f]{40,64})(?: \(from [0-9a-f]{40,64}\))?\r?$/;
-        BLOCKED_HINT = `Required identity: ${REQUIRED_NAME} <${REQUIRED_EMAIL}> (author AND committer). Personal paths in ANY pushed commit block the push even if a later commit removes them \u2014 rewrite the unpushed history (git rebase -i / filter-branch) and push again.`;
       }
     });
     function resolveWin32GlobalBin(trimmed3) {
