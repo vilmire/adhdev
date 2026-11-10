@@ -213786,7 +213786,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         LOG.info("Mesh", `[PullAdopt] mesh=${meshId} adoptedNodeId=${claimed.id} owner=${owner.slice(0, 24)}`);
         return { adopted: true, nodeId: claimed.id, node: { ...claimed } };
       }
-      const rejected = result.rejected.find((r) => r.nodeId === claimed.id);
+      const rejected = result.rejected.find((r) => meshNodeIdMatches7(r, claimed.id));
       return no(rejected ? rejected.reason : "already_on_roster");
     }
     function tombstoneRemovedMeshNode(host, meshId, nodeId) {
