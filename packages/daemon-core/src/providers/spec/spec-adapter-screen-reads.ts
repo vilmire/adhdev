@@ -9,6 +9,8 @@ import type { ChatMessage } from '../../types.js';
 import type { NativeHistoryConfig } from './types.js';
 import type { NativeHistoryInput } from './native-history-types.js';
 import type { KimiPendingQuestionReader } from '../kimi-pending-question.js';
+import { findCodexPathBySessionId } from '../native-history/dispatcher.js';
+import { codexSessionsRoot, readSession as readCodexRollout } from '../native-history/codex-cli-transcript.js';
 import { detectBackgroundTaskActive, backgroundTaskSnapshot, type BackgroundTaskDetection } from './background-task-detector.js';
 import {
     extractCodexSessionIdFromScreen, scrapeScreenAssistantMessages, screenScrapeSupported,
@@ -24,6 +26,43 @@ export function readCurrentScreenSections(driver: ISpecDriver, screenText: strin
     }
 }
 
+const CODEX_SCREEN_ID_DECISION_TTL_MS = 5_000;
+const codexScreenIdDecisions = new Map<string, { at: number; keep: boolean }>();
+
+/** True when the codex rollout for `sessionId` exists and parses to a real transcript. */
+function codexRolloutHasHistory(sessionId: string): boolean {
+    try {
+        const file = findCodexPathBySessionId(codexSessionsRoot(), sessionId);
+        const session = file ? readCodexRollout(file) : null;
+        // A bare session_meta row projects to one session_start marker; that is not history.
+        return !!session && session.messages.some(m => m.kind !== 'session_start');
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * The codex status line prints the CURRENT thread uuid. After a daemon restart
+ * that uuid can differ from the binding persisted for this session (a resume or
+ * compaction thread, or a redraw before the new thread has any turn). Adopting it
+ * blindly rebinds the session to a rollout with no history, so read_chat returned
+ * `messages: []` while the CLI itself was fine. Keep the persisted id while its own
+ * rollout still has history, unless the screen id's rollout also has history.
+ */
+function keepPersistedCodexId(persisted: string, screenId: string): boolean {
+    const key = `${persisted}|${screenId}`;
+    const now = Date.now();
+    const hit = codexScreenIdDecisions.get(key);
+    if (hit && now - hit.at < CODEX_SCREEN_ID_DECISION_TTL_MS) return hit.keep;
+    const keep = codexRolloutHasHistory(persisted) && !codexRolloutHasHistory(screenId);
+    if (codexScreenIdDecisions.size > 64) codexScreenIdDecisions.clear();
+    codexScreenIdDecisions.set(key, { at: now, keep });
+    return keep;
+}
+
+/** Test hook: drop memoized screen-id decisions. */
+export function __resetCodexScreenIdDecisionsForTest(): void { codexScreenIdDecisions.clear(); }
+
 export function extractProviderSessionIdFromScreen(driver: ISpecDriver, cliType: string, providerSessionId: string | undefined): string | undefined {
     if (cliType !== 'codex-cli') return providerSessionId;
     let screenText = '';
@@ -32,7 +71,10 @@ export function extractProviderSessionIdFromScreen(driver: ISpecDriver, cliType:
     } catch {
         return providerSessionId;
     }
-    return extractCodexSessionIdFromScreen(screenText) || providerSessionId;
+    const screenId = extractCodexSessionIdFromScreen(screenText);
+    if (!screenId) return providerSessionId;
+    if (!providerSessionId || providerSessionId.toLowerCase() === screenId.toLowerCase()) return screenId;
+    return keepPersistedCodexId(providerSessionId, screenId) ? providerSessionId : screenId;
 }
 
 /** PTY-scrape assistant bubbles — see scrapeScreenAssistantMessages. */

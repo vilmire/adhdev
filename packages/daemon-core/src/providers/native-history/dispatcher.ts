@@ -389,7 +389,7 @@ function resolveCodexPath(workspace: string, sessionId: string, sessionStartedAt
     return resolved;
 }
 
-function findCodexPathBySessionId(root: string, sessionId: string): string | null {
+export function findCodexPathBySessionId(root: string, sessionId: string): string | null {
     if (!fs.existsSync(root)) return null;
     const needle = sessionId.toLowerCase();
     const matches: Array<{ p: string; mtime: number }> = [];

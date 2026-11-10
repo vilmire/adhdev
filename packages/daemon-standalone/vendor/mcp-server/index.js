@@ -222701,6 +222701,27 @@ ${text10}` : text10;
         return {};
       }
     }
+    var CODEX_SCREEN_ID_DECISION_TTL_MS = 5e3;
+    var codexScreenIdDecisions = /* @__PURE__ */ new Map();
+    function codexRolloutHasHistory(sessionId) {
+      try {
+        const file = findCodexPathBySessionId(codexSessionsRoot(), sessionId);
+        const session = file ? readSession2(file) : null;
+        return !!session && session.messages.some((m) => m.kind !== "session_start");
+      } catch {
+        return false;
+      }
+    }
+    function keepPersistedCodexId(persisted, screenId) {
+      const key7 = `${persisted}|${screenId}`;
+      const now = Date.now();
+      const hit = codexScreenIdDecisions.get(key7);
+      if (hit && now - hit.at < CODEX_SCREEN_ID_DECISION_TTL_MS) return hit.keep;
+      const keep = codexRolloutHasHistory(persisted) && !codexRolloutHasHistory(screenId);
+      if (codexScreenIdDecisions.size > 64) codexScreenIdDecisions.clear();
+      codexScreenIdDecisions.set(key7, { at: now, keep });
+      return keep;
+    }
     function extractProviderSessionIdFromScreen(driver, cliType, providerSessionId) {
       if (cliType !== "codex-cli") return providerSessionId;
       let screenText = "";
@@ -222709,7 +222730,10 @@ ${text10}` : text10;
       } catch {
         return providerSessionId;
       }
-      return extractCodexSessionIdFromScreen(screenText) || providerSessionId;
+      const screenId = extractCodexSessionIdFromScreen(screenText);
+      if (!screenId) return providerSessionId;
+      if (!providerSessionId || providerSessionId.toLowerCase() === screenId.toLowerCase()) return screenId;
+      return keepPersistedCodexId(providerSessionId, screenId) ? providerSessionId : screenId;
     }
     function readScreenAssistantMessages(driver, cliType) {
       if (!screenScrapeSupported(cliType)) return [];
