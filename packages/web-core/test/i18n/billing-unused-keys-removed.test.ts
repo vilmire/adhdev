@@ -35,6 +35,9 @@ const REMOVED_KEYS = [
     'cloud.about.plans.proFeature4',
     'landing.pricing.plans.free.features.mesh',
     'landing.pricing.plans.pro.features.mesh',
+    // Team/org limit fields removed from the plan payload (maxTeamMembers).
+    'cloud.planCard.teamMemberPlural',
+    'cloud.planCard.teamMemberSingular',
 ]
 
 // Keys that look similar (same namespace, adjacent names) but ARE referenced
@@ -48,8 +51,6 @@ const LIVE_CONTROL_KEYS = [
     'cloud.account.limitP2P',
     'cloud.account.limitPushNotifications',
     'cloud.account.limitTurnRelay',
-    'cloud.planCard.teamMemberPlural', // legacy Team-plan fallback branch, still reachable
-    'cloud.planCard.teamMemberSingular',
     'landing.pricing.plans.ultra.features.webhooks', // O2 repurposed this slot, did not remove it
 ]
 
@@ -63,7 +64,7 @@ async function loadCommon(locale: string): Promise<any> {
 
 describe('unused billing/plan-limit i18n keys stay removed (O10)', () => {
     for (const locale of LOCALES) {
-        it(`${locale}: none of the 24 confirmed-dead keys are present`, async () => {
+        it(`${locale}: none of the confirmed-dead keys are present`, async () => {
             const common = await loadCommon(locale)
             for (const key of REMOVED_KEYS) {
                 expect(getPath(common, key)).toBeUndefined()
