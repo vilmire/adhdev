@@ -61,11 +61,10 @@ import {
   callStandardArtifactRead,
 } from './tools/artifact-tools.js';
 import {
-  resolveWorkerModeTools, readWorkerCredentials, workerDriverTool, workerDriverAuthoringTool, workerArtifactRegister, workerArtifactList, workerArtifactRead, reportCompletion, progressUpdate, peerContextPull, drainMailbox, contractReadTool, contractObserveTool, contractCurrentTool,
+  resolveWorkerModeTools, readWorkerCredentials, workerDriverTool, workerDriverAuthoringTool, workerArtifactRegister, workerArtifactList, workerArtifactRead, reportCompletion, progressUpdate, peerContextPull, drainMailbox,
   describeWorkerDeliveryAnswer,
 } from './tools/worker-tools.js';
 import { WorkerReportDelivery } from './tools/worker-report-outbox.js';
-import { MESH_CONTRACT_TOOL, meshContract, readContractCapability } from './tools/mesh-contract-tool.js';
 import type { WorkerTool } from '@adhdev/mesh-shared';
 import { startAssistantServer } from './assistant-server.js';
 import { exitWhenParentGone } from './transports/parent-lifetime.js';
@@ -290,9 +289,6 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
       report_completion: async (a) => asResponse(await reportCompletion(transport, credentials, a, delivery)),
       progress_update: async (a) => asResponse(await progressUpdate(transport, credentials, a, delivery)),
       peer_context_pull: async (a) => asResponse(await peerContextPull(transport, credentials, a)),
-      contract_read: async (a) => asResponse(await contractReadTool(transport, credentials, a)),
-      contract_observe: async (a) => asResponse(await contractObserveTool(transport, credentials, a)),
-      contract_current: async () => asResponse(await contractCurrentTool(transport, credentials)),
       git_status: async (a) => asResponse({ text: await gitStatus(transport, { workspace: a.workspace, include_diff: a.include_diff, format: a.format }) }),
       git_log: async (a) => asResponse({ text: await gitLog(transport, { workspace: a.workspace, limit: a.limit, file: a.file, since: a.since, until: a.until, format: a.format }) }),
       git_diff: async (a) => asResponse({ text: await gitDiff(transport, { workspace: a.workspace, file: a.file, max_lines: a.max_lines, staged: a.staged, format: a.format }) }),
@@ -450,8 +446,6 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     const { isWorkerMcpEnabled } = await import('@adhdev/daemon-core');
     const meshTools = [
       ...(isWorkerMcpEnabled() ? [...ALL_MESH_TOOLS, ...annotateAll([MESH_NOTIFY_WORKER_TOOL])] : ALL_MESH_TOOLS),
-      // Contract versioning (Cut A): only a coordinator holding a daemon-minted capability sees the tool.
-      ...(readContractCapability() ? annotateAll([MESH_CONTRACT_TOOL]) : []),
     ];
 
     server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: meshTools }));
@@ -482,9 +476,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
       // "Unknown tool" at runtime.
       try {
         let run: () => Promise<string>;
-        if (name === 'mesh_contract') {
-          run = () => meshContract(meshCtx, canonicalArgs as any);
-        } else if (name === 'mesh_notify_worker') {
+        if (name === 'mesh_notify_worker') {
           // Flag-gated rather than alias-shaped: its behaviour depends on a
           // runtime env read, so it cannot be a fixed entry in either table.
           run = async () => isWorkerMcpEnabled()

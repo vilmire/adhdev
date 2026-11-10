@@ -25,7 +25,6 @@ const EXPECTED_CLASSES: Record<string, string> = {
     worker_report_forwarded: 'roster',
     worker_report_refusal_forwarded: 'roster',
     worker_progress_forwarded: 'roster',
-    worker_contract_forwarded: 'roster',
     driver_worker_identity_forwarded: 'roster',
     get_mesh_host_grant_key: 'roster',
     artifact_index_forwarded: 'roster',

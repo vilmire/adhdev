@@ -37,10 +37,7 @@ import { runOrphanedDispatchSweep } from './mesh-orphaned-dispatch-sweep.js';
 import { sweepStaleBlockedTasks, type StaleBlockedSweepState } from './mesh-stale-blocked-expiry.js';
 import { componentsDecisionTransport, runDecisionTick } from './mesh-mission-decision-delivery.js';
 import { readText } from '@adhdev/mesh-shared';
-import { contractHousekeeping } from './contract-runtime.js';
-import { depositWorkerMailboxMessage } from './worker-mailbox.js';
 import { liveWorkerHomes, sweepStaleWorkerHomes } from './worker-home-cleanup.js';
-import { publishHeldHandoffNote } from './worker-report.js';
 import { LIGHT_SWEEP_INTERVAL_MS, runLightWorkspaceSweep } from './light-workspace-sweep-runner.js';
 import { installStagePipeline } from './stage-ports-default.js';
 
@@ -229,18 +226,6 @@ export async function runMeshHousekeepingTick(
     // ── idle delegated-session reaper (5 min) ──
     // Stops the CLI runtime of a coordinator-launched delegate idle past the
     // mesh's delegatedSessionIdleTtlMinutes; the session-host record is kept.
-    // CONTRACT-VERSIONING: resumable notice fan-out (+ content-free mailbox hints),
-    // evidence-join recovery, publication of held notes that became usable, hourly GC.
-    // A no-op on a daemon with no enrolled contract namespace.
-    try {
-        contractHousekeeping(hosted.map(h => h.mesh.id), {
-            deposit: depositWorkerMailboxMessage,
-            publishHeld: (note) => publishHeldHandoffNote(note, nowMs),
-        }, nowMs);
-    } catch (e: any) {
-        LOG.warn('MeshHousekeeping', `Contract housekeeping failed: ${e?.message || e}`);
-    }
-
     if (components.router) {
         const reapDue = state.lastIdleSessionReapRunAt === undefined
             || (nowMs - state.lastIdleSessionReapRunAt) >= IDLE_SESSION_REAP_INTERVAL_MS;

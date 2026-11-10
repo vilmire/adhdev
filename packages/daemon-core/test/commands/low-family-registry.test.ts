@@ -15,7 +15,6 @@ import { meshOwnershipAttestHandlers } from '../../src/commands/low-family/mesh-
 import { workerBridgeHandlers } from '../../src/commands/low-family/worker-bridge.js'
 import { workerReportHandlers } from '../../src/commands/low-family/worker-report.js'
 import { workerMailboxHandlers } from '../../src/commands/low-family/worker-mailbox.js'
-import { contractCommandHandlers } from '../../src/commands/low-family/contract-commands.js'
 import { workerPeerContextHandlers } from '../../src/commands/low-family/worker-peer-context.js'
 import { transcriptReplicaHandlers } from '../../src/commands/low-family/transcript-replica.js'
 import { turnLedgerIpcHandlers } from '../../src/commands/low-family/turn-ledger-ipc.js'
@@ -98,8 +97,6 @@ const WORKER_REPORT_CMDS = ['worker_bridge_prepare', 'worker_resolve_task', 'wor
 // WORKER-MCP E-T0: the mailbox piggyback (design §7.1) — coordinator-side deposit
 // (routed cross-daemon via mesh_notify_worker) and the worker-side drain.
 const WORKER_MAILBOX_CMDS = ['deposit_worker_mailbox', 'worker_drain_mailbox']
-// Contract versioning Cut A: worker E2/C1/current + owner/coordinator surfaces.
-const CONTRACT_CMDS = ['worker_contract_read', 'worker_contract_observe', 'worker_contract_current', 'contract_owner', 'contract_coordinator', 'contract_mission_scope', 'worker_contract_forwarded']
 // WORKER-MCP D: the worker's read-only sibling-context lookup (design §6).
 const WORKER_PEER_CONTEXT_CMDS = ['worker_peer_context_pull']
 // Phase 3 §8 unit 3: daemon-local transcript replica IPC (design §4,
@@ -163,7 +160,7 @@ describe('low-family registry', () => {
       ...NOTIFICATION_CMDS, ...DAEMON_LIFECYCLE_CMDS, ...MESH_LEDGER_CMDS, ...MESH_NODE_LOGS_CMDS, ...MESH_OWNERSHIP_ATTEST_CMDS,
       ...WORKER_REPORT_CMDS, ...WORKER_BRIDGE_CMDS, ...WORKER_MAILBOX_CMDS, ...WORKER_PEER_CONTEXT_CMDS,
       ...TRANSCRIPT_REPLICA_CMDS, ...TURN_LEDGER_IPC_CMDS, ...COOPERATIVE_MAINTENANCE_CMDS, ...NEW_WORK_HOLD_CMDS,
-      ...CONTRACT_CMDS, ...PROJECT_TRANSFER_CMDS, ...QUOTA_RESERVE_CMDS, 'mission_read_relay',
+      ...PROJECT_TRANSFER_CMDS, ...QUOTA_RESERVE_CMDS, 'mission_read_relay',
     ]
     // 69 − import_mesh_ledger_slice (C-W9a) + 13 store IPC commands + 1
     // report_transcript_transport (G2b, 2026-09-24) + 8 C-W9c graph/stats/prune/
@@ -186,8 +183,9 @@ describe('low-family registry', () => {
     // + project_transfer_set_agent_auto_approve / _revert / _agent (agent transfers + overwrite revert, 2026-11-02) = 133, + get_daemon_cpu_profile (2026-11-04) = 134,
     // + mesh_attest_node_ownership / mesh_attest_remote_ownership (remote writers, 2026-11-05) = 136,
     // + mission_read_relay (non-host mission reads forwarded to the host, 2026-11-07) = 137,
-    // + worker_contract_forwarded (member relays a worker contract call to the owner, 2026-11-07) = 138.
-    expect(all).toHaveLength(138)
+    // + worker_contract_forwarded (member relays a worker contract call to the owner, 2026-11-07) = 138;
+    // − 7 contract-versioning commands (subsystem removed: no contract was ever authored) = 131.
+    expect(all).toHaveLength(131)
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
     expect(lowFamilyNames()).toHaveLength(all.length)
@@ -207,7 +205,6 @@ describe('low-family registry', () => {
     expect(Object.keys(workerReportHandlers)).toEqual(WORKER_REPORT_CMDS)
     expect(Object.keys(workerBridgeHandlers)).toEqual(WORKER_BRIDGE_CMDS)
     expect(Object.keys(workerMailboxHandlers)).toEqual(WORKER_MAILBOX_CMDS)
-    expect(Object.keys(contractCommandHandlers)).toEqual(CONTRACT_CMDS)
     expect(Object.keys(workerPeerContextHandlers)).toEqual(WORKER_PEER_CONTEXT_CMDS)
     expect(Object.keys(transcriptReplicaHandlers)).toEqual(TRANSCRIPT_REPLICA_CMDS)
     expect(Object.keys(turnLedgerIpcHandlers)).toEqual(TURN_LEDGER_IPC_CMDS)
@@ -233,7 +230,7 @@ describe('low-family registry', () => {
       notificationHandlers, daemonLifecycleHandlers, meshLedgerHandlers,
       meshNodeLogsHandlers, meshOwnershipAttestHandlers, workerReportHandlers, workerBridgeHandlers, workerMailboxHandlers,
       workerPeerContextHandlers, transcriptReplicaHandlers,
-      turnLedgerIpcHandlers, contractCommandHandlers,
+      turnLedgerIpcHandlers,
     ].flatMap((handlers) => Object.keys(handlers))
       // cooperative-maintenance.ts exports the already-built spec ARRAY
       // (defineCommandSpecs returns CommandSpec[]), not a name→handler map, so

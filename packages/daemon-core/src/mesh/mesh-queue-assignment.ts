@@ -43,7 +43,6 @@ import { allowedClassifiedDifficultiesForSession, handleClaimPathDifficultyFloor
 import { isWorkerMcpEnabled, mintWorkerTaskToken } from './worker-mcp-isolation.js';
 import { readSessionWorkerMcpDelivered, resolveDispatchMessage } from './worker-handoff-dispatch.js';
 import { refreshInheritedInputArtifacts } from './mesh-input-artifacts.js';
-import { bodyCarriesPinBlock, contractAdmitDispatch, insertPinBlock } from './contract-runtime.js';
 import { isIdleSessionState, nodeHasActiveMeshWork, isLocalAutoLaunchNode, isSessionActivelyGenerating, resolveSessionBusyVerdict, type SessionBusyVerdict } from './mesh-candidacy-predicates.js';
 
 // The claim path's mesh view, the dispatch delivery lifecycle and the queue drain
@@ -683,26 +682,12 @@ export function tryAssignQueueTask(
     // Evidence handoff: pull in what the mission's earlier tasks produced SINCE enqueue (a
     // depends_on chain is enqueued before its predecessors write anything) and persist it.
     const dispatchTask = refreshInheritedInputArtifacts(meshId, task);
-    let dispatchMessage = resolveDispatchMessage(
+    const dispatchMessage = resolveDispatchMessage(
         continuationNotice ? { ...dispatchTask, message: `${task.message}\n\n${continuationNotice}` } : dispatchTask,
         meshId,
         node,
         { workerMcp },
     );
-    // CONTRACT-VERSIONING (Cut A): a strict task gets its admission pins + binding
-    // frozen and the trusted pin block inserted BEFORE native submission; a refusal
-    // never reaches the worker (dispatch-failure path, task requeued). Unscoped
-    // tasks return compat_open and the body is byte-identical.
-    const contractAdmission = contractAdmitDispatch({
-        meshId, taskId: task.id, attemptId: dispatchAttemptRef.attemptId, generation: dispatchAttemptRef.generation,
-        sessionId, nodeId, recipientDaemonId: readMeshNodeDaemonId(node ?? {}) || undefined, workerMcp,
-    });
-    let contractRefusalCode: string | null = contractAdmission.kind === 'refused' ? contractAdmission.code : null;
-    if (contractAdmission.kind === 'admitted') {
-        dispatchMessage = insertPinBlock(dispatchMessage, contractAdmission.block);
-        // An authored/stale block in the body must not stand in for the admitted one.
-        if (!bodyCarriesPinBlock(dispatchMessage, contractAdmission.block)) contractRefusalCode = 'pin_block_invalid';
-    }
     const coordinatorDaemonId = localCoordinatorDaemonId();
     const coordinatorSessionId = readText(task.sourceCoordinatorSessionId) || undefined;
     const meshContext = buildClaimDispatchMeshContext({
@@ -742,17 +727,6 @@ export function tryAssignQueueTask(
         ...(routingDecision ? { routingDecision } : {}),
         attemptRef: dispatchAttemptRef,
     };
-    if (contractRefusalCode) {
-        LOG.warn('Contract', `Strict dispatch of task ${task.id} → ${sessionId} refused before native submission: ${contractRefusalCode}`);
-        deliverTaskToSession(async () => ({
-            success: false,
-            code: `contract_${contractRefusalCode}`,
-            error: `contract admission refused before native submission (${contractRefusalCode})`,
-            recoverable: true,
-            retryRecommended: true,
-        }), { ...deliverContext, transport: 'local' });
-        return true;
-    }
 
     // CANON-IDENTITY: read the remote daemon id through the normalizing helper so a node
     // whose daemonId arrives in a non-top-level-camelCase serialization form (daemon_id /

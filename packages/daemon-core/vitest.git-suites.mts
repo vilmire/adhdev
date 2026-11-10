@@ -81,9 +81,6 @@ export const GIT_HEAVY_SUITES: string[] = [
   // exercise dirty / stash / ahead / diverged base states. The check reads LIVE git
   // state (including a real fetch), so it cannot be covered with a mocked status.
   'test/mesh/mesh-refine-accept-preflight.test.ts',
-  // CONTRACT-VERSIONING Cut A (AC08/AC09): real root + submodule gitlink chains, a
-  // linked worktree, replace objects and smudge filters against the sanitized reader.
-  'test/mesh/contract/contract-git-source.test.ts',
   'test/mesh/mesh-onboarding-plan.test.ts',
   // Mission git refs (design 2026-11-01-mission-git-refs): real bare-origin + clone topologies (merge, cherry-pick,
   // squash, rebase, shallow clone) judged by ancestry / git cherry / merge-tree residual patch.

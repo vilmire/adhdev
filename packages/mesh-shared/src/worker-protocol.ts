@@ -50,11 +50,6 @@ export const WORKER_TOOLS = [
     'artifact_register',
     'artifact_list',
     'artifact_read',
-    // Contract versioning (Cut A): exact pinned-unit reads (E2), the explicit
-    // read claim (C1) and the authoritative head/notice pull.
-    'contract_read',
-    'contract_observe',
-    'contract_current',
 ] as const
 
 export type WorkerTool = typeof WORKER_TOOLS[number]

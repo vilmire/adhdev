@@ -28,7 +28,6 @@ import { workerBridgeSpecs } from './low-family/worker-bridge.js';
 import { cooperativeMaintenanceSpecs } from './low-family/cooperative-maintenance.js';
 import { maintenanceHoldSpecs } from './low-family/maintenance-hold.js';
 import { workerMailboxSpecs } from './low-family/worker-mailbox.js';
-import { contractCommandSpecs } from './low-family/contract-commands.js';
 import { workerPeerContextSpecs } from './low-family/worker-peer-context.js';
 import { transcriptReplicaSpecs } from './low-family/transcript-replica.js';
 import { cliAgentSpecs } from './med-family/cli-agent.js';
@@ -90,7 +89,6 @@ export function buildDaemonCommandSpecs(): CommandSpec[] {
         ...cooperativeMaintenanceSpecs,
         ...maintenanceHoldSpecs,
         ...workerMailboxSpecs,
-        ...contractCommandSpecs,
         ...workerPeerContextSpecs,
         ...transcriptReplicaSpecs,
         ...cliAgentSpecs,

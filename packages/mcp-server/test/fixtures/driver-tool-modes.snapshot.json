@@ -15,10 +15,7 @@
     "driver_install",
     "artifact_register",
     "artifact_list",
-    "artifact_read",
-    "contract_read",
-    "contract_observe",
-    "contract_current"
+    "artifact_read"
   ],
   "coordinator": [
     "mesh_status",
