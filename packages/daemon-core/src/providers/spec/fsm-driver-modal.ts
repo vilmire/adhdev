@@ -46,6 +46,13 @@ const PARKED_BELOW_KEY_HINT_RE = /\((?:y|n|p|tab|shift\+tab|esc(?:\s+or\s+n)?)\)
 const PARKED_BELOW_SKIP_ROW_RE = /^\s*Skip & tell the agent what to do instead \(esc or n\)\s*$/;
 const PARKED_BELOW_PROMPT_RE = /^\s*Run this (?:command|MCP tool)\?\s*$/;
 
+/**
+ * A lone scroll indicator row (`↓` / `↑`, optionally with a hint such as `↓ more`) that a TUI paints
+ * between a scrolled option list and its footer when some options are below the fold (live 2026-11-09:
+ * codex approval whose option 2 wrapped over ~10 rows, option 3 hidden). It is list chrome, not content.
+ */
+const SCROLL_INDICATOR_LINE_RE = /^\s*[↑↓⇡⇣▲▼]\s*(?:\d+\s+more\b.*|more\b.*)?$/i;
+
 /** Upper bound for one wrapped option's rows (see resolveLiveModalSlice). */
 const MAX_WRAPPED_OPTION_ROWS = 16;
 
@@ -134,6 +141,7 @@ export function resolveLiveModalSlice(
                 if (matchNumberedChoiceIndex(next) !== null) break;
                 if (UNNUMBERED_CHOICE_LINE_RE.test(next)) break;
                 if (MODAL_FOOTER_LINE_RE.test(next) || isComposerOrSpinnerOrBulletLine(next, lines[j + 1] ?? '')) break;
+                if (SCROLL_INDICATOR_LINE_RE.test(next)) break;
                 if (/^\s*[─╌═━]{8,}\s*$/.test(next)) break;
                 if (/^\s*(?:\? for shortcuts|⏵⏵\s+|tab to queue message|⏎\s*send|>\s*$)/i.test(next)) break;
                 optEnd = j;
@@ -200,7 +208,7 @@ export function resolveLiveModalSlice(
                 modalEndRow = r;
                 continue;
             }
-            if (/^\s*[─╌═━┃│╭╮╰╯┌┐└┘├┤┬┴┼]+\s*$/.test(line)) {
+            if (/^\s*[─╌═━┃│╭╮╰╯┌┐└┘├┤┬┴┼]+\s*$/.test(line) || SCROLL_INDICATOR_LINE_RE.test(line)) {
                 modalEndRow = r;
                 continue;
             }
