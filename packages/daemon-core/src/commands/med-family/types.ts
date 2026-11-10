@@ -89,7 +89,7 @@ export interface MedFamilyContext {
     ) => void;
 
     /** Bound `DaemonCommandRouter.requireMeshHostMutationOwner` (owner gate). */
-    requireMeshHostMutationOwner: (meshId: string, inlineMesh: unknown, operation: string) => Promise<CommandRouterResult | null>;
+    requireMeshHostMutationOwner: (meshId: string, inlineMesh: unknown, operation: string, scope?: 'host' | 'member') => Promise<CommandRouterResult | null>;
 
     /** Bound `DaemonCommandRouter.invalidateAggregateMeshStatus`. */
     invalidateAggregateMeshStatus: (meshId: string) => void;

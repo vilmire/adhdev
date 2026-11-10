@@ -30,6 +30,7 @@ import { TerminalWatchDelivery } from './terminal-watch-runtime.js';
 
 import { isCarryOverMissionRecord, SESSION_STATUS_CLASS } from '@adhdev/mesh-shared';
 import type { DaemonComponents } from '../boot/daemon-components.js';
+import { isHostMoveFencedError } from '../mesh/host-handoff/write-fence.js';
 import { LOG } from '../logging/logger.js';
 import { collectCoordinatorReplies } from './assistant-relay-audit.js';
 import { isAdapterEvidenceRef, verifiedNativeReportParts } from './attempt-report-recovery.js';
@@ -618,7 +619,9 @@ export function wireAssistantRuntime(
                 signals?.prune(now);
             }
         } catch (e) {
-            LOG.warn('Assistant', `relay tick failed: ${(e as Error)?.message ?? e}`);
+            // A project another daemon now hosts refuses writes here by design; nothing to retry or report.
+            if (isHostMoveFencedError(e)) LOG.debug('Assistant', 'relay tick skipped a write on a project this daemon no longer hosts');
+            else LOG.warn('Assistant', `relay tick failed: ${(e as Error)?.message ?? e}`);
         } finally {
             ticking = false;
         }

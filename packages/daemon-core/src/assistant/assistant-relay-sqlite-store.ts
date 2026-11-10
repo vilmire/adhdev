@@ -12,6 +12,7 @@
  */
 
 import type { Database as DatabaseHandle } from 'better-sqlite3';
+import { isHostMoveFencedError } from '../mesh/host-handoff/write-fence.js';
 import {
     RELAY_RECEIPT_CAPS, type RelayReceiptKind,
     ATTEMPT_BODY_TTL_MS, ATTEMPT_BODY_MAX_CHARS, ATTEMPT_BODY_MAX_ROWS, ATTEMPT_BODY_TOTAL_BYTES,
@@ -69,7 +70,7 @@ function toRelay(r: RelayDbRow): AssistantRelayRow {
 /** Reading coverage tidies up as it goes. A project mid host move refuses those writes, and the read must still work: a daemon reads this at boot. */
 function skipWhileHostMoveFenced(tidy: () => unknown): void {
     try { tidy(); } catch (error) {
-        if (!String((error as Error)?.message ?? error).includes('mesh_host_handoff_fenced')) throw error;
+        if (!isHostMoveFencedError(error)) throw error;
     }
 }
 

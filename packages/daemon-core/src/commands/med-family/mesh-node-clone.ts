@@ -549,7 +549,7 @@ export const meshNodeCloneHandlers: Record<string, MedFamilyHandler> = {
         const reminderRefusal = await checkCloneAfterIdleReminder(meshId, args);
         if (reminderRefusal) return reminderRefusal;
 
-        const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'worktree clone');
+        const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'worktree clone', 'member');
         if (ownerFailure) return ownerFailure;
 
         const cloneStartedAtMs = Date.now();
@@ -976,7 +976,7 @@ export const meshNodeCloneHandlers: Record<string, MedFamilyHandler> = {
         const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
         if (!meshId) return { success: false, error: 'meshId required' };
         if (!nodeId) return { success: false, error: 'nodeId required' };
-        const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'bootstrap retry');
+        const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'bootstrap retry', 'member');
         if (ownerFailure) return ownerFailure;
 
         try {

@@ -43405,6 +43405,9 @@ ${error.message || ""}`;
         SECRET_KEY = /(secret|token|password|passphrase|credential|private_?key|api_?key|authorization)/i;
       }
     });
+    function isHostMoveFencedError(error) {
+      return String(error?.message ?? error).includes("mesh_host_handoff_fenced");
+    }
     function registerHandoffImportFunction(db3) {
       if (!permits.has(db3)) {
         const state2 = { meshId: "" };
@@ -112338,16 +112341,18 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         transitions.delete(meshId);
       }
     }
-    function durableHandoffAdmissionFailure(meshId) {
+    function durableHandoffAdmissionFailure(meshId, opts = {}) {
+      const memberScope = opts.scope === "member";
       try {
         const config = readMeshConfigFromDisk();
         if (!config && (0, import_node_fs27.existsSync)(getMeshConfigPath())) throw new Error("project authority unavailable");
         const project2 = config?.meshes.find((m) => m.id === meshId);
-        if (project2 && (project2.meshHost?.handoffFence !== void 0 || project2.meshHost?.handedOffTo !== void 0)) throw new Error("persisted project authority is fenced or transferred");
-        const fence = MeshRuntimeStore.getInstance().db.prepare("SELECT 1 FROM mesh_host_write_fences WHERE mesh_id=?").get(meshId);
-        if (fence) throw new Error("durable project write fence is held");
+        if (project2 && (project2.meshHost?.handoffFence !== void 0 || !memberScope && project2.meshHost?.handedOffTo !== void 0)) throw new Error("persisted project authority is fenced or transferred");
+        const fence = MeshRuntimeStore.getInstance().db.prepare("SELECT mode FROM mesh_host_write_fences WHERE mesh_id=?").get(meshId);
+        if (fence && !(memberScope && fence.mode === "history")) throw new Error("durable project write fence is held");
         const pending = MeshRuntimeStore.getInstance().db.prepare("SELECT epoch,phase FROM mesh_host_handoff WHERE mesh_id=? AND role='source' ORDER BY epoch DESC LIMIT 1").get(meshId);
-        if (pending && ["frozen", "exporting", "exported", "awaiting_ack", "acked", "activating", "uncertain", "committed"].includes(pending.phase) && (!project2 || (project2.meshHost?.hostEpoch ?? 0) <= pending.epoch)) throw new Error("durable source authority intent is held");
+        const heldPhases = ["frozen", "exporting", "exported", "awaiting_ack", "acked", "activating", "uncertain", ...memberScope ? [] : ["committed"]];
+        if (pending && heldPhases.includes(pending.phase) && (!project2 || (project2.meshHost?.hostEpoch ?? 0) <= pending.epoch)) throw new Error("durable source authority intent is held");
         return null;
       } catch {
         return { success: false, code: "mesh_host_handoff_fenced", error: "Persisted project host authority is unavailable, fenced or transferred." };
@@ -148833,7 +148838,7 @@ ${grant.exp}`).digest("hex");
       try {
         tidy();
       } catch (error) {
-        if (!String(error?.message ?? error).includes("mesh_host_handoff_fenced")) throw error;
+        if (!isHostMoveFencedError(error)) throw error;
       }
     }
     function metricDay(at) {
@@ -148848,6 +148853,7 @@ ${grant.exp}`).digest("hex");
     var init_assistant_relay_sqlite_store = __esm2({
       "src/assistant/assistant-relay-sqlite-store.ts"() {
         "use strict";
+        init_write_fence();
         init_assistant_relay_store();
         SqliteAssistantRelayStore = class {
           constructor(db3) {
@@ -158616,6 +158622,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         init_report_continuation();
         import_node_crypto76 = require("crypto");
         init_logger();
+        init_write_fence();
         init_assistant_native_window();
         init_dist();
         init_assistant_relay_store();
@@ -158864,50 +158871,62 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
               this.ports.inputLog.append(sid, unverified ? "human_unverified" : "human", { at, messageId: `term:${sid}:${at}:${this.terminalSeq}` });
             }
           }
+          /** Housekeeping on rows of a project another daemon now hosts is refused by the write fence; that is expected, not a failure. */
+          whileHostMoveFenced(step) {
+            try {
+              step();
+            } catch (e) {
+              if (!isHostMoveFencedError(e)) throw e;
+            }
+          }
           /** Periodic (≈1 min): progress / stall signals, vanished projects, retention, retries. */
           tick(now = this.clock.now()) {
             this.pendingHuman = this.pendingHuman.filter((p) => now - p.at < PENDING_HUMAN_MAX_AGE_MS);
             for (const t of this.ports.store.openThreads()) {
-              const idleAt = this.idleSince.get(t.meshId);
-              if (idleAt !== void 0 && now - idleAt >= RELAY_IDLE_CLOSE_GRACE_MS && !this.batches.has(t.meshId)) {
-                this.idleSince.delete(t.meshId);
-                this.ports.store.closeThread(t.meshId, now);
-                continue;
-              }
-              const slug = this.ports.projectSlug(t.meshId);
-              if (slug === null) {
-                this.ports.store.closeThread(t.meshId, now);
-                this.dropBatch(t.meshId);
-                continue;
-              }
-              const since2 = this.working.get(t.meshId);
-              if (since2 !== void 0) {
-                if (now - since2 >= RELAY_PROGRESS_AFTER_MS && !this.progressSent.has(t.meshId)) {
-                  this.progressSent.add(t.meshId);
-                  this.pushLine("progress", buildProgressSignal(slug, this.workOf(t.meshId)?.assigned ?? null), t.meshId);
+              try {
+                const idleAt = this.idleSince.get(t.meshId);
+                if (idleAt !== void 0 && now - idleAt >= RELAY_IDLE_CLOSE_GRACE_MS && !this.batches.has(t.meshId)) {
+                  this.idleSince.delete(t.meshId);
+                  this.ports.store.closeThread(t.meshId, now);
+                  continue;
                 }
-                continue;
-              }
-              const quietFor = now - Math.max(t.lastSendAt, this.lastRelayAt.get(t.meshId) ?? 0);
-              if (!this.batches.has(t.meshId) && quietFor >= RELAY_THREAD_STALE_CLOSE_MS) {
-                this.closeThread(t.meshId);
-                continue;
-              }
-              if (this.batches.has(t.meshId) || this.stallSent.has(t.meshId)) continue;
-              const quietSince = Math.max(t.lastSendAt, this.lastRelayAt.get(t.meshId) ?? 0);
-              if (now - quietSince < RELAY_STALL_AFTER_MS) continue;
-              if (t.stallNotifiedAt !== void 0 && t.stallNotifiedAt >= quietSince) continue;
-              const w = this.workOf(t.meshId);
-              if (w && (w.activeMissions > 0 || w.pending > 0) && w.assigned === 0) {
-                this.stallSent.add(t.meshId);
-                this.ports.store.markStallNotified(t.meshId, now);
-                this.pushLine("stall", buildStallSignal(slug, w), t.meshId);
+                const slug = this.ports.projectSlug(t.meshId);
+                if (slug === null) {
+                  this.ports.store.closeThread(t.meshId, now);
+                  this.dropBatch(t.meshId);
+                  continue;
+                }
+                const since2 = this.working.get(t.meshId);
+                if (since2 !== void 0) {
+                  if (now - since2 >= RELAY_PROGRESS_AFTER_MS && !this.progressSent.has(t.meshId)) {
+                    this.progressSent.add(t.meshId);
+                    this.pushLine("progress", buildProgressSignal(slug, this.workOf(t.meshId)?.assigned ?? null), t.meshId);
+                  }
+                  continue;
+                }
+                const quietFor = now - Math.max(t.lastSendAt, this.lastRelayAt.get(t.meshId) ?? 0);
+                if (!this.batches.has(t.meshId) && quietFor >= RELAY_THREAD_STALE_CLOSE_MS) {
+                  this.closeThread(t.meshId);
+                  continue;
+                }
+                if (this.batches.has(t.meshId) || this.stallSent.has(t.meshId)) continue;
+                const quietSince = Math.max(t.lastSendAt, this.lastRelayAt.get(t.meshId) ?? 0);
+                if (now - quietSince < RELAY_STALL_AFTER_MS) continue;
+                if (t.stallNotifiedAt !== void 0 && t.stallNotifiedAt >= quietSince) continue;
+                const w = this.workOf(t.meshId);
+                if (w && (w.activeMissions > 0 || w.pending > 0) && w.assigned === 0) {
+                  this.stallSent.add(t.meshId);
+                  this.ports.store.markStallNotified(t.meshId, now);
+                  this.pushLine("stall", buildStallSignal(slug, w), t.meshId);
+                }
+              } catch (e) {
+                if (!isHostMoveFencedError(e)) throw e;
               }
             }
-            this.ports.store.prune(now);
-            this.pruneCoverage(now);
-            this.pruneBodyCache(now);
-            this.auditReplies(now);
+            this.whileHostMoveFenced(() => this.ports.store.prune(now));
+            this.whileHostMoveFenced(() => this.pruneCoverage(now));
+            this.whileHostMoveFenced(() => this.pruneBodyCache(now));
+            this.whileHostMoveFenced(() => this.auditReplies(now));
             if (!this.lateCaptureScan && this.unsubscribe) {
               const scan2 = this.repairLateCaptures(now);
               this.lateCaptureScan = scan2;
@@ -162915,7 +162934,8 @@ ${defangRelayBody(text10)}`;
             signals?.prune(now);
           }
         } catch (e) {
-          LOG.warn("Assistant", `relay tick failed: ${e?.message ?? e}`);
+          if (isHostMoveFencedError(e)) LOG.debug("Assistant", "relay tick skipped a write on a project this daemon no longer hosts");
+          else LOG.warn("Assistant", `relay tick failed: ${e?.message ?? e}`);
         } finally {
           ticking = false;
         }
@@ -163118,6 +163138,7 @@ ${defangRelayBody(text10)}`;
         init_terminal_watch();
         init_terminal_watch_runtime();
         init_dist();
+        init_write_fence();
         init_logger();
         init_assistant_relay_audit();
         init_attempt_report_recovery();
@@ -204145,7 +204166,7 @@ ${marker2}`,
         const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
         const nodeId = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
         if (!meshId || !nodeId) return { success: false, error: "meshId and nodeId required" };
-        const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "node update");
+        const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "node update", "member");
         if (ownerFailure) return ownerFailure;
         try {
           const { updateNode: updateNode2, getMesh: getMesh2 } = await Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports));
@@ -204223,7 +204244,7 @@ ${marker2}`,
         const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
         const nodeId = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
         if (!meshId || !nodeId) return { success: false, error: "meshId and nodeId required" };
-        const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "node removal");
+        const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "node removal", "member");
         if (ownerFailure) return ownerFailure;
         try {
           const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
@@ -204583,7 +204604,7 @@ ${marker2}`,
         if (!branch) return { success: false, error: "branch required" };
         const reminderRefusal = await checkCloneAfterIdleReminder(meshId, args);
         if (reminderRefusal) return reminderRefusal;
-        const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "worktree clone");
+        const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "worktree clone", "member");
         if (ownerFailure) return ownerFailure;
         const cloneStartedAtMs = Date.now();
         const requestedSyncBudgetMs = Number(args?.syncBudgetMs);
@@ -204910,7 +204931,7 @@ ${marker2}`,
         const nodeId = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
         if (!meshId) return { success: false, error: "meshId required" };
         if (!nodeId) return { success: false, error: "nodeId required" };
-        const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "bootstrap retry");
+        const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "bootstrap retry", "member");
         if (ownerFailure) return ownerFailure;
         try {
           const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
@@ -214169,9 +214190,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           invalidateAggregateMeshStatus: this.invalidateAggregateMeshStatus.bind(this)
         };
       }
-      async requireMeshHostMutationOwner(meshId, inlineMesh, operation) {
+      async requireMeshHostMutationOwner(meshId, inlineMesh, operation, scope2 = "host") {
         const meshRecord2 = await this.getMeshForCommand(meshId, inlineMesh, { preferInline: true });
-        const durableFailure = durableHandoffAdmissionFailure(meshId);
+        const durableFailure = durableHandoffAdmissionFailure(meshId, { scope: scope2 });
         if (durableFailure) return durableFailure;
         const mesh = meshRecord2?.mesh;
         if (!mesh) return { success: false, error: "Mesh not found" };

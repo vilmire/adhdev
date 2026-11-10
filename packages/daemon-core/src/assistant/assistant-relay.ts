@@ -8,6 +8,7 @@ import { RelayGapTracker, receiptKey, gapGroup, buildReadableReplyGap } from './
 import { reportBodyId, type ReportContinuation } from './report-continuation.js';
 import { createHash } from 'node:crypto';
 import { LOG } from '../logging/logger.js';
+import { isHostMoveFencedError } from '../mesh/host-handoff/write-fence.js';
 import { formatReplyClock, type AttemptReportSnapshot, type AuditedCoordinatorReply } from './assistant-native-window.js';
 /**
  * Assistant relay (design 2026-10-07-assistant-layer.md §4.3 "수신", §4.8;
@@ -318,10 +319,18 @@ export class AssistantRelay {
         }
     }
 
+    /** Housekeeping on rows of a project another daemon now hosts is refused by the write fence; that is expected, not a failure. */
+    private whileHostMoveFenced(step: () => unknown): void {
+        try { step(); } catch (e) { if (!isHostMoveFencedError(e)) throw e; }
+    }
+
     /** Periodic (≈1 min): progress / stall signals, vanished projects, retention, retries. */
     tick(now: number = this.clock.now()): void {
         this.pendingHuman = this.pendingHuman.filter((p) => now - p.at < PENDING_HUMAN_MAX_AGE_MS);
         for (const t of this.ports.store.openThreads()) {
+            // A project this machine handed to another host keeps its old thread rows read-only
+            // (SQLite write fence). Housekeeping on them is skipped quietly, not retried as a failure.
+            try {
             const idleAt = this.idleSince.get(t.meshId);
             if (idleAt !== undefined && now - idleAt >= RELAY_IDLE_CLOSE_GRACE_MS && !this.batches.has(t.meshId)) {
                 this.idleSince.delete(t.meshId);
@@ -360,11 +369,12 @@ export class AssistantRelay {
                 this.ports.store.markStallNotified(t.meshId, now);
                 this.pushLine('stall', buildStallSignal(slug, w), t.meshId);
             }
+            } catch (e) { if (!isHostMoveFencedError(e)) throw e; }
         }
-        this.ports.store.prune(now);
-        this.pruneCoverage(now);
-        this.pruneBodyCache(now);
-        this.auditReplies(now);
+        this.whileHostMoveFenced(() => this.ports.store.prune(now));
+        this.whileHostMoveFenced(() => this.pruneCoverage(now));
+        this.whileHostMoveFenced(() => this.pruneBodyCache(now));
+        this.whileHostMoveFenced(() => this.auditReplies(now));
         if (!this.lateCaptureScan && this.unsubscribe) {
             const scan = this.repairLateCaptures(now);
             this.lateCaptureScan = scan;

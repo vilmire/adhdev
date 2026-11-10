@@ -32,6 +32,28 @@ describe('durable handoff admission', () => {
         state.pending = { phase, epoch: 2 };
         expect(durableHandoffAdmissionFailure('mesh')).toMatchObject({ code: 'mesh_host_handoff_fenced' });
     });
+    describe('member scope (a former host acting on its own node for the current host)', () => {
+        const member = { scope: 'member' as const };
+        it('allows a completed handoff: handedOffTo, history fence, committed source row', () => {
+            state.config.meshes[0].meshHost = { role: 'member', hostEpoch: 1, handedOffTo: { daemonId: 'b', epoch: 1, handoffId: 'h', at: 1, retainUntil: 2 } };
+            state.fence = { mode: 'history' };
+            state.pending = { phase: 'committed', epoch: 1 };
+            expect(durableHandoffAdmissionFailure('mesh', member)).toBeNull();
+            // host-role operations on the same former host stay refused
+            expect(durableHandoffAdmissionFailure('mesh')).toMatchObject({ code: 'mesh_host_handoff_fenced' });
+        });
+        it.each(['frozen', 'exporting', 'activating', 'uncertain'])('still refuses an in-flight %s cut', phase => {
+            state.pending = { phase, epoch: 2 };
+            expect(durableHandoffAdmissionFailure('mesh', member)).toMatchObject({ code: 'mesh_host_handoff_fenced' });
+        });
+        it('still refuses a freeze fence, a transfer write fence and unreadable authority', () => {
+            state.config.meshes[0].meshHost = { role: 'host', handoffFence: { handoffId: 'h', epoch: 2 } };
+            expect(durableHandoffAdmissionFailure('mesh', member)).toMatchObject({ code: 'mesh_host_handoff_fenced' });
+            state.config.meshes[0].meshHost = { role: 'member' };
+            state.fence = { mode: 'transfer' };
+            expect(durableHandoffAdmissionFailure('mesh', member)).toMatchObject({ code: 'mesh_host_handoff_fenced' });
+        });
+    });
     it('does not revive an older source intent after a newer host epoch', () => {
         state.config.meshes[0].meshHost.hostEpoch = 3;
         state.pending = { phase: 'committed', epoch: 2 };

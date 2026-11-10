@@ -1,4 +1,4 @@
-import { durableHandoffAdmissionFailure } from '../mesh/host-handoff/admission.js';
+import { durableHandoffAdmissionFailure, type HandoffAdmissionScope } from '../mesh/host-handoff/admission.js';
 import { admitRouterCommandUnderNewWorkHold, isRouterCommandMaintenanceExempt } from '../maintenance/new-work-hold.js';
 import { captureMaintenanceAdmission, withMaintenanceAdmission, assertMaintenanceDaemon, assertMaintenanceCommandIdentity } from '../maintenance/cooperative-gate.js';
 /**
@@ -576,9 +576,9 @@ export class DaemonCommandRouter {
         };
     }
 
-    private async requireMeshHostMutationOwner(meshId: string, inlineMesh: unknown, operation: string): Promise<CommandRouterResult | null> {
+    private async requireMeshHostMutationOwner(meshId: string, inlineMesh: unknown, operation: string, scope: HandoffAdmissionScope = 'host'): Promise<CommandRouterResult | null> {
         const meshRecord = await this.getMeshForCommand(meshId, inlineMesh, { preferInline: true });
-        const durableFailure = durableHandoffAdmissionFailure(meshId);
+        const durableFailure = durableHandoffAdmissionFailure(meshId, { scope });
         if (durableFailure) return durableFailure;
         const mesh = meshRecord?.mesh;
         if (!mesh) return { success: false, error: 'Mesh not found' };

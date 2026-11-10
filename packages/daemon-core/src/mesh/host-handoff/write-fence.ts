@@ -9,6 +9,10 @@ interface FenceDb {
     prepare(sql: string): { get(...args: unknown[]): any; all(...args: unknown[]): any[]; run(...args: unknown[]): unknown };
     transaction<T>(operation: () => T): () => T;
 }
+/** True for the abort a write fence raises (a project mid- or post-handoff on this machine). */
+export function isHostMoveFencedError(error: unknown): boolean {
+    return String((error as Error)?.message ?? error).includes('mesh_host_handoff_fenced');
+}
 const LOCAL_MEMBER_TABLES = new Set(['turn_attempts', 'turn_events', 'turn_holds', 'mesh_topic_index', 'mesh_local_records', 'mesh_task_outputs', 'session_artifacts', 'mesh_tool_call_log']);
 const permits = new WeakMap<object, { meshId: string }>();
 

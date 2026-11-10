@@ -68,6 +68,20 @@ describe('delivered native coverage persistence', () => {
         expect(() => store.listDeliveredCoverage(NOW + 400 * 24 * 60 * 60 * 1000)).toThrow('disk trouble');
     });
 
+    it('a tick on a project another daemon now hosts skips refused housekeeping quietly and still reports other failures', () => {
+        const db = database();
+        const store: any = new SqliteAssistantRelayStore(db);
+        store.openThread('mesh', NOW - 30 * DAY);
+        commit(store);
+        for (const table of ['assistant_threads', 'assistant_relays', 'assistant_relay_coverage', 'assistant_attempt_bodies']) {
+            for (const op of ['UPDATE', 'DELETE']) db.exec(`CREATE TRIGGER fence_${table}_${op} BEFORE ${op} ON ${table} BEGIN SELECT RAISE(ABORT, 'mesh_host_handoff_fenced'); END`);
+        }
+        expect(() => relay(store, null).tick(NOW + 60 * DAY)).not.toThrow();
+        expect(store.isThreadOpen('mesh')).toBe(true); // refused close left the row alone
+        db.exec("DROP TRIGGER fence_assistant_threads_UPDATE; CREATE TRIGGER other BEFORE UPDATE ON assistant_threads BEGIN SELECT RAISE(ABORT, 'disk trouble'); END");
+        expect(() => relay(store, null).tick(NOW + 60 * DAY)).toThrow('disk trouble');
+    });
+
     it.each(['memory', 'sqlite'])('validates settlement/session ownership and never overwrites delivered coverage (%s)', kind => {
         const store: any = kind === 'memory' ? new InMemoryAssistantRelayStore() : new SqliteAssistantRelayStore(database());
         commit(store);
