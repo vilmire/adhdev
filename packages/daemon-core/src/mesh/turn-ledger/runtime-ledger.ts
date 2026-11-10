@@ -88,6 +88,7 @@ interface MeshRuntimeTurnLedgerOptions {
     publisher?: TurnPublisherPort | null;
     now?: () => number;
     inspectBackgroundProcesses?: (sessionId: string, opts: { startedAfterMs: number }) => readonly string[] | undefined;
+    ptyOutputAt?: (sessionId: string) => number | undefined;
     backgroundWorkReleased?: (attemptId: string, generation: number) => boolean;
 }
 
@@ -108,6 +109,7 @@ export function createMeshRuntimeTurnLedger(options: MeshRuntimeTurnLedgerOption
         },
         ...(options.now ? { now: options.now } : {}),
         ...(options.inspectBackgroundProcesses ? { inspectBackgroundProcesses: options.inspectBackgroundProcesses } : {}),
+        ...(options.ptyOutputAt ? { ptyOutputAt: options.ptyOutputAt } : {}),
         ...(options.backgroundWorkReleased ? { backgroundWorkReleased: options.backgroundWorkReleased } : {}),
         log: {
             info: (m) => LOG.info('TurnLedger', m),

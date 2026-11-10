@@ -44388,6 +44388,9 @@ ${error.message || ""}`;
           stallWakeMs: 9e5,
           coalesceWindowMs: 3e4,
           hardCeilingMs: 54e5,
+          hardCeilingMaxMs: 6 * 36e5,
+          hardCeilingExtendMs: 30 * 6e4,
+          hardCeilingActivityGraceMs: 10 * 6e4,
           stoppingUnreachableMaxMs: 24 * 36e5,
           stoppingForceAfterMs: 15 * 6e4,
           reportMissingNudgeGraceMs: 18e4,
@@ -44442,6 +44445,9 @@ ${error.message || ""}`;
             max: 24 * HOUR,
             aliases: [{ name: "MESH_INFLIGHT_ACKED_HOLD_HARD_CEILING_MS", min: 0, max: 24 * HOUR }]
           },
+          { field: "hardCeilingMaxMs", canonical: "ADHDEV_TURN_HARD_CEILING_MAX_MS", min: 0, max: 7 * 24 * HOUR, aliases: [] },
+          { field: "hardCeilingExtendMs", canonical: "ADHDEV_TURN_HARD_CEILING_EXTEND_MS", min: 0, max: 24 * HOUR, aliases: [] },
+          { field: "hardCeilingActivityGraceMs", canonical: "ADHDEV_TURN_HARD_CEILING_ACTIVITY_GRACE_MS", min: 0, max: 24 * HOUR, aliases: [] },
           { field: "stoppingUnreachableMaxMs", canonical: "ADHDEV_STOPPING_UNREACHABLE_MAX_MS", min: 0, max: 30 * 24 * HOUR, aliases: [] },
           { field: "stoppingForceAfterMs", canonical: "ADHDEV_STOPPING_FORCE_AFTER_MS", min: 0, max: 30 * 24 * HOUR, aliases: [] },
           { field: "reportMissingNudgeGraceMs", canonical: "ADHDEV_TURN_REPORT_MISSING_NUDGE_GRACE_MS", min: 0, max: HOUR, aliases: [] },
@@ -52816,6 +52822,14 @@ ${rendered.join("\n\n")}`,
             { e: "act", act: "rearm_stall_ceiling" },
             { e: "record", note: "stall_ceiling_background_work_live" }
           ] },
+          // The ceiling expired while the worker's PTY is still producing output (ledger-computed
+          // `hardCeilingActive`) and the attempt is below hardCeilingMaxMs: extend once per expiry and
+          // tell the coordinator, instead of failing a visibly running long build (H5 below).
+          { id: "H5x", lane: "current", from: "nonterminal", on: ["hold_expired"], guard: "hold_hard_ceiling_extend", to: "same", verdict: "applied", effects: [
+            { e: "act", act: "extend_hard_ceiling" },
+            { e: "notify", notify: "progress" },
+            { e: "record", note: "hard_ceiling_extended" }
+          ] },
           { id: "H5", lane: "current", from: "nonterminal", on: ["hold_expired"], guard: "hold_hard_ceiling", to: "failed", verdict: "applied", effects: [
             { e: "commit", outcome: "failed", strength: "genuine", reason: "hard_ceiling" }
           ] },
@@ -53141,6 +53155,12 @@ ${rendered.join("\n\n")}`,
     }
     function isMeshScope2(attempt) {
       return attempt.scope !== "plain";
+    }
+    function hardCeilingExtendable(ctx) {
+      const a = ctx.attempt;
+      if (!a || !ctx.hardCeilingActive || a.suspension) return false;
+      const { hardCeilingMaxMs, hardCeilingExtendMs } = ctx.policy;
+      return hardCeilingMaxMs > 0 && hardCeilingExtendMs > 0 && ctx.nowMs < a.acceptedAt + hardCeilingMaxMs;
     }
     function resolveUntil(expr, draft) {
       const { policy, nowMs: nowMs2, evidence } = draft.ctx;
@@ -53886,7 +53906,8 @@ ${rendered.join("\n\n")}`,
           hold_await_consume_exhausted: (ctx) => holdIs(ctx, "await_consume") && ctx.attempt.redriveCount >= MAX_REDRIVES_PER_GENERATION,
           hold_await_turn: (ctx) => holdIs(ctx, "await_turn"),
           hold_liveness: (ctx) => holdIs(ctx, "liveness"),
-          hold_hard_ceiling: (ctx) => holdIs(ctx, "hard_ceiling"),
+          hold_hard_ceiling: (ctx) => holdIs(ctx, "hard_ceiling") && !hardCeilingExtendable(ctx),
+          hold_hard_ceiling_extend: (ctx) => holdIs(ctx, "hard_ceiling") && hardCeilingExtendable(ctx),
           hold_suspension_before_consumed: (ctx) => holdIs(ctx, "suspension_before_consumed"),
           hold_direct_report_missing: (ctx) => ctx.attempt?.scope === "mesh_direct" && holdIs(ctx, "weak_candidate", "await_report") && !correctionPending(ctx) && !reportedThisGeneration(ctx) && !reportMissingNudged(ctx.attempt),
           hold_weak_candidate: (ctx) => holdIs(ctx, "weak_candidate") && ctx.attempt?.scope !== "mesh_direct" && !correctionPending(ctx) && freshAlive(ctx),
@@ -54034,6 +54055,15 @@ ${rendered.join("\n\n")}`,
             const count2 = prior && prior.generation === attempt.generation && prior.requestedAt !== void 0 ? prior.count : 0;
             attempt.data = { ...attempt.data, unconfirmedEndDeferral: { generation: attempt.generation, count: count2 + 1, requestedAt: draft.ctx.nowMs } };
             addHold(draft, { ...hold, until: draft.ctx.nowMs + endProbeGraceMs(draft.ctx.policy), createdAt: draft.ctx.nowMs });
+          },
+          extend_hard_ceiling: (draft) => {
+            const hold = expiredHold(draft.ctx);
+            const attempt = draft.attempt;
+            if (!hold) return;
+            const { policy, nowMs: nowMs2 } = draft.ctx;
+            const until = Math.min(nowMs2 + policy.hardCeilingExtendMs, attempt.acceptedAt + policy.hardCeilingMaxMs);
+            attempt.data = { ...attempt.data, hardCeilingExtension: { count: (attempt.data.hardCeilingExtension?.count ?? 0) + 1, at: nowMs2 } };
+            addHold(draft, { ...hold, until, createdAt: nowMs2 });
           },
           rearm_stall_ceiling: (draft) => {
             const hold = expiredHold(draft.ctx);
@@ -54760,6 +54790,10 @@ Do NOT retry on this node. Consider reassigning to a different node or asking th
     }
     function renderProgress(input, missing) {
       const s2 = input.scalars;
+      if (s2.hardCeilingExtended) {
+        const mins = Math.round(s2.hardCeilingExtended.ageMs / 6e4);
+        return `[System] ${s2.nodeLabel} is still running after ${mins} min and its PTY is still producing output \u2014 its time ceiling was extended (extension ${s2.hardCeilingExtended.count}). This is informational, NOT a completion or a failure; do not dispatch the task elsewhere and do not poll. Wait for its completion event.`;
+      }
       const note2 = resolve21(input.refs.note, input.resolveRef, missing);
       const taskId = s2.progressTaskId ?? s2.taskId ?? "";
       if (note2 === null) return pointerLine(`${s2.nodeLabel}'s progress note`, taskId);
@@ -55660,6 +55694,7 @@ ${line}`;
         ...notify2 === "late_completion" && typeof row2?.generation === "number" ? { priorGeneration: row2.generation } : {},
         ...str5(notice?.promptId) ? { promptId: str5(notice?.promptId) } : {},
         ...Array.isArray(notice?.questions) ? { questions: notice.questions } : {},
+        ...notify2 === "progress" && attempt?.data.hardCeilingExtension ? { hardCeilingExtended: { count: attempt.data.hardCeilingExtension.count, ageMs: Math.max(0, attempt.data.hardCeilingExtension.at - attempt.acceptedAt) } } : {},
         ...notify2 === "progress" && attempt?.taskId ? { progressTaskId: attempt.taskId } : {},
         ...isRecord10(notice?.completionMetadata) ? { completionMetadata: notice.completionMetadata } : {},
         ...typeof (notice?.stalledMs ?? stallEvidence?.stalledMs) === "number" ? { stalledMs: notice?.stalledMs ?? stallEvidence?.stalledMs, meshWorkerStall: true } : {},
@@ -165476,6 +165511,10 @@ ${defangRelayBody(text10)}`;
           }
         }
         const stallWithLiveBackgroundWork = !!attempt && evidence.kind === "hold_expired" && evidence.reason === "stall_ceiling" && deps.backgroundWorkReleased?.(attempt.attemptId, attempt.generation) !== true && (deps.inspectBackgroundProcesses?.(evidence.sessionId, { startedAfterMs: backgroundWorkBaselineMs(attempt) })?.length ?? 0) > 0;
+        const hardCeilingActive = !!attempt && evidence.kind === "hold_expired" && evidence.reason === "hard_ceiling" && (() => {
+          const at = deps.ptyOutputAt?.(evidence.sessionId);
+          return typeof at === "number" && nowMs2 - at <= policy.hardCeilingActivityGraceMs;
+        })();
         let result = reduce({
           attempt,
           holds,
@@ -165484,6 +165523,7 @@ ${defangRelayBody(text10)}`;
           nowMs: nowMs2,
           stopConfirmed: confirmedStops.has(evidence.eventId),
           ...stallWithLiveBackgroundWork ? { backgroundWorkLive: true } : {},
+          ...hardCeilingActive ? { hardCeilingActive: true } : {},
           ...forcedStops.has(evidence.eventId) ? { writerForced: true } : {},
           ...unreachableSettles.has(evidence.eventId) ? { writerUnreachable: unreachableSettles.get(evidence.eventId) } : {}
         });
@@ -165957,6 +165997,7 @@ ${defangRelayBody(text10)}`;
         },
         ...options.now ? { now: options.now } : {},
         ...options.inspectBackgroundProcesses ? { inspectBackgroundProcesses: options.inspectBackgroundProcesses } : {},
+        ...options.ptyOutputAt ? { ptyOutputAt: options.ptyOutputAt } : {},
         ...options.backgroundWorkReleased ? { backgroundWorkReleased: options.backgroundWorkReleased } : {},
         log: {
           info: (m) => LOG.info("TurnLedger", m),
@@ -168291,6 +168332,18 @@ ${defangRelayBody(text10)}`;
             if (!pid) return void 0;
             const tree = peekSessionBackgroundProcesses(pid, { startedAfterMs });
             return tree && tree.liveProcessNames.length > 0 ? tree.liveProcessNames : void 0;
+          } catch {
+            return void 0;
+          }
+        },
+        // Raw PTY output clock (cheap status read, never parses) so an expired hard ceiling can
+        // extend while a long native build is still printing.
+        ptyOutputAt: (sessionId) => {
+          try {
+            const target2 = components.sessionRegistry.get(sessionId);
+            const inst = components.instanceManager.getInstance(target2?.instanceKey || sessionId);
+            const at = inst?.adapter?.getStatus?.({ allowParse: false })?.lastOutputAt;
+            return typeof at === "number" && Number.isFinite(at) && at > 0 ? at : void 0;
           } catch {
             return void 0;
           }

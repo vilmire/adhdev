@@ -49,6 +49,15 @@ export interface TurnPolicy {
     /** Hard ceiling (was QUEUE_HOLD_HARD_DEADLINE / ACKED_HOLD_HARD_CEILING). */
     hardCeilingMs: number;
     /**
+     * Activity-aware ceiling: when `hardCeilingMs` expires and the worker's raw PTY produced output
+     * within `hardCeilingActivityGraceMs`, the ceiling is re-armed for `hardCeilingExtendMs` (one
+     * coordinator notice per extension) instead of failing a visibly progressing long build. The
+     * attempt age (since acceptance) never exceeds `hardCeilingMaxMs`; 0 keeps the fixed ceiling.
+     */
+    hardCeilingMaxMs: number;
+    hardCeilingExtendMs: number;
+    hardCeilingActivityGraceMs: number;
+    /**
      * A `stopping` attempt whose writer node has been continuously unreachable (or was
      * removed from the mesh) this long settles as failed `writer_unreachable`. Default 24 h.
      */
@@ -122,6 +131,9 @@ export const DEFAULT_TURN_POLICY: Readonly<TurnPolicy> = Object.freeze({
     stallWakeMs: 900_000,
     coalesceWindowMs: 30_000,
     hardCeilingMs: 5_400_000,
+    hardCeilingMaxMs: 6 * 3_600_000,
+    hardCeilingExtendMs: 30 * 60_000,
+    hardCeilingActivityGraceMs: 10 * 60_000,
     stoppingUnreachableMaxMs: 24 * 3_600_000,
     stoppingForceAfterMs: 15 * 60_000,
     reportMissingNudgeGraceMs: 180_000,
@@ -219,6 +231,9 @@ export const TURN_POLICY_ENV_BINDINGS: readonly EnvBinding[] = [
     { field: 'coalesceWindowMs', canonical: 'ADHDEV_TURN_COALESCE_WINDOW_MS', min: 0, max: 10 * 60_000, aliases: [] },
     { field: 'hardCeilingMs', canonical: 'ADHDEV_TURN_HARD_CEILING_MS', min: 0, max: 24 * HOUR,
       aliases: [{ name: 'MESH_INFLIGHT_ACKED_HOLD_HARD_CEILING_MS', min: 0, max: 24 * HOUR }] },
+    { field: 'hardCeilingMaxMs', canonical: 'ADHDEV_TURN_HARD_CEILING_MAX_MS', min: 0, max: 7 * 24 * HOUR, aliases: [] },
+    { field: 'hardCeilingExtendMs', canonical: 'ADHDEV_TURN_HARD_CEILING_EXTEND_MS', min: 0, max: 24 * HOUR, aliases: [] },
+    { field: 'hardCeilingActivityGraceMs', canonical: 'ADHDEV_TURN_HARD_CEILING_ACTIVITY_GRACE_MS', min: 0, max: 24 * HOUR, aliases: [] },
     { field: 'stoppingUnreachableMaxMs', canonical: 'ADHDEV_STOPPING_UNREACHABLE_MAX_MS', min: 0, max: 30 * 24 * HOUR, aliases: [] },
     { field: 'stoppingForceAfterMs', canonical: 'ADHDEV_STOPPING_FORCE_AFTER_MS', min: 0, max: 30 * 24 * HOUR, aliases: [] },
     { field: 'reportMissingNudgeGraceMs', canonical: 'ADHDEV_TURN_REPORT_MISSING_NUDGE_GRACE_MS', min: 0, max: HOUR, aliases: [] },

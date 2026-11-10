@@ -14,7 +14,7 @@ describe('TurnPolicy', () => {
     it('has the 8 design defaults + the await-report window (2026-09-24, raised 180s -> 600s same day per live run 6 on rc.41) + the finalizing liveness-probe backoff (same day, run 10 on rc.43) + the await-end window (2026-09-25, rc.44 run 12)', () => {
         expect(DEFAULT_TURN_POLICY).toEqual({
             tickMs: 4_000, quietWindowMs: 8_000, consumeGraceMs: 90_000, deliveryCeilingMs: 120_000,
-            livenessDeadlineMs: 480_000, noTurnDeadlineMs: 900_000, stallNoticeMs: 180_000, stallWakeMs: 900_000, coalesceWindowMs: 30_000, hardCeilingMs: 5_400_000, stoppingUnreachableMaxMs: 86_400_000,
+            livenessDeadlineMs: 480_000, noTurnDeadlineMs: 900_000, stallNoticeMs: 180_000, stallWakeMs: 900_000, coalesceWindowMs: 30_000, hardCeilingMs: 5_400_000, hardCeilingMaxMs: 21_600_000, hardCeilingExtendMs: 1_800_000, hardCeilingActivityGraceMs: 600_000, stoppingUnreachableMaxMs: 86_400_000,
             stoppingForceAfterMs: 900_000, reportMissingNudgeGraceMs: 180_000, stallReclaimMs: 0,
             awaitReportMs: 600_000, livenessProbeIntervalFinalizingMs: 60_000, awaitEndMs: 60_000,
         });
@@ -26,6 +26,9 @@ describe('TurnPolicy', () => {
         expect(resolveTurnPolicy({ ADHDEV_STOPPING_FORCE_AFTER_MS: '60000' }).stoppingForceAfterMs).toBe(60_000);
         expect(resolveTurnPolicy({ ADHDEV_TURN_REPORT_MISSING_NUDGE_GRACE_MS: '30000' }).reportMissingNudgeGraceMs).toBe(30_000);
         expect(resolveTurnPolicy({ ADHDEV_TURN_STALL_RECLAIM_MS: '120000' }).stallReclaimMs).toBe(120_000);
+        expect(resolveTurnPolicy({ ADHDEV_TURN_HARD_CEILING_MAX_MS: '0' }).hardCeilingMaxMs).toBe(0);
+        expect(resolveTurnPolicy({ ADHDEV_TURN_HARD_CEILING_EXTEND_MS: '60000' }).hardCeilingExtendMs).toBe(60_000);
+        expect(resolveTurnPolicy({ ADHDEV_TURN_HARD_CEILING_ACTIVITY_GRACE_MS: '120000' }).hardCeilingActivityGraceMs).toBe(120_000);
         expect(resolveTurnPolicy({ ADHDEV_STOPPING_FORCE_AFTER_MS: '0' }).stoppingForceAfterMs).toBe(0);
         expect(resolveTurnPolicy({})).toEqual(DEFAULT_TURN_POLICY);
     });

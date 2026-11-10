@@ -107,6 +107,8 @@ export interface ReduceInput {
     writerForced?: boolean;
     /** Ledger-computed for a stall_ceiling expiry: the session holds a live, unreleased background process. */
     backgroundWorkLive?: boolean;
+    /** Ledger-computed for a hard_ceiling expiry: the session's raw PTY produced output within hardCeilingActivityGraceMs. */
+    hardCeilingActive?: boolean;
     attempt: TurnAttempt | null;
     /** Active holds of this attempt. */
     holds: readonly TurnHold[];
@@ -249,7 +251,8 @@ const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> 
     hold_await_consume_exhausted: (ctx) => holdIs(ctx, 'await_consume') && ctx.attempt!.redriveCount >= MAX_REDRIVES_PER_GENERATION,
     hold_await_turn: (ctx) => holdIs(ctx, 'await_turn'),
     hold_liveness: (ctx) => holdIs(ctx, 'liveness'),
-    hold_hard_ceiling: (ctx) => holdIs(ctx, 'hard_ceiling'),
+    hold_hard_ceiling: (ctx) => holdIs(ctx, 'hard_ceiling') && !hardCeilingExtendable(ctx),
+    hold_hard_ceiling_extend: (ctx) => holdIs(ctx, 'hard_ceiling') && hardCeilingExtendable(ctx),
     hold_suspension_before_consumed: (ctx) => holdIs(ctx, 'suspension_before_consumed'),
     hold_direct_report_missing: (ctx) => ctx.attempt?.scope === 'mesh_direct'
         && holdIs(ctx, 'weak_candidate', 'await_report') && !correctionPending(ctx) && !reportedThisGeneration(ctx)
@@ -327,6 +330,17 @@ function holdId(attemptId: string, reason: HoldReason): string {
 
 function isMeshScope(attempt: TurnAttempt): boolean {
     return attempt.scope !== 'plain';
+}
+
+/**
+ * The expired hard_ceiling may be extended: the PTY is active, the attempt is below the absolute
+ * cap, and the owner is not the one being waited on (a parked approval/choice never extends).
+ */
+function hardCeilingExtendable(ctx: GuardCtx): boolean {
+    const a = ctx.attempt;
+    if (!a || !ctx.hardCeilingActive || a.suspension) return false;
+    const { hardCeilingMaxMs, hardCeilingExtendMs } = ctx.policy;
+    return hardCeilingMaxMs > 0 && hardCeilingExtendMs > 0 && ctx.nowMs < a.acceptedAt + hardCeilingMaxMs;
 }
 
 function resolveUntil(expr: UntilExpr, draft: Draft): number | null {
@@ -827,6 +841,15 @@ const ACTIONS: Record<ActionId, (draft: Draft) => void> = {
         const count = prior && prior.generation === attempt.generation && prior.requestedAt !== undefined ? prior.count : 0;
         attempt.data = { ...attempt.data, unconfirmedEndDeferral: { generation: attempt.generation, count: count + 1, requestedAt: draft.ctx.nowMs } };
         addHold(draft, { ...hold, until: draft.ctx.nowMs + endProbeGraceMs(draft.ctx.policy), createdAt: draft.ctx.nowMs });
+    },
+    extend_hard_ceiling: (draft) => {
+        const hold = expiredHold(draft.ctx);
+        const attempt = draft.attempt!;
+        if (!hold) return;
+        const { policy, nowMs } = draft.ctx;
+        const until = Math.min(nowMs + policy.hardCeilingExtendMs, attempt.acceptedAt + policy.hardCeilingMaxMs);
+        attempt.data = { ...attempt.data, hardCeilingExtension: { count: (attempt.data.hardCeilingExtension?.count ?? 0) + 1, at: nowMs } };
+        addHold(draft, { ...hold, until, createdAt: nowMs });
     },
     rearm_stall_ceiling: (draft) => {
         const hold = expiredHold(draft.ctx);

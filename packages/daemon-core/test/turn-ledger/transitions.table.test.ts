@@ -148,6 +148,7 @@ const FIRES: Record<string, Fixture> = {
     H3: { attempt: makeAttempt('delivered'), holds: [makeHold('await_turn')], evidence: expired('await_turn'), state: 'stopping', generation: 1, effects: ['cancel_dispatch', 'hold'] },
     H4: { attempt: G(), holds: [makeHold('liveness')], evidence: expired('liveness'), state: 'generating', effects: ['probe', 'hold'] },
     H5: { attempt: G(), holds: [makeHold('hard_ceiling')], evidence: expired('hard_ceiling'), state: 'stopping', effects: ['cancel_dispatch', 'hold'] },
+    H5x: { attempt: G(), holds: [makeHold('hard_ceiling')], evidence: expired('hard_ceiling'), state: 'generating', effects: ['hold', 'notify_coordinator', 'record'], extra: { hardCeilingActive: true } },
     H8: { attempt: G(), holds: [makeHold('stall_ceiling')], evidence: expired('stall_ceiling'), state: 'stopping', effects: ['cancel_dispatch', 'hold'] },
     H8b: { attempt: G(), holds: [makeHold('stall_ceiling')], evidence: expired('stall_ceiling'), state: 'generating', effects: ['hold', 'record'], extra: { backgroundWorkLive: true } },
     H6: { attempt: makeAttempt('delivered'), holds: [makeHold('suspension_before_consumed')], evidence: expired('suspension_before_consumed'), state: 'delivered', effects: ['release_hold'] },

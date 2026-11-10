@@ -468,6 +468,7 @@ export function renderNotice(ctx: RenderContext, meshId: string, entry: Record<s
         ...(notify === 'late_completion' && typeof row?.generation === 'number' ? { priorGeneration: row.generation } : {}),
         ...(str(notice?.promptId) ? { promptId: str(notice?.promptId)! } : {}),
         ...(Array.isArray(notice?.questions) ? { questions: notice!.questions as TurnNotifyScalars['questions'] } : {}),
+        ...(notify === 'progress' && attempt?.data.hardCeilingExtension ? { hardCeilingExtended: { count: attempt.data.hardCeilingExtension.count, ageMs: Math.max(0, attempt.data.hardCeilingExtension.at - attempt.acceptedAt) } } : {}),
         ...(notify === 'progress' && attempt?.taskId ? { progressTaskId: attempt.taskId } : {}),
         ...(isRecord(notice?.completionMetadata) ? { completionMetadata: notice!.completionMetadata as TurnNotifyScalars['completionMetadata'] } : {}),
         ...(typeof (notice?.stalledMs ?? stallEvidence?.stalledMs) === 'number' ? { stalledMs: (notice?.stalledMs ?? stallEvidence?.stalledMs) as number, meshWorkerStall: true } : {}),

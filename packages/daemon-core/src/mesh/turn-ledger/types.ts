@@ -57,6 +57,8 @@ export interface TurnAttemptData {
     providerSuspension?: { generation: number; modalKey: string | null; providerSetup?: boolean; at: number | null; resolvedAt: number | null;
         /** Reminder approval/choice notices sent for this still-parked suspension (R30p). */
         reminders?: number; lastReminderAt?: number };
+    /** Activity-aware hard ceiling (H5x): how many times it was extended and when last. Content-free. */
+    hardCeilingExtension?: { count: number; at: number };
     gitSideEffect?: { dirty: boolean; commitsSinceDispatch: number; attributable: boolean; at: number };
     /** R12r: how many report-awaiting idle ends the worker resumed from (false idles). Diagnostics only. */
     falseIdleCount?: number;

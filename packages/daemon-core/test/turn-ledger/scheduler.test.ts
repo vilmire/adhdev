@@ -20,13 +20,13 @@ import {
 
 const P: TurnPolicy = DEFAULT_TURN_POLICY;
 
-function rig(opts: { probe?: TurnSchedulerProbe; policy?: TurnPolicy } = {}) {
+function rig(opts: { probe?: TurnSchedulerProbe; policy?: TurnPolicy; ptyOutputAt?: (sessionId: string) => number | undefined } = {}) {
     const db = memDb();
     let now = T0;
     const ports = recordingPorts();
     const host = recordingHost();
     const publisher = fakePublisher();
-    const ledger = ledgerOn(db, { now: () => now, ports, host, publisher, ...(opts.policy ? { policy: opts.policy } : {}) });
+    const ledger = ledgerOn(db, { now: () => now, ports, host, publisher, ...(opts.policy ? { policy: opts.policy } : {}), ...(opts.ptyOutputAt ? { ptyOutputAt: opts.ptyOutputAt } : {}) });
     const logs: string[] = [];
     const log = { info: (m: string) => logs.push(`I:${m}`), warn: (m: string) => logs.push(`W:${m}`), error: (m: string) => logs.push(`E:${m}`) };
     const claim = vi.fn();
@@ -247,6 +247,89 @@ describe('invariants', () => {
         r.advance(60_000);
         await r.scheduler.tick();
         expect(r.logs.filter((l) => l.includes('without a hard_ceiling hold'))).toHaveLength(2);
+    });
+});
+
+describe('activity-aware hard ceiling (H5x)', () => {
+    const MIN = 60_000;
+    const ceilingHold = (r: Rig) => r.ledger.store.activeHolds('a1').find((h) => h.reason === 'hard_ceiling');
+    const progressNotices = (r: Rig) => rowsOf(r.db, 'notify', 'a1').filter((n) => (JSON.parse(String(n.payload_json)) as { notify?: string }).notify === 'progress');
+
+    it('extends at the ceiling while PTY output is recent, once per extension, with one notice each', async () => {
+        let outputAt = 0;
+        const r = rig({ ptyOutputAt: () => outputAt });
+        toGenerating(r);
+        r.advance(P.hardCeilingMs + 1);
+        outputAt = r.now - MIN;
+        await r.scheduler.tick();
+        expect(r.ledger.getAttempt('a1')).toMatchObject({ state: 'generating', terminal: null });
+        expect(ceilingHold(r)?.until).toBe(r.now + P.hardCeilingExtendMs);
+        expect(r.ledger.getAttempt('a1')!.data.hardCeilingExtension?.count).toBe(1);
+        expect(progressNotices(r)).toHaveLength(1);
+        // a second expiry, still active: second extension, second notice
+        r.advance(P.hardCeilingExtendMs + 1);
+        outputAt = r.now - MIN;
+        await r.scheduler.tick();
+        expect(r.ledger.getAttempt('a1')!.data.hardCeilingExtension?.count).toBe(2);
+        expect(progressNotices(r)).toHaveLength(2);
+    });
+
+    it('does not extend when the PTY has been quiet longer than the activity grace', async () => {
+        const r = rig({ ptyOutputAt: () => T0 });
+        toGenerating(r);
+        r.advance(P.hardCeilingMs + 1);
+        await r.scheduler.tick();
+        expect(r.ledger.getAttempt('a1')).toMatchObject({ state: 'stopping' });
+        expect(progressNotices(r)).toHaveLength(0);
+    });
+
+    it('does not extend without a PTY output port', async () => {
+        const r = rig();
+        toGenerating(r);
+        r.advance(P.hardCeilingMs + 1);
+        await r.scheduler.tick();
+        expect(r.ledger.getAttempt('a1')).toMatchObject({ state: 'stopping' });
+    });
+
+    it('stops extending at hardCeilingMaxMs (extension clamped to the cap, then H5 fires)', async () => {
+        let outputAt = 0;
+        const r = rig({ ptyOutputAt: () => outputAt });
+        toGenerating(r);
+        const acceptedAt = r.ledger.getAttempt('a1')!.acceptedAt;
+        r.advance(P.hardCeilingMs + 1);
+        for (let i = 0; i < 20 && r.ledger.getAttempt('a1')!.state === 'generating'; i++) {
+            outputAt = r.now - MIN;
+            await r.scheduler.tick();
+            const h = ceilingHold(r);
+            if (!h) break;
+            expect(h.until).toBeLessThanOrEqual(acceptedAt + P.hardCeilingMaxMs);
+            r.advance(Math.max(1, h.until! - r.now) + 1);
+        }
+        expect(r.ledger.getAttempt('a1')).toMatchObject({ state: 'stopping' });
+        expect(r.now - acceptedAt).toBeGreaterThanOrEqual(P.hardCeilingMaxMs);
+        await confirmFixtureWriterQuiescence(r.ledger);
+        expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'failed', reason: 'hard_ceiling' });
+    });
+
+    it('hardCeilingMaxMs = 0 keeps the old fixed ceiling', async () => {
+        const r = rig({ policy: { ...P, hardCeilingMaxMs: 0 }, ptyOutputAt: () => r_now() });
+        function r_now() { return rr.now - MIN; }
+        const rr = r;
+        toGenerating(r);
+        r.advance(P.hardCeilingMs + 1);
+        await r.scheduler.tick();
+        expect(r.ledger.getAttempt('a1')).toMatchObject({ state: 'stopping' });
+    });
+
+    it('a parked approval never extends', async () => {
+        const r = rig({ ptyOutputAt: () => r_now() });
+        function r_now() { return r.now - MIN; }
+        toGenerating(r);
+        r.ledger.observe(evd('suspension', { modal: 'approval', modalKey: 'k1' }));
+        expect(r.ledger.getAttempt('a1')!.suspension).toBe('approval');
+        r.advance(P.hardCeilingMs + 1);
+        await r.scheduler.tick();
+        expect(r.ledger.getAttempt('a1')).toMatchObject({ state: 'stopping' });
     });
 });
 

@@ -91,6 +91,11 @@ export interface TurnLedgerDeps {
      * scheduler's async probe corrects a stale answer).
      */
     inspectBackgroundProcesses?: (sessionId: string, opts: { startedAfterMs: number }) => readonly string[] | undefined;
+    /**
+     * Raw PTY output clock (epoch ms of the last output chunk) of a session, as a SYNCHRONOUS cache
+     * read; undefined = none/unknown. Lets an expired hard_ceiling extend while output continues.
+     */
+    ptyOutputAt?: (sessionId: string) => number | undefined;
     /** The guard's hold for this attempt generation expired; stop gating it. */
     backgroundWorkReleased?: (attemptId: string, generation: number) => boolean;
 }
@@ -486,8 +491,11 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
         const stallWithLiveBackgroundWork = !!attempt && evidence.kind === 'hold_expired' && evidence.reason === 'stall_ceiling'
             && deps.backgroundWorkReleased?.(attempt.attemptId, attempt.generation) !== true
             && (deps.inspectBackgroundProcesses?.(evidence.sessionId, { startedAfterMs: backgroundWorkBaselineMs(attempt) })?.length ?? 0) > 0;
+        const hardCeilingActive = !!attempt && evidence.kind === 'hold_expired' && evidence.reason === 'hard_ceiling'
+            && (() => { const at = deps.ptyOutputAt?.(evidence.sessionId); return typeof at === 'number' && nowMs - at <= policy.hardCeilingActivityGraceMs; })();
         let result = reduce({ attempt, holds, evidence, policy, nowMs, stopConfirmed: confirmedStops.has(evidence.eventId),
             ...(stallWithLiveBackgroundWork ? { backgroundWorkLive: true } : {}),
+            ...(hardCeilingActive ? { hardCeilingActive: true } : {}),
             ...(forcedStops.has(evidence.eventId) ? { writerForced: true } : {}),
             ...(unreachableSettles.has(evidence.eventId) ? { writerUnreachable: unreachableSettles.get(evidence.eventId)! } : {}) });
         if (triggerBackgroundWorkProbe && attempt) {

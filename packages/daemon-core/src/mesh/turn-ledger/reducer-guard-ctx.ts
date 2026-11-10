@@ -21,6 +21,7 @@ export interface GuardCtx {
     nowMs: number;
     effectiveGeneration: number | null;
     backgroundWorkLive?: boolean;
+    hardCeilingActive?: boolean;
 }
 
 export function admissionOf(ctx: GuardCtx): EvidenceAdmission | null {

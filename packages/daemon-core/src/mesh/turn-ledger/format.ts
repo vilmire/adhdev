@@ -177,6 +177,8 @@ export interface TurnNotifyScalars {
 
     /** Worker progress note task id (the note text itself is `refs.note`). */
     progressTaskId?: string;
+    /** Activity-aware hard ceiling extended (H5x): extension count and the attempt age at the last extension. */
+    hardCeilingExtended?: { count: number; ageMs: number };
 
     /** Report-substitution scalars (`shadowedByWorkerReport`). */
     reportTaskId?: string;
@@ -468,6 +470,10 @@ function renderNoProgress(input: RenderTurnNotifyInput): string {
 
 function renderProgress(input: RenderTurnNotifyInput, missing: SummaryRef[]): string {
     const s = input.scalars;
+    if (s.hardCeilingExtended) {
+        const mins = Math.round(s.hardCeilingExtended.ageMs / 60_000);
+        return `[System] ${s.nodeLabel} is still running after ${mins} min and its PTY is still producing output — its time ceiling was extended (extension ${s.hardCeilingExtended.count}). This is informational, NOT a completion or a failure; do not dispatch the task elsewhere and do not poll. Wait for its completion event.`;
+    }
     const note = resolve(input.refs.note, input.resolveRef, missing);
     const taskId = s.progressTaskId ?? s.taskId ?? '';
     if (note === null) return pointerLine(`${s.nodeLabel}'s progress note`, taskId);

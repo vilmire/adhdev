@@ -555,3 +555,12 @@ describe('renderTurnNotify — break-once (one assertion removed/inverted per sh
         expect(refDeclaredUnresolved.contentRefsMissing).toEqual([REF(9)]);
     });
 });
+
+describe('renderTurnNotify — hard ceiling extension notice (H5x)', () => {
+    it('says the worker is still running after N min and is informational, not a stall pointer', () => {
+        const { text } = render('progress', { nodeLabel: NODE_LABEL, taskId: 't1', progressTaskId: 't1', hardCeilingExtended: { count: 2, ageMs: 125 * 60_000 } });
+        expect(text).toContain('still running after 125 min');
+        expect(text).toContain('extension 2');
+        expect(text).toContain('NOT a completion');
+    });
+});

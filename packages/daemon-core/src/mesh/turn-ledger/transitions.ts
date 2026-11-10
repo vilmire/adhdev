@@ -63,7 +63,7 @@ export type GuardId =
     | 'holder_is_this_attempt' | 'confirmed_provider_setup' | 'held_provider_setup' | 'stale_modal_resolution'
     | 'final_present' | 'parked_suspension_observation'
     | 'hold_await_delivery' | 'hold_await_consume_redrive' | 'hold_await_consume_exhausted' | 'hold_await_turn'
-    | 'hold_liveness' | 'hold_hard_ceiling' | 'hold_suspension_before_consumed' | 'hold_weak_candidate' | 'hold_admission'
+    | 'hold_liveness' | 'hold_hard_ceiling' | 'hold_hard_ceiling_extend' | 'hold_suspension_before_consumed' | 'hold_weak_candidate' | 'hold_admission'
     | 'hold_await_report'
     | 'hold_native_probe_report_only' | 'hold_direct_report_missing' | 'hold_queue_report_missing' | 'hold_report_missing_accept'
     | 'hold_stall_ceiling' | 'hold_stall_background_work'
@@ -79,7 +79,7 @@ export type ActionId =
     | 'activity' | 'liveness_unknown' | 'liveness_failure' | 'worker_absent'
     | 'rebind_to_holder' | 'rebind'
     | 'hollow' | 'mark_notified' | 'store_git' | 'redrive' | 'stamp_no_progress_notice'
-    | 'record_report' | 'defer_unconfirmed_end' | 'open_report_correction' | 'nudge_for_report' | 'rearm_stall_ceiling';
+    | 'record_report' | 'defer_unconfirmed_end' | 'open_report_correction' | 'nudge_for_report' | 'rearm_stall_ceiling' | 'extend_hard_ceiling';
 
 /** Hold deadline expressions, resolved against policy + ledger clock. */
 export type UntilExpr =
@@ -548,6 +548,14 @@ export const TRANSITIONS: readonly TransitionRule[] = [
     { id: 'H8b', lane: 'current', from: [G], on: ['hold_expired'], guard: 'hold_stall_background_work', to: 'same', verdict: 'applied', effects: [
         { e: 'act', act: 'rearm_stall_ceiling' },
         { e: 'record', note: 'stall_ceiling_background_work_live' },
+    ] },
+    // The ceiling expired while the worker's PTY is still producing output (ledger-computed
+    // `hardCeilingActive`) and the attempt is below hardCeilingMaxMs: extend once per expiry and
+    // tell the coordinator, instead of failing a visibly running long build (H5 below).
+    { id: 'H5x', lane: 'current', from: 'nonterminal', on: ['hold_expired'], guard: 'hold_hard_ceiling_extend', to: 'same', verdict: 'applied', effects: [
+        { e: 'act', act: 'extend_hard_ceiling' },
+        { e: 'notify', notify: 'progress' },
+        { e: 'record', note: 'hard_ceiling_extended' },
     ] },
     { id: 'H5', lane: 'current', from: 'nonterminal', on: ['hold_expired'], guard: 'hold_hard_ceiling', to: 'failed', verdict: 'applied', effects: [
         { e: 'commit', outcome: 'failed', strength: 'genuine', reason: 'hard_ceiling' },

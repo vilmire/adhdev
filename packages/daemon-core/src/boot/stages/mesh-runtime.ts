@@ -373,6 +373,18 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
                 return undefined;
             }
         },
+        // Raw PTY output clock (cheap status read, never parses) so an expired hard ceiling can
+        // extend while a long native build is still printing.
+        ptyOutputAt: (sessionId) => {
+            try {
+                const target = components.sessionRegistry.get(sessionId);
+                const inst = components.instanceManager.getInstance(target?.instanceKey || sessionId) as { adapter?: { getStatus?: (o?: { allowParse: boolean }) => { lastOutputAt?: unknown } } } | undefined;
+                const at = inst?.adapter?.getStatus?.({ allowParse: false })?.lastOutputAt;
+                return typeof at === 'number' && Number.isFinite(at) && at > 0 ? at : undefined;
+            } catch {
+                return undefined;
+            }
+        },
         backgroundWorkReleased: (attemptId, generation) => backgroundWork.isReleased(attemptId, generation),
     });
 
