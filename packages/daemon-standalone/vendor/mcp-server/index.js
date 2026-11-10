@@ -44382,7 +44382,10 @@ ${error.message || ""}`;
           stoppingUnreachableMaxMs: 24 * 36e5,
           stoppingForceAfterMs: 15 * 6e4,
           reportMissingNudgeGraceMs: 18e4,
-          stallReclaimMs: 30 * 6e4,
+          // Off by default (2026-11-10): transcript silence is not a stall signal — a long foreground
+          // command (a full Cargo test run) writes nothing to the transcript for an hour and was being
+          // reclaimed every 30 min. Re-enable only with a PTY-output based activity signal.
+          stallReclaimMs: 0,
           awaitReportMs: 6e5,
           livenessProbeIntervalFinalizingMs: 6e4,
           awaitEndMs: 6e4

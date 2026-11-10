@@ -59,12 +59,14 @@ describe('stall notices wake a coordinator only when they need action', () => {
 // (owner decision: after a bounded time the mesh decides and moves on).
 describe('generating with no output → reclaim (stall_ceiling)', () => {
     const MIN = 60_000;
-    const RECLAIM = DEFAULT_TURN_POLICY.stallReclaimMs;
+    // Off by default since 2026-11-10; these cases enable it explicitly.
+    const RECLAIM = 30 * MIN;
+    const STALL_POLICY = { ...DEFAULT_TURN_POLICY, stallReclaimMs: RECLAIM };
     function stallRig(opts: { scope?: 'mesh_queue' | 'mesh_direct'; bg?: () => readonly string[] | undefined } = {}) {
         const clock = { at: T0 };
         const host = recordingHost();
         const ports = recordingPorts();
-        const ledger = ledgerOn(memDb(), { now: () => clock.at, host, ports, publisher: fakePublisher('w-dc'), selfDaemonId: 'dc',
+        const ledger = ledgerOn(memDb(), { now: () => clock.at, host, ports, publisher: fakePublisher('w-dc'), selfDaemonId: 'dc', policy: STALL_POLICY,
             ...(opts.bg ? { inspectBackgroundProcesses: opts.bg } : {}) });
         ledger.observe(dispatch({ scope: opts.scope ?? 'mesh_queue' }));
         ledger.observe(evd('delivered', { messageId: 'msg-1', outcome: 'delivered', via: 'local' }, { source: 'input_service' }));

@@ -15,7 +15,7 @@ describe('TurnPolicy', () => {
         expect(DEFAULT_TURN_POLICY).toEqual({
             tickMs: 4_000, quietWindowMs: 8_000, consumeGraceMs: 90_000, deliveryCeilingMs: 120_000,
             livenessDeadlineMs: 480_000, noTurnDeadlineMs: 900_000, stallNoticeMs: 180_000, stallWakeMs: 900_000, coalesceWindowMs: 30_000, hardCeilingMs: 5_400_000, stoppingUnreachableMaxMs: 86_400_000,
-            stoppingForceAfterMs: 900_000, reportMissingNudgeGraceMs: 180_000, stallReclaimMs: 1_800_000,
+            stoppingForceAfterMs: 900_000, reportMissingNudgeGraceMs: 180_000, stallReclaimMs: 0,
             awaitReportMs: 600_000, livenessProbeIntervalFinalizingMs: 60_000, awaitEndMs: 60_000,
         });
         expect(resolveTurnPolicy({ ADHDEV_TURN_AWAIT_END_MS: '15000' }).awaitEndMs).toBe(15_000);

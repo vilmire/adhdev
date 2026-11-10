@@ -125,7 +125,10 @@ export const DEFAULT_TURN_POLICY: Readonly<TurnPolicy> = Object.freeze({
     stoppingUnreachableMaxMs: 24 * 3_600_000,
     stoppingForceAfterMs: 15 * 60_000,
     reportMissingNudgeGraceMs: 180_000,
-    stallReclaimMs: 30 * 60_000,
+    // Off by default (2026-11-10): transcript silence is not a stall signal — a long foreground
+    // command (a full Cargo test run) writes nothing to the transcript for an hour and was being
+    // reclaimed every 30 min. Re-enable only with a PTY-output based activity signal.
+    stallReclaimMs: 0,
     awaitReportMs: 600_000,
     livenessProbeIntervalFinalizingMs: 60_000,
     awaitEndMs: 60_000,

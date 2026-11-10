@@ -81,7 +81,7 @@ describe('commit path', () => {
         expect(ledger.getAttempt('a1')?.state).toBe('generating');
         expect(ledger.store.hasEvent(end.eventId)).toBe(false);
         expect(rowsOf(db, 'committed')).toHaveLength(0);
-        expect(ledger.store.activeHolds('a1').map((h) => h.reason).sort()).toEqual(['hard_ceiling', 'liveness', 'stall_ceiling']);
+        expect(ledger.store.activeHolds('a1').map((h) => h.reason).sort()).toEqual(['hard_ceiling', 'liveness']);
     });
 });
 
