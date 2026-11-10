@@ -53229,13 +53229,21 @@ ${rendered.join("\n\n")}`,
       if (!report) return {};
       return { ...report.summary ? { summary: report.summary } : {}, textEventId: report.eventId };
     }
+    function claudeQuotaWaitNeedsWriterStop(draft, reason) {
+      const attempt = draft.attempt;
+      const ev = draft.ctx.evidence;
+      if (attempt.providerType !== "claude-cli" || reason !== "provider_usage_limit_exceeded") return false;
+      if (ev.kind !== "turn_end") return false;
+      if (ev.nativeOutcome === "failed" || ev.nativeMarker) return false;
+      return ev.observedBy === "claude_runtime_quota" || ev.observedBy === "cli_completion_flush";
+    }
     function commit(draft, outcome, strength, reason, text10) {
       const attempt = draft.attempt;
-      if (attempt.providerType === "claude-cli" && reason === "provider_usage_limit_exceeded" && attempt.scope === "mesh_queue") {
+      if (claudeQuotaWaitNeedsWriterStop(draft, reason) && attempt.scope === "mesh_queue") {
         reclaim(draft, reason);
         return;
       }
-      if (isMeshScope2(attempt) && !attempt.data.writerStop?.confirmed && !settleIdleReportOwed(draft.ctx) && (reason === "hard_ceiling" || draft.ctx.evidence.kind === "cancel" || draft.ctx.evidence.kind === "operator_status" || draft.ctx.evidence.kind === "session_error" || draft.ctx.evidence.kind === "process_exit" || attempt.providerType === "claude-cli" && reason === "provider_usage_limit_exceeded")) {
+      if (isMeshScope2(attempt) && !attempt.data.writerStop?.confirmed && !settleIdleReportOwed(draft.ctx) && (reason === "hard_ceiling" || draft.ctx.evidence.kind === "cancel" || draft.ctx.evidence.kind === "operator_status" || draft.ctx.evidence.kind === "session_error" || draft.ctx.evidence.kind === "process_exit" || claudeQuotaWaitNeedsWriterStop(draft, reason))) {
         beginWriterStop(draft, reason);
         const stopSummary = text10 ? text10.summary : summaryOf(draft.ctx.evidence);
         attempt.data.writerStop.terminal = {

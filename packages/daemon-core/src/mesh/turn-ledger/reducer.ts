@@ -427,6 +427,19 @@ function recordedReportText(draft: Draft): { summary?: SummaryRef; textEventId?:
     return { ...(report.summary ? { summary: report.summary } : {}), textEventId: report.eventId };
 }
 
+/** A paused Claude CLI (runtime screen or whole-reply banner, with no native
+ * failed-turn record) must stop its writer before a queue handoff. A native
+ * reader that already recorded `nativeOutcome: failed` or a native marker is
+ * a truthful task failure and still commits immediately (R9f). */
+function claudeQuotaWaitNeedsWriterStop(draft: Draft, reason: TurnReason): boolean {
+    const attempt = draft.attempt!;
+    const ev = draft.ctx.evidence;
+    if (attempt.providerType !== 'claude-cli' || reason !== 'provider_usage_limit_exceeded') return false;
+    if (ev.kind !== 'turn_end') return false;
+    if (ev.nativeOutcome === 'failed' || ev.nativeMarker) return false;
+    return ev.observedBy === 'claude_runtime_quota' || ev.observedBy === 'cli_completion_flush';
+}
+
 function commit(
     draft: Draft,
     outcome: TurnOutcome,
@@ -438,15 +451,15 @@ function commit(
     // A Claude quota wait is recoverable on another available provider. Queue
     // attempts reuse the existing reclaim path, which releases only AFTER the
     // exact writer checkpoint; direct attempts notify their coordinator instead.
-    if (attempt.providerType === 'claude-cli' && reason === 'provider_usage_limit_exceeded'
-        && attempt.scope === 'mesh_queue') {
+    // Native failed-turn evidence is not that wait and commits below.
+    if (claudeQuotaWaitNeedsWriterStop(draft, reason) && attempt.scope === 'mesh_queue') {
         reclaim(draft, reason);
         return;
     }
     if (isMeshScope(attempt) && !attempt.data.writerStop?.confirmed && !settleIdleReportOwed(draft.ctx) && (reason === 'hard_ceiling'
         || draft.ctx.evidence.kind === 'cancel' || draft.ctx.evidence.kind === 'operator_status'
         || draft.ctx.evidence.kind === 'session_error' || draft.ctx.evidence.kind === 'process_exit'
-        || (attempt.providerType === 'claude-cli' && reason === 'provider_usage_limit_exceeded'))) {
+        || claudeQuotaWaitNeedsWriterStop(draft, reason))) {
         beginWriterStop(draft, reason);
         // A commit carrying its own text (a recorded report, R20r) keeps it across the stop.
         const stopSummary = text ? text.summary : summaryOf(draft.ctx.evidence);
