@@ -297,7 +297,41 @@ export interface SweepLightWorkspacesInput {
     resultRetentionMs?: number;
     /** failed workspaces older than this are removed (default 1h). */
     failedRetentionMs?: number;
+    /**
+     * Stale-leak rule: a preparing/ready/in_use workspace untouched for longer than this whose task is NOT live
+     * (terminal or unknown) is removed. Such rows never reach result_ready (worker stopped/reclaimed/cancelled, daemon
+     * restarted mid-task), so no other rule ever frees them. 0/undefined disables. result_ready workspaces are never
+     * touched by it (they hold a landable result — `resultRetentionMs` governs them).
+     */
+    staleUntouchedMs?: number;
+    /** True when the row's task is still running/pending. Default (when `staleUntouchedMs` is set): everything is live. */
+    isTaskLive?: (row: LightWorkspaceRow) => boolean;
+    /** One line per removal (with size). */
+    log?: (message: string) => void;
 }
+
+/** Bytes under `dir` (lstat walk, links never followed). Best-effort, bounded by entry count. */
+export function lightDirSizeBytes(dir: string, maxEntries = 200_000): number {
+    let total = 0; let seen = 0;
+    const stack = [dir];
+    while (stack.length && seen < maxEntries) {
+        const cur = stack.pop()!;
+        let names: fs.Dirent[];
+        try { names = fs.readdirSync(cur, { withFileTypes: true }); } catch { continue; }
+        for (const d of names) {
+            if (++seen > maxEntries) break;
+            const p = path.join(cur, d.name);
+            try {
+                const st = fs.lstatSync(p);
+                if (st.isSymbolicLink()) continue;
+                if (st.isDirectory()) stack.push(p); else total += st.size;
+            } catch { /* raced */ }
+        }
+    }
+    return total;
+}
+
+const formatMiB = (bytes: number): string => `${(bytes / 1048576).toFixed(1)} MiB`;
 
 export interface LightWorkspaceSweepReport {
     removedMissing: string[];
@@ -325,13 +359,23 @@ export async function sweepLightWorkspaces(input: SweepLightWorkspacesInput): Pr
             pruned = true;
             continue;
         }
-        const expired =
+        let staleReason: string | undefined;
+        if (input.staleUntouchedMs && input.staleUntouchedMs > 0 && (row.state === 'preparing' || row.state === 'ready' || row.state === 'in_use')) {
+            let dirAge = Infinity;
+            try { dirAge = now - fs.statSync(row.path).mtimeMs; } catch { /* keep row age */ }
+            if (Math.min(age, dirAge) > input.staleUntouchedMs && !(input.isTaskLive ?? (() => true))(row)) staleReason = `stale_${row.state}_task_not_live`;
+        }
+        const expired = staleReason !== undefined ||
             (row.state === 'result_ready' && age > (input.resultRetentionMs ?? 24 * 3600_000)) ||
             (row.state === 'failed' && age > (input.failedRetentionMs ?? 3600_000)) ||
             row.state === 'landed' || row.state === 'discarded';
         if (expired) {
+            const size = input.log ? lightDirSizeBytes(row.path) : 0;
             const res = await removeLightWorkspace({ path: row.path, checkoutRoot: checkout, baseDir, db: input.db, workspaceId: row.workspaceId, submodules: Object.keys(row.submoduleBases) });
-            if (res.removed) report.removedExpired.push(row.workspaceId);
+            if (res.removed) {
+                report.removedExpired.push(row.workspaceId);
+                input.log?.(`removed light workspace ${row.workspaceId} (${staleReason ?? row.state}, ${formatMiB(size)}, age ${Math.round(age / 60000)} min) at ${row.path}`);
+            }
         }
     }
     if (pruned) await git(checkout, ['worktree', 'prune'], true);
@@ -348,8 +392,12 @@ export async function sweepLightWorkspaces(input: SweepLightWorkspacesInput): Pr
         report.leaked++;
         const age = now - fs.statSync(marker).mtimeMs;
         if (age < (input.orphanGraceMs ?? 3600_000)) continue;
+        const size = input.log ? lightDirSizeBytes(dir) : 0;
         const res = await removeLightWorkspace({ path: dir, checkoutRoot: checkout, baseDir });
-        if (res.removed) report.removedOrphans.push(name);
+        if (res.removed) {
+            report.removedOrphans.push(name);
+            input.log?.(`removed orphan light workspace ${name} (${formatMiB(size)}, marker age ${Math.round(age / 60000)} min) at ${dir}`);
+        }
     }
     return report;
 }
