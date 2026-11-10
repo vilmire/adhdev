@@ -136833,6 +136833,7 @@ ${detail.join("\n")}` : stripped;
             if (matchNumberedChoiceIndex(next) !== null) break;
             if (UNNUMBERED_CHOICE_LINE_RE.test(next)) break;
             if (MODAL_FOOTER_LINE_RE.test(next) || isComposerOrSpinnerOrBulletLine(next, lines[j + 1] ?? "")) break;
+            if (SCROLL_INDICATOR_LINE_RE.test(next)) break;
             if (/^\s*[─╌═━]{8,}\s*$/.test(next)) break;
             if (/^\s*(?:\? for shortcuts|⏵⏵\s+|tab to queue message|⏎\s*send|>\s*$)/i.test(next)) break;
             optEnd = j;
@@ -136896,7 +136897,7 @@ ${detail.join("\n")}` : stripped;
             modalEndRow = r;
             continue;
           }
-          if (/^\s*[─╌═━┃│╭╮╰╯┌┐└┘├┤┬┴┼]+\s*$/.test(line)) {
+          if (/^\s*[─╌═━┃│╭╮╰╯┌┐└┘├┤┬┴┼]+\s*$/.test(line) || SCROLL_INDICATOR_LINE_RE.test(line)) {
             modalEndRow = r;
             continue;
           }
@@ -137075,6 +137076,7 @@ ${detail.join("\n")}` : stripped;
     var PARKED_BELOW_KEY_HINT_RE;
     var PARKED_BELOW_SKIP_ROW_RE;
     var PARKED_BELOW_PROMPT_RE;
+    var SCROLL_INDICATOR_LINE_RE;
     var MAX_WRAPPED_OPTION_ROWS;
     var init_fsm_driver_modal = __esm2({
       "src/providers/spec/fsm-driver-modal.ts"() {
@@ -137094,6 +137096,7 @@ ${detail.join("\n")}` : stripped;
         PARKED_BELOW_KEY_HINT_RE = /\((?:y|n|p|tab|shift\+tab|esc(?:\s+or\s+n)?)\)\s*$/i;
         PARKED_BELOW_SKIP_ROW_RE = /^\s*Skip & tell the agent what to do instead \(esc or n\)\s*$/;
         PARKED_BELOW_PROMPT_RE = /^\s*Run this (?:command|MCP tool)\?\s*$/;
+        SCROLL_INDICATOR_LINE_RE = /^\s*[↑↓⇡⇣▲▼]\s*(?:\d+\s+more\b.*|more\b.*)?$/i;
         MAX_WRAPPED_OPTION_ROWS = 16;
       }
     });
