@@ -204169,7 +204169,7 @@ ${marker2}`,
         const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
         const nodeId = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
         if (!meshId || !nodeId) return { success: false, error: "meshId and nodeId required" };
-        const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "node update", "member");
+        const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "node update", "member", args);
         if (ownerFailure) return ownerFailure;
         try {
           const { updateNode: updateNode2, getMesh: getMesh2 } = await Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports));
@@ -204247,7 +204247,7 @@ ${marker2}`,
         const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
         const nodeId = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
         if (!meshId || !nodeId) return { success: false, error: "meshId and nodeId required" };
-        const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "node removal", "member");
+        const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "node removal", "member", args);
         if (ownerFailure) return ownerFailure;
         try {
           const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
@@ -204607,7 +204607,7 @@ ${marker2}`,
         if (!branch) return { success: false, error: "branch required" };
         const reminderRefusal = await checkCloneAfterIdleReminder(meshId, args);
         if (reminderRefusal) return reminderRefusal;
-        const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "worktree clone", "member");
+        const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "worktree clone", "member", args);
         if (ownerFailure) return ownerFailure;
         const cloneStartedAtMs = Date.now();
         const requestedSyncBudgetMs = Number(args?.syncBudgetMs);
@@ -204934,7 +204934,7 @@ ${marker2}`,
         const nodeId = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
         if (!meshId) return { success: false, error: "meshId required" };
         if (!nodeId) return { success: false, error: "nodeId required" };
-        const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "bootstrap retry", "member");
+        const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "bootstrap retry", "member", args);
         if (ownerFailure) return ownerFailure;
         try {
           const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
@@ -213922,6 +213922,11 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       ].filter((value) => value !== void 0);
       return [...new Set(ids)];
     }
+    function isFromCurrentMeshHost(meshHost, sender) {
+      if (!sender) return false;
+      const declared = [meshHost.hostDaemonId, meshHost.handedOffTo?.daemonId];
+      return declared.some((id4) => typeof id4 === "string" && id4.length > 0 && daemonIdsEquivalent5(id4, sender));
+    }
     var DaemonCommandRouter = class {
       /** Public (not private) so the extracted ./router-refine.ts orchestration can reach it via `self`. */
       deps;
@@ -214193,7 +214198,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           invalidateAggregateMeshStatus: this.invalidateAggregateMeshStatus.bind(this)
         };
       }
-      async requireMeshHostMutationOwner(meshId, inlineMesh, operation, scope2 = "host") {
+      async requireMeshHostMutationOwner(meshId, inlineMesh, operation, scope2 = "host", commandArgs) {
         const meshRecord2 = await this.getMeshForCommand(meshId, inlineMesh, { preferInline: true });
         const durableFailure = durableHandoffAdmissionFailure(meshId, { scope: scope2 });
         if (durableFailure) return durableFailure;
@@ -214201,6 +214206,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (!mesh) return { success: false, error: "Mesh not found" };
         const meshHost = resolveMeshHostStatus(mesh);
         if (!meshHost.canOwnCoordinator || !meshHost.canOwnQueue) {
+          if (scope2 === "member" && isFromCurrentMeshHost(meshHost, readMeshSender(commandArgs))) return null;
           return { ...buildMeshHostRequiredFailure(mesh, operation), success: false, meshId };
         }
         return null;

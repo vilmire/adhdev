@@ -522,7 +522,7 @@ export const meshNodeLifecycleHandlers: Record<string, MedFamilyHandler> = {
         const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
         if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
-        const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'node update', 'member');
+        const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'node update', 'member', args);
         if (ownerFailure) return ownerFailure;
         try {
             const { updateNode, getMesh } = await import('../../config/mesh-config.js');
@@ -652,7 +652,7 @@ export const meshNodeLifecycleHandlers: Record<string, MedFamilyHandler> = {
         const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
         if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
-        const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'node removal', 'member');
+        const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'node removal', 'member', args);
         if (ownerFailure) return ownerFailure;
         try {
             // preferInline so inline-cache-only clone nodes resolve (matches owner check above).

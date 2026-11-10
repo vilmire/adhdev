@@ -51,7 +51,7 @@ import { DaemonCliManager } from './cli-manager.js';
 import type { ProviderLoader } from '../providers/provider-loader.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import { killIdeProcess, isIdeRunning } from '../launch.js';
-import { meshNodeIdMatches } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { SessionRegistry } from '../sessions/registry.js';
 import type { SessionLifecycleBus } from '../sessions/lifecycle-bus.js';
 import { LOG } from '../logging/logger.js';
@@ -297,6 +297,13 @@ function meshIdsRevealedByCommandArgs(args: unknown): string[] {
 }
 
 export { buildMemberJoinNode } from './router-member-join.js';
+
+/** True when the authenticated mesh sender is the host a member's mesh record declares (or handed off to). */
+function isFromCurrentMeshHost(meshHost: { hostDaemonId?: string; handedOffTo?: { daemonId: string } }, sender: string): boolean {
+    if (!sender) return false;
+    const declared = [meshHost.hostDaemonId, meshHost.handedOffTo?.daemonId];
+    return declared.some(id => typeof id === 'string' && id.length > 0 && daemonIdsEquivalent(id, sender));
+}
 
 export class DaemonCommandRouter {
     /** Public (not private) so the extracted ./router-refine.ts orchestration can reach it via `self`. */
@@ -576,7 +583,7 @@ export class DaemonCommandRouter {
         };
     }
 
-    private async requireMeshHostMutationOwner(meshId: string, inlineMesh: unknown, operation: string, scope: HandoffAdmissionScope = 'host'): Promise<CommandRouterResult | null> {
+    private async requireMeshHostMutationOwner(meshId: string, inlineMesh: unknown, operation: string, scope: HandoffAdmissionScope = 'host', commandArgs?: unknown): Promise<CommandRouterResult | null> {
         const meshRecord = await this.getMeshForCommand(meshId, inlineMesh, { preferInline: true });
         const durableFailure = durableHandoffAdmissionFailure(meshId, { scope });
         if (durableFailure) return durableFailure;
@@ -584,6 +591,13 @@ export class DaemonCommandRouter {
         if (!mesh) return { success: false, error: 'Mesh not found' };
         const meshHost = resolveMeshHostStatus(mesh);
         if (!meshHost.canOwnCoordinator || !meshHost.canOwnQueue) {
+            // Member-scope operations act on THIS daemon's own node. A member (including a
+            // former host that handed the mesh over) performs them when the mesh's CURRENT
+            // host asks: the host's handler forwards the clone/update/removal to the node's
+            // owning daemon, and the receiving member's own config record says role
+            // 'member'. The sender is the transport-stamped authenticated peer, never a
+            // payload claim, and must be the host this record declares (or handed off to).
+            if (scope === 'member' && isFromCurrentMeshHost(meshHost, readMeshSender(commandArgs))) return null;
             return { ...buildMeshHostRequiredFailure(mesh, operation), success: false, meshId };
         }
         return null;
