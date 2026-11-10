@@ -435,9 +435,18 @@ function commit(
     text?: { summary?: SummaryRef; textEventId?: string },
 ): void {
     const attempt = draft.attempt!;
+    // A Claude quota wait is recoverable on another available provider. Queue
+    // attempts reuse the existing reclaim path, which releases only AFTER the
+    // exact writer checkpoint; direct attempts notify their coordinator instead.
+    if (attempt.providerType === 'claude-cli' && reason === 'provider_usage_limit_exceeded'
+        && attempt.scope === 'mesh_queue') {
+        reclaim(draft, reason);
+        return;
+    }
     if (isMeshScope(attempt) && !attempt.data.writerStop?.confirmed && !settleIdleReportOwed(draft.ctx) && (reason === 'hard_ceiling'
         || draft.ctx.evidence.kind === 'cancel' || draft.ctx.evidence.kind === 'operator_status'
-        || draft.ctx.evidence.kind === 'session_error' || draft.ctx.evidence.kind === 'process_exit')) {
+        || draft.ctx.evidence.kind === 'session_error' || draft.ctx.evidence.kind === 'process_exit'
+        || (attempt.providerType === 'claude-cli' && reason === 'provider_usage_limit_exceeded'))) {
         beginWriterStop(draft, reason);
         // A commit carrying its own text (a recorded report, R20r) keeps it across the stop.
         const stopSummary = text ? text.summary : summaryOf(draft.ctx.evidence);

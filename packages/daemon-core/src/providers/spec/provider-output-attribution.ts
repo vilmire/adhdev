@@ -160,15 +160,20 @@ export function classifyOwnQuotaFailureOnlyReply(cliType: string, reply: string)
  * Claude Code's own usage-limit status line, as captured in real session transcripts (2026-10-26..11-03, system
  * messages): `Usage limit reached · continuing automatically at 5:30pm · esc to cancel`, also
  * `Usage limit reached again · …`. WHOLE-reply match only: the line is provider chrome, so assistant prose that
- * merely mentions a limit never matches. No other wording is recognised - an earlier draft guessed at
- * "Your limit will reset at…" / "You've hit your limit" banners that no captured transcript contains.
+ * merely mentions a limit never matches. Also accepts the weekly-limit and limit-resets
+ * chrome captured on 2026-11-10. A timezone-only weekly reset retains no guessed epoch.
  * Returns the reset time (epoch ms; the CLI prints machine-local clock time without a date, so it is the next
  * occurrence after `now`), or `{}` when the clock time cannot be read.
  */
 export function parseClaudeUsageLimitBanner(reply: string, now: number = Date.now()): { resetsAt?: number } | null {
-    if (reply.length > 200) return null;
+    if (reply.length > 512) return null;
     const text = stripAnsi(reply).replace(/\s+/g, ' ').trim();
-    const m = /^Usage limit reached(?: again)? · continuing automatically at (\d{1,2})(?::(\d{2}))?\s?([ap])m · esc to cancel$/i.exec(text);
+    // Captured weekly-limit chrome (2026-11-10). Keep whole-reply authority;
+    // timezone/date wording is retained by the runtime observer, never a release signal.
+    const weekly = /^You've hit your weekly limit · resets \d{1,2}(?::\d{2})?\s?[ap]m \([A-Za-z_]+\/[A-Za-z_]+\)$/i.test(text);
+    if (weekly) return {};
+    const resetOnly = /^Usage limit reached · limit resets (\d{1,2})(?::(\d{2}))?\s?([ap])m$/i.exec(text);
+    const m = resetOnly ?? /^Usage limit reached(?: again)? · continuing automatically at (\d{1,2})(?::(\d{2}))?\s?([ap])m · esc to cancel$/i.exec(text);
     if (!m) return null;
     const hour12 = Number(m[1]), minute = Number(m[2] ?? '0');
     if (hour12 < 1 || hour12 > 12 || minute > 59) return {};

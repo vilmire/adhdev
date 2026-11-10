@@ -49,6 +49,8 @@ export interface CliRateLimitEvidence {
      * is split into pools; the hold then binds that pool alone (stored under metadata.cliRateLimitPools).
      */
     pool?: string;
+    /** Exact live Claude screen: retained across unknown refreshes and elapsed resets. */
+    runtime?: { sessionId: string; screenHash: string; resetText: string };
 }
 
 type HoldWindow = { usedPercent?: number | null; resetsAt?: number | null } | null | undefined;
@@ -90,12 +92,18 @@ export function windowResetUnconfirmed(
     return null;
 }
 
+function runtimeEvidence(raw: unknown): Pick<CliRateLimitEvidence, 'runtime'> {
+    const runtime = (raw as CliRateLimitEvidence | null)?.runtime;
+    return runtime && typeof runtime.sessionId === 'string' && typeof runtime.screenHash === 'string'
+        && typeof runtime.resetText === 'string' ? { runtime } : {};
+}
+
 function parseEvidence(raw: unknown, pool?: string): CliRateLimitEvidence | null {
     if (!raw || typeof raw !== 'object') return null;
     const observedAt = Number((raw as { observedAt?: unknown }).observedAt);
     if (!Number.isFinite(observedAt) || observedAt <= 0) return null;
     const resetsAt = Number((raw as { resetsAt?: unknown }).resetsAt);
-    return { observedAt, ...(Number.isFinite(resetsAt) && resetsAt > 0 ? { resetsAt } : {}), ...(pool ? { pool } : {}) };
+    return { observedAt, ...(Number.isFinite(resetsAt) && resetsAt > 0 ? { resetsAt } : {}), ...(pool ? { pool } : {}), ...runtimeEvidence(raw) };
 }
 
 /** Pool-scoped CLI reports, keyed by pool id. */
@@ -117,7 +125,7 @@ export function readCliRateLimitEvidence(quota: Pick<MeshNodeFactsProviderQuota,
     const observedAt = Number((raw as { observedAt?: unknown }).observedAt);
     if (!Number.isFinite(observedAt) || observedAt <= 0) return null;
     const resetsAt = Number((raw as { resetsAt?: unknown }).resetsAt);
-    return { observedAt, ...(Number.isFinite(resetsAt) && resetsAt > 0 ? { resetsAt } : {}) };
+    return { observedAt, ...(Number.isFinite(resetsAt) && resetsAt > 0 ? { resetsAt } : {}), ...runtimeEvidence(raw) };
 }
 
 function minRemaining(quota: MeshNodeFactsProviderQuota, pool?: string): number | undefined {
@@ -135,8 +143,10 @@ function minRemaining(quota: MeshNodeFactsProviderQuota, pool?: string): number 
  * reset when there is one, otherwise with real headroom on every window.
  */
 export function cliRateLimitHoldActive(evidence: CliRateLimitEvidence, quota: MeshNodeFactsProviderQuota): boolean {
+    if (evidence.runtime && evidence.resetsAt === undefined) return true;
     if (quota.status !== 'ok' || !(Number(quota.updatedAt) > evidence.observedAt)) return true;
-    if (evidence.resetsAt !== undefined) return Number(quota.updatedAt) < evidence.resetsAt;
+    if (evidence.resetsAt !== undefined && Number(quota.updatedAt) < evidence.resetsAt) return true;
+    if (!evidence.runtime && evidence.resetsAt !== undefined) return false;
     const left = minRemaining(quota, evidence.pool);
     return left === undefined || left < CLI_RATE_LIMIT_CLEAR_MIN_PERCENT;
 }
@@ -182,5 +192,7 @@ export function withCliRateLimitEvidence(
         const pools = { ...readPoolCliRateLimitEvidence(base), [evidence.pool]: evidence };
         return { ...base, metadata: { ...base.metadata, cliRateLimitPools: stripPools(pools) } };
     }
-    return { ...base, metadata: { ...base.metadata, cliRateLimit: evidence } };
+    return { ...base, metadata: { ...base.metadata, cliRateLimit: {
+        ...readCliRateLimitEvidence(base), ...evidence,
+    } } };
 }

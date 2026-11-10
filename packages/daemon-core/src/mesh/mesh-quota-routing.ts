@@ -434,7 +434,7 @@ export function evaluateProviderQuotaGate(
     // window) the hold lifts; a session that hits the limit again simply records new evidence.
     // A grace past the reset keeps a measurement that is about to arrive in charge (no flapping at the reset).
     const unmeasurable = quota.status !== 'ok';
-    const pastResetGrace = (ev: Parameters<typeof cliRateLimitResetPassed>[0]) => unmeasurable && cliRateLimitResetPassed(ev, now - UNMEASURABLE_RESET_GRACE_MS);
+    const pastResetGrace = (ev: Parameters<typeof cliRateLimitResetPassed>[0]) => !ev.runtime && unmeasurable && cliRateLimitResetPassed(ev, now - UNMEASURABLE_RESET_GRACE_MS);
     if (cliEvidence && cliRateLimitHoldActive(cliEvidence, quota) && !pastResetGrace(cliEvidence)) {
         const resetPassed = cliRateLimitResetPassed(cliEvidence, now);
         return {

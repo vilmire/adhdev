@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { completionIdentityCurrent, type CompletionBindingHost } from './native-completion-binding.js';
 /**
  * The completed-debounce flush interpreter (verbatim move out of
@@ -380,17 +381,14 @@ export function emitGeneratingCompleted(host: CompletionEmitHost, opts: {
             // A provider whose account is split into model pools records the limit against the running model's
             // pool only, so the other pool keeps routing (quota-pools.ts). Unknown model → provider-wide, as before.
             const pool = quotaPoolsOf(host.type).length ? sessionQuotaPool(host) : undefined;
-            recordCliRateLimitEvidence(host.type, { observedAt, ...(resetsAt ? { resetsAt } : {}), ...(pool ? { pool } : {}) });
+            recordCliRateLimitEvidence(host.type, { observedAt, ...(resetsAt ? { resetsAt } : {}), ...(pool ? { pool } : {}),
+                ...(host.type === 'claude-cli' ? { runtime: { sessionId: host.instanceId,
+                    screenHash: createHash('sha256').update(summary).digest('hex'), resetText: summary } } : {}),
+            });
         } catch { /* evidence is best-effort */ }
     }
-    // Claude Code's banner says it CONTINUES AUTOMATICALLY at the reset time: the turn is paused, not ended.
-    // Ending the attempt here (R9f -> failed) would fail the task while the same session resumes on its own and
-    // writes outside any attempt (a ghost writer), and it would also remove the task from `assigned`, so the owner
-    // would never get the switch-or-wait card. The exhaustion evidence above is enough: the task stays assigned,
-    // routing holds the provider, the owner is offered the switch, and a resumed turn finishes inside the attempt.
-    // Nothing else of the completion bookkeeping runs either, so the REAL completion later is not suppressed.
-    if (host.type === 'claude-cli' && summary && !classifyOwnAuthFailureOnlyReply(host.type, summary)
-        && classifyOwnQuotaFailureOnlyReply(host.type, summary) === 'usage_limit_exceeded') return;
+    // Claude's paused CLI is still a writer. R9f uses the same supported
+    // writer-stop checkpoint as the runtime screen path before publishing failure.
     // Classification input only (NOT pushed to the wire — C-W5c deleted the
     // legacy `agent:generating_completed` construction; `isWeakCompletionEvidence`
     // just needs the same shape it always read).

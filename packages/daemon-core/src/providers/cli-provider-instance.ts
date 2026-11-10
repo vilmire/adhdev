@@ -56,6 +56,7 @@ import { evaluateFinalizationBlock, type CompletionArmPatch, type CompletionFlus
 import { createSqliteProbeCache, probeSessionIdFromConfig } from './completion/transcript-probe.js';
 import * as approvalGate from './completion/approval-gate.js';
 import * as evidence from './completion/evidence.js';
+import { observeRuntimeQuota } from './completion/runtime-quota.js';
 import { runStatusTransitionTick } from './completion/status-transition.js';
 import type { SessionEventPort } from './provider-event-port.js';
 import { scanModelFallback } from './cli-provider-model-fallback.js';
@@ -410,6 +411,7 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     async onTick(): Promise<void> {
+        observeRuntimeQuota(this);
         if (this.type === 'codex-cli' && this.adapter.getInteractivePromptTransport?.() !== 'wire' && this.lastStatus === 'generating') this.detectStatusTransition();
         scanModelFallback(this);
         if (this.providerSessionId) return;

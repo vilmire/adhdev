@@ -36323,12 +36323,16 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
       }
       return null;
     }
+    function runtimeEvidence(raw) {
+      const runtime2 = raw?.runtime;
+      return runtime2 && typeof runtime2.sessionId === "string" && typeof runtime2.screenHash === "string" && typeof runtime2.resetText === "string" ? { runtime: runtime2 } : {};
+    }
     function parseEvidence(raw, pool) {
       if (!raw || typeof raw !== "object") return null;
       const observedAt = Number(raw.observedAt);
       if (!Number.isFinite(observedAt) || observedAt <= 0) return null;
       const resetsAt = Number(raw.resetsAt);
-      return { observedAt, ...Number.isFinite(resetsAt) && resetsAt > 0 ? { resetsAt } : {}, ...pool ? { pool } : {} };
+      return { observedAt, ...Number.isFinite(resetsAt) && resetsAt > 0 ? { resetsAt } : {}, ...pool ? { pool } : {}, ...runtimeEvidence(raw) };
     }
     function readPoolCliRateLimitEvidence(quota) {
       const raw = quota?.metadata?.cliRateLimitPools;
@@ -36346,7 +36350,7 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
       const observedAt = Number(raw.observedAt);
       if (!Number.isFinite(observedAt) || observedAt <= 0) return null;
       const resetsAt = Number(raw.resetsAt);
-      return { observedAt, ...Number.isFinite(resetsAt) && resetsAt > 0 ? { resetsAt } : {} };
+      return { observedAt, ...Number.isFinite(resetsAt) && resetsAt > 0 ? { resetsAt } : {}, ...runtimeEvidence(raw) };
     }
     function minRemaining(quota, pool) {
       const buckets = Array.isArray(quota.buckets) ? quota.buckets : [];
@@ -36355,8 +36359,10 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
       return values.length ? Math.min(...values) : void 0;
     }
     function cliRateLimitHoldActive(evidence, quota) {
+      if (evidence.runtime && evidence.resetsAt === void 0) return true;
       if (quota.status !== "ok" || !(Number(quota.updatedAt) > evidence.observedAt)) return true;
-      if (evidence.resetsAt !== void 0) return Number(quota.updatedAt) < evidence.resetsAt;
+      if (evidence.resetsAt !== void 0 && Number(quota.updatedAt) < evidence.resetsAt) return true;
+      if (!evidence.runtime && evidence.resetsAt !== void 0) return false;
       const left = minRemaining(quota, evidence.pool);
       return left === void 0 || left < CLI_RATE_LIMIT_CLEAR_MIN_PERCENT;
     }
@@ -36395,7 +36401,10 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
         const pools = { ...readPoolCliRateLimitEvidence(base), [evidence.pool]: evidence };
         return { ...base, metadata: { ...base.metadata, cliRateLimitPools: stripPools(pools) } };
       }
-      return { ...base, metadata: { ...base.metadata, cliRateLimit: evidence } };
+      return { ...base, metadata: { ...base.metadata, cliRateLimit: {
+        ...readCliRateLimitEvidence(base),
+        ...evidence
+      } } };
     }
     var QUOTA_HARD_EXHAUSTED_PERCENT;
     var CLI_RATE_LIMIT_CLEAR_MIN_PERCENT;
@@ -53218,7 +53227,11 @@ ${rendered.join("\n\n")}`,
     }
     function commit(draft, outcome, strength, reason, text10) {
       const attempt = draft.attempt;
-      if (isMeshScope2(attempt) && !attempt.data.writerStop?.confirmed && !settleIdleReportOwed(draft.ctx) && (reason === "hard_ceiling" || draft.ctx.evidence.kind === "cancel" || draft.ctx.evidence.kind === "operator_status" || draft.ctx.evidence.kind === "session_error" || draft.ctx.evidence.kind === "process_exit")) {
+      if (attempt.providerType === "claude-cli" && reason === "provider_usage_limit_exceeded" && attempt.scope === "mesh_queue") {
+        reclaim(draft, reason);
+        return;
+      }
+      if (isMeshScope2(attempt) && !attempt.data.writerStop?.confirmed && !settleIdleReportOwed(draft.ctx) && (reason === "hard_ceiling" || draft.ctx.evidence.kind === "cancel" || draft.ctx.evidence.kind === "operator_status" || draft.ctx.evidence.kind === "session_error" || draft.ctx.evidence.kind === "process_exit" || attempt.providerType === "claude-cli" && reason === "provider_usage_limit_exceeded")) {
         beginWriterStop(draft, reason);
         const stopSummary = text10 ? text10.summary : summaryOf(draft.ctx.evidence);
         attempt.data.writerStop.terminal = {
@@ -72659,7 +72672,7 @@ ${mergeTreeErr?.stderr || ""}`;
       const { facts, quota } = entry;
       const cliEvidence = readCliRateLimitEvidence(quota);
       const unmeasurable = quota.status !== "ok";
-      const pastResetGrace = (ev) => unmeasurable && cliRateLimitResetPassed(ev, now - UNMEASURABLE_RESET_GRACE_MS);
+      const pastResetGrace = (ev) => !ev.runtime && unmeasurable && cliRateLimitResetPassed(ev, now - UNMEASURABLE_RESET_GRACE_MS);
       if (cliEvidence && cliRateLimitHoldActive(cliEvidence, quota) && !pastResetGrace(cliEvidence)) {
         const resetPassed = cliRateLimitResetPassed(cliEvidence, now);
         return {
@@ -165245,7 +165258,7 @@ ${defangRelayBody(text10)}`;
   session_id TEXT NOT NULL,daemon_id TEXT NOT NULL,pid INTEGER NOT NULL,boot_nonce TEXT NOT NULL,
   state TEXT NOT NULL,outcome TEXT,revision INTEGER NOT NULL,updated_at INTEGER NOT NULL)`);
       function begin(entry, sessionId) {
-        const operationId = (0, import_node_crypto84.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
+        const operationId = (0, import_node_crypto86.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
         db3.prepare("INSERT INTO turn_notice_submit_metadata VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)").run(operationId, messageId, entry.meshId, entry.writer, entry.seq, sessionId, ledger.selfDaemonId, process.pid, MAINTENANCE_BOOT_NONCE, "intent", null, 1, Date.now());
         const update = (state2, outcome) => {
           db3.prepare("UPDATE turn_notice_submit_metadata SET state=?,outcome=COALESCE(?,outcome),revision=revision+1,updated_at=? WHERE operation_id=? AND state!='submitted'").run(state2, outcome ?? null, Date.now(), operationId);
@@ -165255,7 +165268,7 @@ ${defangRelayBody(text10)}`;
       return {
         begin,
         async handling(run5) {
-          const id4 = (0, import_node_crypto84.randomUUID)();
+          const id4 = (0, import_node_crypto86.randomUUID)();
           active.add(id4);
           try {
             return await run5();
@@ -165301,11 +165314,11 @@ ${defangRelayBody(text10)}`;
       }
       return v?.state === "not_consumed" && v.retries < 1 ? "allowed_once_proven_not_consumed" : "requires_exact_not_consumed_proof";
     }
-    var import_node_crypto84;
+    var import_node_crypto86;
     var init_notice_submit_inventory = __esm2({
       "src/mesh/turn-ledger/notice-submit-inventory.ts"() {
         "use strict";
-        import_node_crypto84 = require("crypto");
+        import_node_crypto86 = require("crypto");
         init_cooperative_gate();
         init_input_consume_ack();
       }
@@ -224050,9 +224063,12 @@ ${text10}` : text10;
       return /^(?:… \d+ more actions \([\d a-z,:]+\) … )?⚠ Individual quota reached\. Please upgrade your subscription to increase your limits\. Resets in (?:\d+h)?(?:\d+m)?\d+s\.(?: Error ID: [a-f0-9-]{8,80})?$/i.test(text10) ? "usage_limit_exceeded" : null;
     }
     function parseClaudeUsageLimitBanner(reply2, now = Date.now()) {
-      if (reply2.length > 200) return null;
+      if (reply2.length > 512) return null;
       const text10 = stripAnsi3(reply2).replace(/\s+/g, " ").trim();
-      const m = /^Usage limit reached(?: again)? · continuing automatically at (\d{1,2})(?::(\d{2}))?\s?([ap])m · esc to cancel$/i.exec(text10);
+      const weekly = /^You've hit your weekly limit · resets \d{1,2}(?::\d{2})?\s?[ap]m \([A-Za-z_]+\/[A-Za-z_]+\)$/i.test(text10);
+      if (weekly) return {};
+      const resetOnly = /^Usage limit reached · limit resets (\d{1,2})(?::(\d{2}))?\s?([ap])m$/i.exec(text10);
+      const m = resetOnly ?? /^Usage limit reached(?: again)? · continuing automatically at (\d{1,2})(?::(\d{2}))?\s?([ap])m · esc to cancel$/i.exec(text10);
       if (!m) return null;
       const hour12 = Number(m[1]), minute = Number(m[2] ?? "0");
       if (hour12 < 1 || hour12 > 12 || minute > 59) return {};
@@ -227547,6 +227563,70 @@ ${buttons.join("\n")}`;
       return fromSnapshot || void 0;
     }
     var import_node_crypto83 = require("crypto");
+    init_refresh();
+    init_provider_failure_classifier();
+    init_turn_evidence_port();
+    function claudeRuntimeQuotaScreen(screen) {
+      const clean3 = stripAnsi3(screen).replace(/\r\n?/g, "\n");
+      const filtered = new Set(stripToolAndCodeLines(clean3).split("\n"));
+      const lines = clean3.split("\n").filter((line) => line.trim());
+      const banners = lines.slice(-8).filter((line, index, tail) => (
+        // A literal example introduced by prose has no provider-chrome authority.
+        !(index > 0 && /:\s*$/.test(tail[index - 1])) && /^[ ]{0,2}(?:You've hit your weekly limit|Usage limit reached)/.test(line) && filtered.has(line) && parseClaudeUsageLimitBanner(line)
+      ));
+      return banners.length ? banners.map((line) => line.trim()).join("\n") : null;
+    }
+    var emitted = /* @__PURE__ */ new WeakMap();
+    function observeRuntimeQuota(host, now = Date.now()) {
+      if (host.type !== "claude-cli" || !host.turnEvidencePort || !host.isMeshWorkerSession()) return false;
+      const ref2 = host.currentAttemptRef?.();
+      if (!ref2) return false;
+      let snapshot;
+      try {
+        const status = host.adapter.getStatus?.({ allowParse: false });
+        if (status?.activeModal || status?.activeInteractivePrompt) return false;
+        snapshot = host.adapter.getTerminalScreenSnapshot?.();
+      } catch {
+        return false;
+      }
+      if (snapshot?.truncated) return false;
+      const screen = snapshot?.text;
+      if (!screen) return false;
+      const banners = claudeRuntimeQuotaScreen(screen);
+      if (!banners) return false;
+      const key7 = `${ref2.attemptId}:${ref2.generation}`;
+      const screenHash = snapshot?.hash || (0, import_node_crypto83.createHash)("sha256").update(screen).digest("hex");
+      const resetsAt = banners.split("\n").map((line) => parseClaudeUsageLimitBanner(line, now)?.resetsAt).find((at) => at !== void 0);
+      recordCliRateLimitEvidence(host.type, {
+        observedAt: now,
+        ...resetsAt ? { resetsAt } : {},
+        runtime: { sessionId: host.instanceId, screenHash, resetText: banners }
+      });
+      if (emitted.get(host) === key7) return true;
+      emitted.set(host, key7);
+      emitTurnEnd(host.turnEvidencePort, {
+        sessionId: host.instanceId,
+        attemptRef: ref2,
+        at: now,
+        observedBy: "claude_runtime_quota",
+        source: "fsm_edge",
+        strength: "genuine",
+        providerFailure: "usage_limit_exceeded",
+        envelope: {
+          finalSummary: banners,
+          providerType: host.type,
+          notice: { completionMetadata: {
+            diagnosticReason: "quota_blocked",
+            screenHash,
+            providerSessionId: host.providerSessionId,
+            resetsAt,
+            observedAt: now
+          } }
+        }
+      });
+      return true;
+    }
+    var import_node_crypto84 = require("crypto");
     var BUSY_BLIP_DAMP_MS = 2e3;
     var blipSince = /* @__PURE__ */ new WeakMap();
     function dampBusyBlip(host, now) {
@@ -227752,7 +227832,7 @@ ${buttons.join("\n")}`;
               now
             );
             const providerApproval = adapterStatus?.waitKind === "external" || adapterStatus?.providerApproval?.lifecycle !== "pending" ? null : adapterStatus.providerApproval;
-            const approvalModalKey = providerApproval?.modalKey ?? `modal:${(0, import_node_crypto83.randomUUID)()}`;
+            const approvalModalKey = providerApproval?.modalKey ?? `modal:${(0, import_node_crypto84.randomUUID)()}`;
             host.lastApprovalModalKey = approvalModalKey;
             const approvalEvidence = providerApproval?.evidence ?? (adapterStatus?.waitKind === "external" ? "live" : void 0);
             host.pushEvent({
@@ -229008,6 +229088,7 @@ ${buttons.join("\n")}`;
         host.appliedEffectKeys = new Set(Array.from(host.appliedEffectKeys).slice(-100));
       }
     }
+    var import_node_crypto85 = require("crypto");
     init_dist();
     init_logger();
     init_mesh_event_trace();
@@ -229218,11 +229299,19 @@ ${buttons.join("\n")}`;
           const observedAt = Date.now();
           const resetsAt = host.type === "claude-cli" ? parseClaudeUsageLimitBanner(summary, observedAt)?.resetsAt : void 0;
           const pool = quotaPoolsOf(host.type).length ? sessionQuotaPool(host) : void 0;
-          recordCliRateLimitEvidence(host.type, { observedAt, ...resetsAt ? { resetsAt } : {}, ...pool ? { pool } : {} });
+          recordCliRateLimitEvidence(host.type, {
+            observedAt,
+            ...resetsAt ? { resetsAt } : {},
+            ...pool ? { pool } : {},
+            ...host.type === "claude-cli" ? { runtime: {
+              sessionId: host.instanceId,
+              screenHash: (0, import_node_crypto85.createHash)("sha256").update(summary).digest("hex"),
+              resetText: summary
+            } } : {}
+          });
         } catch {
         }
       }
-      if (host.type === "claude-cli" && summary && !classifyOwnAuthFailureOnlyReply(host.type, summary) && classifyOwnQuotaFailureOnlyReply(host.type, summary) === "usage_limit_exceeded") return;
       const completionEvidenceInput = {
         chatTitle: opts.chatTitle,
         duration: opts.duration,
@@ -230001,8 +230090,8 @@ ${buttons.join("\n")}`;
     function finalSummaryProvenanceDiagnostic(host, emittedSummary) {
       const provenance = host.lastFinalSummaryProvenance;
       if (!provenance) return {};
-      const emitted = typeof emittedSummary === "string" ? emittedSummary : "";
-      if (emitted.length !== provenance.contentLength) return {};
+      const emitted2 = typeof emittedSummary === "string" ? emittedSummary : "";
+      if (emitted2.length !== provenance.contentLength) return {};
       return {
         finalSummarySource: provenance.source,
         ...provenance.mayBeTruncated ? { finalSummaryMayBeTruncated: true } : {}
@@ -230282,6 +230371,7 @@ ${buttons.join("\n")}`;
         });
       }
       async onTick() {
+        observeRuntimeQuota(this);
         if (this.type === "codex-cli" && this.adapter.getInteractivePromptTransport?.() !== "wire" && this.lastStatus === "generating") this.detectStatusTransition();
         scanModelFallback(this);
         if (this.providerSessionId) return;
@@ -234556,7 +234646,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       let draining = false;
       let closed = false;
       let anonymousCount = 0;
-      let emitted = 0;
+      let emitted2 = 0;
       const emittedByKind = zeroByKind();
       let handlerErrors = 0;
       const handlerErrorsBySubscriber = {};
@@ -234624,7 +234714,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           rejectedAfterClose += 1;
           return;
         }
-        emitted += 1;
+        emitted2 += 1;
         emittedByKind[event.kind] += 1;
         queue.push(event);
         if (draining) return;
@@ -234674,7 +234764,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
             if (sub.async) asyncPending[sub.name] = (asyncPending[sub.name] ?? 0) + sub.pending.length;
           }
           return {
-            emitted,
+            emitted: emitted2,
             emittedByKind: { ...emittedByKind },
             handlerErrors,
             handlerErrorsBySubscriber: { ...handlerErrorsBySubscriber },
