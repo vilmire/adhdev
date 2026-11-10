@@ -182587,7 +182587,7 @@ ${output}` : "";
       } catch {
         return null;
       }
-      const base = known && known.stamp.ino === stamp2.ino && stamp2.dbSize >= known.stamp.dbSize ? known : null;
+      let base = known && known.stamp.ino === stamp2.ino && stamp2.dbSize >= known.stamp.dbSize ? known : null;
       let rows = null;
       for (let attempt = 1; attempt <= AGY_DB_MAX_ATTEMPTS; attempt++) {
         let db3;
@@ -182606,6 +182606,10 @@ ${output}` : "";
             columns = /* @__PURE__ */ new Set();
           }
           const extra = ["task_details", "status"].filter((c) => columns.has(c)).map((c) => `, ${c}`).join("");
+          if (base && base.cursor >= 0) {
+            const anchor2 = db3.prepare("SELECT step_type, length(CAST(step_payload AS BLOB)) AS payload_bytes FROM steps WHERE idx = ?").get(base.cursor);
+            if (!anchor2 || lifecycleAnchor(anchor2.step_type, anchor2.payload_bytes) !== base.anchor) base = null;
+          }
           rows = db3.prepare(
             `SELECT idx, step_type, step_payload${extra}
              FROM steps
@@ -182640,11 +182644,13 @@ ${output}` : "";
       const settled = base?.settled ?? [];
       const live = [];
       let cursor = base?.cursor ?? -1;
+      let anchor = base?.anchor ?? "";
       let contiguous = true;
       for (const row2 of rows) {
         if (contiguous && typeof row2.status === "number" && AGY_LIFECYCLE_SETTLED_STATUSES.has(row2.status)) {
           appendLifecycleSteps(row2, settled);
           cursor = row2.idx;
+          anchor = lifecycleAnchor(row2.step_type, row2.step_payload == null ? null : Buffer.byteLength(row2.step_payload));
         } else {
           contiguous = false;
           appendLifecycleSteps(row2, live);
@@ -182654,8 +182660,11 @@ ${output}` : "";
       const result = sawRows ? [...settled, ...live] : null;
       lifecycleCache.delete(filePath2);
       if (lifecycleCache.size >= LIFECYCLE_CACHE_MAX_FILES) lifecycleCache.delete(lifecycleCache.keys().next().value);
-      lifecycleCache.set(filePath2, { stamp: stamp2, settled, cursor, sawRows, result });
+      lifecycleCache.set(filePath2, { stamp: stamp2, settled, cursor, anchor, sawRows, result });
       return result;
+    }
+    function lifecycleAnchor(stepType, payloadBytes) {
+      return `${Number(stepType)}:${typeof payloadBytes === "number" ? payloadBytes : -1}`;
     }
     function appendLifecycleSteps(row2, out) {
       if (row2.step_type === AGY_STEP_TYPE_USER) {

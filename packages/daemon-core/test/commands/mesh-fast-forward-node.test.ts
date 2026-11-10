@@ -629,4 +629,6 @@ it('round4 P1-C: exact mapped approval permits a clean public workspace push and
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-useSyntheticPublicPushPatterns()
+// Explicit committed identity policy (product default is none) so the
+// foreign-identity control in the P1-C case still blocks.
+useSyntheticPublicPushPatterns(undefined, { identity: { name: 'vilmire', email: 'vilmire@users.noreply.github.com' } })

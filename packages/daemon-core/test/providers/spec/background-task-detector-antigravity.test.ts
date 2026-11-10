@@ -59,6 +59,7 @@ import type {
     CompletionPolicy,
     CompletionSignalReader,
 } from '../../../src/providers/completion/completion-engine.js';
+import { __resetTaskLifecycleCacheForTests } from '../../../src/providers/native-history/antigravity-conversation-db.js';
 import type { AgyTaskLifecycleStep } from '../../../src/providers/native-history/antigravity-conversation-db.js';
 
 // Isolated fake HOME.
@@ -291,6 +292,10 @@ function preflightWith(bg: { active: boolean; count?: number }, opts: { now: num
 beforeEach(() => {
     fs.rmSync(fakeHome(), { recursive: true, force: true });
     fs.mkdirSync(fakeHome(), { recursive: true });
+    // Every case rebuilds the store at the same path. The reader's per-file
+    // cursor is module state, and on Linux the rebuilt file gets the freed
+    // inode number back, so a cursor left by the previous case must not survive.
+    __resetTaskLifecycleCacheForTests();
 });
 
 afterEach(() => {

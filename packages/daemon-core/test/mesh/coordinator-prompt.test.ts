@@ -1,10 +1,15 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { CANONICAL_MESH_TOOL_NAMES, CANONICAL_MESH_TOOL_COUNT, RETIRED_MESH_TOOLS, WORKER_TOOLS, renderCoordinatorWorkerSection } from '@adhdev/mesh-shared'
 import { buildCoordinatorSystemPrompt } from '../../src/mesh/coordinator-prompt.js'
 
-const THIS_REPO_RULES = readFileSync(join(import.meta.dirname, '../../../../../.adhdev/coordinator-rules.md'), 'utf8')
+// The monorepo that embeds this package as a submodule keeps its own coordinator
+// rules five levels up. A standalone checkout of this repository has no such
+// file, so the one case that needs it is skipped there instead of failing the
+// whole file at import time.
+const THIS_REPO_RULES_PATH = join(import.meta.dirname, '../../../../../.adhdev/coordinator-rules.md')
+const THIS_REPO_RULES = existsSync(THIS_REPO_RULES_PATH) ? readFileSync(THIS_REPO_RULES_PATH, 'utf8') : null
 
 describe('Repo Mesh coordinator prompt', () => {
   it('uses default policy for cloud inline meshes that omit policy/coordinator fields', () => {
@@ -688,7 +693,7 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('Converge branches')
   })
 
-  it('treats submodule reachability failures as publish-needed blocked review', () => {
+  it.skipIf(THIS_REPO_RULES === null)('treats submodule reachability failures as publish-needed blocked review', () => {
     const prompt = buildCoordinatorSystemPrompt({
       mesh: {
         id: 'mesh_1',
@@ -707,7 +712,7 @@ describe('Repo Mesh coordinator prompt', () => {
         createdAt: '2026-01-01T00:00:00Z',
         updatedAt: '2026-01-01T00:00:00Z',
       } as any,
-      repoRules: { text: THIS_REPO_RULES, source: 'repo', differsFromBundled: true },
+      repoRules: { text: THIS_REPO_RULES!, source: 'repo', differsFromBundled: true },
     })
 
     expect(prompt).toContain('require each submodule commit to be reachable from the configured submodule remote main branch')

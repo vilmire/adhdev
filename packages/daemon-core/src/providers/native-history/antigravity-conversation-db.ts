@@ -551,8 +551,12 @@ export function readTaskLifecycleSteps(filePath: string): AgyTaskLifecycleStep[]
     // Native binding unavailable — same degradation as parseConversationDb.
     return null;
   }
-  // A replaced or shrunken store (VACUUM, rewrite) has no reusable cursor.
-  const base = known && known.stamp.ino === stamp.ino && stamp.dbSize >= known.stamp.dbSize ? known : null;
+  // A replaced or shrunken store (VACUUM, rewrite) has no reusable cursor. The
+  // file address alone cannot prove "same store": Linux hands a just-freed inode
+  // number straight to the next file created, and an in-place rewrite keeps it on
+  // every platform. So this is only a cheap first filter — the cursor row itself
+  // is re-checked against the open store below before anything is reused.
+  let base = known && known.stamp.ino === stamp.ino && stamp.dbSize >= known.stamp.dbSize ? known : null;
 
   let rows: AgyLifecycleRow[] | null = null;
 
@@ -574,6 +578,14 @@ export function readTaskLifecycleSteps(filePath: string): AgyTaskLifecycleStep[]
         columns = new Set<string>();
       }
       const extra = ['task_details', 'status'].filter((c) => columns.has(c)).map((c) => `, ${c}`).join('');
+      if (base && base.cursor >= 0) {
+        // The settled row the cursor points at never changes again, so a store
+        // that no longer holds exactly that row is a different store.
+        const anchor = db
+          .prepare('SELECT step_type, length(CAST(step_payload AS BLOB)) AS payload_bytes FROM steps WHERE idx = ?')
+          .get(base.cursor) as { step_type?: unknown; payload_bytes?: unknown } | undefined;
+        if (!anchor || lifecycleAnchor(anchor.step_type, anchor.payload_bytes) !== base.anchor) base = null;
+      }
       rows = db
         .prepare(
           `SELECT idx, step_type, step_payload${extra}
@@ -610,12 +622,14 @@ export function readTaskLifecycleSteps(filePath: string): AgyTaskLifecycleStep[]
   const settled = base?.settled ?? [];
   const live: AgyTaskLifecycleStep[] = [];
   let cursor = base?.cursor ?? -1;
+  let anchor = base?.anchor ?? '';
   let contiguous = true;
   for (const row of rows) {
     // A step grows in place until it settles, so the cursor stops at the first open one.
     if (contiguous && typeof row.status === 'number' && AGY_LIFECYCLE_SETTLED_STATUSES.has(row.status)) {
       appendLifecycleSteps(row, settled);
       cursor = row.idx;
+      anchor = lifecycleAnchor(row.step_type, row.step_payload == null ? null : Buffer.byteLength(row.step_payload));
     } else {
       contiguous = false;
       appendLifecycleSteps(row, live);
@@ -625,8 +639,13 @@ export function readTaskLifecycleSteps(filePath: string): AgyTaskLifecycleStep[]
   const result = sawRows ? [...settled, ...live] : null;
   lifecycleCache.delete(filePath);
   if (lifecycleCache.size >= LIFECYCLE_CACHE_MAX_FILES) lifecycleCache.delete(lifecycleCache.keys().next().value!);
-  lifecycleCache.set(filePath, { stamp, settled, cursor, sawRows, result });
+  lifecycleCache.set(filePath, { stamp, settled, cursor, anchor, sawRows, result });
   return result;
+}
+
+/** Identity of the settled row a cursor rests on: its type and payload size (null payload = -1). */
+function lifecycleAnchor(stepType: unknown, payloadBytes: unknown): string {
+  return `${Number(stepType)}:${typeof payloadBytes === 'number' ? payloadBytes : -1}`;
 }
 
 function appendLifecycleSteps(row: AgyLifecycleRow, out: AgyTaskLifecycleStep[]): void {
@@ -668,6 +687,8 @@ interface LifecycleCacheEntry {
   /** Steps of rows at or before `cursor`: settled, so never read again. */
   settled: AgyTaskLifecycleStep[];
   cursor: number;
+  /** `lifecycleAnchor` of the row at `cursor`; '' while the cursor is still -1. */
+  anchor: string;
   sawRows: boolean;
   result: AgyTaskLifecycleStep[] | null;
 }

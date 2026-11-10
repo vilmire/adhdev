@@ -68,8 +68,12 @@ describe('resolveCoordinatorRules', () => {
         expect(r.text).not.toContain('A clean worktree branch →');
     });
 
-    it('keeps this repo next-RC rules ahead of the generic bundle', () => {
-        const repoRoot = path.resolve(path.join(import.meta.dirname, '../../../../../'));
+    // Only meaningful inside the monorepo that embeds this package as a submodule:
+    // a standalone checkout has no rules file five levels up.
+    const EMBEDDING_REPO_ROOT = path.resolve(path.join(import.meta.dirname, '../../../../../'));
+    const hasEmbeddingRepoRules = fs.existsSync(path.join(EMBEDDING_REPO_ROOT, '.adhdev', 'coordinator-rules.md'));
+    it.skipIf(!hasEmbeddingRepoRules)('keeps this repo next-RC rules ahead of the generic bundle', () => {
+        const repoRoot = EMBEDDING_REPO_ROOT;
         const r = resolveCoordinatorRules(repoRoot);
         expect(r.source).toBe('repo');
         expect(r.differsFromBundled).toBe(true);
