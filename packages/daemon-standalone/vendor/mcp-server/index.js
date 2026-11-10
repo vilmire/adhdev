@@ -227617,10 +227617,15 @@ ${buttons.join("\n")}`;
       const pressToken = (host.autoApprovePressToken ?? 0) + 1;
       host.autoApprovePressToken = pressToken;
       host.autoApproveSurrenderedAt = 0;
-      setTimeout(() => pressAutoApproveButton(host, buttonIndex, now, pressToken), 0);
+      const authorized = { signature: modalSignature, entrySeq: approvalEntrySeq, message: modal?.message, label: buttonLabel, buttons };
+      setTimeout(() => pressAutoApproveButton(host, buttonIndex, now, pressToken, authorized), 0);
       return autoApproveActive;
     }
-    function pressAutoApproveButton(host, buttonIndex, firedAt, token) {
+    function recordAutoApprovalPress(host, message, label2, buttons, at) {
+      host.recordAutoApproval(typeof message === "string" ? message : void 0, label2, at);
+      host.logAutoApproval?.(message, label2, buttons);
+    }
+    function pressAutoApproveButton(host, buttonIndex, firedAt, token, authorized) {
       const adapter = host.adapter;
       if (typeof adapter.resolveModalMatched !== "function") {
         adapter.resolveModal?.(buttonIndex);
@@ -227629,9 +227634,9 @@ ${buttons.join("\n")}`;
       if (adapter.resolveModalMatched(buttonIndex)) return;
       if (host.lastAutoApproveFiredAt === firedAt) host.lastAutoApproveFiredAt = 0;
       LOG.warn("CLI", `[${host.type}] auto-approve resolveModal matched no button (index ${buttonIndex}) \u2014 re-reading modal and retrying`);
-      scheduleAutoApproveRetry(host, token, 0);
+      scheduleAutoApproveRetry(host, token, 0, authorized);
     }
-    function scheduleAutoApproveRetry(host, token, attempt) {
+    function scheduleAutoApproveRetry(host, token, attempt, authorized) {
       const delay3 = APPROVAL_PRESS_RETRY_DELAYS_MS[attempt];
       if (delay3 === void 0) {
         surrenderAutoApprove(host);
@@ -227648,13 +227653,17 @@ ${buttons.join("\n")}`;
         }
         const fresh = adapter.getStatus({ allowParse: false });
         const freshButtons = Array.isArray(fresh?.activeModal?.buttons) ? fresh.activeModal.buttons.map((b) => String(b || "").trim()).filter(Boolean) : [];
-        const kind = typeof fresh?.activeModal?.kind === "string" ? fresh.activeModal.kind : "approval";
-        const choice2 = freshButtons.length > 0 && kind === "approval" && (hasNegativeApprovalOption(freshButtons) || hasReliableApprovalAffirmative(freshButtons)) ? selectAutoApprovalButton(host, freshButtons, fresh?.providerApproval) : null;
+        const freshSeq = typeof fresh?.approvalEntrySeq === "number" ? fresh.approvalEntrySeq : 0;
+        const sameModal2 = freshButtons.length > 0 && freshSeq === authorized.entrySeq && !isAutoApproveBlockedBySignInViewport(host, fresh, fresh?.activeModal) && approvableModalSignature(host, fresh?.activeModal, fresh?.providerApproval) === authorized.signature;
+        const choice2 = sameModal2 ? selectAutoApprovalButton(host, freshButtons, fresh?.providerApproval) : null;
         if (choice2 && choice2.index >= 0 && adapter.resolveModalMatched?.(choice2.index)) {
-          host.lastAutoApproveFiredAt = Date.now();
+          const at = Date.now();
+          host.lastAutoApproveFiredAt = at;
+          recordAutoApprovalPress(host, fresh?.activeModal?.message, choice2.label, freshButtons, at);
           return;
         }
-        scheduleAutoApproveRetry(host, token, attempt + 1);
+        if (freshButtons.length > 0 && !sameModal2) return;
+        scheduleAutoApproveRetry(host, token, attempt + 1, authorized);
       }, delay3);
       timer.unref?.();
     }

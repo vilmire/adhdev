@@ -513,6 +513,8 @@ export function maybeAutoApproveStatus(host: ApprovalGateHost, adapterStatus: an
         host.autoApproveBusyTimer = null;
         host.lastAutoApprovalSignature = '';
     }, APPROVAL_FIRE_BUSY_WINDOW_MS);
+    // Audit of the decision; a press that then matches no button is logged as such
+    // (pressAutoApproveButton), and a successful retry records its own entry.
     host.recordAutoApproval(modal?.message, buttonLabel, now);
     host.logAutoApproval?.(modal?.message, buttonLabel, buttons);
     // APPROVAL-INBOX-BLINDSPOT (Fix A) + BUTTON-INDEX-MISMAP (Fix C): stamp the
@@ -522,7 +524,8 @@ export function maybeAutoApproveStatus(host: ApprovalGateHost, adapterStatus: an
     const pressToken = (host.autoApprovePressToken ?? 0) + 1;
     host.autoApprovePressToken = pressToken;
     host.autoApproveSurrenderedAt = 0;
-    setTimeout(() => pressAutoApproveButton(host, buttonIndex, now, pressToken), 0);
+    const authorized: AuthorizedApproval = { signature: modalSignature, entrySeq: approvalEntrySeq, message: modal?.message, label: buttonLabel, buttons };
+    setTimeout(() => pressAutoApproveButton(host, buttonIndex, now, pressToken, authorized), 0);
     return autoApproveActive;
 }
 
@@ -532,7 +535,15 @@ export function maybeAutoApproveStatus(host: ApprovalGateHost, adapterStatus: an
  * on screen — so re-read the live modal and re-press with backoff while the FSM is
  * still in `approval`, and only then surrender to the coordinator/human.
  */
-function pressAutoApproveButton(host: ApprovalGateHost, buttonIndex: number, firedAt: number, token: number): void {
+/** The exact modal the fire path's gates authorized; a retry may only press this one. */
+interface AuthorizedApproval { signature: string; entrySeq: number; message: unknown; label: string; buttons: string[] }
+
+function recordAutoApprovalPress(host: ApprovalGateHost, message: unknown, label: string, buttons: string[], at: number): void {
+    host.recordAutoApproval(typeof message === 'string' ? message : undefined, label, at);
+    host.logAutoApproval?.(message, label, buttons);
+}
+
+function pressAutoApproveButton(host: ApprovalGateHost, buttonIndex: number, firedAt: number, token: number, authorized: AuthorizedApproval): void {
     // The initial press is never token-gated (every fire must press); only the retry chain is.
     const adapter = host.adapter;
     if (typeof adapter.resolveModalMatched !== 'function') {
@@ -542,10 +553,10 @@ function pressAutoApproveButton(host: ApprovalGateHost, buttonIndex: number, fir
     if (adapter.resolveModalMatched(buttonIndex)) return;
     if (host.lastAutoApproveFiredAt === firedAt) host.lastAutoApproveFiredAt = 0;
     LOG.warn('CLI', `[${host.type}] auto-approve resolveModal matched no button (index ${buttonIndex}) — re-reading modal and retrying`);
-    scheduleAutoApproveRetry(host, token, 0);
+    scheduleAutoApproveRetry(host, token, 0, authorized);
 }
 
-function scheduleAutoApproveRetry(host: ApprovalGateHost, token: number, attempt: number): void {
+function scheduleAutoApproveRetry(host: ApprovalGateHost, token: number, attempt: number, authorized: AuthorizedApproval): void {
     const delay = APPROVAL_PRESS_RETRY_DELAYS_MS[attempt];
     if (delay === undefined) {
         surrenderAutoApprove(host);
@@ -562,16 +573,24 @@ function scheduleAutoApproveRetry(host: ApprovalGateHost, token: number, attempt
         const freshButtons: string[] = Array.isArray(fresh?.activeModal?.buttons)
             ? fresh.activeModal.buttons.map((b: any) => String(b || '').trim()).filter(Boolean)
             : [];
-        const kind = typeof fresh?.activeModal?.kind === 'string' ? fresh.activeModal.kind : 'approval';
-        const choice = freshButtons.length > 0 && kind === 'approval'
-            && (hasNegativeApprovalOption(freshButtons) || hasReliableApprovalAffirmative(freshButtons))
-            ? selectAutoApprovalButton(host, freshButtons, fresh?.providerApproval)
-            : null;
+        // Press ONLY the modal the fire path authorized: same consent signature (which
+        // re-applies the sign-in / confirm / picker / one-time-option gates via
+        // approvableModalSignature), same FSM approval entry, and no sign-in viewport.
+        // Anything else is a different prompt — leave it to the normal settle gate.
+        const freshSeq = typeof fresh?.approvalEntrySeq === 'number' ? fresh.approvalEntrySeq : 0;
+        const sameModal = freshButtons.length > 0
+            && freshSeq === authorized.entrySeq
+            && !isAutoApproveBlockedBySignInViewport(host, fresh, fresh?.activeModal)
+            && approvableModalSignature(host, fresh?.activeModal, fresh?.providerApproval) === authorized.signature;
+        const choice = sameModal ? selectAutoApprovalButton(host, freshButtons, fresh?.providerApproval) : null;
         if (choice && choice.index >= 0 && adapter.resolveModalMatched?.(choice.index)) {
-            host.lastAutoApproveFiredAt = Date.now();
+            const at = Date.now();
+            host.lastAutoApproveFiredAt = at;
+            recordAutoApprovalPress(host, fresh?.activeModal?.message, choice.label, freshButtons, at);
             return;
         }
-        scheduleAutoApproveRetry(host, token, attempt + 1);
+        if (freshButtons.length > 0 && !sameModal) return; // a different modal: the settle gate owns it
+        scheduleAutoApproveRetry(host, token, attempt + 1, authorized);
     }, delay);
     (timer as any).unref?.();
 }

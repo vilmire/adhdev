@@ -41,7 +41,7 @@ function harness(_opts: Record<string, never> = {}) {
     isFsmApprovalState: () => true,
     // A real refresh re-parses the (stable) screen into the latch.
     refreshModalNow: () => { latched = screenModal; return !!latched },
-    getStatus: () => latched ? approvalStatus : { status: 'generating', activeModal: null },
+    getStatus: () => latched ? { ...approvalStatus, activeModal: latched } : { status: 'generating', activeModal: null },
     resolveModalMatched: (i: number) => {
       if (!latched || i < 0 || i >= latched.buttons.length) return false
       presses.push(i)
@@ -49,7 +49,7 @@ function harness(_opts: Record<string, never> = {}) {
     },
   }
   live.push(instance)
-  return { instance, events, messages, presses, reappear: () => { screenModal = modal } }
+  return { instance, events, messages, presses, reappear: () => { screenModal = modal }, showOther: (m: typeof modal) => { screenModal = m } }
 }
 
 beforeEach(() => { vi.useFakeTimers() })
@@ -67,6 +67,23 @@ async function detectAndFire(instance: any) {
 }
 
 describe('auto-approve press with a vanished modal', () => {
+  it('a retry never presses a DIFFERENT prompt than the one the gate authorized', async () => {
+    const h = harness()
+    await detectAndFire(h.instance)
+    // The screen now shows another consent prompt (different question) — not the authorized one.
+    h.showOther({ ...modal, message: 'Would you like to run the following command?\n$ rm -rf build' })
+    for (const d of APPROVAL_PRESS_RETRY_DELAYS_MS) vi.advanceTimersByTime(d + 5)
+    expect(h.presses).toEqual([])
+  })
+
+  it('a retry never presses a sign-in / credential prompt', async () => {
+    const h = harness()
+    await detectAndFire(h.instance)
+    h.showOther({ ...modal, buttons: ['1. Sign in with your account', 'No'] })
+    for (const d of APPROVAL_PRESS_RETRY_DELAYS_MS) vi.advanceTimersByTime(d + 5)
+    expect(h.presses).toEqual([])
+  })
+
   it('re-reads the live modal and retries: the redrawn prompt is approved', async () => {
     const h = harness()
     await detectAndFire(h.instance)
