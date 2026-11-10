@@ -90,6 +90,12 @@ export async function bootPlatform(cfg: DaemonBootConfig): Promise<PlatformStage
     }
     if (upgradeFailure) LOG.warn('Upgrade', describeUpgradeFailureNotice(upgradeFailure, cfg.statusVersion));
 
+    // This daemon booted, so any leftover upgrade snapshot older than 24 h (interrupted/failed upgrade) is dead weight.
+    try {
+        const { sweepStaleUpgradeBackups } = await import('../../commands/upgrade-backup-sweep.js');
+        sweepStaleUpgradeBackups(getConfigDir(), { log: m => LOG.info('Upgrade', m) });
+    } catch { /* best-effort */ }
+
     // One-shot: record the effective provider channel as an explicit
     // config.providerChannel so the legacy updateChannel fallback (resolver
     // priority 4) can eventually go without flipping any machine's channel.

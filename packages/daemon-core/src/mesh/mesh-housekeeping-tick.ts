@@ -41,6 +41,7 @@ import { contractHousekeeping } from './contract-runtime.js';
 import { depositWorkerMailboxMessage } from './worker-mailbox.js';
 import { liveWorkerHomes, sweepStaleWorkerHomes } from './worker-home-cleanup.js';
 import { publishHeldHandoffNote } from './worker-report.js';
+import { LIGHT_SWEEP_INTERVAL_MS, runLightWorkspaceSweep } from './light-workspace-sweep-runner.js';
 import { installStagePipeline } from './stage-ports-default.js';
 
 /** Disk/worktree retention: artifacts age in days and the fs/git walk is heavy — hourly. */
@@ -51,6 +52,7 @@ export const IDLE_SESSION_REAP_INTERVAL_MS = 5 * 60 * 1000;
 export interface HousekeepingState extends StaleBlockedSweepState {
     lastDiskRetentionRunAt?: number;
     lastIdleSessionReapRunAt?: number;
+    lastLightSweepRunAt?: number;
 }
 
 /** The meshes this daemon hosts this tick, with the id-set each is hosted under. */
@@ -216,6 +218,12 @@ export async function runMeshHousekeepingTick(
                 }
             }
         }
+    }
+
+    // ── light workspace sweep (10 min; ADHDEV_LIGHT_WORKSPACE_STALE_HOURS=0 disables) ──
+    if (store && (state.lastLightSweepRunAt === undefined || (nowMs - state.lastLightSweepRunAt) >= LIGHT_SWEEP_INTERVAL_MS)) {
+        state.lastLightSweepRunAt = nowMs;
+        try { await runLightWorkspaceSweep(); } catch (e: any) { LOG.warn('MeshHousekeeping', `Light workspace sweep failed: ${e?.message || e}`); }
     }
 
     // ── idle delegated-session reaper (5 min) ──
