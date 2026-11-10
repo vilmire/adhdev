@@ -25,7 +25,8 @@ export function bindPushDestination(repo: string, local: string, key = 'oss', re
 }
 
 /** Committed synthetic patterns pinned out of band; no real private data. */
-export function useSyntheticPublicPushPatterns(repositories?: Record<string, 'public' | 'private'>) {
+/** `options.identity`: explicit committed identity policy; omitted = no identity enforcement (product default). */
+export function useSyntheticPublicPushPatterns(repositories?: Record<string, 'public' | 'private'>, options: { identity?: unknown } = {}) {
   let root: string
   const previous = { root: process.env.ADHDEV_PRIVATE_ROOT, digest: process.env.ADHDEV_PUBLIC_PUSH_PATTERNS_SHA256, path: process.env.PATH }
   beforeAll(() => {
@@ -34,7 +35,7 @@ export function useSyntheticPublicPushPatterns(repositories?: Record<string, 'pu
     execFileSync(realGit, ['init', '-q', root])
     execFileSync(realGit, ['-C', root, 'remote', 'add', 'origin', 'https://github.com/vilmire/adhdev-cloud.git'])
     mkdirSync(join(root, '.adhdev'))
-    const blob = JSON.stringify({ ownerNames: ['fixture-owner'], knownHosts: ['FixtureHostZ', 'FleetFixtureZ'], blockedText: ['synthetic-private-token'], ...(repositories ? { repositories } : {}) })
+    const blob = JSON.stringify({ ownerNames: ['fixture-owner'], knownHosts: ['FixtureHostZ', 'FleetFixtureZ'], blockedText: ['synthetic-private-token'], ...(repositories ? { repositories } : {}), ...(options.identity !== undefined ? { identity: options.identity } : {}) })
     writeFileSync(join(root, '.adhdev/public-push-patterns.json'), blob)
     execFileSync(realGit, ['-C', root, 'add', '.adhdev'])
     execFileSync(realGit, ['-C', root, 'commit', '-qm', 'Synthetic pattern fixture'], { env: { ...process.env, GIT_AUTHOR_NAME: 'vilmire', GIT_AUTHOR_EMAIL: 'vilmire@users.noreply.github.com', GIT_COMMITTER_NAME: 'vilmire', GIT_COMMITTER_EMAIL: 'vilmire@users.noreply.github.com' } })

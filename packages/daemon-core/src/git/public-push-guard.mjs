@@ -1,8 +1,11 @@
-// Enforced guard for the PUBLIC oss remote (github.com/vilmire/adhdev).
+// Enforced guard for the PUBLIC oss remote.
 //
 // Nothing may be pushed there unless
-//   (1) every pushed commit has author AND committer
-//       vilmire <vilmire@users.noreply.github.com> (annotated tags: the tagger), and
+//   (1) IF the committed, pinned organization policy declares an `identity`
+//       ({ name, email }), every pushed commit has author AND committer equal to
+//       it (annotated tags: the tagger). With no `identity` in the policy no
+//       contributor identity is rejected — the product embeds no person's name
+//       or email, and git config / env / payload are never a policy source, and
 //   (2) the personal-path scan passes over the FULL pushed history — every new
 //       commit's added lines, message and file paths, not just the tip diff.
 //       A path that entered in one commit and was deleted by a later one is
@@ -33,8 +36,24 @@ import { realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { findLeaks, findLeaksWithPatterns, currentUserNames } from './personal-paths.mjs';
 
-export const REQUIRED_NAME = 'vilmire';
-export const REQUIRED_EMAIL = 'vilmire@users.noreply.github.com';
+const IDENTITY_KEYS = ['name', 'email'];
+const identityPolicyError = () => Object.assign(new Error('public push identity policy is malformed (expected "identity": { "name": <string>, "email": <string> } or absent); refusing publish'), { code: 'IDENTITY_POLICY_INVALID' });
+
+/**
+ * Optional explicit identity policy: `patterns.identity = { name, email }`.
+ * Absent → null (nothing enforced). Present but malformed → throws (fail closed;
+ * a typo must never silently downgrade to "no policy").
+ */
+export function resolveIdentityPolicy(patterns) {
+  if (!patterns || patterns.identity === undefined) return null;
+  const id = patterns.identity;
+  if (!id || typeof id !== 'object' || Array.isArray(id)) throw identityPolicyError();
+  if (Object.keys(id).some((k) => !IDENTITY_KEYS.includes(k))) throw identityPolicyError();
+  for (const k of IDENTITY_KEYS) if (typeof id[k] !== 'string' || !id[k] || id[k] !== id[k].trim() || /[\x00-\x1f<>\n]/.test(id[k])) throw identityPolicyError();
+  if (!/^[^@\s]+@[^@\s]+$/.test(id.email)) throw identityPolicyError();
+  return { name: id.name, email: id.email };
+}
+const describeRequired = (policy) => `"${policy.name} <${policy.email}>"`;
 
 // Supplied by private repo config; never embed owner/fleet patterns in OSS.
 export function loadPublicPushPatterns(repo, { forRepo = repo, expectedDigest = process.env.ADHDEV_PUBLIC_PUSH_PATTERNS_SHA256, requireAuthorityPin = false } = {}) {
@@ -60,9 +79,12 @@ export function loadPublicPushPatterns(repo, { forRepo = repo, expectedDigest = 
     if ((requireAuthorityPin || !containsTarget) && !expectedDigest) throw new Error();
     if (expectedDigest !== undefined && (!/^[0-9a-f]{64}$/.test(expectedDigest) || createHash('sha256').update(blob).digest('hex') !== expectedDigest)) throw new Error();
     const patterns = JSON.parse(blob);
+    resolveIdentityPolicy(patterns);
     if (!['ownerNames', 'knownHosts', 'blockedText'].every(key => Array.isArray(patterns[key]) && patterns[key].length && patterns[key].every(v => typeof v === 'string' && v.trim()))) throw new Error();
     return patterns;
-  } catch {
+  } catch (error) {
+    // A malformed identity policy gets its own clear refusal (it names no content).
+    if (error?.code === 'IDENTITY_POLICY_INVALID') throw error;
     // Neither Git/JSON errors nor policy contents may be relayed to logs.
     throw new Error('public push pattern config unavailable, uncommitted, unpinned or invalid at private root; refusing public publish');
   }
@@ -382,12 +404,13 @@ export async function newCommits(cwd, remoteName, localSha, remoteSha, provenCom
   return (await runGit(cwd, ['rev-list', '--stdin'], { input: revisions })).split('\n').filter(Boolean);
 }
 
-async function identityViolations(cwd, shas) {
+async function identityViolations(cwd, shas, policy) {
   const out = [];
+  if (!policy) return out;
   for (const rec of await readCommits(cwd, shas)) {
     for (const [role, n, e] of [['author', rec.an, rec.ae], ['committer', rec.cn, rec.ce]]) {
-      if (n !== REQUIRED_NAME || e !== REQUIRED_EMAIL) {
-        out.push({ kind: 'identity', sha: rec.sha, detail: `${role} is "${n} <${e}>", required "${REQUIRED_NAME} <${REQUIRED_EMAIL}>"` });
+      if (n !== policy.name || e !== policy.email) {
+        out.push({ kind: 'identity', sha: rec.sha, detail: `${role} is "${n} <${e}>", required ${describeRequired(policy)}` });
       }
     }
   }
@@ -415,23 +438,23 @@ function scanText(scan, text) {
   return hits;
 }
 
-async function messageViolations(cwd, shas, scan) {
+async function messageViolations(cwd, shas, scan, policy) {
   const out = [];
   for (const rec of await readCommits(cwd, shas)) {
     for (const l of scanText(scan, rec.message)) out.push({ kind: 'path', sha: rec.sha, file: '(commit message)', line: l.line, detail: l.name || l.match });
   }
-  out.push(...await headerViolations(cwd, shas, scan));
+  out.push(...await headerViolations(cwd, shas, scan, policy));
   return out;
 }
 
 // `%B` hides everything git does not treat as the message: custom headers,
 // `mergetag` (an embedded tag object) and `gpgsig` are all published with the
 // commit. `rev-list --header` prints the raw buffer, one NUL-terminated record per commit.
-async function headerViolations(cwd, shas, scan) {
+async function headerViolations(cwd, shas, scan, policy) {
   if (!shas.length) return [];
   const raw = await runGit(cwd, ['rev-list', '--header', '--no-walk=unsorted', '--stdin'], { input: shas.join('\n') + '\n' });
   const out = [];
-  const identityOk = (name, email) => name === REQUIRED_NAME && email === REQUIRED_EMAIL;
+  const identityOk = (name, email) => !policy || (name === policy.name && email === policy.email);
   for (const record of raw.split('\0')) {
     const nl = record.indexOf('\n');
     if (nl === -1) continue;
@@ -448,9 +471,10 @@ async function headerViolations(cwd, shas, scan) {
       const m = /^(author|committer) (.*) <(.*)> \d+ [+-]\d{4}$/.exec(line);
       if (!m) continue;
       // The first of each is what git parsed (%an/%ce, already checked); report only duplicates.
-      if (++counts[m[1]] > 1 && !identityOk(m[2], m[3])) out.push({ kind: 'identity', sha, detail: `raw ${m[1]} header is "${m[2]} <${m[3]}>", required "${REQUIRED_NAME} <${REQUIRED_EMAIL}>"` });
+      if (++counts[m[1]] > 1 && !identityOk(m[2], m[3])) out.push({ kind: 'identity', sha, detail: `raw ${m[1]} header is "${m[2]} <${m[3]}>", required ${describeRequired(policy)}` });
     }
     for (const role of ['author', 'committer']) {
+      // Structural (not identity-policy) check: git itself writes exactly one of each.
       if (counts[role] !== 1) out.push({ kind: 'identity', sha, detail: `expected exactly one ${role} header, found ${counts[role]}` });
     }
     for (let i = 0; i < lines.length; i++) {
@@ -458,8 +482,8 @@ async function headerViolations(cwd, shas, scan) {
       const tagLines = [];
       while (i + 1 < lines.length && lines[i + 1].startsWith(' ')) tagLines.push(lines[++i].slice(1));
       const tagger = /^tagger (.*) <(.*)> \d+ [+-]\d{4}$/m.exec(tagLines.join('\n'));
-      if (!tagger || !identityOk(tagger[1], tagger[2])) {
-        out.push({ kind: 'identity', sha, detail: `mergetag tagger is ${tagger ? `"${tagger[1]} <${tagger[2]}>"` : 'missing'}, required "${REQUIRED_NAME} <${REQUIRED_EMAIL}>"` });
+      if (policy && (!tagger || !identityOk(tagger[1], tagger[2]))) {
+        out.push({ kind: 'identity', sha, detail: `mergetag tagger is ${tagger ? `"${tagger[1]} <${tagger[2]}>"` : 'missing'}, required ${describeRequired(policy)}` });
       }
     }
   }
@@ -583,7 +607,7 @@ function openBatchReader(cwd) {
 }
 
 /** Annotated tag objects: tagger identity + name/message scan (nested tags too). */
-async function tagViolations(reader, objectSha, scan, scanRef) {
+async function tagViolations(reader, objectSha, scan, scanRef, policy) {
   const out = [];
   let cur = objectSha;
   const seen = new Set();
@@ -599,8 +623,8 @@ async function tagViolations(reader, objectSha, scan, scanRef) {
     const header = sep === -1 ? raw : raw.slice(0, sep);
     const message = sep === -1 ? '' : raw.slice(sep + 2);
     const tagger = /^tagger (.*) <(.*)> \d+ [+-]\d{4}$/m.exec(header);
-    if (!tagger || tagger[1] !== REQUIRED_NAME || tagger[2] !== REQUIRED_EMAIL) {
-      out.push({ kind: 'identity', sha: cur, detail: `tagger is ${tagger ? `"${tagger[1]} <${tagger[2]}>"` : 'missing'}, required "${REQUIRED_NAME} <${REQUIRED_EMAIL}>"` });
+    if (policy && (!tagger || tagger[1] !== policy.name || tagger[2] !== policy.email)) {
+      out.push({ kind: 'identity', sha: cur, detail: `tagger is ${tagger ? `"${tagger[1]} <${tagger[2]}>"` : 'missing'}, required ${describeRequired(policy)}` });
     }
     for (const l of scanText(scan, `${header.replace(/^tagger .*$/m, '')}\n${message}`)) out.push({ kind: 'path', sha: cur, file: '(tag object)', line: l.line, detail: l.name || l.match });
     const tagName = /^tag (.*)$/m.exec(header);
@@ -619,11 +643,12 @@ async function tagViolations(reader, objectSha, scan, scanRef) {
  */
 export async function checkPush(entries, { cwd = process.cwd(), remoteName = 'origin', remoteUrl, findLeaksFn, ownerNames = currentUserNames(), patterns, integrationBase } = {}) {
   if (!patterns && !findLeaksFn) patterns = await loadPublicPushPatternsForRepo(cwd);
+  const identityPolicy = resolveIdentityPolicy(patterns);
   const names = new Set([...currentUserNames(), ...ownerNames, ...(patterns?.ownerNames || [])]);
   const scan = findLeaksFn || ((t) => patterns ? findLeaksWithPatterns(t, patterns, names) : findLeaks(t, names));
   // Ref names have no public repository-owner context: owner account tokens
   // there are identifying, even without a home-directory prefix.
-  const refOwners = new Set([REQUIRED_NAME, ...names]);
+  const refOwners = new Set(names);
   const scanRef = (name) => {
     const hits = scanText(scan, `/${name}`);
     for (const owner of refOwners) {
@@ -656,7 +681,7 @@ export async function checkPush(entries, { cwd = process.cwd(), remoteName = 'or
     if (e.localRef?.startsWith('refs/tags/')) {
       for (const l of scanRef(e.localRef)) add([{ kind: 'path', sha: e.localSha, file: '(tag name)', line: l.line, detail: l.name || l.match }]);
     }
-    if (e.localSha !== e.remoteSha) add(await tagViolations(reader(), e.localSha, scan, scanRef));
+    if (e.localSha !== e.remoteSha) add(await tagViolations(reader(), e.localSha, scan, scanRef, identityPolicy));
     if (integrationBase !== undefined && !ZERO.test(integrationBase)) await runGit(cwd, ['merge-base', '--is-ancestor', integrationBase, e.localSha]);
     const pending = await newCommits(cwd, remoteName, e.localSha, integrationBase ?? e.remoteSha, proven);
     const shas = pending.filter((s) => !seen.has(s));
@@ -674,8 +699,8 @@ export async function checkPush(entries, { cwd = process.cwd(), remoteName = 'or
       catch (error) { add([{ kind: 'source_phase', sha: e.localSha, file: '(normal retirement)', line: 1, detail: error.message }]); }
     }
     shas.forEach((s) => seen.add(s));
-    add(await identityViolations(cwd, shas));
-    add(await messageViolations(cwd, shas, scan));
+    add(await identityViolations(cwd, shas, identityPolicy));
+    add(await messageViolations(cwd, shas, scan, identityPolicy));
     add(await patchViolations(cwd, shas, scan));
   }
   return { violations, checked: seen.size };
@@ -688,7 +713,7 @@ export function formatViolation(v) {
   return `  ${v.sha.slice(0, 12)} [${v.ref}] ${v.file}:${v.line}  personal path: ${v.detail}`;
 }
 
-export const BLOCKED_HINT = `Required identity: ${REQUIRED_NAME} <${REQUIRED_EMAIL}> (author AND committer). Personal paths in ANY pushed commit block the push even if a later commit removes them — rewrite the unpushed history (git rebase -i / filter-branch) and push again.`;
+export const BLOCKED_HINT = `If the repository policy declares an identity, every pushed commit's author AND committer (and annotated tagger) must match it. Personal paths in ANY pushed commit block the push even if a later commit removes them — rewrite the unpushed history (git rebase -i / filter-branch) and push again.`;
 
 /**
  * Refinery/auto-publish entry point: throws (message = full report) unless
