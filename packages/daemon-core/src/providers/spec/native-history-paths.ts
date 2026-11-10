@@ -681,7 +681,45 @@ export function pickExactSessionFileAcrossDateWindow(
         if (found) matches.push(found);
     }
     matches.sort((a, b) => safeMtimeMs(b) - safeMtimeMs(a));
-    return matches[0] || null;
+    // A long-lived session's rollout stays in the directory of the day it was
+    // CREATED (codex appends to the same file for weeks), so an exact session id
+    // must be found regardless of how old that date directory is. The id is
+    // authoritative; only the nearby-day shortcut above is time-boxed.
+    return matches[0] || scanDateTreeForSessionFile(template, input, pattern, requestedSessionId);
+}
+
+/**
+ * Exact-id lookup across EVERY date directory of a `.../{yyyy}/{mm}/{dd}` template
+ * (newest day first). The date vars must be the trailing template segments.
+ */
+export function scanDateTreeForSessionFile(
+    template: string,
+    input: NativeHistoryInput,
+    pattern: RegExp,
+    requestedSessionId: string,
+): string | null {
+    if (!requestedSessionId) return null;
+    const segs = template.split('/');
+    const first = segs.findIndex(seg => /^\{(yyyy|mm|dd)\}$/.test(seg));
+    if (first < 0 || !segs.slice(first).every(seg => /^\{(yyyy|mm|dd)\}$/.test(seg))) return null;
+    const base = first > 0 ? expandPathForDate(segs.slice(0, first).join('/'), input, new Date()) : null;
+    if (!base) return null;
+    const walk = (dir: string, depth: number): string | null => {
+        if (depth === 0) return pickExactSessionFile(dir, pattern, requestedSessionId);
+        let names: string[];
+        try {
+            names = fs.readdirSync(dir, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name);
+        } catch { return null; }
+        names.sort().reverse();
+        for (const name of names) {
+            const hit = walk(path.join(dir, name), depth - 1);
+            if (hit) return hit;
+        }
+        return null;
+    };
+    const found = walk(base, segs.length - first);
+    if (found) LOG.debug('NativeHistory', `jsonl date-tree scan hit: sessionId=${requestedSessionId} → ${JSON.stringify(found)} (outside nearby-day window)`);
+    return found;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
