@@ -44,6 +44,10 @@ const PARKED_BELOW_SWITCHER_RE = /^\s*←\/→ to switch approval\s*$/;
 const PARKED_BELOW_KEY_HINT_RE = /\((?:y|n|p|tab|shift\+tab|esc(?:\s+or\s+n)?)\)\s*$/i;
 /** cursor-agent's single-approval prompt: its last option row, and the header above it. */
 const PARKED_BELOW_SKIP_ROW_RE = /^\s*Skip & tell the agent what to do instead \(esc or n\)\s*$/;
+/** Codex's own approval footer — live chrome, always the last row of the dialog. */
+const CODEX_PARKED_ABOVE_FOOTER_RE = /^\s*Press enter to confirm or esc to cancel\s*$/;
+/** Codex's approval header ("Would you like to run …?", "Allow …?"), the row that opens the dialog. */
+const CODEX_PARKED_ABOVE_HEADER_RE = /^\s*(?:Would you like to (?:run the following command|make the following edits|grant these permissions)|Allow (?:command|Codex to|the .+ MCP server to run tool))\b/;
 const PARKED_BELOW_PROMPT_RE = /^\s*Run this (?:command|MCP tool)\?\s*$/;
 
 /**
@@ -316,7 +320,30 @@ export function resolveLiveModalSlice(
                 && modalEndRow === lastNonBlankRow
                 && blankDownToCursor
                 && (queuedForm || singleForm);
-            if (!detached && !parkedBelow) return empty;
+            // PARKED ABOVE (codex): while a command approval is up codex leaves the terminal cursor
+            // where the transcript last drew it, rows above the dialog (live 2026-11-11: row 2 of a
+            // 32-row screen, the dialog at rows 8-31; the worker sat 40+ min reported as `generating`,
+            // the FSM already in `approval`). Accepted only for codex's own dialog shape: its footer is
+            // the bottom row, the choice block is the last block and only blank rows separate them,
+            // and its header sits between the cursor and the choices with no composer, spinner or
+            // bullet row after it. A transcript quoting the dialog always has the composer below it,
+            // which the bottom-most check above already rejects.
+            const headerRow = (() => {
+                for (let r = choiceStartRow - 1; r > effectiveCursorRow; r -= 1) {
+                    if (CODEX_PARKED_ABOVE_HEADER_RE.test(lines[r])) return r;
+                }
+                return -1;
+            })();
+            const parkedAbove = effectiveCursorRow < interactiveStartRow
+                && lastChoiceBlock !== undefined
+                && choiceEndRow === lastChoiceBlock.endRow
+                && lastChoiceBlock.count >= 2
+                && CODEX_PARKED_ABOVE_FOOTER_RE.test(lines[lastNonBlankRow])
+                && lines.slice(choiceEndRow + 1, lastNonBlankRow).every(row => !row.trim())
+                && headerRow !== -1
+                && lines.slice(headerRow + 1, choiceStartRow)
+                    .every(row => !isComposerOrSpinnerOrBulletLine(row) && matchNumberedChoiceIndex(row) === null);
+            if (!detached && !parkedBelow && !parkedAbove) return empty;
         }
     }
 
