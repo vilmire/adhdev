@@ -18,6 +18,8 @@ import { gitChildEnv } from '../git/git-locale.js';
 import { resolveLinkedWorktreeSource } from '../git/linked-worktree-source.js';
 import { meshNodeIdMatches, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { readStringValue } from '../mesh/mesh-node-identity.js';
+import { findEndedSessionEvidence, ALREADY_ENDED_STOP_PROOF_NOTE, type SessionEndState } from '../mesh/mesh-session-end-proof.js';
+import { sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import { reconcileWorktreeBranch } from '../mesh/mesh-worktree-branch-reconcile.js';
 import { workingDirBasename } from '../providers/working-dir.js';
 import { checkWorktreeChangesPatchEquivalentInRef, MeshWorktreePatchContainmentSummary } from '../mesh/mesh-refine-gates.js';
@@ -1219,6 +1221,34 @@ export async function cleanupMeshSessions(self: DaemonCommandRouter, args: {
             }
         }
 
+        // Explicit per-session end state for NAMED sessions (read-only). Without this, a session that
+        // already ended is indistinguishable from an unknown id (both just show matchedCount 0).
+        const sessionStates: SessionEndState[] = [];
+        if (requestedSessionIds?.size) {
+            const matchedIds = new Set(matched.map(r => String(r.sessionId)));
+            const unmatchedRequested = [...requestedSessionIds].filter(id => !matchedIds.has(id));
+            const endedEvidence = findEndedSessionEvidence(args.meshId, unmatchedRequested);
+            for (const id of requestedSessionIds) {
+                const matchedRecord = matched.find(r => String(r.sessionId) === id);
+                if (matchedRecord) {
+                    if (self.isCompletedHostedSession(matchedRecord)) {
+                        sessionStates.push({ sessionId: id, state: 'already_ended', source: 'host_record' });
+                    }
+                    continue;
+                }
+                // Listed by the host but bound elsewhere: it is live/recorded, not ended and not unknown.
+                if (sessions.some(r => sessionIdsEquivalent(String(r?.sessionId ?? ''), id))) continue;
+                const evidence = endedEvidence.get(id);
+                if (evidence) {
+                    sessionStates.push({ sessionId: id, state: 'already_ended', endedAt: evidence.endedAt, ...(evidence.reason ? { reason: evidence.reason } : {}), source: evidence.source });
+                } else {
+                    sessionStates.push({ sessionId: id, state: 'unknown', detail: 'no live host record and no recorded end for this session id' });
+                }
+            }
+        }
+        const alreadyEndedSessionIds = sessionStates.filter(s => s.state === 'already_ended').map(s => s.sessionId);
+        const unknownSessionIds = sessionStates.filter(s => s.state === 'unknown').map(s => s.sessionId);
+
         const deleteUnsupported = deleteUnsupportedSessionIds.length > 0;
         return {
             success: errors.length === 0,
@@ -1244,5 +1274,9 @@ export async function cleanupMeshSessions(self: DaemonCommandRouter, args: {
                 recordsRemainSessionIds,
             } : {}),
             ...(errors.length ? { errors } : {}),
+            ...(sessionStates.length ? { sessionStates } : {}),
+            ...(alreadyEndedSessionIds.length ? { alreadyEndedSessionIds } : {}),
+            ...(unknownSessionIds.length ? { unknownSessionIds } : {}),
+            ...(sessionStates.length ? { stopProofNote: ALREADY_ENDED_STOP_PROOF_NOTE } : {}),
         };
     }

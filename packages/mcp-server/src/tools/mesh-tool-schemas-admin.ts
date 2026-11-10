@@ -328,7 +328,7 @@ export const MESH_CLEANUP_WORKTREE_NODES_TOOL = {
 export const MESH_CLEANUP_SESSIONS_TOOL = {
     name: 'mesh_cleanup_sessions',
     description: 'Clean up delegated-session bookkeeping without removing nodes. Two families, selected by `mode` (REQUIRED):\n'
-        + '• preserve / stop / delete_stopped / stop_and_delete — a node\'s delegated session records (needs node_id). Use when a node is cluttered with finished or stuck worker sessions. Defaults should preserve reviewable history unless you choose a mode explicitly.\n'
+        + '• preserve / stop / delete_stopped / stop_and_delete — a node\'s delegated session records (needs node_id). Use when a node is cluttered with finished or stuck worker sessions. Defaults should preserve reviewable history unless you choose a mode explicitly. When you name session_ids, the response carries per-session `sessionStates`: `already_ended` (with endedAt/reason when known) means the daemon recorded that session as ended — this IS a valid stop proof, nothing more to stop, and `matchedCount: 0` alongside it is expected; `unknown` means the daemon has no record of that id and is NOT a stop proof.\n'
         + '• prune_stale_direct — mesh-wide: orphaned staleDirect dispatch records (direct task dispatches whose original node/session is gone from the live mesh). Use when mesh_status keeps listing stale direct dispatches. '
         + 'Dry-run by default; execute=true deletes. Active/pending/assigned/generating work and fresh unacknowledged dispatch failures (node/session still live) are always preserved, and the append-only ledger history is kept.',
     inputSchema: {

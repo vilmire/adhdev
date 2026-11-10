@@ -212251,6 +212251,33 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     }
     init_dist();
     init_mesh_node_identity();
+    init_dist();
+    init_mesh_local_records();
+    function findEndedSessionEvidence(meshId, sessionIds) {
+      const found = /* @__PURE__ */ new Map();
+      if (!meshId || sessionIds.length === 0) return found;
+      let entries3 = [];
+      try {
+        entries3 = readLocalRecords(meshId, { kind: ["session_stopped"], turnTerminals: false });
+      } catch {
+        return found;
+      }
+      for (const entry of entries3) {
+        const entrySessionId = typeof entry.sessionId === "string" ? entry.sessionId : "";
+        if (!entrySessionId) continue;
+        for (const wanted of sessionIds) {
+          if (!sessionIdsEquivalent(entrySessionId, wanted)) continue;
+          const prior = found.get(wanted);
+          if (prior && prior.endedAt > entry.timestamp) continue;
+          const payload = entry.payload ?? {};
+          const reason = typeof payload.reason === "string" && payload.reason ? payload.reason : void 0;
+          found.set(wanted, { endedAt: entry.timestamp, ...reason ? { reason } : {}, source: "mesh_ledger" });
+        }
+      }
+      return found;
+    }
+    var ALREADY_ENDED_STOP_PROOF_NOTE = "already_ended is an authoritative stop proof: the daemon recorded this session as ended, so no stop is needed and the slot is free to replace. unknown means the daemon has no record of that session id (it is NOT proof of a stop).";
+    init_dist();
     var WORKTREE_TAG_PREFIX = "worktree=";
     function readTrimmed(value) {
       return typeof value === "string" && value.trim() ? value.trim() : "";
@@ -213092,6 +213119,30 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           errors.push({ sessionId, error: message });
         }
       }
+      const sessionStates = [];
+      if (requestedSessionIds?.size) {
+        const matchedIds = new Set(matched.map((r) => String(r.sessionId)));
+        const unmatchedRequested = [...requestedSessionIds].filter((id4) => !matchedIds.has(id4));
+        const endedEvidence = findEndedSessionEvidence(args.meshId, unmatchedRequested);
+        for (const id4 of requestedSessionIds) {
+          const matchedRecord = matched.find((r) => String(r.sessionId) === id4);
+          if (matchedRecord) {
+            if (self.isCompletedHostedSession(matchedRecord)) {
+              sessionStates.push({ sessionId: id4, state: "already_ended", source: "host_record" });
+            }
+            continue;
+          }
+          if (sessions.some((r) => sessionIdsEquivalent(String(r?.sessionId ?? ""), id4))) continue;
+          const evidence = endedEvidence.get(id4);
+          if (evidence) {
+            sessionStates.push({ sessionId: id4, state: "already_ended", endedAt: evidence.endedAt, ...evidence.reason ? { reason: evidence.reason } : {}, source: evidence.source });
+          } else {
+            sessionStates.push({ sessionId: id4, state: "unknown", detail: "no live host record and no recorded end for this session id" });
+          }
+        }
+      }
+      const alreadyEndedSessionIds = sessionStates.filter((s2) => s2.state === "already_ended").map((s2) => s2.sessionId);
+      const unknownSessionIds = sessionStates.filter((s2) => s2.state === "unknown").map((s2) => s2.sessionId);
       const deleteUnsupported = deleteUnsupportedSessionIds.length > 0;
       return {
         success: errors.length === 0,
@@ -213114,7 +213165,11 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           deleteUnsupportedSessionIds,
           recordsRemainSessionIds
         } : {},
-        ...errors.length ? { errors } : {}
+        ...errors.length ? { errors } : {},
+        ...sessionStates.length ? { sessionStates } : {},
+        ...alreadyEndedSessionIds.length ? { alreadyEndedSessionIds } : {},
+        ...unknownSessionIds.length ? { unknownSessionIds } : {},
+        ...sessionStates.length ? { stopProofNote: ALREADY_ENDED_STOP_PROOF_NOTE } : {}
       };
     }
     init_mesh_mission_change_notifier();
@@ -251694,7 +251749,7 @@ var MESH_CLEANUP_WORKTREE_NODES_TOOL = {
 };
 var MESH_CLEANUP_SESSIONS_TOOL = {
   name: "mesh_cleanup_sessions",
-  description: "Clean up delegated-session bookkeeping without removing nodes. Two families, selected by `mode` (REQUIRED):\n\u2022 preserve / stop / delete_stopped / stop_and_delete \u2014 a node's delegated session records (needs node_id). Use when a node is cluttered with finished or stuck worker sessions. Defaults should preserve reviewable history unless you choose a mode explicitly.\n\u2022 prune_stale_direct \u2014 mesh-wide: orphaned staleDirect dispatch records (direct task dispatches whose original node/session is gone from the live mesh). Use when mesh_status keeps listing stale direct dispatches. Dry-run by default; execute=true deletes. Active/pending/assigned/generating work and fresh unacknowledged dispatch failures (node/session still live) are always preserved, and the append-only ledger history is kept.",
+  description: "Clean up delegated-session bookkeeping without removing nodes. Two families, selected by `mode` (REQUIRED):\n\u2022 preserve / stop / delete_stopped / stop_and_delete \u2014 a node's delegated session records (needs node_id). Use when a node is cluttered with finished or stuck worker sessions. Defaults should preserve reviewable history unless you choose a mode explicitly. When you name session_ids, the response carries per-session `sessionStates`: `already_ended` (with endedAt/reason when known) means the daemon recorded that session as ended \u2014 this IS a valid stop proof, nothing more to stop, and `matchedCount: 0` alongside it is expected; `unknown` means the daemon has no record of that id and is NOT a stop proof.\n\u2022 prune_stale_direct \u2014 mesh-wide: orphaned staleDirect dispatch records (direct task dispatches whose original node/session is gone from the live mesh). Use when mesh_status keeps listing stale direct dispatches. Dry-run by default; execute=true deletes. Active/pending/assigned/generating work and fresh unacknowledged dispatch failures (node/session still live) are always preserved, and the append-only ledger history is kept.",
   inputSchema: {
     type: "object",
     properties: {
