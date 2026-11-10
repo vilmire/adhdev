@@ -992,9 +992,15 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
         // adapter-status-projection.ts:81-84 rule ("never infer status from
         // whether a modal parsed") is untouched. Cost is bounded: only a frame
         // that was about to hard-fail pays for the extra parse.
+        // A modal-less FSM `approval` frame projects status `generating` (never infer
+        // status from a failed modal parse), so the status string alone would hide
+        // exactly this stale latch behind "Not in approval state": also treat a live
+        // FSM approval state as the failing shape.
+        const fsmProbe = (adapter as unknown as { isFsmApprovalState?: () => boolean }).isFsmApprovalState;
+        const fsmInApproval = typeof fsmProbe === 'function' && fsmProbe.call(adapter);
         let refreshAttempted = false;
         if (!modals.effectiveModal
-            && modals.effectiveStatus === 'waiting_approval'
+            && (modals.effectiveStatus === 'waiting_approval' || fsmInApproval)
             && typeof adapter.refreshModalNow === 'function') {
             refreshAttempted = true;
             const refreshed = adapter.refreshModalNow();
@@ -1021,12 +1027,14 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
             // waiting_approval that mesh_status/notifications report (they key off the
             // status string alone), which sent a coordinator hunting for a nonexistent
             // status bug. Say which one actually happened.
-            if (effectiveStatus === 'waiting_approval') {
+            if (effectiveStatus === 'waiting_approval' || fsmInApproval) {
                 return {
                     success: false,
                     approvalModalUnavailable: true,
                     refreshAttempted,
-                    error: 'Session status IS waiting_approval, but no approval modal could be read'
+                    error: (effectiveStatus === 'waiting_approval'
+                        ? 'Session status IS waiting_approval, but no approval modal could be read'
+                        : 'An approval prompt is pending (the FSM is in its approval state; the status reads generating only because no modal parsed), but no approval modal could be read')
                         + (refreshAttempted ? ' even after forcing a live re-parse of the screen' : '')
                         + '. The status is not wrong — there are simply no buttons to press from here. '
                         + 'This happens when the state was entered by a timeout rather than by a modal '

@@ -194590,8 +194590,10 @@ ${marker2}`,
         };
         let modals = readModals(status, targetState);
         logGate("", modals);
+        const fsmProbe = adapter.isFsmApprovalState;
+        const fsmInApproval = typeof fsmProbe === "function" && fsmProbe.call(adapter);
         let refreshAttempted = false;
-        if (!modals.effectiveModal && modals.effectiveStatus === "waiting_approval" && typeof adapter.refreshModalNow === "function") {
+        if (!modals.effectiveModal && (modals.effectiveStatus === "waiting_approval" || fsmInApproval) && typeof adapter.refreshModalNow === "function") {
           refreshAttempted = true;
           const refreshed = adapter.refreshModalNow();
           LOG.info("Command", `[resolveAction] CLI PTY \u2192 modal latch was empty at waiting_approval; forced live re-parse (modalNowLatched=${refreshed ? "yes" : "no"})`);
@@ -194604,12 +194606,12 @@ ${marker2}`,
             LOG.info("Command", `[resolveAction] CLI PTY \u2192 already_resolved (modal gone, resolved within cooldown)`);
             return { success: true, alreadyResolved: true, status: "already_resolved" };
           }
-          if (effectiveStatus === "waiting_approval") {
+          if (effectiveStatus === "waiting_approval" || fsmInApproval) {
             return {
               success: false,
               approvalModalUnavailable: true,
               refreshAttempted,
-              error: "Session status IS waiting_approval, but no approval modal could be read" + (refreshAttempted ? " even after forcing a live re-parse of the screen" : "") + ". The status is not wrong \u2014 there are simply no buttons to press from here. This happens when the state was entered by a timeout rather than by a modal appearing, or when the screen has since moved on. Read the terminal to see what is actually on it; if a prompt is visible, drive it with send_keys rather than retrying approve."
+              error: (effectiveStatus === "waiting_approval" ? "Session status IS waiting_approval, but no approval modal could be read" : "An approval prompt is pending (the FSM is in its approval state; the status reads generating only because no modal parsed), but no approval modal could be read") + (refreshAttempted ? " even after forcing a live re-parse of the screen" : "") + ". The status is not wrong \u2014 there are simply no buttons to press from here. This happens when the state was entered by a timeout rather than by a modal appearing, or when the screen has since moved on. Read the terminal to see what is actually on it; if a prompt is visible, drive it with send_keys rather than retrying approve."
             };
           }
           return { success: false, error: "Not in approval state" };
@@ -225149,6 +225151,16 @@ ${text10}` : text10;
         }
         return !!this.latestModal && (this.latestModal.buttons?.length ?? 0) > 0;
       }
+      /**
+       * True while the FSM sits in an `approval` state, REGARDLESS of whether a modal
+       * parsed this frame (the status projection reports `generating` for a
+       * modal-less approval frame, so status alone cannot tell the two apart).
+       * Used by the auto-approve retry and by resolve_action to recognise a modal
+       * that vanished from the latch on a redraw while the prompt is still pending.
+       */
+      isFsmApprovalState() {
+        return !this.providerFailure && !this.exited && this.spawned && this.latestState?.status === "approval";
+      }
       getScriptParsedStatus() {
         const providerSessionId = this.extractProviderSessionIdFromScreen();
         if (providerSessionId) this.providerSessionId = providerSessionId;
@@ -227351,6 +227363,7 @@ ${JSON.stringify(replies)}
     var APPROVAL_FLAP_CONTINUITY_MS = 6e3;
     var APPROVAL_AUTO_MASK_STALL_MS = 10500;
     var APPROVAL_FIRE_BUSY_WINDOW_MS = 5e3;
+    var APPROVAL_PRESS_RETRY_DELAYS_MS = [300, 800, 2e3];
     var APPROVAL_STICKY_FLAP_MS = 4e3;
     function approvalModalSignature(message, affirmativeAnchor) {
       return [typeof message === "string" ? message.trim() : "", affirmativeAnchor].join("::");
@@ -227423,6 +227436,8 @@ ${JSON.stringify(replies)}
       host.autoApproveMaskSince = 0;
       host.stalledApprovalNudgeEpisode = 0;
       host.autoApproveLastModalSeenAt = 0;
+      host.autoApproveSurrenderedAt = 0;
+      host.autoApprovePressToken = (host.autoApprovePressToken ?? 0) + 1;
       host.autoApproveBusy = false;
       if (host.autoApproveSettleTimer) {
         clearTimeout(host.autoApproveSettleTimer);
@@ -227511,6 +227526,7 @@ ${JSON.stringify(replies)}
         host.autoApproveMaskSince = 0;
         host.stalledApprovalNudgeEpisode = 0;
         host.autoApproveLastModalSeenAt = 0;
+        host.autoApproveSurrenderedAt = 0;
         if (host.autoApproveSettleTimer) {
           clearTimeout(host.autoApproveSettleTimer);
           host.autoApproveSettleTimer = null;
@@ -227518,6 +227534,7 @@ ${JSON.stringify(replies)}
         return autoApproveActive;
       }
       host.autoApproveInactiveSince = 0;
+      if (host.autoApproveSurrenderedAt) return false;
       if (!host.autoApproveMaskSince) host.autoApproveMaskSince = now;
       maybeEmitStalledApprovalNudge(host, adapterStatus, now);
       const modal = adapterStatus.activeModal;
@@ -227597,19 +227614,85 @@ ${buttons.join("\n")}`;
       host.recordAutoApproval(modal?.message, buttonLabel, now);
       host.logAutoApproval?.(modal?.message, buttonLabel, buttons);
       host.lastAutoApproveFiredAt = now;
-      setTimeout(() => {
-        const adapter = host.adapter;
-        if (typeof adapter.resolveModalMatched === "function") {
-          const matched = adapter.resolveModalMatched(buttonIndex);
-          if (!matched) {
-            if (host.lastAutoApproveFiredAt === now) host.lastAutoApproveFiredAt = 0;
-            LOG.warn("CLI", `[${host.type}] auto-approve resolveModal matched no button (index ${buttonIndex}) \u2014 surfacing approval to coordinator`);
-          }
-        } else {
-          adapter.resolveModal?.(buttonIndex);
-        }
-      }, 0);
+      const pressToken = (host.autoApprovePressToken ?? 0) + 1;
+      host.autoApprovePressToken = pressToken;
+      host.autoApproveSurrenderedAt = 0;
+      setTimeout(() => pressAutoApproveButton(host, buttonIndex, now, pressToken), 0);
       return autoApproveActive;
+    }
+    function pressAutoApproveButton(host, buttonIndex, firedAt, token) {
+      const adapter = host.adapter;
+      if (typeof adapter.resolveModalMatched !== "function") {
+        adapter.resolveModal?.(buttonIndex);
+        return;
+      }
+      if (adapter.resolveModalMatched(buttonIndex)) return;
+      if (host.lastAutoApproveFiredAt === firedAt) host.lastAutoApproveFiredAt = 0;
+      LOG.warn("CLI", `[${host.type}] auto-approve resolveModal matched no button (index ${buttonIndex}) \u2014 re-reading modal and retrying`);
+      scheduleAutoApproveRetry(host, token, 0);
+    }
+    function scheduleAutoApproveRetry(host, token, attempt) {
+      const delay3 = APPROVAL_PRESS_RETRY_DELAYS_MS[attempt];
+      if (delay3 === void 0) {
+        surrenderAutoApprove(host);
+        return;
+      }
+      const timer = setTimeout(() => {
+        if (host.autoApprovePressToken !== token) return;
+        const adapter = host.adapter;
+        if (!host.shouldUsePtyAutoApprove() || host.manualAttendance.isAttended(Date.now())) return;
+        if (typeof adapter.isFsmApprovalState === "function" && !adapter.isFsmApprovalState()) return;
+        try {
+          adapter.refreshModalNow?.();
+        } catch {
+        }
+        const fresh = adapter.getStatus({ allowParse: false });
+        const freshButtons = Array.isArray(fresh?.activeModal?.buttons) ? fresh.activeModal.buttons.map((b) => String(b || "").trim()).filter(Boolean) : [];
+        const kind = typeof fresh?.activeModal?.kind === "string" ? fresh.activeModal.kind : "approval";
+        const choice2 = freshButtons.length > 0 && kind === "approval" && (hasNegativeApprovalOption(freshButtons) || hasReliableApprovalAffirmative(freshButtons)) ? selectAutoApprovalButton(host, freshButtons, fresh?.providerApproval) : null;
+        if (choice2 && choice2.index >= 0 && adapter.resolveModalMatched?.(choice2.index)) {
+          host.lastAutoApproveFiredAt = Date.now();
+          return;
+        }
+        scheduleAutoApproveRetry(host, token, attempt + 1);
+      }, delay3);
+      timer.unref?.();
+    }
+    function surrenderAutoApprove(host) {
+      const now = Date.now();
+      host.autoApproveSurrenderedAt = now;
+      host.autoApproveMaskSince = now;
+      host.pendingAutoApprovalSignature = "";
+      host.pendingAutoApprovalSince = 0;
+      host.autoApproveBusy = false;
+      if (host.autoApproveBusyTimer) {
+        clearTimeout(host.autoApproveBusyTimer);
+        host.autoApproveBusyTimer = null;
+      }
+      host.lastAutoApprovalSignature = "";
+      try {
+        host.adapter.refreshModalNow?.();
+      } catch {
+      }
+      LOG.warn("CLI", `[${host.type}] auto-approve resolveModal matched no button after ${APPROVAL_PRESS_RETRY_DELAYS_MS.length} retries \u2014 surfacing approval to coordinator`);
+      const fresh = host.adapter.getStatus({ allowParse: false });
+      if (fresh?.status === "waiting_approval") return;
+      if (!host.isMeshWorkerSession()) return;
+      if (host.stalledApprovalNudgeEpisode === now) return;
+      host.stalledApprovalNudgeEpisode = now;
+      const modal = fresh?.activeModal;
+      host.appendRuntimeSystemMessage(
+        formatApprovalRequestMessage(modal?.message, modal?.buttons),
+        `approval_request:${now}`,
+        now
+      );
+      host.pushEvent({
+        event: "agent:waiting_approval",
+        chatTitle: `${host.provider.name} \xB7 ${workingDirBasename(host.workingDir)}`,
+        timestamp: now,
+        modalMessage: modal?.message,
+        modalButtons: modal?.buttons
+      });
     }
     function stabilizeFlappingApprovalStatus(host, adapterStatus, now = Date.now()) {
       if (!host.isAutonomousMeshSession() || !host.shouldUsePtyAutoApprove()) return adapterStatus;

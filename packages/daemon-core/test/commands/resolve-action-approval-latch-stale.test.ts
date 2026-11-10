@@ -196,4 +196,49 @@ describe('handleResolveAction — stale approval-modal latch (APPROVE-LATCH-STAL
     expect((result as any).error).not.toContain('live re-parse')
     expect(resolveModal).not.toHaveBeenCalled()
   })
+
+  // Live defect (codex-cli, 23 min wedge): FSM stays `approval` but the redraw blanked the
+  // modal parse, so the adapter projects status `generating` (modal-less approval). resolve_action
+  // answered "Not in approval state" without ever re-reading the screen.
+  describe('FSM approval with a modal-less (generating) projection', () => {
+    function adapterWith(opts: { modalAfterRefresh: boolean }) {
+      let latched: { message: string; buttons: string[] } | null = null
+      const resolveModal = vi.fn()
+      const refreshModalNow = vi.fn(() => {
+        if (opts.modalAfterRefresh) latched = { message: 'Run it?', buttons: ['Yes, proceed (y)', 'No (esc)'] }
+        return !!latched
+      })
+      return {
+        resolveModal,
+        refreshModalNow,
+        adapter: {
+          getStatus: () => latched
+            ? { status: 'waiting_approval', messages: [], activeModal: latched }
+            : { status: 'generating', messages: [], activeModal: null },
+          isFsmApprovalState: () => true,
+          resolveModal,
+          refreshModalNow,
+          isApprovalRecentlyResolved: () => false,
+          writeRaw: vi.fn(),
+        },
+      }
+    }
+
+    it('re-reads the screen and approves instead of "Not in approval state"', async () => {
+      const { adapter, resolveModal, refreshModalNow } = adapterWith({ modalAfterRefresh: true })
+      const result = await handleResolveAction(helpersFor(adapter), APPROVE_ARGS)
+      expect(refreshModalNow).toHaveBeenCalledTimes(1)
+      expect(result).toMatchObject({ success: true, buttonIndex: 0 })
+      expect(resolveModal).toHaveBeenCalledWith(0)
+    })
+
+    it('still no modal: actionable approvalModalUnavailable, not "Not in approval state"', async () => {
+      const { adapter, resolveModal } = adapterWith({ modalAfterRefresh: false })
+      const result = await handleResolveAction(helpersFor(adapter), APPROVE_ARGS) as any
+      expect(result.success).toBe(false)
+      expect(result.approvalModalUnavailable).toBe(true)
+      expect(result.error).not.toMatch(/^Not in approval state/)
+      expect(resolveModal).not.toHaveBeenCalled()
+    })
+  })
 })

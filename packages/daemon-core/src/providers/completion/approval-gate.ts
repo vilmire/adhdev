@@ -41,6 +41,8 @@ export const APPROVAL_FLAP_CONTINUITY_MS = 6000;
 export const APPROVAL_AUTO_MASK_STALL_MS = 10500;
 /** Busy window after a fire during which re-snapshots of the same entry are ignored. */
 export const APPROVAL_FIRE_BUSY_WINDOW_MS = 5000;
+/** Backoff before each re-read + re-press when the auto-approve press found no button. */
+export const APPROVAL_PRESS_RETRY_DELAYS_MS: readonly number[] = [300, 800, 2000];
 /** AUTOAPPROVE-FLAP-INBOX-MISSING sticky-approval overlay window — see the
  *  class static's doc (CliProviderInstance.APPROVAL_STICKY_FLAP_MS) for the
  *  full 2026-07-13 RCA. */
@@ -64,6 +66,10 @@ export interface ApprovalGateHost {
         getLastApprovalResolvedAt(): number;
         resolveModalMatched?: (index: number) => boolean;
         resolveModal?: (index: number) => void;
+        /** FSM is in `approval` even if no modal parsed this frame (spec adapters). */
+        isFsmApprovalState?: () => boolean;
+        /** Force one live re-parse of the screen; true when a modal with buttons is now latched. */
+        refreshModalNow?: () => boolean;
         getTerminalScreenSnapshot?: (maxBytes?: number) => { text?: string } | null;
     };
     manualAttendance: {
@@ -82,6 +88,10 @@ export interface ApprovalGateHost {
     autoApproveBusyTimer: NodeJS.Timeout | null;
     autoApproveSettleTimer: NodeJS.Timeout | null;
     lastAutoApproveFiredAt: number;
+    /** Set when the press retries were exhausted; the mask is dropped for the rest of the episode (0 = not surrendered). */
+    autoApproveSurrenderedAt?: number;
+    /** Bumped per fire; a stale retry chain from an earlier fire aborts itself. */
+    autoApprovePressToken?: number;
     // AUTOAPPROVE-FLAP-INBOX-MISSING sticky-approval overlay state (instance-owned;
     // the sticky suite seeds/inspects these directly).
     approvalStickyLastConcreteAt: number;
@@ -220,6 +230,8 @@ export function resetPtyAutoApproveState(host: ApprovalGateHost): void {
     host.autoApproveMaskSince = 0;
     host.stalledApprovalNudgeEpisode = 0;
     host.autoApproveLastModalSeenAt = 0;
+    host.autoApproveSurrenderedAt = 0;
+    host.autoApprovePressToken = (host.autoApprovePressToken ?? 0) + 1;
     host.autoApproveBusy = false;
     if (host.autoApproveSettleTimer) {
         clearTimeout(host.autoApproveSettleTimer);
@@ -354,11 +366,16 @@ export function maybeAutoApproveStatus(host: ApprovalGateHost, adapterStatus: an
         host.autoApproveMaskSince = 0;
         host.stalledApprovalNudgeEpisode = 0;
         host.autoApproveLastModalSeenAt = 0;
+        host.autoApproveSurrenderedAt = 0;
         if (host.autoApproveSettleTimer) { clearTimeout(host.autoApproveSettleTimer); host.autoApproveSettleTimer = null; }
         return autoApproveActive;
     }
     // Active approval observed — reset the inactivity tracker.
     host.autoApproveInactiveSince = 0;
+    // The press retries were exhausted for this episode: do not mask or re-fire —
+    // the real waiting_approval + modal surfaces (status-transition emits the
+    // approval event) so a coordinator/human can resolve it.
+    if (host.autoApproveSurrenderedAt) return false;
     // STATUS-MISMATCH: the mask-stall clock measures the true age of the
     // unresolved episode; set only when zero so it survives signature changes.
     if (!host.autoApproveMaskSince) host.autoApproveMaskSince = now;
@@ -502,19 +519,96 @@ export function maybeAutoApproveStatus(host: ApprovalGateHost, adapterStatus: an
     // local-resolution clock ONLY when the click actually matched a button, so a
     // never-pressed modal is forwarded to the coordinator, not suppressed.
     host.lastAutoApproveFiredAt = now;
-    setTimeout(() => {
-        const adapter = host.adapter;
-        if (typeof adapter.resolveModalMatched === 'function') {
-            const matched = adapter.resolveModalMatched(buttonIndex);
-            if (!matched) {
-                if (host.lastAutoApproveFiredAt === now) host.lastAutoApproveFiredAt = 0;
-                LOG.warn('CLI', `[${host.type}] auto-approve resolveModal matched no button (index ${buttonIndex}) — surfacing approval to coordinator`);
-            }
-        } else {
-            adapter.resolveModal?.(buttonIndex);
-        }
-    }, 0);
+    const pressToken = (host.autoApprovePressToken ?? 0) + 1;
+    host.autoApprovePressToken = pressToken;
+    host.autoApproveSurrenderedAt = 0;
+    setTimeout(() => pressAutoApproveButton(host, buttonIndex, now, pressToken), 0);
     return autoApproveActive;
+}
+
+/**
+ * One auto-approve press. A miss (no button for the index) is usually a redraw
+ * that blanked the modal parse ~100 ms after detection while the prompt is still
+ * on screen — so re-read the live modal and re-press with backoff while the FSM is
+ * still in `approval`, and only then surrender to the coordinator/human.
+ */
+function pressAutoApproveButton(host: ApprovalGateHost, buttonIndex: number, firedAt: number, token: number): void {
+    // The initial press is never token-gated (every fire must press); only the retry chain is.
+    const adapter = host.adapter;
+    if (typeof adapter.resolveModalMatched !== 'function') {
+        adapter.resolveModal?.(buttonIndex);
+        return;
+    }
+    if (adapter.resolveModalMatched(buttonIndex)) return;
+    if (host.lastAutoApproveFiredAt === firedAt) host.lastAutoApproveFiredAt = 0;
+    LOG.warn('CLI', `[${host.type}] auto-approve resolveModal matched no button (index ${buttonIndex}) — re-reading modal and retrying`);
+    scheduleAutoApproveRetry(host, token, 0);
+}
+
+function scheduleAutoApproveRetry(host: ApprovalGateHost, token: number, attempt: number): void {
+    const delay = APPROVAL_PRESS_RETRY_DELAYS_MS[attempt];
+    if (delay === undefined) {
+        surrenderAutoApprove(host);
+        return;
+    }
+    const timer = setTimeout(() => {
+        if (host.autoApprovePressToken !== token) return;
+        const adapter = host.adapter;
+        if (!host.shouldUsePtyAutoApprove() || host.manualAttendance.isAttended(Date.now())) return;
+        // Episode over (the prompt was answered/closed meanwhile): nothing to retry.
+        if (typeof adapter.isFsmApprovalState === 'function' && !adapter.isFsmApprovalState()) return;
+        try { adapter.refreshModalNow?.(); } catch { /* best-effort live re-parse */ }
+        const fresh = adapter.getStatus({ allowParse: false }) as any;
+        const freshButtons: string[] = Array.isArray(fresh?.activeModal?.buttons)
+            ? fresh.activeModal.buttons.map((b: any) => String(b || '').trim()).filter(Boolean)
+            : [];
+        const kind = typeof fresh?.activeModal?.kind === 'string' ? fresh.activeModal.kind : 'approval';
+        const choice = freshButtons.length > 0 && kind === 'approval'
+            && (hasNegativeApprovalOption(freshButtons) || hasReliableApprovalAffirmative(freshButtons))
+            ? selectAutoApprovalButton(host, freshButtons, fresh?.providerApproval)
+            : null;
+        if (choice && choice.index >= 0 && adapter.resolveModalMatched?.(choice.index)) {
+            host.lastAutoApproveFiredAt = Date.now();
+            return;
+        }
+        scheduleAutoApproveRetry(host, token, attempt + 1);
+    }, delay);
+    (timer as any).unref?.();
+}
+
+/**
+ * Retries exhausted: leave the auto-approve mask for the rest of the episode so
+ * the visible status becomes waiting_approval with the parsed modal and
+ * resolve_action works; page the coordinator when the status path alone would
+ * not (no modal parsed → the status frame still reads `generating`).
+ */
+function surrenderAutoApprove(host: ApprovalGateHost): void {
+    const now = Date.now();
+    host.autoApproveSurrenderedAt = now;
+    host.autoApproveMaskSince = now;
+    host.pendingAutoApprovalSignature = '';
+    host.pendingAutoApprovalSince = 0;
+    host.autoApproveBusy = false;
+    if (host.autoApproveBusyTimer) { clearTimeout(host.autoApproveBusyTimer); host.autoApproveBusyTimer = null; }
+    host.lastAutoApprovalSignature = '';
+    try { host.adapter.refreshModalNow?.(); } catch { /* best-effort live re-parse */ }
+    LOG.warn('CLI', `[${host.type}] auto-approve resolveModal matched no button after ${APPROVAL_PRESS_RETRY_DELAYS_MS.length} retries — surfacing approval to coordinator`);
+    const fresh = host.adapter.getStatus({ allowParse: false }) as any;
+    if (fresh?.status === 'waiting_approval') return; // status-transition emits the approval event on the next frame
+    if (!host.isMeshWorkerSession()) return;
+    if (host.stalledApprovalNudgeEpisode === now) return;
+    host.stalledApprovalNudgeEpisode = now;
+    const modal = fresh?.activeModal;
+    host.appendRuntimeSystemMessage(
+        formatApprovalRequestMessage(modal?.message, modal?.buttons),
+        `approval_request:${now}`,
+        now,
+    );
+    host.pushEvent({
+        event: 'agent:waiting_approval', chatTitle: `${host.provider.name} · ${workingDirBasename(host.workingDir)}`, timestamp: now,
+        modalMessage: modal?.message,
+        modalButtons: modal?.buttons,
+    });
 }
 
 /**

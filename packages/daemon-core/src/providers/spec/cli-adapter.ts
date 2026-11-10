@@ -542,6 +542,17 @@ export class SpecCliAdapter implements CliAdapter {
         return !!this.latestModal && (this.latestModal.buttons?.length ?? 0) > 0;
     }
 
+    /**
+     * True while the FSM sits in an `approval` state, REGARDLESS of whether a modal
+     * parsed this frame (the status projection reports `generating` for a
+     * modal-less approval frame, so status alone cannot tell the two apart).
+     * Used by the auto-approve retry and by resolve_action to recognise a modal
+     * that vanished from the latch on a redraw while the prompt is still pending.
+     */
+    isFsmApprovalState(): boolean {
+        return !this.providerFailure && !this.exited && this.spawned && this.latestState?.status === 'approval';
+    }
+
     getScriptParsedStatus(): { status?: string; messages: unknown[]; title?: string } & Record<string, unknown> {
         const providerSessionId = this.extractProviderSessionIdFromScreen();
         if (providerSessionId) this.providerSessionId = providerSessionId;
