@@ -357,6 +357,22 @@ export function runDiskRetentionSweep(now: number = Date.now()): {
 
 // ─── Orphan worktree detection (detection-only, emits cleanup_candidate) ──────
 
+/**
+ * Anchor for `git worktree list`: a base (non-worktree) node's repoRoot (preferred) or
+ * workspace that EXISTS on this machine. A shared mesh lists every member's base node,
+ * and the first one is often another machine's checkout whose path does not exist here —
+ * anchoring on it silently skipped this daemon's own worktrees (live 2026-11-11: finished
+ * task worktrees piled up on a member for days, ~1.4 GB each).
+ */
+export function resolveLocalBaseRepoRoot(nodes: ReadonlyArray<{ isLocalWorktree?: boolean; repoRoot?: string; workspace?: string }>): string | undefined {
+    for (const n of nodes) {
+        if (n.isLocalWorktree) continue;
+        const root = n.repoRoot || n.workspace;
+        if (root && existsSync(join(root, '.git'))) return root;
+    }
+    return undefined;
+}
+
 /** How many recent worktree_cleanup_candidate entries to scan for the re-emit guard. */
 const ORPHAN_DEDUPE_WINDOW = 200;
 
@@ -377,10 +393,7 @@ export async function detectAndSignalOrphanWorktrees(
     now: number = Date.now(),
 ): Promise<string[]> {
     const nodes = Array.isArray(mesh.nodes) ? mesh.nodes : [];
-    // Anchor: a base (non-worktree) node's repoRoot (preferred) or workspace. The base
-    // node is the primary checkout; its git dir enumerates every worktree of the repo.
-    const baseNode = nodes.find(n => !n.isLocalWorktree && (n.repoRoot || n.workspace));
-    const repoRoot = baseNode?.repoRoot || baseNode?.workspace;
+    const repoRoot = resolveLocalBaseRepoRoot(nodes);
     if (!repoRoot) return []; // no local base checkout for this mesh on this daemon
 
     let worktrees: WorktreePathLike[];

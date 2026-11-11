@@ -26,6 +26,7 @@ import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { triggerMeshQueue } from './mesh-events-coordinator.js';
 import { resolveCoordinatorDaemonIds, daemonHostsMesh, resolveCoordinatorSelfIds } from './mesh-reconcile-identity.js';
 import { runDiskRetentionSweep, detectAndSignalOrphanWorktrees } from './mesh-disk-retention.js';
+import { reapOrphanWorktrees } from './mesh-orphan-worktree-reaper.js';
 import { pruneMeshRuntimeRetention } from './mesh-runtime-store.js';
 import { runWorktreeNodeRetentionTick, type WorktreeRetentionDeps } from './mesh-worktree-retention.js';
 import { sessionLifetimeDeps } from './mesh-session-lifetime-runtime.js';
@@ -189,6 +190,21 @@ export async function runMeshHousekeepingTick(
                 await detectAndSignalOrphanWorktrees(mesh, nowMs);
             } catch (e: any) {
                 LOG.warn('MeshHousekeeping', `Orphan worktree detection failed for mesh ${mesh.id}: ${e?.message || e}`);
+            }
+            // Safe removal of orphans that stayed orphaned past the grace (fail-closed; grace 0 disables).
+            if (components.router) {
+                const router = components.router;
+                try {
+                    await reapOrphanWorktrees(mesh, {
+                        listSessions: async () => {
+                            const control = router.deps.sessionHostControl;
+                            if (!control) throw new Error('session host control unavailable');
+                            return await control.listSessions();
+                        },
+                    }, nowMs);
+                } catch (e: any) {
+                    LOG.warn('MeshHousekeeping', `Orphan worktree removal failed for mesh ${mesh.id}: ${e?.message || e}`);
+                }
             }
         }
         // Converged local worktree-node retention (grace 0 disables).

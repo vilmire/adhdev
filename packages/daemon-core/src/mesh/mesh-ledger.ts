@@ -166,6 +166,9 @@ export type MeshLedgerKind =
     // unresolved entry within the dedupe window suppresses the repeat).
     // payload: { worktreePath, branch?, head?, reason: 'no_matching_live_node', state: 'cleanup_candidate' }
     | 'worktree_cleanup_candidate'
+    // Orphan-worktree reaper removed a proven-clean, fully-pushed managed orphan (mesh-orphan-worktree-reaper.ts).
+    // payload: { worktreePath, branchDeleted, removedAt }
+    | 'worktree_orphan_removed'
     // QUEUE-HOLD-HARD-DEADLINE: an unbounded reconcile hold gate (live
     // awaiting_approval/awaiting_choice, an unresolved held waiting_* suspension, or the
     // RC.20 active-attempt-stage gate) kept a row 'assigned' past the absolute ceiling and
