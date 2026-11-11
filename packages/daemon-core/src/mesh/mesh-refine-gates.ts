@@ -672,6 +672,12 @@ interface MeshRefineValidationGateOptions {
      */
     onCommandComplete?: (info: { displayCommand: string; durationMs: number; passed: boolean }) => void;
     /**
+     * REFINE-JOB-PROGRESS: called when a validation command STARTS (after the missing-deps skip
+     * check, before spawn). `gateLabel` is the configured gate id or display command; counters only.
+     * Never awaited; a throwing callback is swallowed.
+     */
+    onCommandStart?: (info: { gateLabel: string; gatesStarted: number; gatesTotal: number }) => void;
+    /**
      * ★C: whether sync_base rebased the branch in THIS refine run. A vendor-drift
      * failure means something different depending on the answer — see
      * {@link buildRefineVendorDriftHint}.
@@ -1183,6 +1189,8 @@ export async function runMeshRefineValidationGate(
      * a second genuine failure racing the first is recorded without overwriting
      * the summary-level failure classification of the first.
      */
+    let gatesStarted = 0;
+    const gatesTotal = commandsToRun.length;
     const runOne = async (candidate: MeshRefineValidationCommand, control?: RefineCommandControl, handle?: RefineLaneCommandHandle): Promise<RefineLaneCommandOutcome> => {
         const startedAt = Date.now();
         const cwd = candidate.cwd ? pathResolve(workspace, candidate.cwd) : workspace;
@@ -1201,6 +1209,16 @@ export async function runMeshRefineValidationGate(
             return 'blocked';
         }
         const resolvedCommand = resolveWin32Executable(candidate.command);
+        gatesStarted += 1;
+        if (opts?.onCommandStart) {
+            try {
+                opts.onCommandStart({
+                    gateLabel: candidate.id || candidate.displayCommand || [candidate.command, ...(candidate.args || [])].join(' ').trim(),
+                    gatesStarted,
+                    gatesTotal,
+                });
+            } catch { /* observability must never fail the run */ }
+        }
         try {
             const result = await execRefineCommand(execFileAsync, candidate, cwd, resolvedCommand, control);
             if (handle?.cancelRequested) {

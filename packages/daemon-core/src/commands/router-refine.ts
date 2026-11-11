@@ -18,7 +18,7 @@ import { createInteractionId } from '../logging/debug-trace.js';
 import { meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { assessRefineBaseDivergence } from '../mesh/mesh-refine-base-divergence.js';
 // ★B1: slow-gate progress notification (threshold + throttle live in the module).
-import { emitRefineProgress, isSlowRefineGate, type RefineProgressContext } from '../mesh/mesh-refine-progress.js';
+import { emitRefineProgress, isSlowRefineGate, recordRefineGateProgress, type RefineProgressContext } from '../mesh/mesh-refine-progress.js';
 // ★REFINE-ACCEPT-BASE-PREFLIGHT — see mesh-refine-accept-preflight.ts for the
 // four-incident RCA this comes from.
 import {
@@ -217,6 +217,9 @@ export async function refineValidationStage(self: DaemonCommandRouter, ctx: Refi
                 branchWasRebased: didRefineRebaseBranch(refineStages),
                 // ★B1: announce only the gates that actually cost time. The threshold and
                 // the throttle live in mesh-refine-progress.ts; this stage just reports.
+                onCommandStart: ctx.progress
+                    ? (info) => recordRefineGateProgress(ctx.progress!, node.id, info)
+                    : undefined,
                 onCommandComplete: ctx.progress
                     ? (info) => {
                         if (!isSlowRefineGate(info.durationMs)) return;

@@ -46,6 +46,7 @@
  */
 import { LOG } from '../logging/logger.js';
 import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
+import { meshRecord } from './mesh-record.js';
 
 /**
  * A gate slower than this is worth announcing. Set at 30s per the owner's
@@ -193,5 +194,51 @@ export function emitRefineProgress(context: RefineProgressContext, event: Refine
         notifyMeshCoordinator(buildRefineProgressEventPayload(context, event, suppressed) as any);
     } catch (e: any) {
         LOG.debug('Mesh', `[Refinery] progress event dropped (${event.phase}): ${e?.message || e}`);
+    }
+}
+
+/** Longest gate label recorded in a progress record (config id/display command only). */
+const GATE_LABEL_MAX_CHARS = 80;
+
+export interface RefineGateStartInfo {
+    /** Configured gate id (preferred) or its display command. Never command output. */
+    gateLabel: string;
+    /** 1-based count of gates started so far in this node's validation run. */
+    gatesStarted: number;
+    gatesTotal: number;
+}
+
+/**
+ * REFINE-JOB-PROGRESS: record that a validation gate STARTED, so a coordinator reading
+ * mesh_status can tell "running gate 9 of 14" from "never started" without polling output.
+ *
+ * Content boundary: only the configured gate id/label (clamped) and counters — no command
+ * output, no paths of user code, no diffs. Written through the same local record path
+ * (`meshRecord(..., { local: true })`) as the job's `task_dispatched`/terminal records, with
+ * the same `refineJob` identity so buildMeshAsyncRefineJobs folds it by jobId. One record
+ * per gate start (never per output line). Never throws.
+ */
+export function recordRefineGateProgress(
+    context: RefineProgressContext,
+    nodeId: string | undefined,
+    info: RefineGateStartInfo,
+): void {
+    try {
+        meshRecord(context.meshId, 'refine_progress', {
+            ...(nodeId ? { nodeId } : {}),
+            payload: {
+                source: 'refine_mesh_node_async_job',
+                refineJob: { jobId: context.jobId, meshId: context.meshId, ...(nodeId ? { nodeId } : {}), status: 'running' },
+                progress: {
+                    phase: 'gate_started',
+                    gateLabel: String(info.gateLabel || '').slice(0, GATE_LABEL_MAX_CHARS),
+                    gatesStarted: info.gatesStarted,
+                    gatesTotal: info.gatesTotal,
+                    at: new Date().toISOString(),
+                },
+            },
+        }, { local: true });
+    } catch (e: any) {
+        LOG.debug('Mesh', `[Refinery] gate progress record dropped: ${e?.message || e}`);
     }
 }

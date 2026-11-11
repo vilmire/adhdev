@@ -73138,6 +73138,8 @@ ${asText(streams.stderr)}
       }
       let missingDepsBlocked = false;
       const bootstrapProvidedDependencies = summary.bootstrap?.stage === "cached" || summary.bootstrap?.stage === "ran" || summary.bootstrap?.stage === "legacy";
+      let gatesStarted = 0;
+      const gatesTotal = commandsToRun.length;
       const runOne = async (candidate, control, handle) => {
         const startedAt = Date.now();
         const cwd = candidate.cwd ? (0, import_path16.resolve)(workspace, candidate.cwd) : workspace;
@@ -73153,6 +73155,17 @@ ${asText(streams.stderr)}
           return "blocked";
         }
         const resolvedCommand = resolveWin32Executable(candidate.command);
+        gatesStarted += 1;
+        if (opts?.onCommandStart) {
+          try {
+            opts.onCommandStart({
+              gateLabel: candidate.id || candidate.displayCommand || [candidate.command, ...candidate.args || []].join(" ").trim(),
+              gatesStarted,
+              gatesTotal
+            });
+          } catch {
+          }
+        }
         try {
           const result = await execRefineCommand(execFileAsync11, candidate, cwd, resolvedCommand, control);
           if (handle?.cancelRequested) {
@@ -90447,6 +90460,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
             "$.taskId",
             "$.source",
             "$.refineJob",
+            "$.progress",
             "$.retryOfJobId",
             "$.result.branch",
             "$.result.into",
@@ -90456,7 +90470,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
             "$.finalBranchConvergenceState.baseBranch"
           ]
         };
-        REFINE_JOB_LEDGER_KINDS = ["task_dispatched", "task_completed", "task_failed"];
+        REFINE_JOB_LEDGER_KINDS = ["task_dispatched", "task_completed", "task_failed", "refine_progress"];
       }
     });
     var mesh_local_records_exports = {};
@@ -99731,7 +99745,7 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
     }
     function instructionForStatus(status) {
       if (status === "accepted") return "Refine job is accepted; wait for asyncRefineJobs or pendingCoordinatorEvents to report running/completed/failed.";
-      if (status === "running") return "Refine job is running; do not poll the ledger repeatedly. Watch asyncRefineJobs or pendingCoordinatorEvents for the terminal result.";
+      if (status === "running") return "Refine job is running; do not poll the ledger repeatedly. Judge liveness from currentGate/gatesStarted/gatesTotal and lastProgressAt (a recent lastProgressAt means it is advancing; only a long-stale one is worth investigating). Watch asyncRefineJobs or pendingCoordinatorEvents for the terminal result.";
       if (status === "completed") return "Refine job completed; inspect branch convergence and cleanup evidence before reporting final merge state.";
       return "Refine job failed; inspect result/finalBranchConvergenceState in mesh_task_history, fix the blocker, then rerun mesh_refine_node when ready.";
     }
@@ -99739,7 +99753,7 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
       const jobId = readString2(patch.jobId);
       if (!jobId) return;
       const previous = jobs.get(jobId);
-      const status = patch.status || previous?.status || "running";
+      const status = previous && (previous.status === "completed" || previous.status === "failed") && patch.status !== "completed" && patch.status !== "failed" ? previous.status : patch.status || previous?.status || "running";
       const definedPatch = Object.fromEntries(
         Object.entries(patch).filter(([, value]) => value !== void 0)
       );
@@ -99761,8 +99775,20 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
         const finalState = readOptionalRecord2(payload.finalBranchConvergenceState) || readOptionalRecord2(result?.finalBranchConvergenceState);
         const jobId = readString2(refineJob?.jobId);
         if (!jobId) continue;
+        const progress = entry.kind === "refine_progress" ? readOptionalRecord2(payload.progress) : void 0;
+        const progressAt = progress ? readString2(progress.at) || entry.timestamp : void 0;
+        const prior = jobs.get(jobId);
+        const progressIsNewer = progressAt !== void 0 && (!prior?.lastProgressAt || new Date(progressAt).getTime() >= new Date(prior.lastProgressAt).getTime());
+        const gatesStarted = progress && typeof progress.gatesStarted === "number" ? progress.gatesStarted : void 0;
+        const gatesTotal = progress && typeof progress.gatesTotal === "number" ? progress.gatesTotal : void 0;
         const status = ledgerStatus(entry.kind, readString2(refineJob?.status));
         mergeJob(jobs, {
+          ...progress && progressIsNewer ? {
+            currentGate: readString2(progress.gateLabel),
+            gatesStarted,
+            gatesTotal,
+            lastProgressAt: progressAt
+          } : {},
           jobId,
           interactionId: readString2(refineJob?.interactionId),
           status,
@@ -138490,17 +138516,40 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         LOG.debug("Mesh", `[Refinery] progress event dropped (${event.phase}): ${e?.message || e}`);
       }
     }
+    function recordRefineGateProgress(context2, nodeId, info) {
+      try {
+        meshRecord(context2.meshId, "refine_progress", {
+          ...nodeId ? { nodeId } : {},
+          payload: {
+            source: "refine_mesh_node_async_job",
+            refineJob: { jobId: context2.jobId, meshId: context2.meshId, ...nodeId ? { nodeId } : {}, status: "running" },
+            progress: {
+              phase: "gate_started",
+              gateLabel: String(info.gateLabel || "").slice(0, GATE_LABEL_MAX_CHARS),
+              gatesStarted: info.gatesStarted,
+              gatesTotal: info.gatesTotal,
+              at: (/* @__PURE__ */ new Date()).toISOString()
+            }
+          }
+        }, { local: true });
+      } catch (e) {
+        LOG.debug("Mesh", `[Refinery] gate progress record dropped: ${e?.message || e}`);
+      }
+    }
     var SLOW_GATE_THRESHOLD_MS;
     var MIN_EVENT_INTERVAL_MS;
     var CRITICAL_PHASES;
+    var GATE_LABEL_MAX_CHARS;
     var init_mesh_refine_progress = __esm2({
       "src/mesh/mesh-refine-progress.ts"() {
         "use strict";
         init_logger();
         init_deliver();
+        init_mesh_record();
         SLOW_GATE_THRESHOLD_MS = 3e4;
         MIN_EVENT_INTERVAL_MS = 15e3;
         CRITICAL_PHASES = /* @__PURE__ */ new Set(["node_failed", "chain_abort", "job_failed"]);
+        GATE_LABEL_MAX_CHARS = 80;
       }
     });
     async function assessRefineAcceptPreflight(params) {
@@ -140257,6 +140306,7 @@ ${e?.stderr || ""}`;
         branchWasRebased: didRefineRebaseBranch(refineStages),
         // ★B1: announce only the gates that actually cost time. The threshold and
         // the throttle live in mesh-refine-progress.ts; this stage just reports.
+        onCommandStart: ctx.progress ? (info) => recordRefineGateProgress(ctx.progress, node.id, info) : void 0,
         onCommandComplete: ctx.progress ? (info) => {
           if (!isSlowRefineGate(info.durationMs)) return;
           emitRefineProgress(ctx.progress, {

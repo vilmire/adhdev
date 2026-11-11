@@ -20,6 +20,13 @@ export interface MeshAsyncRefineJobSummary extends MeshAsyncJobLifecycle {
     lastEvent?: string;
     lastLedgerKind?: string;
     lastUpdatedAt?: string;
+    /** Configured id/label of the gate most recently started (never command output). */
+    currentGate?: string;
+    /** Gates started so far in the current node's validation run. */
+    gatesStarted?: number;
+    gatesTotal?: number;
+    /** ISO time of the newest progress record; judge staleness from this instead of polling. */
+    lastProgressAt?: string;
     instruction: string;
 }
 
@@ -40,7 +47,7 @@ function ledgerStatus(kind: string, fallback?: string): MeshAsyncRefineJobStatus
 
 function instructionForStatus(status: MeshAsyncRefineJobStatus): string {
     if (status === 'accepted') return 'Refine job is accepted; wait for asyncRefineJobs or pendingCoordinatorEvents to report running/completed/failed.';
-    if (status === 'running') return 'Refine job is running; do not poll the ledger repeatedly. Watch asyncRefineJobs or pendingCoordinatorEvents for the terminal result.';
+    if (status === 'running') return 'Refine job is running; do not poll the ledger repeatedly. Judge liveness from currentGate/gatesStarted/gatesTotal and lastProgressAt (a recent lastProgressAt means it is advancing; only a long-stale one is worth investigating). Watch asyncRefineJobs or pendingCoordinatorEvents for the terminal result.';
     if (status === 'completed') return 'Refine job completed; inspect branch convergence and cleanup evidence before reporting final merge state.';
     return 'Refine job failed; inspect result/finalBranchConvergenceState in mesh_task_history, fix the blocker, then rerun mesh_refine_node when ready.';
 }
@@ -52,7 +59,10 @@ function mergeJob(
     const jobId = readString(patch.jobId);
     if (!jobId) return;
     const previous = jobs.get(jobId);
-    const status = patch.status || previous?.status || 'running';
+    // Terminal states are sticky: a late/out-of-order progress or event record never reopens a job.
+    const status = previous && (previous.status === 'completed' || previous.status === 'failed') && patch.status !== 'completed' && patch.status !== 'failed'
+        ? previous.status
+        : (patch.status || previous?.status || 'running');
     const definedPatch = Object.fromEntries(
         Object.entries(patch).filter(([, value]) => value !== undefined),
     ) as Partial<MeshAsyncRefineJobSummary>;
@@ -80,8 +90,21 @@ export function buildMeshAsyncRefineJobs(args: {
         const finalState = readOptionalRecord(payload.finalBranchConvergenceState) || readOptionalRecord(result?.finalBranchConvergenceState);
         const jobId = readString(refineJob?.jobId);
         if (!jobId) continue;
+        const progress = entry.kind === 'refine_progress' ? readOptionalRecord(payload.progress) : undefined;
+        const progressAt = progress ? (readString(progress.at) || entry.timestamp) : undefined;
+        const prior = jobs.get(jobId);
+        const progressIsNewer = progressAt !== undefined
+            && (!prior?.lastProgressAt || new Date(progressAt).getTime() >= new Date(prior.lastProgressAt).getTime());
+        const gatesStarted = progress && typeof progress.gatesStarted === 'number' ? progress.gatesStarted : undefined;
+        const gatesTotal = progress && typeof progress.gatesTotal === 'number' ? progress.gatesTotal : undefined;
         const status = ledgerStatus(entry.kind, readString(refineJob?.status));
         mergeJob(jobs, {
+            ...(progress && progressIsNewer ? {
+                currentGate: readString(progress.gateLabel),
+                gatesStarted,
+                gatesTotal,
+                lastProgressAt: progressAt,
+            } : {}),
             jobId,
             interactionId: readString(refineJob?.interactionId),
             status,

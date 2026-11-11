@@ -31,6 +31,9 @@ import { readString } from '@adhdev/mesh-shared';
 
 export type MeshLedgerKind =
     | 'task_dispatched'
+    // REFINE-JOB-PROGRESS: one content-free record per validation gate START of an async refine job
+    // (gate id/label + counters only). payload: { source: 'refine_mesh_node_async_job', refineJob, progress }
+    | 'refine_progress'
     // LEDGER-TASK-TRACEABILITY (C): a queue task transitioned pending→assigned (a
     // node/session claimed it). Distinct from task_dispatched (the message was handed
     // to the transport): claim precedes dispatch and marks the lifecycle handoff.
@@ -698,6 +701,7 @@ export const REFINE_JOB_LEDGER_PROJECTION: LocalRecordProjection = {
         '$.taskId',
         '$.source',
         '$.refineJob',
+        '$.progress',
         '$.retryOfJobId',
         '$.result.branch',
         '$.result.into',
@@ -709,7 +713,7 @@ export const REFINE_JOB_LEDGER_PROJECTION: LocalRecordProjection = {
 };
 
 /** The refine-job lifecycle kinds buildMeshAsyncRefineJobs folds. */
-export const REFINE_JOB_LEDGER_KINDS: MeshLedgerKind[] = ['task_dispatched', 'task_completed', 'task_failed'];
+export const REFINE_JOB_LEDGER_KINDS: MeshLedgerKind[] = ['task_dispatched', 'task_completed', 'task_failed', 'refine_progress'];
 
 // ─── Recovery Context ───────────────────────────
 
