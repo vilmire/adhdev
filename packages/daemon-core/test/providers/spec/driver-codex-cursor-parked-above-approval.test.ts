@@ -166,3 +166,32 @@ describe('resolveLiveModalSlice — codex MCP tool form, cursor parked on the `�
         expect(resolveLiveModalSlice(quoted, { row: 12, col: 1 }).hasLiveModal).toBe(false);
     });
 });
+
+maybe('FsmDriver — codex MCP tool form with the cursor on the `• Calling` row', () => {
+    const paint = (lines: string[], cursor: { row: number; col: number }) =>
+        `\x1b[2J\x1b[H${lines.join('\r\n')}\x1b[${cursor.row + 1};${cursor.col + 1}H`;
+
+    it('reaches approval with the four MCP buttons, keeps it on a repaint, and leaves it once the form is gone', async () => {
+        const factory = new DrivableFactory();
+        const driver = new FsmDriver({ specPath: SPEC, workingDir: os.tmpdir(), hotReload: false, transportFactory: factory, cols: 80, rows: 32 } as any);
+        driver.start();
+        factory.last!.feed(paint(MCP_FORM_SCREEN, { row: 12, col: 1 }));
+        await sleep(2500);
+        expect((driver as any).currentStateId).toBe('approval');
+        const labels = ((driver as any).currentEval?.modal?.buttons ?? []).map((b: any) => b.label ?? b);
+        expect(labels).toHaveLength(4);
+        expect(labels.join('|')).toContain('Always allow');
+
+        // Same prompt repainted (e.g. a spinner tick elsewhere): still one pending approval.
+        factory.last!.feed(paint(MCP_FORM_SCREEN, { row: 12, col: 1 }));
+        await sleep(1500);
+        expect((driver as any).currentStateId).toBe('approval');
+
+        // Form dismissed → the call result replaces it; no stale approval.
+        const done = MCP_FORM_SCREEN.slice(0, 12).concat(['• Called adhdev-mesh.mesh_enqueue_task', '  └ {"success":true}', '', '› ']);
+        factory.last!.feed(paint(done, { row: done.length - 1, col: 2 }));
+        await sleep(2500);
+        expect((driver as any).currentStateId).not.toBe('approval');
+        driver.stop?.();
+    });
+});
