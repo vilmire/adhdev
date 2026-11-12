@@ -111,3 +111,58 @@ maybe('FsmDriver — codex approval with the cursor parked above it', () => {
         driver.stop?.();
     });
 });
+
+// Live 2026-11-12: codex's MCP-tool permission form ("Field 1/1 … enter to submit | esc to cancel"),
+// cursor parked ON the `• Calling …` bullet row of the tool call being approved. The cursor-on-bullet
+// rejection ran before the parked-above acceptance, so the session sat an hour as `generating`.
+const MCP_FORM_SCREEN: string[] = [
+    "› [System] Coordinator idle with 1 active mission(s): - Fix review defect…",
+    "  └ {\"success\":true,\"dryRun\":true}",
+    "    + Show details",
+    "",
+    "• Called adhdev-mesh.mesh_mission_upsert",
+    "  └ {\"success\":true,\"mission\":{\"id\":\"m-1\"}}",
+    "    + Show details",
+    "",
+    "• Called adhdev-mesh.mesh_clone_node",
+    "  └ {\"success\":true,\"node\":{\"id\":\"node_1\"}}",
+    "    + Show details",
+    "",
+    "• Calling adhdev-mesh.mesh_enqueue_task",
+    "    + Show details",
+    "",
+    "",
+    "  Field 1/1",
+    "  Allow the adhdev-mesh MCP server to run tool \"mesh_enqueue_task\"?",
+    "",
+    "  difficulty: difficult",
+    "  message: implement the admin feature …",
+    "  mission_id: m-1",
+    "",
+    "  › 1. Allow                   Run the tool and continue",
+    "    2. Allow for this session  Run the tool and remember this choice for this",
+    "                               session",
+    "    3. Always allow            Run the tool and remember this choice for",
+    "                               future tool calls",
+    "    4. Cancel                  Cancel this tool call",
+    "  enter to submit | esc to cancel",
+];
+
+describe('resolveLiveModalSlice — codex MCP tool form, cursor parked on the `• Calling` row', () => {
+    it('treats the form as live although the cursor sits on the tool-call bullet above it', () => {
+        const slice = resolveLiveModalSlice(MCP_FORM_SCREEN, { row: 12, col: 1 });
+        expect(slice.hasLiveModal).toBe(true);
+        expect(slice.screen).toContain('Allow the adhdev-mesh MCP server to run tool');
+        expect(slice.screen).toContain('4. Cancel');
+    });
+
+    it('still rejects a cursor on a bullet when no codex dialog is at the bottom', () => {
+        const noDialog = MCP_FORM_SCREEN.slice(0, 14);
+        expect(resolveLiveModalSlice(noDialog, { row: 12, col: 1 }).hasLiveModal).toBe(false);
+    });
+
+    it('still rejects the same form quoted above an active composer', () => {
+        const quoted = [...MCP_FORM_SCREEN, '', '› ', '  tab to queue message  ·  ⏎ send'];
+        expect(resolveLiveModalSlice(quoted, { row: 12, col: 1 }).hasLiveModal).toBe(false);
+    });
+});

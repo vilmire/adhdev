@@ -135705,7 +135705,24 @@ ${detail.join("\n")}` : stripped;
       if (cursor !== void 0) {
         if (cursor.row < 0) return empty;
         const effectiveCursorRow = cursor.row;
-        if (effectiveCursorRow <= lastNonBlankRow && isComposerOrSpinnerOrBulletLine(lines[effectiveCursorRow], lines[effectiveCursorRow + 1] ?? "")) {
+        const codexParkedAbove = (() => {
+          if (!(effectiveCursorRow < interactiveStartRow)) return false;
+          if (!lastChoiceBlock || choiceEndRow !== lastChoiceBlock.endRow || lastChoiceBlock.count < 2) return false;
+          if (!CODEX_PARKED_ABOVE_FOOTER_RE.test(lines[lastNonBlankRow])) return false;
+          if (!lines.slice(choiceEndRow + 1, lastNonBlankRow).every((row2) => !row2.trim())) return false;
+          let headerRow = -1;
+          for (let r = choiceStartRow - 1; r > effectiveCursorRow; r -= 1) {
+            if (CODEX_PARKED_ABOVE_HEADER_RE.test(lines[r])) {
+              headerRow = r;
+              break;
+            }
+          }
+          if (headerRow === -1) return false;
+          return lines.slice(headerRow + 1, choiceStartRow).every((row2) => !isComposerOrSpinnerOrBulletLine(row2) && matchNumberedChoiceIndex(row2) === null);
+        })();
+        const cursorLine = lines[effectiveCursorRow] ?? "";
+        const cursorOnPendingCodexCall = /^\s*•\s+(?:Calling|Running)\s/.test(cursorLine);
+        if (effectiveCursorRow <= lastNonBlankRow && isComposerOrSpinnerOrBulletLine(cursorLine, lines[effectiveCursorRow + 1] ?? "") && !(codexParkedAbove && cursorOnPendingCodexCall)) {
           return empty;
         }
         if (effectiveCursorRow < interactiveStartRow || effectiveCursorRow > modalEndRow + 1) {
@@ -135714,14 +135731,7 @@ ${detail.join("\n")}` : stripped;
           const queuedForm = PARKED_BELOW_SWITCHER_RE.test(lines[lastNonBlankRow]) && lines.slice(Math.max(interactiveStartRow, lastNonBlankRow - 4), lastNonBlankRow).some((row2) => PARKED_BELOW_KEY_HINT_RE.test(row2));
           const singleForm = PARKED_BELOW_SKIP_ROW_RE.test(lines[lastNonBlankRow]) && lines.slice(Math.max(interactiveStartRow, lastNonBlankRow - 8), lastNonBlankRow).some((row2) => PARKED_BELOW_PROMPT_RE.test(row2));
           const parkedBelow = effectiveCursorRow > lastNonBlankRow && modalEndRow === lastNonBlankRow && blankDownToCursor && (queuedForm || singleForm);
-          const headerRow = (() => {
-            for (let r = choiceStartRow - 1; r > effectiveCursorRow; r -= 1) {
-              if (CODEX_PARKED_ABOVE_HEADER_RE.test(lines[r])) return r;
-            }
-            return -1;
-          })();
-          const parkedAbove = effectiveCursorRow < interactiveStartRow && lastChoiceBlock !== void 0 && choiceEndRow === lastChoiceBlock.endRow && lastChoiceBlock.count >= 2 && CODEX_PARKED_ABOVE_FOOTER_RE.test(lines[lastNonBlankRow]) && lines.slice(choiceEndRow + 1, lastNonBlankRow).every((row2) => !row2.trim()) && headerRow !== -1 && lines.slice(headerRow + 1, choiceStartRow).every((row2) => !isComposerOrSpinnerOrBulletLine(row2) && matchNumberedChoiceIndex(row2) === null);
-          if (!detached && !parkedBelow && !parkedAbove) return empty;
+          if (!detached && !parkedBelow && !codexParkedAbove) return empty;
         }
       }
       const sliceLines = lines.slice(minStartRow, modalEndRow + 1);
@@ -135869,7 +135879,7 @@ ${detail.join("\n")}` : stripped;
         PARKED_BELOW_SWITCHER_RE = /^\s*←\/→ to switch approval\s*$/;
         PARKED_BELOW_KEY_HINT_RE = /\((?:y|n|p|tab|shift\+tab|esc(?:\s+or\s+n)?)\)\s*$/i;
         PARKED_BELOW_SKIP_ROW_RE = /^\s*Skip & tell the agent what to do instead \(esc or n\)\s*$/;
-        CODEX_PARKED_ABOVE_FOOTER_RE = /^\s*Press enter to confirm or esc to cancel\s*$/;
+        CODEX_PARKED_ABOVE_FOOTER_RE = /^\s*(?:Press enter to confirm or esc to cancel|enter to submit \| esc to cancel)\s*$/;
         CODEX_PARKED_ABOVE_HEADER_RE = /^\s*(?:Would you like to (?:run the following command|make the following edits|grant these permissions)|Allow (?:command|Codex to|the .+ MCP server to run tool))\b/;
         PARKED_BELOW_PROMPT_RE = /^\s*Run this (?:command|MCP tool)\?\s*$/;
         SCROLL_INDICATOR_LINE_RE = /^\s*[↑↓⇡⇣▲▼]\s*(?:\d+\s+more\b.*|more\b.*)?$/i;

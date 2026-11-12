@@ -45,7 +45,7 @@ const PARKED_BELOW_KEY_HINT_RE = /\((?:y|n|p|tab|shift\+tab|esc(?:\s+or\s+n)?)\)
 /** cursor-agent's single-approval prompt: its last option row, and the header above it. */
 const PARKED_BELOW_SKIP_ROW_RE = /^\s*Skip & tell the agent what to do instead \(esc or n\)\s*$/;
 /** Codex's own approval footer — live chrome, always the last row of the dialog. */
-const CODEX_PARKED_ABOVE_FOOTER_RE = /^\s*Press enter to confirm or esc to cancel\s*$/;
+const CODEX_PARKED_ABOVE_FOOTER_RE = /^\s*(?:Press enter to confirm or esc to cancel|enter to submit \| esc to cancel)\s*$/;
 /** Codex's approval header ("Would you like to run …?", "Allow …?"), the row that opens the dialog. */
 const CODEX_PARKED_ABOVE_HEADER_RE = /^\s*(?:Would you like to (?:run the following command|make the following edits|grant these permissions)|Allow (?:command|Codex to|the .+ MCP server to run tool))\b/;
 const PARKED_BELOW_PROMPT_RE = /^\s*Run this (?:command|MCP tool)\?\s*$/;
@@ -282,9 +282,38 @@ export function resolveLiveModalSlice(
     if (cursor !== undefined) {
         if (cursor.row < 0) return empty;
         const effectiveCursorRow = cursor.row;
+        // PARKED ABOVE (codex): while an approval (command or MCP-tool form) is up codex leaves the
+        // terminal cursor where the transcript last drew it, rows above the dialog — even on the
+        // `• Calling …` row of the tool call being approved (live 2026-11-11: row 2 of a 32-row
+        // screen; 2026-11-12: the `• Calling adhdev-mesh.mesh_enqueue_task` row, the session sat an
+        // hour reported as `generating`). Accepted only for codex's own dialog shape: its footer is
+        // the bottom row, the choice block is the last block with only blank rows before the footer,
+        // and its header sits between the cursor and the choices with no composer, spinner or bullet
+        // row after it. A transcript quoting the dialog always has the composer below it, which the
+        // bottom-most check above already rejects. Evaluated BEFORE the cursor-on-bullet rejection,
+        // because codex parks on exactly such a row.
+        const codexParkedAbove = (() => {
+            if (!(effectiveCursorRow < interactiveStartRow)) return false;
+            if (!lastChoiceBlock || choiceEndRow !== lastChoiceBlock.endRow || lastChoiceBlock.count < 2) return false;
+            if (!CODEX_PARKED_ABOVE_FOOTER_RE.test(lines[lastNonBlankRow])) return false;
+            if (!lines.slice(choiceEndRow + 1, lastNonBlankRow).every(row => !row.trim())) return false;
+            let headerRow = -1;
+            for (let r = choiceStartRow - 1; r > effectiveCursorRow; r -= 1) {
+                if (CODEX_PARKED_ABOVE_HEADER_RE.test(lines[r])) { headerRow = r; break; }
+            }
+            if (headerRow === -1) return false;
+            return lines.slice(headerRow + 1, choiceStartRow)
+                .every(row => !isComposerOrSpinnerOrBulletLine(row) && matchNumberedChoiceIndex(row) === null);
+        })();
+        // The one bullet row codex parks on is the IN-PROGRESS tool call being approved (`• Calling …`
+        // / `• Running …`). A finished `• Ran …` row above a dialog means the dialog is quoted tool
+        // output (nested-approval-false-positive), so it stays rejected.
+        const cursorLine = lines[effectiveCursorRow] ?? '';
+        const cursorOnPendingCodexCall = /^\s*•\s+(?:Calling|Running)\s/.test(cursorLine);
         if (
             effectiveCursorRow <= lastNonBlankRow
-            && isComposerOrSpinnerOrBulletLine(lines[effectiveCursorRow], lines[effectiveCursorRow + 1] ?? '')
+            && isComposerOrSpinnerOrBulletLine(cursorLine, lines[effectiveCursorRow + 1] ?? '')
+            && !(codexParkedAbove && cursorOnPendingCodexCall)
         ) {
             return empty;
         }
@@ -320,30 +349,8 @@ export function resolveLiveModalSlice(
                 && modalEndRow === lastNonBlankRow
                 && blankDownToCursor
                 && (queuedForm || singleForm);
-            // PARKED ABOVE (codex): while a command approval is up codex leaves the terminal cursor
-            // where the transcript last drew it, rows above the dialog (live 2026-11-11: row 2 of a
-            // 32-row screen, the dialog at rows 8-31; the worker sat 40+ min reported as `generating`,
-            // the FSM already in `approval`). Accepted only for codex's own dialog shape: its footer is
-            // the bottom row, the choice block is the last block and only blank rows separate them,
-            // and its header sits between the cursor and the choices with no composer, spinner or
-            // bullet row after it. A transcript quoting the dialog always has the composer below it,
-            // which the bottom-most check above already rejects.
-            const headerRow = (() => {
-                for (let r = choiceStartRow - 1; r > effectiveCursorRow; r -= 1) {
-                    if (CODEX_PARKED_ABOVE_HEADER_RE.test(lines[r])) return r;
-                }
-                return -1;
-            })();
-            const parkedAbove = effectiveCursorRow < interactiveStartRow
-                && lastChoiceBlock !== undefined
-                && choiceEndRow === lastChoiceBlock.endRow
-                && lastChoiceBlock.count >= 2
-                && CODEX_PARKED_ABOVE_FOOTER_RE.test(lines[lastNonBlankRow])
-                && lines.slice(choiceEndRow + 1, lastNonBlankRow).every(row => !row.trim())
-                && headerRow !== -1
-                && lines.slice(headerRow + 1, choiceStartRow)
-                    .every(row => !isComposerOrSpinnerOrBulletLine(row) && matchNumberedChoiceIndex(row) === null);
-            if (!detached && !parkedBelow && !parkedAbove) return empty;
+            // PARKED ABOVE (codex): see codexParkedAbove above.
+            if (!detached && !parkedBelow && !codexParkedAbove) return empty;
         }
     }
 
