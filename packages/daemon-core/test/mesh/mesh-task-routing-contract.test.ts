@@ -43,4 +43,54 @@ describe('routing contracts', () => {
         expect(pendingLaunchReservation(task, 200000)).toBe(false);
         expect(pendingLaunchReservation({ ...task, status: 'assigned' }, 110000)).toBe(false);
     });
+    it('enforces attested read-lease checkout, different provider, proof integrity and writer absence on resumed stage review child', async () => {
+        const { createHash } = await import('node:crypto');
+        const { realpathSync } = await import('node:fs');
+        const { attestStageReviewInput } = await import('../../src/mesh/stage-review-input.js');
+        const { initialStageState } = await import('../../src/mesh/stage-state.js');
+        const candidateWs = mkdtempSync(join(tmpdir(), 'rc-stage-cand-')); dirs.push(candidateWs);
+        const baseWs = mkdtempSync(join(tmpdir(), 'rc-stage-base-')); dirs.push(baseWs);
+        execFileSync('git', ['init', '-q'], { cwd: candidateWs, stdio: 'pipe' });
+        execFileSync('git', ['init', '-q'], { cwd: baseWs, stdio: 'pipe' });
+        writeFileSync(join(candidateWs, 'runtime.ts'), 'export const r5 = true;\n');
+        execFileSync('git', ['add', 'runtime.ts'], { cwd: candidateWs, stdio: 'pipe' });
+        execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'd919'], { cwd: candidateWs, stdio: 'pipe' });
+        const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: candidateWs, encoding: 'utf8', stdio: 'pipe' }).trim();
+        const artPath = join(realpathSync.native(candidateWs), 'art_e4ec.json');
+        writeFileSync(artPath, '{"ok":true}');
+        const grant = { id: 'art_e4ec', file: artPath, sha256: createHash('sha256').update('{"ok":true}').digest('hex'), size: Buffer.byteLength('{"ok":true}') };
+
+        const st = initialStageState(new Date().toISOString());
+        Object.assign(st, {
+            phase: 'awaiting_review', round: 6, released: false,
+            stageHeads: [{ round: 5, rootSha: 'a'.repeat(40) }, { round: 6, rootSha: headSha }],
+            reviewTaskIds: ['c1', 'c2', 'c3', 'c4', 'c5', 'c6'],
+            selfCheck: 'unavailable',
+        });
+        const parent = {
+            id: 'parent_3e2', meshId: 'mesh_1', status: 'assigned',
+            assignedNodeId: 'node_a992', assignedSessionId: 'impl_3e2', assignedProviderType: 'claude-cli',
+            stagePlan: { review: true, maxRevisions: 2, independence: 'different_provider' },
+            stageState: st,
+        } as unknown as MeshWorkQueueEntry;
+        const proof = attestStageReviewInput(parent, {
+            repoIdentity: 'vilmire/adhdev', machineId: 'machine-1', nodeId: 'node_a992', workspace: candidateWs,
+        }, [grant]);
+        proof.childTaskId = 'c6';
+        parent.stageReviewInput = proof;
+        const child = {
+            id: 'c6', origin: 'stage', parentTaskId: 'parent_3e2', stageRole: 'review', stageRound: 6,
+            readonly: true, taskMode: 'validation', inputArtifactIds: ['art_e4ec'],
+            review: { sourceTaskId: 'parent_3e2', independence: 'different_provider' },
+        } as unknown as MeshWorkQueueEntry;
+
+        // 1. Wrong base checkout is refused
+        expect(reviewRoutingRefusal(child, parent, 'antigravity-cli', { workspace: baseWs, machineId: 'machine-1', repoIdentity: 'vilmire/adhdev' }, [parent])).toBe('review_input_unavailable');
+        // 2. Same provider as proven implementer source provider is refused
+        expect(reviewRoutingRefusal(child, parent, 'claude-cli', { workspace: candidateWs, machineId: 'machine-1', repoIdentity: 'vilmire/adhdev' }, [parent])).toBe('review_independence_required');
+        // 3. Missing proof is refused
+        expect(reviewRoutingRefusal(child, { ...parent, stageReviewInput: undefined }, 'antigravity-cli', { workspace: candidateWs, machineId: 'machine-1', repoIdentity: 'vilmire/adhdev' }, [parent])).toBe('review_input_unavailable');
+        // 4. Attested candidate checkout read-lease is accepted for an independent provider
+        expect(reviewRoutingRefusal(child, parent, 'antigravity-cli', { workspace: candidateWs, machineId: 'machine-1', repoIdentity: 'vilmire/adhdev' }, [parent])).toBeUndefined();
+    });
 });

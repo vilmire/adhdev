@@ -34,6 +34,7 @@ import { FINGERPRINT_V2, type StageGitPort, type StageRuntimePorts, type SelfChe
 import { runMeshRefineValidationProfile } from './refine-profile-run.js';
 import { prepareLightWorkspace, removeLightWorkspace } from './light-workspace.js';
 import { loadLightWorkspaceConfig } from './light-workspace-config.js';
+import { getLightWorkspace } from './mesh-light-workspace-store.js';
 import { attestStageReviewInput, stageReviewArtifactGrantsWithheld, currentStageReviewScope } from './stage-review-input.js';
 import { reviewInputBusy } from './mesh-task-routing-contract.js';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
@@ -399,6 +400,13 @@ export function createProductionStagePorts(components: Pick<DaemonComponents, 's
             },
         },
         workspaceOf: parent => {
+            // Light implementer: prefer the private light workspace path (Contract B provenance).
+            if (parent.light && parent.lightWorkspaceId) {
+                try {
+                    const lw = getLightWorkspace(store().db, parent.lightWorkspaceId);
+                    if (lw?.path) return lw.path;
+                } catch { /* fall through */ }
+            }
             const nodeId = parent.assignedNodeId ?? parent.targetNodeId;
             if (parent.ownershipScope?.worktree) return parent.ownershipScope.worktree;
             const mesh = getMesh(parent.meshId) as { nodes?: Array<{ id?: string; nodeId?: string; workspace?: string }> } | undefined;

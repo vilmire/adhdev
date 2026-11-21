@@ -33,6 +33,7 @@ export const CANONICAL_MESH_TOOL_NAMES = [
     'mesh_queue_revise',
     'mesh_light_land',
     'mesh_light_discard',
+    'mesh_light_continue_integration',
     'mesh_send_task',
     'mesh_read_chat',
     'mesh_read_debug',

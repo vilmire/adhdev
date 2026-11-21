@@ -122,7 +122,7 @@ export function lightArtifactDir(ws: Pick<LightWorkspaceRow, 'repoRoot' | 'taskI
     return path.join(resolveConfigDir(), 'light-artifacts', lightRepoHash(ws.repoRoot), lightTaskKey(ws.taskId));
 }
 
-function registerPatch(task: MeshWorkQueueEntry, ws: LightWorkspaceRow, name: string, content: string, title: string): string | undefined {
+function registerPatch(task: MeshWorkQueueEntry, ws: LightWorkspaceRow, name: string, content: string, title: string, kind: 'diff' | 'json' = 'diff'): string | undefined {
     if (!content) return undefined;
     const dir = lightArtifactDir(ws);
     fs.mkdirSync(dir, { recursive: true });
@@ -134,12 +134,66 @@ function registerPatch(task: MeshWorkQueueEntry, ws: LightWorkspaceRow, name: st
         if (!register) throw new Error('artifact registrar not installed');
         return register({
             sessionId, workspaceRoot: dir, path: name, meshId: task.meshId, taskId: task.id, ...(task.missionId ? { missionId: task.missionId } : {}),
-            producerRole: 'pipeline', kind: 'diff', title,
+            producerRole: 'pipeline', kind, title,
         }) ?? undefined;
     } catch (e: any) {
         LOG.warn('LightTask', `patch artifact ${name} for ${task.id} not registered: ${e?.message || e}`);
         return undefined;
     }
+}
+
+/** Parse porcelain v1 paths (tracked + untracked). Paths are repo-relative posix. */
+function porcelainTouchedPaths(porcelain: string): string[] {
+    const out: string[] = [];
+    for (const line of porcelain.split('\n')) {
+        if (!line) continue;
+        // "XY path" or "XY orig -> path" (rename). Untracked is "?? path".
+        const body = line.slice(3);
+        if (!body) continue;
+        const arrow = body.lastIndexOf(' -> ');
+        out.push(arrow >= 0 ? body.slice(arrow + 4) : body);
+    }
+    return [...new Set(out)].sort();
+}
+
+/**
+ * Immutable dirty packet for one git root (workspace root or a submodule): tracked binary
+ * diff + untracked-as-new-file diffs, without mutating the private index.
+ */
+async function captureDirtyRepoPacket(repo: string): Promise<{ patch: string; touchedPaths: string[]; headSha: string | null; gitDir: string | null; indexPath: string | null; patchSha256: string }> {
+    // Do not use lightGitOk here: its .trim() eats the leading space of porcelain " M path".
+    const statusRaw = await lightGit(repo, ['status', '--porcelain=v1', '--untracked-files=all']);
+    const status = statusRaw.code === 0 ? statusRaw.stdout.replace(/\n$/, '') : '';
+    const touchedPaths = porcelainTouchedPaths(status);
+    const tracked = (await lightGit(repo, ['diff', 'HEAD', '--binary'], { timeoutMs: 50_000 })).stdout;
+    const staged = (await lightGit(repo, ['diff', '--cached', '--binary'], { timeoutMs: 50_000 })).stdout;
+    const untracked = (await lightGitOk(repo, ['ls-files', '-z', '-o', '--exclude-standard']))?.split('\0').filter(Boolean) ?? [];
+    const parts: string[] = [];
+    if (tracked) parts.push(tracked.endsWith('\n') ? tracked : `${tracked}\n`);
+    if (staged) parts.push(staged.endsWith('\n') ? staged : `${staged}\n`);
+    for (const rel of untracked) {
+        const abs = path.join(repo, rel);
+        // `git diff --no-index` exits 1 on difference; lightGit keeps stdout.
+        const empty = process.platform === 'win32' ? 'NUL' : '/dev/null';
+        const u = await lightGit(repo, ['diff', '--no-index', '--binary', '--', empty, abs], { timeoutMs: 50_000 });
+        if (u.stdout) {
+            // Rewrite /dev/null or NUL paths to a stable a/ / b/ form for the packet.
+            const rewritten = u.stdout
+                .replace(new RegExp(`(a/)${empty.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'g'), `a/${rel}`)
+                .replace(new RegExp(`(b/)${abs.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'g'), `b/${rel}`)
+                .replace(new RegExp(abs.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), rel);
+            parts.push(rewritten.endsWith('\n') ? rewritten : `${rewritten}\n`);
+        }
+    }
+    const patch = parts.join('');
+    const headSha = await lightGitOk(repo, ['rev-parse', 'HEAD']);
+    const gitDir = await lightGitOk(repo, ['rev-parse', '--absolute-git-dir']);
+    const indexPath = await lightGitOk(repo, ['rev-parse', '--git-path', 'index']);
+    return {
+        patch, touchedPaths, headSha, gitDir,
+        indexPath: indexPath ? path.resolve(repo, indexPath) : null,
+        patchSha256: crypto.createHash('sha256').update(patch).digest('hex'),
+    };
 }
 
 export async function captureLightTaskResult(input: { meshId: string; taskId: string; report: LightReportInput }): Promise<LightTaskResult | null> {
@@ -170,16 +224,72 @@ export async function captureLightTaskResult(input: { meshId: string; taskId: st
         ...(subs.length ? { submoduleBranches: Object.fromEntries(subs.map(s => [s, ws.branchRefs[s] ?? ''])) } : {}),
     };
 
-    // 1. uncommitted changes -> blocked, the diff is kept as an artifact (never committed for the worker)
-    const dirty: string[] = [];
-    for (const dir of [lw, ...subs.map(s => path.join(lw, s))]) {
-        const st = await lightGitOk(dir, ['status', '--porcelain=v1', '--untracked-files=all']);
-        if (st === null || st) dirty.push(dir);
+    // 1. uncommitted changes -> blocked. Capture EVERY dirty root/submodule as its own immutable
+    // packet (patch + touchedPaths + hash + identity). Never promote dirty work to verified/landable.
+    const dirtyUnits: Array<{ label: string; dir: string; prefix: string }> = [
+        { label: 'root', dir: lw, prefix: '' },
+        ...subs.map(s => ({ label: s, dir: path.join(lw, s), prefix: `${s}/` })),
+    ];
+    const dirtyPackets: Array<{
+        label: string; prefix: string; patch: string; touchedPaths: string[]; headSha: string | null;
+        gitDir: string | null; indexPath: string | null; patchSha256: string;
+    }> = [];
+    for (const unit of dirtyUnits) {
+        const st = await lightGit(unit.dir, ['status', '--porcelain=v1', '--untracked-files=all']);
+        // Preserve leading spaces; only treat spawn failure as unknown/dirty.
+        if (st.code !== 0 || st.stdout.replace(/\n$/, '')) {
+            const packet = await captureDirtyRepoPacket(unit.dir);
+            dirtyPackets.push({ label: unit.label, prefix: unit.prefix, ...packet });
+        }
     }
-    if (dirty.length) {
-        const diff = (await lightGit(lw, ['diff', 'HEAD', '--binary'])).stdout;
-        const id = registerPatch(task, ws, 'uncommitted.patch', diff, 'Light task: uncommitted changes');
-        return finish({ ...base, landing: 'blocked', blockedReason: 'light_uncommitted_changes', touchedPaths: [], patchArtifactIds: id ? [id] : [] });
+    if (dirtyPackets.length) {
+        const patchIds: string[] = [];
+        const touchedPaths = [...new Set(dirtyPackets.flatMap(p => p.touchedPaths.map(t => `${p.prefix}${t}`)))].sort();
+        const patchBodies: string[] = [];
+        for (const p of dirtyPackets) {
+            const safe = p.label.replace(/[^a-zA-Z0-9_-]/g, '_');
+            const name = p.label === 'root' ? 'uncommitted.root.patch' : `uncommitted.${safe}.patch`;
+            patchBodies.push(p.patch);
+            const id = registerPatch(task, ws, name, p.patch, `Light task uncommitted packet (${p.label})`);
+            if (id) patchIds.push(id);
+        }
+        const mesh = getMesh(meshId);
+        const logEvidence = (report.testsRun ?? []).map(t => ({
+            command: t.command, exit: t.exit,
+            logSha256: crypto.createHash('sha256').update(JSON.stringify({ command: t.command, exit: t.exit, passed: t.passed, failed: t.failed, note: t.note })).digest('hex'),
+        }));
+        const identity = {
+            version: 1 as const,
+            readiness: 'uncommitted' as const,
+            taskId, missionId: task.missionId ?? '', revision: task.revision ?? 0,
+            repoIdentity: mesh?.repoIdentity ?? '', machineId: getMachineId() ?? '',
+            canonicalWorktree: lw,
+            packets: dirtyPackets.map(p => ({
+                label: p.label, touchedPaths: p.touchedPaths.map(t => `${p.prefix}${t}`),
+                patchSha256: p.patchSha256, headSha: p.headSha, gitDir: p.gitDir, indexPath: p.indexPath,
+            })),
+            tests: logEvidence,
+        };
+        const identityJson = `${JSON.stringify(identity, null, 2)}\n`;
+        const iid = registerPatch(task, ws, 'uncommitted.source-identity.json', identityJson, 'Light task uncommitted source identity', 'json');
+        if (iid) patchIds.push(iid);
+        const patchSha256 = crypto.createHash('sha256').update(patchBodies.join('\n')).digest('hex');
+        const candidate: MeshSourceCandidate = {
+            version: 1, readiness: 'uncommitted', taskId, missionId: task.missionId ?? '', revision: task.revision ?? 0,
+            repoIdentity: mesh?.repoIdentity ?? '', machineId: getMachineId() ?? '', canonicalWorktree: lw,
+            rootBaseSha: ws.rootBaseSha, ossBaseSha: ws.submoduleBases['oss'] ?? '',
+            patchSha256,
+            manifestSha256: crypto.createHash('sha256').update(JSON.stringify({
+                readiness: 'uncommitted', packets: identity.packets, touchedPaths, patchSha256, tests: logEvidence,
+            })).digest('hex'),
+            touchedPaths, tests: logEvidence.map(t => ({ command: t.command, exit: t.exit, logSha256: t.logSha256 })),
+            settledCommands: false, integrationTaskId: '', logicalOverlapTaskIds: [],
+        };
+        return finish({
+            ...base, landing: 'blocked', blockedReason: 'light_uncommitted_changes',
+            blockedDetail: JSON.stringify({ packetCount: dirtyPackets.length, labels: dirtyPackets.map(p => p.label), patchSha256 }),
+            touchedPaths, patchArtifactIds: patchIds, sourceCandidate: candidate,
+        });
     }
 
     // 2. lineage: heads descend from their bases

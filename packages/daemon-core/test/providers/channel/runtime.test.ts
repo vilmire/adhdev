@@ -300,6 +300,49 @@ describe('ProviderChannelRuntime.sync', () => {
     expect(report.errors.some((e) => e.code === 'ENTRY_ARTIFACT_NOT_FOUND')).toBe(true);
   });
 
+  it('returns exact typed staging error with zero history fetches (R3-03/R4-03)', async () => {
+    const other: FixtureProviderSpec = {
+      category: 'cli', dirname: 'y-cli', type: 'y-cli', version: '1.0.0',
+    };
+    buildRepoTree(repoRoot, [other]);
+    const digestX = digestFor(repoRoot, 'cli', 'x-cli');
+    const digestY = digestFor(repoRoot, 'cli', 'y-cli');
+    const metadata = metadataFor([
+      makeRegistryRow(CLI_X, digestX),
+      makeRegistryRow(other, digestY),
+    ]);
+    const runtime = makeRuntime({ store, repoRoot, metadata });
+    let historyFetches = 0;
+    (runtime as any).fetchTransportMetaJson = async (url: string) => {
+      historyFetches += 1;
+      throw new Error(`unexpected history fetch: ${url}`);
+    };
+    const orig = store.createStagingDir.bind(store);
+    store.createStagingDir = ((kind: string) => {
+      if (kind.startsWith('obj-y-cli')) {
+        const err = new Error('ENOSPC');
+        (err as NodeJS.ErrnoException).code = 'ENOSPC';
+        throw err;
+      }
+      return orig(kind);
+    }) as typeof store.createStagingDir;
+
+    const report = await runtime.sync({
+      channel: 'stable',
+      targetTypes: new Set(['x-cli', 'y-cli']),
+    });
+    expect(report.status).toBe('activated');
+    expect(store.getPointer('stable', 'x-cli')?.active.digest).toBe(digestX);
+    expect(store.getPointer('stable', 'y-cli')).toBeNull();
+    // Exactly one typed staging error — no false DIGEST_MISMATCH (R4-03).
+    expect(report.errors).toEqual([
+      expect.objectContaining({ providerType: 'y-cli', code: 'TRANSPORT_FAILED' }),
+    ]);
+    // Mirror URL → tip probe may not call GitHub history; assert we never
+    // entered a deep-history walk after the terminal staging failure.
+    expect(historyFetches).toBe(0);
+  });
+
   it('supports rollback to the previous verified object after a bad update, without network', async () => {
     // v1 activation
     const digestV1 = digestFor(repoRoot, 'cli', 'x-cli');

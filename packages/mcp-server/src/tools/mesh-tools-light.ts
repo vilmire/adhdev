@@ -1,7 +1,7 @@
-/** LIGHT-TASK tools: land captured light results, or discard them (daemon: light_land / light_discard, mesh host only). */
+/** LIGHT-TASK tools: land / discard / continue-to-integration (daemon light_* IPC, mesh host only). */
 import type { MeshContext } from './mesh-tools.js';
 
-async function run(ctx: MeshContext, command: 'light_land' | 'light_discard', payload: Record<string, unknown>): Promise<string> {
+async function run(ctx: MeshContext, command: 'light_land' | 'light_discard' | 'light_continue_integration', payload: Record<string, unknown>): Promise<string> {
     try {
         const raw: any = await ctx.transport.command(command, { meshId: ctx.mesh.id, ...payload });
         return JSON.stringify(raw && typeof raw === 'object' ? raw : { success: false, error: 'empty daemon answer' }, null, 2);
@@ -29,4 +29,27 @@ export async function meshLightDiscard(ctx: MeshContext, args: { task_ids?: stri
     const taskIds = Array.isArray(args.task_ids) ? args.task_ids.filter(t => typeof t === 'string' && t.trim()) : [];
     if (!taskIds.length) return JSON.stringify({ success: false, code: 'bad_request', error: 'mesh_light_discard requires task_ids.' });
     return run(ctx, 'light_discard', { taskIds });
+}
+
+export async function meshLightContinueIntegration(ctx: MeshContext, args: {
+    task_id?: string; expected_revision?: number; owner_decision_id?: string;
+    owner_option_id?: string; owner_answer_revision?: number; dry_run?: boolean;
+}): Promise<string> {
+    const taskId = typeof args.task_id === 'string' ? args.task_id.trim() : '';
+    const ownerDecisionId = typeof args.owner_decision_id === 'string' ? args.owner_decision_id.trim() : '';
+    const ownerOptionId = typeof args.owner_option_id === 'string' ? args.owner_option_id.trim() : '';
+    const expectedRevision = args.expected_revision;
+    const ownerAnswerRevision = args.owner_answer_revision;
+    if (!taskId || !ownerDecisionId || !ownerOptionId
+        || typeof expectedRevision !== 'number' || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0
+        || typeof ownerAnswerRevision !== 'number' || !Number.isSafeInteger(ownerAnswerRevision) || ownerAnswerRevision < 1
+        || (args.dry_run !== undefined && typeof args.dry_run !== 'boolean')) {
+        return JSON.stringify({ success: false, code: 'bad_request', error: 'mesh_light_continue_integration requires task_id, expected_revision, owner_decision_id, owner_option_id and owner_answer_revision.' });
+    }
+    return run(ctx, 'light_continue_integration', {
+        sourceTaskId: taskId,
+        expectedRevision,
+        ownerAnswer: { decisionId: ownerDecisionId, optionId: ownerOptionId, revision: ownerAnswerRevision },
+        dryRun: args.dry_run === true,
+    });
 }

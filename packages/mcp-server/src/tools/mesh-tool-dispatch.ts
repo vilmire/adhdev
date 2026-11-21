@@ -42,7 +42,7 @@ import {
 import type { CanonicalMeshToolName } from '@adhdev/daemon-core';
 
 import type { MeshContext } from './mesh-tools.js';
-import { meshLightLand, meshLightDiscard } from './mesh-tools-light.js';
+import { meshLightLand, meshLightDiscard, meshLightContinueIntegration } from './mesh-tools-light.js';
 import {
     meshStatus, meshRoutePreview, meshListNodes, meshSendTask, meshReadChat,
     meshEnqueueTask, meshEnqueueBatch, meshViewQueue, meshQueueCancel, meshTaskStageDecide, meshQueueRequeue, meshQueueRevise,
@@ -89,6 +89,7 @@ export const MESH_TOOL_DISPATCH: Readonly<Record<CanonicalMeshToolName, MeshTool
     mesh_queue_revise: (ctx, a) => meshQueueRevise(ctx, a as any),
     mesh_recover_node_identity: (ctx, a) => meshRecoverNodeIdentity(ctx, a as any),
     mesh_light_land: (ctx, a) => meshLightLand(ctx, a as any),
+    mesh_light_continue_integration: (ctx, a) => meshLightContinueIntegration(ctx, a as any),
     mesh_light_discard: (ctx, a) => meshLightDiscard(ctx, a as any),
     mesh_queue_requeue: (ctx, a) => meshQueueRequeue(ctx, a as any),
     mesh_send_task: (ctx, a) => meshSendTask(ctx, a as any),

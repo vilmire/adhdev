@@ -111,7 +111,7 @@ const TURN_LEDGER_IPC_CMDS = [
   // C-W9b / C-W9a store commands (mesh-store-ipc.ts, merged into the same map).
   'tool_call_record', 'ledger_query', 'mission_list_query', 'record_local', 'queue_query',
   'queue_enqueue', 'queue_enqueue_batch', 'queue_cancel', 'queue_requeue', 'queue_revise', 'direct_dispatch_record',
-  'active_work_query', 'recovery_context_query', 'light_land', 'light_discard',
+  'active_work_query', 'recovery_context_query', 'light_land', 'light_discard', 'light_continue_integration',
   // C-W9c store commands (mesh-stats-ipc.ts, merged into the same map): the last
   // mcp-server in-process daemon-core paths — task/mission stats, one prune
   // audit, orphaned-pin notify.
@@ -153,7 +153,7 @@ const NEW_WORK_HOLD_CMDS = [
 ]
 
 describe('low-family registry', () => {
-  it('registers all 138 LOW family commands once, no overlap', () => {
+  it('registers all 132 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,
@@ -184,8 +184,9 @@ describe('low-family registry', () => {
     // + mesh_attest_node_ownership / mesh_attest_remote_ownership (remote writers, 2026-11-05) = 136,
     // + mission_read_relay (non-host mission reads forwarded to the host, 2026-11-07) = 137,
     // + worker_contract_forwarded (member relays a worker contract call to the owner, 2026-11-07) = 138;
-    // − 7 contract-versioning commands (subsystem removed: no contract was ever authored) = 131.
-    expect(all).toHaveLength(131)
+    // − 7 contract-versioning commands (subsystem removed: no contract was ever authored) = 131;
+    // + light_continue_integration (light→integration continuation, 2026-11-22) = 132.
+    expect(all).toHaveLength(132)
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
     expect(lowFamilyNames()).toHaveLength(all.length)

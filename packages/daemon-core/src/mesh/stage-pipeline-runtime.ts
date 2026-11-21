@@ -44,12 +44,15 @@ export class StagePipelineRuntime {
         return next;
     }
 
-    /** Same per-parent chain as claims/reports/resume; never enqueues or replaces a child. */
+    /** Same per-parent chain as claims/reports/resume; v1 repairs a pending child, v2 resumes a terminal-blocked parent. */
     async recoverPendingReview(request: StageReviewRecoveryRequest, host: StageReviewRecoveryHost) {
         let result: Awaited<ReturnType<typeof recoverPendingStageReview>> | undefined;
         let error: unknown;
         await this.serial(request.meshId, request.parentTaskId, async () => {
-            try { result = await recoverPendingStageReview(request, host, this.ports); } catch (e) { error = e; }
+            try {
+                result = await recoverPendingStageReview(request, host, this.ports);
+                if (!request.dryRun) this.failures.clear(request.meshId, request.parentTaskId);
+            } catch (e) { error = e; }
         });
         if (error) throw error;
         if (!result) throw new Error('review_recovery_unavailable');
@@ -353,8 +356,6 @@ export class StagePipelineRuntime {
             case 'create_review_child': {
                 // A persisted child owns its original baseline; retries must never refresh a started review.
                 if (st.reviewTaskIds.some(cid => { const c = this.ports.queue.get(meshId, cid); return c?.stageRound === effect.round && (c.status === 'pending' || c.status === 'assigned'); })) return;
-                // A reviewer must claim from the reviewed checkout, and none can be launched into a light worktree.
-                if (parent.light) throw new Error('review_unsupported_for_light_task');
                 const workspace = this.ports.workspaceOf(parent);
                 const head = st.stageHeads[st.stageHeads.length - 1]?.rootSha ?? '';
                 const plan = parent.stagePlan!;
@@ -363,6 +364,16 @@ export class StagePipelineRuntime {
                 const ws = workspace && head
                     ? await this.ports.reviewerWorkspace.prepare({ meshId, parentTaskId: id, reviewTaskId: reviewId, round: effect.round, rootSha: head, baseSha: st.baseSha, sourceWorkspace: workspace })
                     : null;
+                // Light parents: keep the lasting refusal unless a host-prepared reviewer workspace
+                // is attested against a confirmed committed source candidate (Contract B). Enqueue
+                // still refuses light+review; only this attested stage path may proceed.
+                if (parent.light) {
+                    const cand = parent.lightResult?.sourceCandidate;
+                    const attested = !!ws && cand?.readiness === 'verified_source_candidate'
+                        && !!cand.rootCandidateSha && cand.rootCandidateSha === head
+                        && ws.headSha === head;
+                    if (!attested) throw new Error('review_unsupported_for_light_task');
+                }
                 // Reuse the prior reviewer only when it can actually claim this round: a session below the
                 // review's difficulty floor would sit pinned, never claim, and park the review after the TTL.
                 const reviewDifficulty = parent.difficulty === 'difficult' ? 'difficult' as const : 'medium' as const;

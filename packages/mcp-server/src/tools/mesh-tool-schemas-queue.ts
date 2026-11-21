@@ -193,7 +193,7 @@ export const MESH_QUEUE_CANCEL_TOOL = {
 
 export const MESH_TASK_STAGE_DECIDE_TOOL = {
     name: 'mesh_task_stage_decide',
-    description: 'Decide a BLOCKED review-in-task stage task (blocked reason review_unresolved | review_rejected_approach | review_unavailable | self_check_failed | stage_pipeline_ceiling). accept = take the current head as done (unresolved findings stay on record); revise_once = one more revise round; rereview = review again with a different reviewer; abandon = cancel it. accept/abandon also work on a task whose review is stuck before it started (parked, quota-gated): the review is skipped. Otherwise only for blocked stage tasks. With action=rereview and versioned recovery, repair ONE existing pending never-started child by owner answer and parent/child CAS; only difficult→medium. Dry-run first; no automatic dispatch.',
+    description: 'Decide a BLOCKED review-in-task stage task (blocked reason review_unresolved | review_rejected_approach | review_unavailable | self_check_failed | stage_pipeline_ceiling). accept = take the current head as done (unresolved findings stay on record); revise_once = one more revise round; rereview = review again with a different reviewer; abandon = cancel it. accept/abandon also work on a task whose review is stuck before it started (parked, quota-gated): the review is skipped. Otherwise only for blocked stage tasks. With action=rereview and versioned recovery, repair ONE existing pending never-started child (v=1) or resume ONE terminal-blocked stage parent with completed children only at an attested continuation head (v=2) by owner answer and CAS; only medium. Dry-run first; no automatic dispatch.',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -297,5 +297,23 @@ export const MESH_LIGHT_DISCARD_TOOL = {
         type: 'object' as const,
         properties: { task_ids: { type: 'array', items: { type: 'string' } } },
         required: ['task_ids'],
+    },
+};
+
+export const MESH_LIGHT_CONTINUE_INTEGRATION_TOOL = {
+    name: 'mesh_light_continue_integration',
+    description: 'Host-attested continuation to one integration successor in the existing light workspace. Requires a persisted owner answer scoped to the exact source task and a matching source revision. Use dry_run first.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            task_id: { type: 'string', description: 'Source light task id.' },
+            expected_revision: { type: 'integer', minimum: 0, description: 'CAS revision of the source row.' },
+            owner_decision_id: { type: 'string', minLength: 1, description: 'Persisted decision id that approved this continuation.' },
+            owner_option_id: { type: 'string', minLength: 1, description: 'Option chosen in the persisted owner answer.' },
+            owner_answer_revision: { type: 'integer', minimum: 1, description: 'Revision of the persisted owner answer.' },
+            dry_run: { type: 'boolean', description: 'Validate attestation and plan with zero mutations.' },
+        },
+        required: ['task_id', 'expected_revision', 'owner_decision_id', 'owner_option_id', 'owner_answer_revision'],
+        additionalProperties: false,
     },
 };

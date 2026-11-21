@@ -13,6 +13,7 @@ import { normalizeOwnedPaths } from '@adhdev/mesh-shared';
 import { revisePendingTask } from '../../mesh/mesh-task-revision.js';
 import { requestQuotaOverrideDecision } from '../../mesh/mesh-quota-hold-escalation.js';
 import { lightLandIpcHandlers } from './light-land-ipc.js';
+import { lightContinuationIpcHandlers } from './light-continuation-ipc.js';
 import { admitLightBaseNode } from '../../mesh/light-task-admission.js';
 import { triggerMeshQueue } from '../../mesh/mesh-queue-assignment.js';
 import { projectWorkerOutcomeViews } from '../../mesh/mesh-worker-outcome-view.js';
@@ -686,4 +687,5 @@ export const meshStoreIpcHandlers: Record<string, LowFamilyHandler> = {
     active_work_query: activeWorkQuery,
     recovery_context_query: recoveryContextQuery,
     ...lightLandIpcHandlers,
+    ...lightContinuationIpcHandlers,
 };

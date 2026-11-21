@@ -79,6 +79,8 @@ const CHANNEL_ACTIVATION_RECHECK_MS = 5_000;
 /** Test seam: verified channel sync transport I/O (never set in production). */
 export interface ChannelSyncIO {
   fetchJson?: (url: string) => Promise<any>;
+  /** GitHub commit-history / transport-meta fetches (pin-to-published). */
+  fetchTransportMetaJson?: (url: string) => Promise<any>;
   downloadFile?: (url: string, destPath: string) => Promise<void>;
   extractTarball?: (tarPath: string, destDir: string) => Promise<void>;
 }

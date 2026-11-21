@@ -95,10 +95,66 @@ export class ProviderChannelStore {
 
   // ─── Staging ─────────────────────────────────────────────
 
+  /**
+   * Lease files live as siblings of staging dirs (`staging/.lease-<dirname>`),
+   * never inside the dir — object staging is hashed for tree digests and must
+   * not gain extra files. `gc()` refuses to delete a dir whose lease names a
+   * still-living PID, or whose liveness cannot be determined (GitHub #13).
+   * Crash orphans (lease proves a dead PID, or lease-less leftovers) reclaim.
+   *
+   * ★ Publish order: a complete lease is written atomically BEFORE the staging
+   * directory appears in `staging/`. Another process must never observe a dir
+   * without a readable lease and treat that as authorization to delete it.
+   */
+  static stagingLeasePath(stagingDir: string): string {
+    return path.join(path.dirname(stagingDir), `.lease-${path.basename(stagingDir)}`);
+  }
+
+  /**
+   * Owner PID encoded in a legacy `.lease-*.<pid>.<hex>.tmp` name, or null.
+   * Used so GC never sweeps a live installer's in-flight publish (R2-01).
+   */
+  static leaseTmpOwnerPid(leaseTmpName: string): number | null {
+    // `.lease-<dirname>.<pid>.<hex>.tmp`
+    const m = /^\.lease-.+\.(\d+)\.[0-9a-f]+\.tmp$/i.exec(leaseTmpName);
+    if (!m) return null;
+    const pid = Number(m[1]);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  }
+
+  /** True when a PID is alive or liveness cannot be proven (fail closed). */
+  static isPidHeld(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (e: any) {
+      if (e?.code === 'ESRCH') return false;
+      return true; // EPERM / unknown → preserve
+    }
+  }
+
   /** Create a fresh staging directory. Caller must clean it up (or gc will). */
   createStagingDir(kind: string): string {
-    const dir = path.join(this.stagingDir, `${kind}-${process.pid}-${crypto.randomBytes(6).toString('hex')}`);
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(this.stagingDir, { recursive: true });
+    const name = `${kind}-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
+    const dir = path.join(this.stagingDir, name);
+    const leasePath = ProviderChannelStore.stagingLeasePath(dir);
+    const body = JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() });
+    // 1) Exclusively create the final lease in place (no `.tmp` under staging/
+    //    that concurrent gc could delete between write and rename — R2-01).
+    // 2) Only then mkdir the staging dir.
+    try {
+      fs.writeFileSync(leasePath, body, { encoding: 'utf-8', flag: 'wx' });
+    } catch (e) {
+      try { fs.rmSync(leasePath, { force: true }); } catch { /* best-effort */ }
+      throw e instanceof Error ? e : new Error(String(e));
+    }
+    try {
+      fs.mkdirSync(dir, { recursive: false });
+    } catch (e) {
+      try { fs.rmSync(leasePath, { force: true }); } catch { /* best-effort */ }
+      throw e instanceof Error ? e : new Error(String(e));
+    }
     return dir;
   }
 
@@ -108,6 +164,36 @@ export class ProviderChannelStore {
     try {
       fs.rmSync(dir, { recursive: true, force: true });
     } catch { /* best-effort */ }
+    try {
+      fs.rmSync(ProviderChannelStore.stagingLeasePath(dir), { force: true });
+    } catch { /* best-effort */ }
+  }
+
+  /**
+   * True when staging must be preserved.
+   * - Live PID → held.
+   * - Uncertain liveness (EPERM / unreadable lease / malformed JSON) → held
+   *   (fail closed: never authorize GC when we cannot prove the owner is dead).
+   * - Missing lease, or lease naming a proven-dead PID → not held.
+   */
+  static isStagingLeaseHeld(dir: string): boolean {
+    const leasePath = ProviderChannelStore.stagingLeasePath(dir);
+    let raw: string;
+    try {
+      raw = fs.readFileSync(leasePath, 'utf-8');
+    } catch (e: any) {
+      if (e?.code === 'ENOENT') return false;
+      // Unreadable lease (EACCES/EPERM/…) — preserve the staging dir.
+      return true;
+    }
+    let pid: unknown;
+    try {
+      pid = (JSON.parse(raw) as { pid?: unknown })?.pid;
+    } catch {
+      return true; // corrupt lease → preserve
+    }
+    if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return true;
+    return ProviderChannelStore.isPidHeld(pid);
   }
 
   // ─── Objects ─────────────────────────────────────────────
@@ -146,6 +232,11 @@ export class ProviderChannelStore {
     }
     fs.mkdirSync(this.objectsDir, { recursive: true });
     fs.renameSync(stagedObjectDir, objectDir);
+    // Staging dir moved out of staging/; drop the sibling lease so gc does not
+    // accumulate markers for promoted objects (review R1-05).
+    try {
+      fs.rmSync(ProviderChannelStore.stagingLeasePath(stagedObjectDir), { force: true });
+    } catch { /* best-effort */ }
     return objectDir;
   }
 
@@ -426,8 +517,40 @@ export class ProviderChannelStore {
       stagingEntries = [];
     }
     for (const name of stagingEntries) {
+      // Lease marker files are siblings; reclaim orphans with no staging dir.
+      if (name.startsWith('.lease-')) {
+        if (name.endsWith('.tmp')) {
+          // Legacy in-flight publish temps: only reclaim when the encoded
+          // owner PID is proven dead. Unconditional delete raced createStagingDir
+          // write→rename and made live installs fail with ENOENT (R2-01).
+          const ownerPid = ProviderChannelStore.leaseTmpOwnerPid(name);
+          if (ownerPid !== null && ProviderChannelStore.isPidHeld(ownerPid)) continue;
+          try {
+            fs.rmSync(path.join(this.stagingDir, name), { force: true });
+            removedStaging++;
+          } catch { /* best-effort */ }
+          continue;
+        }
+        const stagedName = name.slice('.lease-'.length);
+        const stagedFull = path.join(this.stagingDir, stagedName);
+        if (fs.existsSync(stagedFull)) continue; // dir still present; handled below
+        // Lease published, mkdir not yet visible (createStagingDir window), or
+        // promotion cleared the dir but left a live-owner marker — preserve when
+        // the lease claims a live/uncertain PID (review R1-01).
+        if (ProviderChannelStore.isStagingLeaseHeld(stagedFull)) continue;
+        // Orphan marker (dead owner / crash after promotion) — reclaim.
+        try {
+          fs.rmSync(path.join(this.stagingDir, name), { force: true });
+          removedStaging++;
+        } catch { /* best-effort */ }
+        continue;
+      }
+      const full = path.join(this.stagingDir, name);
       try {
-        fs.rmSync(path.join(this.stagingDir, name), { recursive: true, force: true });
+        // Preserve when lease proves a live owner OR liveness is uncertain.
+        if (ProviderChannelStore.isStagingLeaseHeld(full)) continue;
+        fs.rmSync(full, { recursive: true, force: true });
+        try { fs.rmSync(ProviderChannelStore.stagingLeasePath(full), { force: true }); } catch { /* best-effort */ }
         removedStaging++;
       } catch { /* best-effort */ }
     }

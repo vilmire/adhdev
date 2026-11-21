@@ -240,22 +240,25 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
         return result.ok ? { success: true, taskId, action } : { success: false, error: result.error };
     },
 
-    /** Versioned, owner-answer-bound recovery of an existing never-started review only. */
+    /** Versioned, owner-answer-bound recovery of an existing never-started review or terminal-blocked stage parent. */
     stage_recover_mesh_review: async (ctx: MedFamilyContext, args: unknown) => {
         try {
-            const { decodeStageReviewRecovery } = await import('../../mesh/stage-review-recovery.js');
+            const { decodeStageReviewRecovery, resolveRecoverySourceNodeId } = await import('../../mesh/stage-review-recovery.js');
             const request = decodeStageReviewRecovery(args);
             const denied = await ctx.requireMeshHostMutationOwner(request.meshId, undefined, 'stage review recovery');
             if (denied) return denied;
-            const [{ getMesh }, { getMachineId }, { daemonIdsEquivalent }, { resolveMeshHostStatus }, { getInstalledStagePipeline }] = await Promise.all([
+            const [{ getMesh }, { getMachineId }, { daemonIdsEquivalent, meshNodeIdMatches }, { resolveMeshHostStatus }, { getInstalledStagePipeline }] = await Promise.all([
                 import('../../config/mesh-config.js'), import('../../config/config.js'), import('@adhdev/mesh-shared'),
                 import('../../mesh/mesh-host-ownership.js'), import('../../mesh/stage-ports-default.js'),
             ]);
             const mesh = getMesh(request.meshId);
             const actor = ctx.deps.statusInstanceId;
             const owner = resolveMeshHostStatus(mesh, { localDaemonId: actor });
-            const parent = MeshRuntimeStore.getInstance().findQueueEntryById(request.meshId, request.parentTaskId);
-            const node = mesh?.nodes?.find(n => n.id === parent?.assignedNodeId);
+            const store = MeshRuntimeStore.getInstance();
+            const parent = store.findQueueEntryById(request.meshId, request.parentTaskId);
+            const sourceNodeId = resolveRecoverySourceNodeId(store, request, parent);
+            const node = mesh?.nodes?.find(n => sourceNodeId ? meshNodeIdMatches({ nodeId: n.id }, sourceNodeId) : false)
+                ?? (request.v === 2 ? mesh?.nodes?.find(n => n.workspace === request.expectedWorkspace) : undefined);
             const machineId = getMachineId();
             if (!mesh?.repoIdentity || !actor || owner.role !== 'host' || !owner.hostDaemonId || !daemonIdsEquivalent(owner.hostDaemonId, actor)
                 || !machineId || !node?.workspace || !daemonIdsEquivalent(node.daemonId, actor)) throw new Error('authenticated_local_mesh_host_required');

@@ -620,6 +620,53 @@ describe('stage effect retry bound and stale parent (live 2026-11-07 c8b231ee)',
         expect(h.parent().stageState!.blockedDetail).toMatch(/review_unsupported_for_light_task/);
         expect(h.log.notices.map(n => n.status)).toEqual(['blocked']);
     });
+    it('a light parent with host-attested reviewer workspace + verified committed candidate creates one managed review child', async () => {
+        const h = harness();
+        const HEAD = 'abc123deadbeef';
+        h.ports.git.headSha = async () => HEAD;
+        h.ports.reviewerWorkspace = {
+            prepare: async (req) => ({ path: '/opt/review-ws', headSha: req.rootSha, release: async () => undefined }),
+        };
+        const row = h.parent();
+        (row as any).light = true;
+        (row as any).lightWorkspaceId = 'lw1';
+        (row as any).lightResult = {
+            landing: 'ready', workspaceId: 'lw1', branch: 'mesh/light/x', rootBaseSha: 'base', touchedPaths: ['src.txt'],
+            patchArtifactIds: [], capturedAt: new Date().toISOString(),
+            sourceCandidate: {
+                version: 1, readiness: 'verified_source_candidate', taskId: PARENT, missionId: 'mi1', revision: 0,
+                repoIdentity: 'r', machineId: 'm', canonicalWorktree: '/opt/ws', rootBaseSha: 'base', ossBaseSha: '',
+                rootCandidateSha: HEAD, patchSha256: 'p'.repeat(64), manifestSha256: 'm'.repeat(64),
+                touchedPaths: ['src.txt'], tests: [], settledCommands: true, integrationTaskId: '', logicalOverlapTaskIds: [],
+            },
+        };
+        await h.implDone('a1');
+        expect(h.parent().status).toBe('assigned');
+        expect(h.parent().stageState!.reviewTaskIds).toHaveLength(1);
+        expect(h.lastChild().reviewerWorkspace).toEqual({ path: '/opt/review-ws', headSha: HEAD });
+        expect(h.lastChild().review?.independence).toBe('different_provider');
+    });
+    it('a light parent with prepare null still refuses even when a verified candidate exists', async () => {
+        const h = harness();
+        const HEAD = 'abc123deadbeef';
+        h.ports.git.headSha = async () => HEAD;
+        h.ports.reviewerWorkspace = { prepare: async () => null };
+        const row = h.parent();
+        (row as any).light = true;
+        (row as any).lightResult = {
+            landing: 'ready', workspaceId: 'lw1', branch: 'b', rootBaseSha: 'base', touchedPaths: [], patchArtifactIds: [],
+            capturedAt: new Date().toISOString(),
+            sourceCandidate: {
+                version: 1, readiness: 'verified_source_candidate', taskId: PARENT, missionId: 'mi1', revision: 0,
+                repoIdentity: 'r', machineId: 'm', canonicalWorktree: '/opt/ws', rootBaseSha: 'base', ossBaseSha: '',
+                rootCandidateSha: HEAD, patchSha256: 'p'.repeat(64), manifestSha256: 'm'.repeat(64),
+                touchedPaths: [], tests: [], settledCommands: true, integrationTaskId: '', logicalOverlapTaskIds: [],
+            },
+        };
+        await h.implDone('a1');
+        expect(h.parent().status).toBe('blocked');
+        expect(h.parent().stageState!.blockedDetail).toMatch(/review_unsupported_for_light_task/);
+    });
     it('a busy reviewer checkout is an honest wait: logged once, never escalated', async () => {
         const h = harness();
         h.ports.queue.enqueueReviewChild = () => { throw new Error('review_input_busy'); };
@@ -627,5 +674,74 @@ describe('stage effect retry bound and stale parent (live 2026-11-07 c8b231ee)',
         for (let i = 0; i < 15; i++) { await h.rt.tick(); await h.rt.idle(); }
         expect(h.parent().status).toBe('assigned');
         expect(h.log.progress.filter(t => /review_input_busy/.test(t))).toHaveLength(1);
+    });
+
+    it('after terminal-blocked v2 resume into round 6, tick and child terminal preserve 5 completed children, old verdicts and old self-check while starting new round at selfCheck unavailable', async () => {
+        const h = harness();
+        const completedIds: string[] = [];
+        for (let r = 1; r <= 5; r++) {
+            const cid = `${PARENT}:r${r}`;
+            completedIds.push(cid);
+            h.rows.set(cid, {
+                id: cid, meshId: MESH, message: `review r${r}`, status: 'completed',
+                origin: 'stage', parentTaskId: PARENT, stageRole: 'review', stageRound: r,
+                readonly: true, taskMode: 'validation',
+                assignedNodeId: 'node_a992', assignedProviderType: 'codex-cli', assignedSessionId: `rev-${r}`,
+                review: { sourceTaskId: PARENT, independence: 'different_provider' },
+                createdAt: '', updatedAt: '',
+            });
+        }
+        const round6Id = `${PARENT}:r6`;
+        h.rows.set(round6Id, {
+            id: round6Id, meshId: MESH, message: 'review r6 resumed', status: 'pending',
+            origin: 'stage', parentTaskId: PARENT, stageRole: 'review', stageRound: 6,
+            readonly: true, taskMode: 'validation', difficulty: 'medium',
+            targetNodeId: 'node_a992', inputArtifactIds: ['art_diff_r6', 'art_e4ec721b0297e1aa'],
+            review: { sourceTaskId: PARENT, independence: 'different_provider' },
+            createdAt: '', updatedAt: '',
+        });
+        Object.assign(h.parent(), {
+            status: 'assigned',
+            assignedNodeId: 'node_a992', assignedSessionId: 'impl-s', assignedProviderType: 'claude-cli',
+        });
+        Object.assign(h.parent().stageState!, {
+            phase: 'awaiting_review', round: 6, released: false,
+            baseSha: 'fb928c2a4bba8d7b47d7ffdd79cc7a0f8c65f59b',
+            stageHeads: [
+                ...[1, 2, 3, 4, 5].map(r => ({ round: r, rootSha: 'fb928c2a4bba8d7b47d7ffdd79cc7a0f8c65f59b' })),
+                { round: 6, rootSha: 'd919a78f7c9e1fce8a891a394dd3224a74ae3944' },
+            ],
+            reviewTaskIds: [...completedIds, round6Id],
+            artifacts: {
+                diff: ['art_diff_old', 'art_diff_r6'],
+                selfCheck: ['art_self_check_r5_failed'],
+                verdict: ['art_v1', 'art_v2', 'art_v3', 'art_v4', 'art_v5'],
+            },
+            lastVerdict: 'changes_requested',
+            openFindingIds: ['R5-01'],
+            selfCheck: 'unavailable',
+            reviewFingerprint: 'fp2\nd919-clean',
+        });
+        h.fp.value = 'fp2\nd919-clean';
+        const priorChildrenSnap = JSON.stringify(completedIds.map(id => h.rows.get(id)));
+
+        // tick() must not create a duplicate child for round 6 or alter the 5 completed children
+        await h.rt.tick(); await h.rt.idle();
+        expect(h.parent().stageState!.reviewTaskIds).toEqual([...completedIds, round6Id]);
+        expect(JSON.stringify(completedIds.map(id => h.rows.get(id)))).toBe(priorChildrenSnap);
+        expect(h.parent().stageState!.selfCheck).toBe('unavailable');
+        expect(h.parent().stageState!.artifacts.selfCheck).toEqual(['art_self_check_r5_failed']);
+
+        // Claim and complete the round-6 child with an independent provider verdict
+        const c6 = h.rows.get(round6Id)!;
+        c6.status = 'assigned'; c6.assignedSessionId = 'rev-6'; c6.assignedProviderType = 'antigravity-cli';
+        await h.rt.onChildClaimed(MESH, round6Id); await h.rt.idle();
+        expect(h.parent().stageState!.phase).toBe('reviewing');
+        await h.review({ verdict: 'approve', priorFindings: [{ id: 'R5-01', status: 'resolved' }] });
+        expect(h.parent().status).toBe('completed');
+        expect(h.parent().stageState!.artifacts.verdict).toHaveLength(6);
+        expect(h.parent().stageState!.artifacts.verdict.slice(0, 5)).toEqual(['art_v1', 'art_v2', 'art_v3', 'art_v4', 'art_v5']);
+        expect(h.parent().stageState!.artifacts.selfCheck).toEqual(['art_self_check_r5_failed']);
+        expect(JSON.stringify(completedIds.map(id => h.rows.get(id)))).toBe(priorChildrenSnap);
     });
 });

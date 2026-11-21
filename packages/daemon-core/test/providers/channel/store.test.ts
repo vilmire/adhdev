@@ -111,11 +111,120 @@ describe('ProviderChannelStore', () => {
   });
 
   it('cleans staging leftovers from interrupted syncs during gc', () => {
-    const staging = store.createStagingDir('sync');
+    // Crash orphan: lease names a dead pid — gc must reclaim.
+    const staging = join(root, '.store', 'staging', 'sync-orphan-dead');
+    mkdirSync(staging, { recursive: true });
     writeFileSync(join(staging, 'partial.bin'), 'x', 'utf-8');
+    writeFileSync(
+      ProviderChannelStore.stagingLeasePath(staging),
+      JSON.stringify({ pid: 2_147_483_647, createdAt: new Date().toISOString() }),
+      'utf-8',
+    );
+    expect(ProviderChannelStore.isStagingLeaseHeld(staging)).toBe(false);
     const gcResult = store.gc();
     expect(gcResult.removedStaging).toBeGreaterThanOrEqual(1);
     expect(existsSync(staging)).toBe(false);
+    expect(existsSync(ProviderChannelStore.stagingLeasePath(staging))).toBe(false);
+  });
+
+  it('does not let gc delete a leased in-flight staging dir (ENOENT race guard)', () => {
+    const staging = store.createStagingDir('sync');
+    writeFileSync(join(staging, 'providers.tar.gz'), 'partial', 'utf-8');
+    expect(ProviderChannelStore.isStagingLeaseHeld(staging)).toBe(true);
+    const gcResult = store.gc();
+    expect(gcResult.removedStaging).toBe(0);
+    expect(existsSync(join(staging, 'providers.tar.gz'))).toBe(true);
+    // Explicit owner cleanup still works immediately (removes lease + contents).
+    store.removeStagingDir(staging);
+    expect(existsSync(staging)).toBe(false);
+  });
+
+  it('publishes a complete lease before the staging directory is visible (R1-01)', () => {
+    const stagingRoot = join(root, '.store', 'staging');
+    const before = new Set(existsSync(stagingRoot) ? readdirSync(stagingRoot) : []);
+    const staging = store.createStagingDir('sync');
+    const after = readdirSync(stagingRoot);
+    const name = staging.split(/[/\\]/).pop()!;
+    expect(after).toContain(name);
+    expect(after).toContain(`.lease-${name}`);
+    expect(existsSync(ProviderChannelStore.stagingLeasePath(staging))).toBe(true);
+    expect(ProviderChannelStore.isStagingLeaseHeld(staging)).toBe(true);
+    for (const entry of after) {
+      if (entry.startsWith('.lease-') || before.has(entry)) continue;
+      expect(existsSync(join(stagingRoot, `.lease-${entry}`))).toBe(true);
+    }
+    store.removeStagingDir(staging);
+  });
+
+  it('does not reclaim a live-owner lease while the staging dir is not yet visible (R1-01)', () => {
+    // Simulate the window after atomic lease publish and before mkdir.
+    const stagingRoot = join(root, '.store', 'staging');
+    mkdirSync(stagingRoot, { recursive: true });
+    const name = `sync-${process.pid}-inflight`;
+    const dir = join(stagingRoot, name);
+    const leasePath = ProviderChannelStore.stagingLeasePath(dir);
+    writeFileSync(leasePath, JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }), 'utf-8');
+    expect(existsSync(dir)).toBe(false);
+    expect(ProviderChannelStore.isStagingLeaseHeld(dir)).toBe(true);
+    expect(store.gc().removedStaging).toBe(0);
+    expect(existsSync(leasePath)).toBe(true);
+    // Owner cleanup after aborted create still clears the marker.
+    store.removeStagingDir(dir);
+    expect(existsSync(leasePath)).toBe(false);
+  });
+
+  it('does not let concurrent GC delete a live-owner lease tmp mid-publish (R2-01)', () => {
+    const stagingRoot = join(root, '.store', 'staging');
+    mkdirSync(stagingRoot, { recursive: true });
+    // Legacy write→rename window: GC used to unconditionally rm *.tmp here.
+    const tmpName = `.lease-sync-${process.pid}-abc.${process.pid}.deadbeef.tmp`;
+    const tmpPath = join(stagingRoot, tmpName);
+    writeFileSync(tmpPath, JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }), 'utf-8');
+    expect(ProviderChannelStore.leaseTmpOwnerPid(tmpName)).toBe(process.pid);
+    expect(store.gc().removedStaging).toBe(0);
+    expect(existsSync(tmpPath)).toBe(true);
+    // Dead owner tmp is still reclaimed.
+    const deadTmp = `.lease-sync-ghost.2147483647.00ff.tmp`;
+    writeFileSync(join(stagingRoot, deadTmp), '{}', 'utf-8');
+    expect(store.gc().removedStaging).toBeGreaterThanOrEqual(1);
+    expect(existsSync(join(stagingRoot, deadTmp))).toBe(false);
+    // createStagingDir publishes the final lease with O_EXCL — no staging *.tmp.
+    const before = new Set(readdirSync(stagingRoot));
+    const staging = store.createStagingDir('sync');
+    const after = readdirSync(stagingRoot);
+    for (const entry of after) {
+      if (before.has(entry)) continue;
+      expect(entry.endsWith('.tmp')).toBe(false);
+    }
+    store.removeStagingDir(staging);
+    rmSync(tmpPath, { force: true });
+  });
+
+  it('preserves staging when lease liveness is uncertain (corrupt lease)', () => {
+    const staging = join(root, '.store', 'staging', 'sync-uncertain');
+    mkdirSync(staging, { recursive: true });
+    writeFileSync(join(staging, 'partial.bin'), 'x', 'utf-8');
+    writeFileSync(ProviderChannelStore.stagingLeasePath(staging), '{not-json', 'utf-8');
+    expect(ProviderChannelStore.isStagingLeaseHeld(staging)).toBe(true);
+    expect(store.gc().removedStaging).toBe(0);
+    expect(existsSync(staging)).toBe(true);
+    store.removeStagingDir(staging);
+  });
+
+  it('clears the sibling lease on putObject and reclaims orphan markers (R1-05)', () => {
+    const { dir, digest } = buildObjectStaging({ ...CLI_X, files: { 'marker.txt': 'promoted' } });
+    writeFileSync(
+      ProviderChannelStore.stagingLeasePath(dir),
+      JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }),
+      'utf-8',
+    );
+    store.putObject(dir, digest);
+    expect(existsSync(ProviderChannelStore.stagingLeasePath(dir))).toBe(false);
+    mkdirSync(join(root, '.store', 'staging'), { recursive: true });
+    const orphanLease = join(root, '.store', 'staging', '.lease-gone-dir');
+    writeFileSync(orphanLease, JSON.stringify({ pid: 2_147_483_647, createdAt: new Date().toISOString() }), 'utf-8');
+    expect(store.gc().removedStaging).toBeGreaterThanOrEqual(1);
+    expect(existsSync(orphanLease)).toBe(false);
   });
 
   it('treats corrupt pointer files as typed STORE_CORRUPT errors (fail closed)', () => {

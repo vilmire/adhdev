@@ -246,6 +246,7 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   mesh_recover_node_identity: DESTRUCTIVE_LOCAL,
   // Lands (merges) or discards finished light-task results.
   mesh_light_land: DESTRUCTIVE_LOCAL,
+  mesh_light_continue_integration: DESTRUCTIVE_LOCAL,
   mesh_light_discard: DESTRUCTIVE_LOCAL,
   mesh_queue_requeue: DESTRUCTIVE_LOCAL,
   // Restores held events back to pending. Explicitly documented as lossless.

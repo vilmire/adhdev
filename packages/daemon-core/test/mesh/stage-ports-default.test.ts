@@ -163,4 +163,49 @@ describe('production stage ports', () => {
         expect(resolveStagePipelineCeilingMs({ ADHDEV_STAGE_PIPELINE_CEILING_MS: String(99 * 3600_000) } as never)).toBe(24 * 3600_000);
         expect(resolveStagePipelineCeilingMs({ ADHDEV_STAGE_PIPELINE_CEILING_MS: '600000' } as never)).toBe(600_000);
     });
+
+    it('reviewInputValid accepts a resumed round-6 managed review child at the attested head/submodule and rejects head or artifact drift', async () => {
+        const { createHash } = await import('node:crypto');
+        const { realpathSync } = await import('node:fs');
+        const { attestStageReviewInput } = await import('../../src/mesh/stage-review-input.js');
+        const { initialStageState } = await import('../../src/mesh/stage-state.js');
+        const ws = mkdtempSync(join(tmpdir(), 'stage-ports-r6-')); dirs.push(ws);
+        const sub = mkdtempSync(join(tmpdir(), 'stage-ports-sub-')); dirs.push(sub);
+        git(sub, 'init', '-b', 'main'); writeFileSync(join(sub, 'mod.ts'), 'export const v = 1;\n'); git(sub, 'add', '.'); git(sub, 'commit', '-m', 'sub');
+        git(ws, 'init', '-b', 'main');
+        git(ws, '-c', 'protocol.file.allow=always', 'submodule', 'add', sub, 'oss');
+        git(ws, 'commit', '-m', 'old head');
+        const oldHead = (await defaultStageGit.headSha(ws))!;
+        writeFileSync(join(ws, 'root.ts'), 'export const r5 = true;\n'); git(ws, 'add', '.'); git(ws, 'commit', '-m', 'new head');
+        const newHead = (await defaultStageGit.headSha(ws))!;
+        const artFile = join(realpathSync.native(ws), 'art_cont.md');
+        writeFileSync(artFile, 'continuation evidence');
+        const grant = { id: 'art_cont', file: artFile, sha256: createHash('sha256').update('continuation evidence').digest('hex'), size: Buffer.byteLength('continuation evidence') };
+
+        const st = initialStageState(new Date().toISOString());
+        Object.assign(st, {
+            phase: 'awaiting_review', round: 6, released: false,
+            baseSha: oldHead,
+            stageHeads: [...[1, 2, 3, 4, 5].map(r => ({ round: r, rootSha: oldHead })), { round: 6, rootSha: newHead }],
+            reviewTaskIds: ['c1', 'c2', 'c3', 'c4', 'c5', 'c6'],
+            artifacts: { diff: ['d_old', 'd_r6'], selfCheck: ['sc_old'], verdict: ['v1', 'v2', 'v3', 'v4', 'v5'] },
+            selfCheck: 'unavailable',
+        });
+        const parent: any = { id: 'parent_3e2', meshId: 'm', status: 'assigned', stagePlan: { review: true, maxRevisions: 2, independence: 'different_provider' }, stageState: st };
+        const proof = attestStageReviewInput(parent, { repoIdentity: 'repo', machineId: 'm', nodeId: 'node_a992', workspace: ws }, [grant]);
+        proof.childTaskId = 'c6';
+        parent.stageReviewInput = proof;
+        const child: any = { id: 'c6', origin: 'stage', parentTaskId: 'parent_3e2', stageRole: 'review', stageRound: 6, readonly: true, inputArtifactIds: ['art_cont'] };
+
+        const ports = createProductionStagePorts({} as never);
+        expect(ports.queue.reviewInputValid!(parent, child)).toBe(true);
+        expect(parent.stageState.selfCheck).toBe('unavailable');
+        expect(parent.stageState.artifacts.selfCheck).toEqual(['sc_old']);
+
+        // Artifact tampering invalidates the review input fail-closed
+        writeFileSync(artFile, 'tampered');
+        expect(ports.queue.reviewInputValid!(parent, child)).toBe(false);
+        writeFileSync(artFile, 'continuation evidence');
+        expect(ports.queue.reviewInputValid!(parent, child)).toBe(true);
+    });
 });

@@ -194,8 +194,26 @@ describe('LIGHT-TASK result capture (real git)', () => {
     write(path.join(ws.path, 'src.txt'), 'dirty\n')
     const res = await captureLightTaskResult({ meshId, taskId: row.id, report: { outcome: 'completed' } })
     expect(res).toMatchObject({ landing: 'blocked', blockedReason: 'light_uncommitted_changes' })
-    expect(res!.patchArtifactIds).toHaveLength(1)
+    expect(res!.patchArtifactIds.length).toBeGreaterThanOrEqual(1)
+    expect(res!.sourceCandidate).toMatchObject({ readiness: 'uncommitted', settledCommands: false })
+    expect(res!.sourceCandidate!.touchedPaths).toContain('src.txt')
+    expect(res!.landing).not.toBe('ready')
     expect(resultOf(store, row.id).status).toBe('blocked')
+  })
+
+  it('nested OSS-only dirty captures submodule packet paths/hashes (not root gitlink-only success)', async () => {
+    const { row, ws } = await setup()
+    write(path.join(ws.path, 'oss', 'a.txt'), 'nested-dirty\n')
+    const res = await captureLightTaskResult({ meshId, taskId: row.id, report: { outcome: 'completed', testsRun: [{ command: 'vitest run nested', exit: 0 }] } })
+    expect(res).toMatchObject({ landing: 'blocked', blockedReason: 'light_uncommitted_changes' })
+    expect(res!.touchedPaths.some(p => p === 'oss/a.txt' || p.endsWith('/a.txt') || p === 'a.txt' || p.startsWith('oss/'))).toBe(true)
+    expect(res!.sourceCandidate?.readiness).toBe('uncommitted')
+    expect(res!.sourceCandidate?.patchSha256).toMatch(/^[a-f0-9]{64}$/)
+    expect(res!.patchArtifactIds.length).toBeGreaterThanOrEqual(2) // at least one repo packet + identity json
+    const detail = JSON.parse(res!.blockedDetail || '{}')
+    expect(detail.labels).toEqual(expect.arrayContaining(['oss']))
+    // Must not look landable/verified.
+    expect(res!.sourceCandidate?.rootCandidateSha).toBeUndefined()
   })
 
   it('a dependency change (package.json dependencies) blocks but preserves the patch', async () => {

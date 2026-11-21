@@ -18,7 +18,7 @@ import { getMachineId } from '../config/config.js';
 import { admitLightBaseNode } from './light-task-admission.js';
 import { takeLightCheckoutFingerprint } from './light-checkout-fingerprint.js';
 import { LightWorkspaceError, prepareLightWorkspace, removeLightWorkspace } from './light-workspace.js';
-import { countLiveLightWorkspaces, setLightWorkspaceFingerprint } from './mesh-light-workspace-store.js';
+import { countLiveLightWorkspaces, getLightWorkspace, setLightWorkspaceFingerprint } from './mesh-light-workspace-store.js';
 import { getMeshWithCache } from './mesh-queue-mesh-view.js';
 import { resolveAutoLaunchPlan } from './mesh-queue-autolaunch.js';
 import { tryAssignQueueTask, waitForLocalSessionReady } from './mesh-queue-assignment.js';
@@ -134,11 +134,61 @@ async function dispatchOne(components: DaemonComponents, meshId: string, mesh: a
     }
 }
 
+/**
+ * Integration continuation successors arrive with lightWorkspaceId already pinned
+ * (Contract A). Launch a session INTO that existing path — never prepare a fresh
+ * checkout that would drop uncommitted packets.
+ */
+async function dispatchReuseWorkspace(components: DaemonComponents, meshId: string, mesh: any, task: MeshWorkQueueEntry): Promise<boolean> {
+    const store = MeshRuntimeStore.getInstance();
+    const handle = task.lightWorkspaceId ? getLightWorkspace(store.db, task.lightWorkspaceId) : undefined;
+    if (!handle?.path) { noteLightPrepareFailure(meshId, task, 'reuse', 'light_workspace_missing'); return false; }
+    const admission = (() => {
+        try { return admitLightBaseNode(mesh, getMachineId() ?? undefined, task.lightBaseNodeId); } catch (e: any) { noteLightPrepareFailure(meshId, task, 'admission', e?.message || String(e)); return null; }
+    })();
+    if (!admission) return false;
+    const node = (mesh.nodes ?? []).find((n: any) => meshNodeIdMatches(n, admission.lightBaseNodeId));
+    const nodeId = admission.lightBaseNodeId;
+    let skipReason: string | undefined;
+    const plan = await resolveAutoLaunchPlan(components, meshId, mesh, task as any, node, nodeId, false, [], (_n, reason) => { skipReason = reason; });
+    if (!plan) { recordQueueTaskHold(meshId, task.id, skipReason || 'provider_unusable', nodeId); return false; }
+    try {
+        assertMaintenanceAdmission([meshId]);
+        assertMaintenanceNode(meshId, nodeId);
+        const launch: any = await components.router.execute('launch_cli', {
+            cliType: plan.effectiveProviderType,
+            dir: handle.path,
+            settings: { ...plan.launchSettings, lightWorkspaceId: handle.workspaceId },
+            ...(plan.effectiveModel ? { initialModel: plan.effectiveModel } : {}),
+            ...(plan.effectiveThinkingLevel ? { initialThinkingLevel: plan.effectiveThinkingLevel } : {}),
+            ...plan.launchProvenance,
+        }, 'mesh', { inProcess: true });
+        const sessionId = readText(launch?.sessionId) || readText(launch?.id) || readText(launch?.runtimeSessionId);
+        if (!launch?.success || !sessionId) {
+            noteLightPrepareFailure(meshId, task, 'launch', launch?.error || 'launch_cli_failed');
+            return false;
+        }
+        const pinned = pinRowToLightSession(meshId, task.id, {
+            lightWorkspaceId: handle.workspaceId, targetSessionId: sessionId, targetNodeId: nodeId,
+            ...(task.ownershipScope ? { ownershipScope: task.ownershipScope } : {}),
+        });
+        if (!pinned) return false;
+        await waitForLocalSessionReady(components, sessionId);
+        tryAssignQueueTask(components, meshId, nodeId, sessionId, plan.effectiveProviderType, plan.buildRoutingDecision(), undefined, 'light_dispatch');
+        return true;
+    } catch (e: any) {
+        noteLightPrepareFailure(meshId, task, 'launch', e?.message || String(e));
+        return false;
+    }
+}
+
 /** One drain pass: start as many pending light rows as the caps allow. Returns how many were started. */
 export async function dispatchLightTasks(components: DaemonComponents, meshId: string, mesh?: any): Promise<number> {
     try { assertMaintenanceAdmission([meshId]); } catch { return 0; }
     if (isNewWorkHeld({ meshId })) return 0;
-    const pending = getQueue(meshId, { status: ['pending'] }).filter(t => t.light && !t.lightWorkspaceId);
+    const pendingFresh = getQueue(meshId, { status: ['pending'] }).filter(t => t.light && !t.lightWorkspaceId);
+    const pendingReuse = getQueue(meshId, { status: ['pending'] }).filter(t => t.light && t.lightWorkspaceId && !t.targetSessionId && !t.assignedSessionId);
+    const pending = [...pendingReuse, ...pendingFresh];
     if (!pending.length) return 0;
     const m = mesh ?? getMeshWithCache(components, meshId);
     if (!m) return 0;
@@ -158,8 +208,12 @@ export async function dispatchLightTasks(components: DaemonComponents, meshId: s
         if (countLiveLightWorkspaces(store.db) >= cap + LIGHT_WORKSPACE_SLACK) { recordQueueTaskHold(meshId, task.id, LIGHT_HOLD.LIMIT, undefined, true); continue; }
         if (!evaluateTaskOwnedPathsAdmission(store, meshId, task).allowed) { recordQueueTaskHold(meshId, task.id, 'owned_paths_conflict', undefined, true); continue; }
         inFlight.add(key);
-        try { if (await dispatchOne(components, meshId, m, task)) started++; }
-        catch (e: any) { LOG.warn('LightTask', `dispatch ${task.id} failed: ${e?.message || e}`); }
+        try {
+            const ok = task.lightWorkspaceId
+                ? await dispatchReuseWorkspace(components, meshId, m, task)
+                : await dispatchOne(components, meshId, m, task);
+            if (ok) started++;
+        } catch (e: any) { LOG.warn('LightTask', `dispatch ${task.id} failed: ${e?.message || e}`); }
         finally { inFlight.delete(key); }
     }
     return started;

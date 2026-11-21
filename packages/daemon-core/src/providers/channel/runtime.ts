@@ -45,7 +45,12 @@ import {
 import { computeProviderTreeDigest } from './tree-digest.js';
 import type { ActivationRef, ProviderChannelStore } from './store.js';
 import { extractTarballGz } from '../extract-tarball.js';
-import { buildPinnedArchiveUrl, parseGitHubArchiveUrl, resolveTransportCandidates } from './pinned-transport.js';
+import {
+  buildPinnedArchiveUrl,
+  MAX_HISTORY_CANDIDATES,
+  parseGitHubArchiveUrl,
+  resolveTransportCandidates,
+} from './pinned-transport.js';
 import { readProviderManifest, type ActivationBlock, type ActivationGate } from './auto-update-gate.js';
 
 export interface ChannelSyncError {
@@ -189,7 +194,7 @@ export class ProviderChannelRuntime {
     this.logFn = options.logFn ?? (() => {});
     this.fetchJson = options.fetchJson ?? defaultFetchJson;
     this.fetchTransportMetaJson = options.fetchTransportMetaJson ?? defaultFetchJson;
-    this.downloadFile = options.downloadFile ?? defaultDownloadFile;
+    this.downloadFile = options.downloadFile ?? downloadProviderArchive;
     this.extractTarball = options.extractTarball ?? defaultExtractTarball;
   }
 
@@ -365,101 +370,371 @@ export class ProviderChannelRuntime {
       const key = entry.sourceCommit ?? '';
       groups.set(key, [...(groups.get(key) ?? []), entry]);
     }
-    sourceGroups: for (const [sourceCommit, pending] of groups) {
-      // Custom mirrors retain their configured transport; all trees still verify.
-      const candidates = sourceCommit
-        ? [archive ? buildPinnedArchiveUrl(archive, sourceCommit) : this.providerTarballUrl]
-        : await resolveTransportCandidates(this.providerTarballUrl, this.fetchTransportMetaJson);
+    // Sync-scoped archive cache (review R3-02 / R4-02):
+    // - Tip stays pinned for the whole legacy group (shared once).
+    // - Historical candidates are released immediately after the attempt so
+    //   peak retained staging is tip + at most one deeper archive.
+    type CachedArchive = { stagingRoot: string; repoRoot: string };
+    const archiveCache = new Map<string, CachedArchive>();
+    let tipUrlHeld: string | null = null;
+    /** Peak number of retained staging dirs observed during this sync (tests). */
+    let peakRetainedArchives = 0;
+    const notePeak = () => {
+      peakRetainedArchives = Math.max(peakRetainedArchives, archiveCache.size);
+    };
+    const releaseArchiveCache = () => {
+      for (const cached of archiveCache.values()) {
+        this.store.removeStagingDir(cached.stagingRoot);
+      }
+      archiveCache.clear();
+      tipUrlHeld = null;
+    };
+    const releaseArchive = (transportUrl: string): void => {
+      if (transportUrl === tipUrlHeld) return;
+      const cached = archiveCache.get(transportUrl);
+      if (!cached) return;
+      this.store.removeStagingDir(cached.stagingRoot);
+      archiveCache.delete(transportUrl);
+    };
 
-      for (let attempt = 0; attempt < candidates.length; attempt += 1) {
-        const transportUrl = candidates[attempt];
-        const isLastCandidate = attempt === candidates.length - 1;
-        const attemptErrors: ChannelSyncError[] = [];
-        const attemptActivated: ActivationRef[] = [];
-        const attemptBlocked = new Set<string>();
-
-        const stagingRoot = this.store.createStagingDir('sync');
-        let retryWithOlderCommit = false;
+    const ensureArchive = async (
+      transportUrl: string,
+    ): Promise<{ ok: true; repoRoot: string } | { ok: false; message: string }> => {
+      const hit = archiveCache.get(transportUrl);
+      if (hit) return { ok: true, repoRoot: hit.repoRoot };
+      let stagingRoot: string;
+      try {
+        stagingRoot = this.store.createStagingDir('sync');
+      } catch (e: any) {
+        return { ok: false, message: `provider staging create failed: ${e?.message || e}` };
+      }
+      try {
+        const tarPath = path.join(stagingRoot, 'providers.tar.gz');
+        const extractDir = path.join(stagingRoot, 'repo');
         try {
-          const tarPath = path.join(stagingRoot, 'providers.tar.gz');
-          const extractDir = path.join(stagingRoot, 'repo');
           fs.mkdirSync(extractDir, { recursive: true });
-          try {
-            await this.downloadFile(transportUrl, tarPath);
-            await this.extractTarball(tarPath, extractDir);
-          } catch (e: any) {
-            report.errors.push({ code: 'TRANSPORT_FAILED', message: `provider tarball transport failed: ${e?.message || e}` });
-            report.status = 'error';
-            this.log(`source group failed (TRANSPORT_FAILED): ${e?.message || e} [${pathEnvDiagnostic()}]`);
-            continue sourceGroups;
-          }
-
-          const repoRoot = findTarballRepoRoot(extractDir);
-          if (!repoRoot) {
-            report.errors.push({ code: 'TRANSPORT_FAILED', message: 'provider tarball has an unexpected structure (no repo root dir)' });
-            report.status = 'error';
-            continue sourceGroups;
-          }
-
-          // 5. Per entry: locate → stage → verify digest → activate. Per-entry
-          //    failures never affect other entries and never touch the previous
-          //    activation.
-          for (const entry of pending) {
-            const outcome = await this.tryActivateOne(channel, entry, repoRoot, gate);
-            if (outcome && 'blocked' in outcome) {
-              report.blocked.push(outcome.blocked);
-              attemptBlocked.add(entry.providerType);
-            } else if (outcome) {
-              attemptErrors.push(outcome);
-            } else {
-              const pointer = this.store.getPointer(channel, entry.providerType);
-              if (pointer) attemptActivated.push(pointer.active);
-            }
-          }
-
-          // A DIGEST_MISMATCH here means this commit's tree is not the tree the
-          // registry published. That is precisely the "someone pushed to main
-          // without republishing" case, and an OLDER commit may still reproduce
-          // the published digest — so retry rather than fail. Any other error
-          // class (artifact missing, store corrupt) is not commit-dependent and
-          // is reported as-is. Entries that DID verify at this commit are
-          // already activated and stay activated; the retry only re-attempts
-          // what is still pending.
-          const mismatches = attemptErrors.filter((e) => e.code === 'DIGEST_MISMATCH');
-          retryWithOlderCommit = mismatches.length > 0
-            && mismatches.length === attemptErrors.length
-            && !isLastCandidate;
-          if (retryWithOlderCommit) {
-            this.log(
-              `digest mismatch at ${transportUrl} for ${mismatches.length} entr${mismatches.length === 1 ? 'y' : 'ies'}`
-              + ' — the published rows were not built from this commit; trying the previous commit',
-            );
-          }
-        } finally {
+          await this.downloadFile(transportUrl, tarPath);
+          await this.extractTarball(tarPath, extractDir);
+        } catch (e: any) {
           this.store.removeStagingDir(stagingRoot);
+          return { ok: false, message: `provider tarball transport failed: ${e?.message || e}` };
         }
+        const repoRoot = findTarballRepoRoot(extractDir);
+        if (!repoRoot) {
+          this.store.removeStagingDir(stagingRoot);
+          return { ok: false, message: 'provider tarball has an unexpected structure (no repo root dir)' };
+        }
+        archiveCache.set(transportUrl, { stagingRoot, repoRoot });
+        notePeak();
+        return { ok: true, repoRoot };
+      } catch (e: any) {
+        this.store.removeStagingDir(stagingRoot);
+        return { ok: false, message: `provider tarball transport failed: ${e?.message || e}` };
+      }
+    };
 
-        if (retryWithOlderCommit) {
-          // Drop the types that verified at this commit from the retry set, so
-          // an older commit is only asked about what is still unresolved.
-          const resolved = new Set([...attemptActivated.map((a) => a.providerType), ...attemptBlocked]);
-          report.activated.push(...attemptActivated);
-          for (let i = pending.length - 1; i >= 0; i -= 1) {
-            if (resolved.has(pending[i].providerType)) pending.splice(i, 1);
+    const activateAgainstRepo = async (
+      entries: ActivatableEntry[],
+      repoRoot: string,
+    ): Promise<{
+      activated: ActivationRef[];
+      errors: ChannelSyncError[];
+      blockedTypes: Set<string>;
+    }> => {
+      const activated: ActivationRef[] = [];
+      const errors: ChannelSyncError[] = [];
+      const blockedTypes = new Set<string>();
+      for (const entry of entries) {
+        const outcome = await this.tryActivateOne(channel, entry, repoRoot, gate);
+        if (outcome && 'blocked' in outcome) {
+          report.blocked.push(outcome.blocked);
+          blockedTypes.add(entry.providerType);
+        } else if (outcome) {
+          errors.push(outcome);
+        } else {
+          const pointer = this.store.getPointer(channel, entry.providerType);
+          if (pointer) activated.push(pointer.active);
+        }
+      }
+      return { activated, errors, blockedTypes };
+    };
+
+    /** Prefer the physical artifact dirname when known; else category/type guess. */
+    const historyPathsFor = (
+      entry: ActivatableEntry,
+      physicalByType: Map<string, string>,
+    ): string[] => {
+      const physical = physicalByType.get(entry.providerType);
+      if (physical) return [physical];
+      return [`${entry.category}/${entry.providerType}`];
+    };
+
+    const learnPhysicalPaths = (
+      entries: ActivatableEntry[],
+      repoRoot: string,
+      physicalByType: Map<string, string>,
+    ): void => {
+      for (const entry of entries) {
+        if (physicalByType.has(entry.providerType)) continue;
+        const dir = locateArtifactDir(repoRoot, entry);
+        if (!dir) continue;
+        physicalByType.set(entry.providerType, `${entry.category}/${path.basename(dir)}`);
+      }
+    };
+
+    try {
+      for (const [sourceCommit, groupEntries] of groups) {
+        const pending = [...groupEntries];
+        if (pending.length === 0) continue;
+
+        if (sourceCommit) {
+          const candidates = [
+            archive ? buildPinnedArchiveUrl(archive, sourceCommit) : this.providerTarballUrl,
+          ];
+          for (let attempt = 0; attempt < candidates.length; attempt += 1) {
+            const transportUrl = candidates[attempt];
+            const isLastCandidate = attempt === candidates.length - 1;
+            const ensured = await ensureArchive(transportUrl);
+            if (!ensured.ok) {
+              report.errors.push({ code: 'TRANSPORT_FAILED', message: ensured.message });
+              report.status = 'error';
+              this.log(`source group failed (TRANSPORT_FAILED): ${ensured.message} [${pathEnvDiagnostic()}]`);
+              break;
+            }
+            const { activated, errors, blockedTypes } = await activateAgainstRepo(pending, ensured.repoRoot);
+            const retryable = errors.filter((e) => e.code === 'DIGEST_MISMATCH');
+            const retryWithOlderCommit = retryable.length > 0
+              && retryable.length === errors.length
+              && !isLastCandidate;
+            if (retryWithOlderCommit) {
+              report.activated.push(...activated);
+              const resolved = new Set([...activated.map((a) => a.providerType), ...blockedTypes]);
+              for (let i = pending.length - 1; i >= 0; i -= 1) {
+                if (resolved.has(pending[i].providerType)) pending.splice(i, 1);
+              }
+              continue;
+            }
+            report.activated.push(...activated);
+            report.errors.push(...errors);
+            break;
           }
           continue;
         }
 
-        // Terminal attempt: either everything resolved, a non-mismatch error
-        // occurred, or this was the last candidate commit — in which case its
-        // DIGEST_MISMATCH errors are the final, reported answer (the digest
-        // contract stays fail-closed; exhausting history never activates
-        // anything unverified).
-        report.activated.push(...attemptActivated);
-        report.errors.push(...attemptErrors);
-        break;
+        // Legacy (no sourceCommit): share tip once, then walk history only for
+        // DIGEST_MISMATCH / ENTRY_ARTIFACT_NOT_FOUND rows (R4-03). After path
+        // candidates are exhausted, try bounded full-repo history skipping
+        // SHAs already tried *for that entry* so a rename cannot hide the
+        // publish commit (R4-01). Historical archives are released immediately
+        // (R4-02); while staged, every unresolved entry that still needs that
+        // URL is verified against it (R5-01).
+        const physicalByType = new Map<string, string>();
+        const tipRetryableByType = new Map<string, ChannelSyncError>();
+        const tipCandidates = await resolveTransportCandidates(
+          this.providerTarballUrl,
+          this.fetchTransportMetaJson,
+          { limit: 1 },
+        );
+        const tipUrl = tipCandidates[0] ?? this.providerTarballUrl;
+        tipUrlHeld = tipUrl;
+        /** Per-entry URLs already evaluated (never a group-wide historical ban). */
+        const triedByEntry = new Map<string, Set<string>>();
+        const entryTried = (providerType: string): Set<string> => {
+          let set = triedByEntry.get(providerType);
+          if (!set) {
+            set = new Set<string>([tipUrl]);
+            triedByEntry.set(providerType, set);
+          }
+          return set;
+        };
+
+        {
+          const ensured = await ensureArchive(tipUrl);
+          if (!ensured.ok) {
+            report.errors.push({ code: 'TRANSPORT_FAILED', message: ensured.message });
+            report.status = 'error';
+            this.log(`source group failed (TRANSPORT_FAILED): ${ensured.message} [${pathEnvDiagnostic()}]`);
+            continue;
+          }
+          learnPhysicalPaths(pending, ensured.repoRoot, physicalByType);
+          const { activated, errors, blockedTypes } = await activateAgainstRepo(pending, ensured.repoRoot);
+          report.activated.push(...activated);
+          const resolved = new Set([...activated.map((a) => a.providerType), ...blockedTypes]);
+          for (let i = pending.length - 1; i >= 0; i -= 1) {
+            if (resolved.has(pending[i].providerType)) pending.splice(i, 1);
+          }
+          for (const e of errors) {
+            if (e.code === 'DIGEST_MISMATCH' || e.code === 'ENTRY_ARTIFACT_NOT_FOUND') {
+              if (e.providerType) tipRetryableByType.set(e.providerType, e);
+            } else {
+              report.errors.push(e);
+              // Terminal tip errors must not enter the history worklist (R4-03).
+              if (e.providerType) {
+                for (let i = pending.length - 1; i >= 0; i -= 1) {
+                  if (pending[i].providerType === e.providerType) pending.splice(i, 1);
+                }
+              }
+            }
+          }
+        }
+
+        // History worklist: only commit-dependent tip outcomes.
+        let historyPending = pending.filter((e) => tipRetryableByType.has(e.providerType));
+
+        type HistoryAttemptResult = {
+          activated: boolean;
+          lastErrors: ChannelSyncError[];
+          /** Non-retryable activation/staging failure — do not open repo fallback (R5-02). */
+          terminal: boolean;
+        };
+
+        /**
+         * Stage one historical URL, verify every unresolved entry that still
+         * needs it, then release (peak = tip + 1). Attempts are tracked per
+         * entry so one row consuming H cannot ban H for another (R5-01).
+         */
+        const tryHistoricalUrl = async (
+          transportUrl: string,
+          driver: ActivatableEntry,
+        ): Promise<HistoryAttemptResult> => {
+          const applicable = historyPending.filter(
+            (e) => !entryTried(e.providerType).has(transportUrl),
+          );
+          if (applicable.length === 0) {
+            return { activated: false, lastErrors: [], terminal: false };
+          }
+          for (const e of applicable) entryTried(e.providerType).add(transportUrl);
+          const ensured = await ensureArchive(transportUrl);
+          try {
+            if (!ensured.ok) {
+              const err: ChannelSyncError = {
+                code: 'TRANSPORT_FAILED',
+                message: ensured.message,
+                providerType: driver.providerType,
+              };
+              // Download/extract failure is candidate-specific — not terminal
+              // for the entry (later SHAs may still work).
+              return { activated: false, lastErrors: [err], terminal: false };
+            }
+            learnPhysicalPaths(applicable, ensured.repoRoot, physicalByType);
+            const { activated, errors, blockedTypes } = await activateAgainstRepo(
+              applicable,
+              ensured.repoRoot,
+            );
+            report.activated.push(...activated);
+            const done = new Set([
+              ...activated.map((a) => a.providerType),
+              ...blockedTypes,
+            ]);
+            historyPending = historyPending.filter((e) => !done.has(e.providerType));
+
+            const driverActivated = done.has(driver.providerType);
+            if (driverActivated) {
+              return { activated: true, lastErrors: [], terminal: false };
+            }
+            const isRetryable = (code: ChannelSyncError['code']): boolean =>
+              code === 'DIGEST_MISMATCH' || code === 'ENTRY_ARTIFACT_NOT_FOUND';
+            // Any non-retryable activation failure settles that row immediately
+            // with its typed error — no further path/repo candidates (R5-02).
+            for (const e of errors) {
+              if (!e.providerType || isRetryable(e.code)) continue;
+              historyPending = historyPending.filter((row) => row.providerType !== e.providerType);
+              if (e.providerType !== driver.providerType) {
+                // Collateral terminal rows are removed without revisiting the
+                // outer loop — record their typed error here.
+                report.errors.push(e);
+              }
+            }
+            const driverErrors = errors.filter((e) => e.providerType === driver.providerType);
+            const terminal = driverErrors.some((e) => !isRetryable(e.code));
+            return {
+              activated: false,
+              lastErrors: driverErrors,
+              terminal,
+            };
+          } finally {
+            releaseArchive(transportUrl);
+          }
+        };
+
+        const tryCandidateUrls = async (
+          entry: ActivatableEntry,
+          candidates: string[],
+        ): Promise<HistoryAttemptResult> => {
+          let lastErrors: ChannelSyncError[] = [];
+          for (let attempt = 0; attempt < candidates.length; attempt += 1) {
+            const transportUrl = candidates[attempt];
+            if (transportUrl === tipUrl) continue;
+            if (entryTried(entry.providerType).has(transportUrl)) continue;
+            // Driver may already have been activated while another entry staged this URL.
+            if (!historyPending.some((e) => e.providerType === entry.providerType)) {
+              return { activated: true, lastErrors: [], terminal: false };
+            }
+            const remaining = candidates.slice(attempt + 1).filter(
+              (u) => u !== tipUrl && !entryTried(entry.providerType).has(u),
+            );
+            const isLastCandidate = remaining.length === 0;
+            const outcome = await tryHistoricalUrl(transportUrl, entry);
+            if (outcome.activated) return outcome;
+            if (outcome.terminal) return outcome;
+            lastErrors = outcome.lastErrors.length > 0 ? outcome.lastErrors : lastErrors;
+            const retryable = lastErrors.filter(
+              (e) => e.code === 'DIGEST_MISMATCH' || e.code === 'ENTRY_ARTIFACT_NOT_FOUND',
+            );
+            if (lastErrors.length > 0 && retryable.length !== lastErrors.length) {
+              return { activated: false, lastErrors, terminal: true };
+            }
+            if (isLastCandidate) break;
+            if (lastErrors.length > 0) {
+              this.log(
+                `commit-dependent failure at ${transportUrl} for ${entry.providerType}`
+                + ` (${[...new Set(retryable.map((e) => e.code))].join(', ')})`
+                + ' — trying the next candidate commit',
+              );
+            }
+          }
+          return { activated: false, lastErrors, terminal: false };
+        };
+
+        for (const entry of [...historyPending]) {
+          if (!historyPending.some((e) => e.providerType === entry.providerType)) continue;
+          const paths = historyPathsFor(entry, physicalByType);
+          const pathCandidates = await resolveTransportCandidates(
+            this.providerTarballUrl,
+            this.fetchTransportMetaJson,
+            { paths },
+          );
+          let result = await tryCandidateUrls(entry, pathCandidates);
+          // Path history can be nonempty yet still omit a pre-rename publish
+          // commit — after path exhaustion, walk bounded full-repo history
+          // skipping SHAs already tried for this entry (review R4-01).
+          // Terminal path failures must NOT open repo fallback (R5-02).
+          if (!result.activated && !result.terminal) {
+            const repoCandidates = await resolveTransportCandidates(
+              this.providerTarballUrl,
+              this.fetchTransportMetaJson,
+              { limit: MAX_HISTORY_CANDIDATES },
+            );
+            const deeper = await tryCandidateUrls(entry, repoCandidates);
+            if (deeper.activated || deeper.terminal || deeper.lastErrors.length > 0) {
+              result = deeper;
+            }
+          }
+          if (!result.activated) {
+            if (result.lastErrors.length > 0) {
+              report.errors.push(...result.lastErrors);
+            } else if (tipRetryableByType.has(entry.providerType)) {
+              report.errors.push(tipRetryableByType.get(entry.providerType)!);
+            }
+          }
+        }
       }
+    } finally {
+      releaseArchiveCache();
     }
+    // Expose peak for targeted tests without widening the public report type.
+    (report as ChannelSyncReport & { _peakRetainedArchives?: number })._peakRetainedArchives =
+      peakRetainedArchives;
 
     // 6. N=2 retention + crash-orphan cleanup.
     try {
@@ -499,7 +774,17 @@ export class ProviderChannelRuntime {
     // Move the artifact subtree into an object-staging dir whose layout
     // mirrors the repo root (<category>/<dirname>/…), so the tree digest is
     // computed over repo-root-relative paths exactly as specified.
-    const objStaging = this.store.createStagingDir(`obj-${entry.providerType}`);
+    // Lease/mkdir failures are typed — never reject the whole sync (R3-03).
+    let objStaging: string;
+    try {
+      objStaging = this.store.createStagingDir(`obj-${entry.providerType}`);
+    } catch (e: any) {
+      return {
+        code: 'TRANSPORT_FAILED',
+        message: `failed to create object staging: ${e?.message || e}`,
+        providerType: entry.providerType,
+      };
+    }
     try {
       fs.mkdirSync(path.join(objStaging, entry.category), { recursive: true });
       fs.renameSync(artifactDir, path.join(objStaging, entry.category, path.basename(artifactDir)));
@@ -687,9 +972,29 @@ function defaultFetchJson(url: string): Promise<any> {
   });
 }
 
-function defaultDownloadFile(url: string, destPath: string): Promise<void> {
+/**
+ * Promote a completed partial download into the final path. Exported for
+ * regression tests: failure cleanup must never delete a successful final file.
+ */
+export function promoteDownloadPartial(partialPath: string, destPath: string): void {
+  fs.renameSync(partialPath, destPath);
+}
+
+/** Best-effort removal of a partial download; never touches `destPath`. */
+export function discardDownloadPartial(partialPath: string): void {
+  try {
+    fs.rmSync(partialPath, { force: true });
+  } catch { /* best-effort */ }
+}
+
+/**
+ * Default provider-archive download (exported for mid-body disconnect tests).
+ * Uses `stream/promises.pipeline` so premature response closure rejects.
+ */
+export function downloadProviderArchive(url: string, destPath: string): Promise<void> {
   const https = require('https') as typeof import('https');
   const http = require('http') as typeof import('http');
+  const { pipeline } = require('stream/promises') as typeof import('stream/promises');
   return new Promise((resolve, reject) => {
     const doRequest = (reqUrl: string, redirectCount = 0) => {
       if (redirectCount > 5) {
@@ -698,18 +1003,50 @@ function defaultDownloadFile(url: string, destPath: string): Promise<void> {
       }
       const mod = reqUrl.startsWith('https') ? https : http;
       const req = mod.get(reqUrl, { headers: { 'User-Agent': 'adhdev-daemon' }, timeout: 60000 }, (res) => {
-        if (res.statusCode === 301 || res.statusCode === 302) {
-          doRequest(res.headers.location!, redirectCount + 1);
+        const code = res.statusCode ?? 0;
+        if (code === 301 || code === 302 || code === 303 || code === 307 || code === 308) {
+          const location = res.headers.location;
+          res.resume();
+          if (!location) {
+            reject(new Error(`HTTP ${code} redirect without Location`));
+            return;
+          }
+          doRequest(location, redirectCount + 1);
           return;
         }
-        if (res.statusCode !== 200) {
-          reject(new Error(`HTTP ${res.statusCode}`));
+        if (code !== 200) {
+          res.resume();
+          reject(new Error(`HTTP ${code}`));
           return;
         }
-        const ws = fs.createWriteStream(destPath);
-        res.pipe(ws);
-        ws.on('finish', () => { ws.close(); resolve(); });
-        ws.on('error', reject);
+        // Parent must exist (staging can be wiped by a concurrent gc before
+        // this runs — surface a clear error rather than createWriteStream ENOENT).
+        try {
+          fs.mkdirSync(path.dirname(destPath), { recursive: true });
+        } catch (e: any) {
+          res.resume();
+          reject(e);
+          return;
+        }
+        // Write to a sibling temp then rename. Use pipeline() so a mid-body
+        // disconnect / source error rejects (res.pipe alone can hang the
+        // promise and leave syncTail serialized forever — review R1-04).
+        const partialPath = `${destPath}.${process.pid}.part`;
+        const ws = fs.createWriteStream(partialPath);
+        pipeline(res, ws)
+          .then(() => {
+            try {
+              promoteDownloadPartial(partialPath, destPath);
+              resolve();
+            } catch (e: any) {
+              discardDownloadPartial(partialPath);
+              reject(e);
+            }
+          })
+          .catch((e: any) => {
+            discardDownloadPartial(partialPath);
+            reject(e);
+          });
       });
       req.on('error', reject);
       req.on('timeout', () => { req.destroy(); reject(new Error('Download timeout')); });
