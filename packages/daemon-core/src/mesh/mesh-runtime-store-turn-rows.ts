@@ -72,7 +72,11 @@ export function pruneMeshRuntimeRetention(): {
         const { queue: terminalQueue, taskOutputs } = store.pruneTerminalQueue(MESH_TERMINAL_QUEUE_RETENTION_MS);
         const topicIndex = meshTopicIndexFor(store.db).pruneOlderThan(Date.now() - MESH_TOPIC_INDEX_RETENTION_MS);
         const turn = store.transaction(() => store.turnStore().pruneTerminalMeshAttempts(resolveTurnAttemptRetentionMs(), Date.now()));
-        store.db.prepare('DELETE FROM session_artifacts WHERE updated_at < ?').run(Date.now() - MESH_SESSION_ARTIFACTS_RETENTION_MS);
+        // Reference-safe preservation: do not DELETE session_artifacts by age.
+        // Active/held review inputs, grants, and mission/handoff refs must stay
+        // resolvable; unprotected-proof-missing rows stay (fail-safe). The
+        // MESH_SESSION_ARTIFACTS_RETENTION_MS constant remains for diagnostics.
+        void MESH_SESSION_ARTIFACTS_RETENTION_MS;
         // Structured missions: closed >180d collapse to one summary event; per-mesh row cap (design §4.3).
         const missionEvents = store.missionItems().pruneEvents().deleted;
         if (localRecords + toolCalls + terminalQueue + taskOutputs + topicIndex + turn.attempts + missionEvents > 0) {

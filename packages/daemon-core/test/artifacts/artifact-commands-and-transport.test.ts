@@ -584,7 +584,7 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
             expect(imgFetch2.sha256Changed).toBe(true);
             expect(imgFetch2.hashChanged).toBe(true);
 
-            // Fill remaining slots up to MAX_ARTIFACTS_PER_SESSION (50)
+            // Fill remaining soft-window slots up to MAX_ARTIFACTS_PER_SESSION (50)
             for (let i = 2; i <= MAX_ARTIFACTS_PER_SESSION; i += 1) {
                 const name = `file-${i}.txt`;
                 fs.writeFileSync(path.join(workspaceA, name), `content ${i}`, 'utf8');
@@ -595,16 +595,16 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
                 expect(r.success).toBe(true);
             }
 
-            // 51st distinct file must fail with session_artifact_limit_reached
+            // 51st distinct file succeeds under soft counts + byte budget
             fs.writeFileSync(path.join(workspaceA, 'file-51.txt'), 'overflow', 'utf8');
             const overflowRes = await artifactHandlers.artifact_register(ctx, {
                 sessionId,
                 path: 'file-51.txt',
             });
-            expect(overflowRes.success).toBe(false);
-            expect(overflowRes.code).toBe('session_artifact_limit_reached');
+            expect(overflowRes.success).toBe(true);
+            expect(overflowRes.isUpdate).toBe(false);
 
-            // Re-registering an existing file at cap 50 succeeds in-place with same artifactId
+            // Re-registering an existing file still succeeds in-place with same artifactId
             const updateAtCap = await artifactHandlers.artifact_register(ctx, {
                 sessionId,
                 path: 'shot.png',

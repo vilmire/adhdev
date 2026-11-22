@@ -29,24 +29,54 @@ export const MAX_ARTIFACT_BYTES = 4 * 1024 * 1024;
 /** Maximum number of UTF-8 characters (Unicode code points) in previewText. */
 export const MAX_PREVIEW_TEXT_CHARS = 600;
 
-/** Maximum number of distinct artifacts allowed per session. */
+/**
+ * Soft / hot list-window sizes (not hard registration refusals).
+ * New rows are admitted by byte budget; these remain default page bounds and
+ * soft advisory counters returned to callers.
+ */
 export const MAX_ARTIFACTS_PER_SESSION = 50;
 
-/** Maximum number of distinct artifacts allowed per mission (OD-7 / brief d6a3c57e). */
+/** Soft / hot list-window size per mission (not a hard registration refusal). */
 export const MAX_ARTIFACTS_PER_MISSION = 200;
 
-/** Maximum number of distinct artifacts allowed per mesh (OD-7 / brief d6a3c57e). */
+/** Soft / hot list-window size per mesh (not a hard registration refusal). */
 export const MAX_ARTIFACTS_PER_MESH = 500;
 
 /** Maximum page size for MCP / assistant / follower artifact reads (256 KiB, OD-7). */
 export const MAX_ARTIFACT_MCP_PAGE_BYTES = 256 * 1024;
+
+/** Conservative per-row metadata floor used by admission billing. */
+export const ARTIFACT_METADATA_ROW_FLOOR_BYTES = 4 * 1024;
+
+/**
+ * Daemon-wide hard metadata budget for session_artifacts rows (proposed design
+ * constant — not an observed live usage figure). Existing over-budget rows are
+ * grandfathered; only NEW growth is refused.
+ */
+export const ARTIFACT_METADATA_BUDGET_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Daemon-wide hard logical payload budget (sum of registered size_bytes).
+ * Proposed design constant — not an observed live usage figure.
+ */
+export const ARTIFACT_PAYLOAD_BUDGET_BYTES = 1024 * 1024 * 1024;
+
+/** Free-disk reserve hint for operators (admission does not auto-delete to reclaim). */
+export const ARTIFACT_FREE_RESERVE_BYTES = 64 * 1024 * 1024;
+
+/** Maximum page size for owner/SQL keyset listing. */
+export const MAX_ARTIFACT_LIST_PAGE = 100;
 
 /** Maximum base64-encoded UTF-8 byte budget for a given raw byte limit (`ceil(rawBytes / 3) * 4`). */
 export function maxBase64EncodedBytes(rawBytes: number): number {
     return Math.ceil(Math.max(0, rawBytes) / 3) * 4;
 }
 
-/** Metadata retention horizon for session_artifacts (30 days, OD-7). */
+/**
+ * Historical 30-day horizon constant (OD-7). Retention DELETE of artifact
+ * metadata is disabled under the reference-safe preservation policy; the
+ * constant remains for diagnostics and grandfathered callers.
+ */
 export const ARTIFACT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 export type ArtifactProducerRole = 'worker' | 'coordinator' | 'assistant' | 'user' | 'session' | 'pipeline';
@@ -165,17 +195,27 @@ export type ArtifactErrorCode =
     | 'mission_artifact_limit_reached'
     | 'mesh_artifact_limit_exceeded'
     | 'mesh_artifact_limit_reached'
+    | 'artifact_storage_budget_exceeded'
+    | 'artifact_storage_unavailable'
+    | 'artifact_revision_conflict'
+    | 'artifact_repair_required'
+    | 'artifact_preserved_refuse_delete'
+    | 'stale_cursor'
     | 'artifact_not_found'
     | 'artifact_session_mismatch'
     | 'artifact_access_denied';
 
 export class ArtifactGuardError extends Error {
     readonly code: ArtifactErrorCode;
+    readonly details?: Readonly<Record<string, unknown>>;
+    readonly retryable: boolean;
 
-    constructor(code: ArtifactErrorCode, message: string) {
+    constructor(code: ArtifactErrorCode, message: string, details?: Record<string, unknown>) {
         super(message.includes(code) ? message : `${message} (${code})`);
         this.name = 'ArtifactGuardError';
         this.code = code;
+        if (details) this.details = Object.freeze({ ...details });
+        this.retryable = details?.retryable === true;
     }
 }
 

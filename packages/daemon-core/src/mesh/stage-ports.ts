@@ -47,8 +47,45 @@ export interface StageGitPort {
 export interface StageArtifactInput {
     meshId: string; missionId?: string; taskId: string; kind: 'diff' | 'self_check' | 'review_verdict';
     title: string; content: string; ext: '.diff' | '.md' | '.json';
+    /** Optional stable operation key; production ports derive one from kind+content when omitted. */
+    operationKey?: string;
 }
-export interface StageArtifactPort { register(input: StageArtifactInput): string | null }
+
+/** Structured stage artifact registration outcome (never hides quota/storage failures as success). */
+export type StageArtifactRegisterResult =
+    | { ok: true; artifactId: string }
+    | {
+        ok: false
+        code: string
+        message: string
+        retryable: boolean
+        preserved?: boolean
+        /** Guard/budget details (scope, bytes, counts) when available — never discard. */
+        details?: Record<string, unknown>
+    };
+
+/** Durable unrecovered payload written outside admission/budget (restart recovery). */
+export type StageArtifactRecoveryResult =
+    | { ok: true; relPath: string; sha256: string; bytes: number; reused?: boolean }
+    | {
+        ok: false
+        code: string
+        message: string
+        /** Existing different digest for this op was left untouched. */
+        preserved?: boolean
+        existingSha256?: string
+    };
+
+export interface StageArtifactPort {
+    register(input: StageArtifactInput): StageArtifactRegisterResult
+    /**
+     * Persist the full admission-bounded payload for an unresolved hold (not registered).
+     * Path is digest-immutable: same op+bytes no-op; different bytes never overwrite prior recovery.
+     */
+    writeRecovery?(input: { taskId: string; operationKey: string; content: string; ext: string }): StageArtifactRecoveryResult
+    /** Read back a recovery payload after stash/process loss (prefer sha256 when known). */
+    readRecovery?(input: { taskId: string; operationKey: string; sha256?: string }): string | null
+}
 
 export interface StageQueuePort {
     get(meshId: string, taskId: string): MeshWorkQueueEntry | null;

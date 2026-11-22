@@ -1,7 +1,8 @@
+import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { StagePipelineRuntime, selectStageInputArtifacts } from '../../src/mesh/stage-pipeline-runtime.js';
 import { initialStageState } from '../../src/mesh/stage-state.js';
-import { __resetStageReportStashForTests, stashStageReport } from '../../src/mesh/stage-report-stash.js';
+import { __resetStageReportStashForTests, peekStageReport, stashStageReport } from '../../src/mesh/stage-report-stash.js';
 import { __resetIndependenceTrackerForTests, noteReviewRefusal } from '../../src/mesh/stage-independence.js';
 import type { StageRuntimePorts } from '../../src/mesh/stage-ports.js';
 import type { MeshWorkQueueEntry } from '../../src/mesh/mesh-work-queue-types.js';
@@ -14,6 +15,7 @@ const PARENT = 'p1';
 function harness(opts: { maxRevisions?: 0 | 1 | 2 | 3; selfChecks?: SelfCheckResult[]; diff?: boolean; independence?: 'different_provider' | 'fresh_session_ok' } = {}) {
     let nowMs = Date.parse('2026-11-01T00:00:00Z');
     const rows = new Map<string, MeshWorkQueueEntry>();
+    const recoveryStore = new Map<string, string>();
     const log = { progress: [] as string[], notices: [] as Array<{ status: string; report: string }>, commits: [] as Array<{ status: string; text: string }>, revisions: [] as string[], artifacts: [] as string[], cancelled: [] as string[], finished: [] as string[], sessions: new Set<string>(['impl-s', 'rev-s']) };
     const parent: MeshWorkQueueEntry = {
         id: PARENT, meshId: MESH, message: 'do the thing', status: 'assigned', taskMode: 'code_change', difficulty: 'medium',
@@ -33,7 +35,36 @@ function harness(opts: { maxRevisions?: 0 | 1 | 2 | 3; selfChecks?: SelfCheckRes
             baseSha: async () => 'base0000', headSha: async () => (opts.diff === false ? 'base0000' : `head${++head}`),
             diff: async () => 'diff text', isClean: async () => true, fingerprint: async (_w, limits) => { if (limits?.legacy) fp.legacyCalls++; const next = fp.queue.shift(); if (next === 'throw') throw new Error('git failed'); if (next !== undefined) return next; return limits?.legacy && fp.legacyValue !== undefined ? fp.legacyValue : fp.value; },
         },
-        artifacts: { register: i => { const id = `art_${i.kind}_${log.artifacts.length}`; log.artifacts.push(id); return id; } },
+        artifacts: {
+            register: i => { const id = `art_${i.kind}_${log.artifacts.length}`; log.artifacts.push(id); return { ok: true as const, artifactId: id }; },
+            writeRecovery: (input) => {
+                const bytes = Buffer.byteLength(input.content, 'utf8');
+                const sha256 = createHash('sha256').update(input.content, 'utf8').digest('hex');
+                const key = `${input.taskId}\0${input.operationKey}\0${sha256}`;
+                const existing = recoveryStore.get(key);
+                if (existing !== undefined) {
+                    if (existing === input.content) {
+                        return { ok: true as const, relPath: `.recovery/${input.operationKey}.${sha256.slice(0, 12)}${input.ext}`, sha256, bytes, reused: true };
+                    }
+                    return {
+                        ok: false as const,
+                        code: 'artifact_revision_conflict',
+                        message: 'recovery digest collision',
+                        preserved: true,
+                        existingSha256: createHash('sha256').update(existing, 'utf8').digest('hex'),
+                    };
+                }
+                // Digest-immutable: never overwrite a different payload for the same opKey.
+                recoveryStore.set(key, input.content);
+                return { ok: true as const, relPath: `.recovery/${input.operationKey}.${sha256.slice(0, 12)}${input.ext}`, sha256, bytes };
+            },
+            readRecovery: (input) => {
+                if (input.sha256) return recoveryStore.get(`${input.taskId}\0${input.operationKey}\0${input.sha256}`) ?? null;
+                const prefix = `${input.taskId}\0${input.operationKey}\0`;
+                const hits = [...recoveryStore.entries()].filter(([k]) => k.startsWith(prefix));
+                return hits.length === 1 ? hits[0]![1] : null;
+            },
+        },
         queue: {
             get: (_m, id) => rows.get(id) ?? null,
             mutate: (_m, id, fn) => { const e = rows.get(id); if (!e) return null; fn(e); return e; },
@@ -67,7 +98,7 @@ function harness(opts: { maxRevisions?: 0 | 1 | 2 | 3; selfChecks?: SelfCheckRes
         await rt.onChildTerminal(MESH, c.id); await rt.idle();
     };
     const f = (id: string, severity: 'major' | 'nit' = 'major') => ({ id, severity, category: 'correctness' as const, claim: `claim ${id}`, evidence: 'ev' });
-    return { ports, fp, rt, rows, log, parent: () => rows.get(PARENT)!, implDone, review, lastChild, advance: (ms: number) => { nowMs += ms; } , f };
+    return { ports, fp, rt, rows, log, recoveryStore, parent: () => rows.get(PARENT)!, implDone, review, lastChild, advance: (ms: number) => { nowMs += ms; } , f };
 }
 
 beforeEach(() => { __resetStageReportStashForTests(); __resetIndependenceTrackerForTests(); });
@@ -380,6 +411,549 @@ describe('stage pipeline runtime', () => {
         await h.implDone('a3');
         expect(h.parent().stageState!.blockedReason).toBe('self_check_failed');
         expect(h.parent().stageState!.round).toBe(0);
+    });
+
+    it('failed self-check stays failed when artifact storage also fails (no skipped_infra_error upgrade)', async () => {
+        const longLog = `lint broke\n${'x'.repeat(5_000)}\nTRAILER-MARKER-END`;
+        const h = harness({ selfChecks: [{ status: 'failed', log: longLog }] });
+        const keys: string[] = [];
+        h.ports.artifacts.register = (input) => {
+            if (typeof input.operationKey === 'string') keys.push(input.operationKey);
+            if (input.kind === 'self_check') {
+                return {
+                    ok: false as const,
+                    code: 'artifact_storage_budget_exceeded',
+                    message: 'budget',
+                    retryable: false,
+                    preserved: true,
+                    details: { scope: 'mesh', currentBytes: 9, limitBytes: 8 },
+                };
+            }
+            const id = `art_${input.kind}_${h.log.artifacts.length}`;
+            h.log.artifacts.push(id);
+            return { ok: true as const, artifactId: id };
+        };
+        await h.implDone('a1');
+        expect(h.parent().stageState!.selfCheck).toBe('failed');
+        expect(h.parent().stageState!.phase).toBe('revising');
+        expect(h.log.revisions).toHaveLength(1);
+        expect(keys.some((k) => /^self_check-r0-b0$/.test(k))).toBe(true);
+        const holdKey = Object.keys(h.parent().stageState!.artifactFailures ?? {}).find((k) => k.startsWith('self_check-r0-b0#'))!;
+        const hold = h.parent().stageState!.artifactFailures?.[holdKey];
+        expect(hold).toMatchObject({
+            kind: 'self_check',
+            code: 'artifact_storage_budget_exceeded',
+            inspectionStatus: 'failed',
+            operationKey: 'self_check-r0-b0',
+            preserved: true,
+        });
+        expect(hold!.evidenceBytes!).toBeGreaterThan(4_000);
+        expect(hold!.evidenceSha256).toMatch(/^[0-9a-f]{64}$/);
+        expect(hold!.recoveryRelPath).toMatch(/\.recovery\/self_check-r0-b0\.[0-9a-f]{12}/);
+        // Full payload recovered after stash wipe (restart) — including trailer past 4k.
+        __resetStageReportStashForTests();
+        const recovered = h.ports.artifacts.readRecovery!({
+            taskId: PARENT,
+            operationKey: 'self_check-r0-b0',
+            sha256: hold!.evidenceSha256,
+        });
+        expect(recovered).toContain('TRAILER-MARKER-END');
+        expect(recovered!.length).toBe(hold!.evidenceBytes);
+    });
+
+    it('verdict artifact failure keeps full review JSON on recovery after stash loss', async () => {
+        const h = harness();
+        await h.implDone('a1');
+        h.ports.artifacts.register = (input) => {
+            if (input.kind === 'review_verdict') {
+                return {
+                    ok: false as const,
+                    code: 'artifact_storage_budget_exceeded',
+                    message: 'verdict budget',
+                    retryable: false,
+                    preserved: true,
+                    details: { scope: 'mission', limitBytes: 1 },
+                };
+            }
+            const id = `art_${input.kind}_${h.log.artifacts.length}`;
+            h.log.artifacts.push(id);
+            return { ok: true as const, artifactId: id };
+        };
+        const childId = h.lastChild().id;
+        const manyFindings = Array.from({ length: 40 }, (_, i) => h.f(`F${i}`, i % 2 === 0 ? 'major' : 'nit'));
+        // Inflate claims so serialized review exceeds 4k and later findings would be lost if truncated.
+        for (const f of manyFindings) f.claim = `${f.claim} ${'detail-'.repeat(20)}${f.id}`;
+        await h.review({ verdict: 'approve_with_nits', findings: manyFindings, checked: ['a', 'b'], notChecked: ['c'] });
+        const holdKey = Object.keys(h.parent().stageState!.artifactFailures ?? {}).find((k) => k.startsWith('review_verdict-r1-'))!;
+        expect(holdKey).toBeTruthy();
+        const hold = h.parent().stageState!.artifactFailures![holdKey]!;
+        expect(hold).toMatchObject({
+            kind: 'review_verdict',
+            inspectionStatus: 'approve_with_nits',
+            code: 'artifact_storage_budget_exceeded',
+            preserved: true,
+        });
+        expect(hold.evidenceBytes!).toBeGreaterThan(4_000);
+        expect(holdKey).toBe(`${hold.operationKey}#${hold.evidenceSha256}`);
+        // Parked for durable replay — must not advance via reviewer_unavailable (no replacement child).
+        expect(h.parent().stageState!.phase).toBe('awaiting_review');
+        expect(h.parent().stageState!.reviewTaskIds).toHaveLength(1);
+        __resetStageReportStashForTests();
+        expect(peekStageReport(MESH, childId)).toBeUndefined();
+        const recovered = h.ports.artifacts.readRecovery!({
+            taskId: PARENT,
+            operationKey: hold.operationKey,
+            sha256: hold.evidenceSha256,
+        })!;
+        expect(recovered.length).toBe(hold.evidenceBytes);
+        expect(recovered).toContain('"verdict": "approve_with_nits"');
+        expect(recovered).toContain('"id": "F39"'); // last finding preserved (not truncated away)
+    });
+
+    it('R8/R7-01: large review dual persist fail parks body; stash reset + resume replays exact payload', async () => {
+        // Match R8 review probe: max-bound Korean fields → >256KiB UTF-8 when serialized.
+        const pad = (n: number, ch: string) => ch.repeat(n);
+        const findings = Array.from({ length: 30 }, (_, i) => ({
+            id: `R8F${i}`,
+            severity: (i % 2 === 0 ? 'major' : 'nit') as 'major' | 'nit',
+            category: 'correctness' as const,
+            claim: pad(500, '가'),
+            evidence: pad(1000, '나'),
+            suggestedFix: pad(500, '다'),
+            file: pad(200, '파'),
+        }));
+        const checked = Array.from({ length: 20 }, (_, i) => `${pad(500, '검')}${i}`.slice(0, 500));
+        const notChecked = Array.from({ length: 20 }, (_, i) => `${pad(500, '미')}${i}`.slice(0, 500));
+        const testsRun = Array.from({ length: 20 }, (_, i) => ({
+            command: `${pad(500, '명')}${i}`.slice(0, 500),
+            exit: 0,
+            note: `${pad(500, '노')}${i}`.slice(0, 500),
+        }));
+        const h = harness();
+        await h.implDone('a1');
+        const childId = h.lastChild().id;
+        let verdictRegisters = 0;
+        h.ports.artifacts.register = (input) => {
+            if (input.kind === 'review_verdict') {
+                verdictRegisters += 1;
+                if (verdictRegisters === 1) {
+                    return {
+                        ok: false as const,
+                        code: 'ENOSPC',
+                        message: 'disk full on verdict register',
+                        retryable: true,
+                        preserved: false,
+                    };
+                }
+            }
+            const id = `art_${input.kind}_${h.log.artifacts.length}`;
+            h.log.artifacts.push(id);
+            return { ok: true as const, artifactId: id };
+        };
+        h.ports.artifacts.writeRecovery = () => ({
+            ok: false as const,
+            code: 'artifact_storage_unavailable',
+            message: 'ENOSPC on recovery',
+            preserved: false,
+        });
+        await h.review({
+            verdict: 'changes_requested',
+            findings,
+            checked,
+            notChecked,
+            testsRun,
+        });
+        const hold = Object.values(h.parent().stageState!.artifactFailures ?? {}).find((x) => x.kind === 'review_verdict')!;
+        expect(hold.evidenceBytes!).toBeGreaterThan(256_000);
+        expect(hold.inlineEvidence).toBeTruthy();
+        expect(Buffer.byteLength(hold.inlineEvidence!, 'utf8')).toBe(hold.evidenceBytes);
+        expect(hold.preserved).toBe(true);
+        expect(hold.recoveryWriteFailed).toBe(true);
+        expect(h.parent().stageState!.reviewTaskIds).toHaveLength(1);
+        expect(h.parent().stageState!.phase).toBe('awaiting_review');
+        expect(h.log.progress.some((p) => p.includes('parked for durable replay') || p.includes('recoverable block'))).toBe(true);
+        const parkedSha = hold.evidenceSha256;
+        const parkedBody = hold.inlineEvidence!;
+        // Simulate restart: process-local stash gone; queue hold remains.
+        __resetStageReportStashForTests();
+        expect(peekStageReport(MESH, childId)).toBeUndefined();
+        await h.rt.tick();
+        await h.rt.idle();
+        // Replay registered the exact parked body and applied the verdict.
+        expect(h.parent().stageState!.artifactFailures?.[`${hold.operationKey}#${parkedSha}`]).toBeUndefined();
+        expect(h.parent().stageState!.artifacts.verdict.length).toBeGreaterThan(0);
+        expect(h.parent().stageState!.lastVerdict).toBe('changes_requested');
+        expect(h.parent().stageState!.reviewTaskIds).toHaveLength(1); // no replacement reviewer
+        expect(createHash('sha256').update(parkedBody, 'utf8').digest('hex')).toBe(parkedSha);
+        expect(parkedBody).toContain('"id": "R8F29"');
+        expect(verdictRegisters).toBeGreaterThanOrEqual(2);
+    });
+
+    it('R8/R7-01: large review dual fail + resume with register still failing stays parked (no reviewer_unavailable)', async () => {
+        const pad = (n: number, ch: string) => ch.repeat(n);
+        const findings = Array.from({ length: 30 }, (_, i) => ({
+            id: `P${i}`,
+            severity: (i === 0 ? 'major' : 'nit') as 'major' | 'nit',
+            category: 'correctness' as const,
+            claim: pad(500, '가'),
+            evidence: pad(1000, '나'),
+            suggestedFix: pad(500, '다'),
+            file: pad(200, '파'),
+        }));
+        const h = harness();
+        await h.implDone('a1');
+        h.ports.artifacts.register = (input) => {
+            if (input.kind === 'review_verdict') {
+                return {
+                    ok: false as const,
+                    code: 'ENOSPC',
+                    message: 'still full',
+                    retryable: true,
+                    preserved: false,
+                };
+            }
+            const id = `art_${input.kind}_${h.log.artifacts.length}`;
+            h.log.artifacts.push(id);
+            return { ok: true as const, artifactId: id };
+        };
+        h.ports.artifacts.writeRecovery = () => ({
+            ok: false as const,
+            code: 'artifact_storage_unavailable',
+            message: 'ENOSPC',
+            preserved: false,
+        });
+        await h.review({
+            verdict: 'changes_requested',
+            findings,
+            checked: Array.from({ length: 20 }, (_, i) => `${pad(500, '검')}${i}`.slice(0, 500)),
+            notChecked: Array.from({ length: 20 }, (_, i) => `${pad(500, '미')}${i}`.slice(0, 500)),
+            testsRun: Array.from({ length: 20 }, (_, i) => ({
+                command: `${pad(500, '명')}${i}`.slice(0, 500),
+                exit: 1,
+                note: `${pad(500, '노')}${i}`.slice(0, 500),
+            })),
+        });
+        const before = h.parent().stageState!.reviewTaskIds.length;
+        const holdBytes = Object.values(h.parent().stageState!.artifactFailures ?? {}).find((x) => x.kind === 'review_verdict')!.evidenceBytes!;
+        expect(holdBytes).toBeGreaterThan(256_000);
+        __resetStageReportStashForTests();
+        await h.rt.tick();
+        await h.rt.idle();
+        expect(h.parent().stageState!.reviewTaskIds).toHaveLength(before);
+        expect(h.parent().stageState!.blockedReason).toBeUndefined();
+        expect(Object.values(h.parent().stageState!.artifactFailures ?? {}).some((x) => x.kind === 'review_verdict' && x.preserved)).toBe(true);
+        expect(h.log.progress.some((p) => p.includes('not replacing reviewer') || p.includes('hold retained'))).toBe(true);
+    });
+
+    it('R9-01: corrupt valid-JSON inlineEvidence (approve vs held changes_requested) does not register/apply/clear', async () => {
+        const h = harness();
+        await h.implDone('a1');
+        h.ports.artifacts.register = (input) => {
+            if (input.kind === 'review_verdict') {
+                return {
+                    ok: false as const,
+                    code: 'ENOSPC',
+                    message: 'disk full',
+                    retryable: true,
+                    preserved: false,
+                };
+            }
+            const id = `art_${input.kind}_${h.log.artifacts.length}`;
+            h.log.artifacts.push(id);
+            return { ok: true as const, artifactId: id };
+        };
+        h.ports.artifacts.writeRecovery = () => ({
+            ok: false as const,
+            code: 'artifact_storage_unavailable',
+            message: 'ENOSPC',
+            preserved: false,
+        });
+        await h.review({
+            verdict: 'changes_requested',
+            findings: [h.f('R9A', 'major')],
+            checked: ['diff'],
+            notChecked: ['perf'],
+        });
+        const key = Object.keys(h.parent().stageState!.artifactFailures ?? {}).find((k) => k.startsWith('review_verdict-'))!;
+        const hold = h.parent().stageState!.artifactFailures![key]!;
+        expect(hold.inspectionStatus).toBe('changes_requested');
+        const originalSha = hold.evidenceSha256;
+        // Mutate parked body to a different valid approve report while leaving the held digest untouched.
+        const corruptBody = JSON.stringify({
+            round: 1,
+            reviewTaskId: h.lastChild().id,
+            independenceUsed: 'different_provider',
+            verdict: 'approve',
+            findings: [],
+            checked: ['diff'],
+            notChecked: ['perf'],
+        }, null, 2);
+        expect(createHash('sha256').update(corruptBody, 'utf8').digest('hex')).not.toBe(originalSha);
+        h.ports.queue.mutate(MESH, PARENT, (e) => {
+            e.stageState!.artifactFailures![key]!.inlineEvidence = corruptBody;
+        });
+        let registeredVerdict = 0;
+        const prevRegister = h.ports.artifacts.register;
+        h.ports.artifacts.register = (input) => {
+            if (input.kind === 'review_verdict') registeredVerdict += 1;
+            return prevRegister(input);
+        };
+        __resetStageReportStashForTests();
+        await h.rt.tick();
+        await h.rt.idle();
+        expect(registeredVerdict).toBe(0);
+        expect(h.parent().stageState!.lastVerdict).toBeUndefined();
+        expect(h.parent().stageState!.artifacts.verdict).toHaveLength(0);
+        expect(h.parent().stageState!.artifactFailures?.[key]?.evidenceSha256).toBe(originalSha);
+        expect(h.parent().stageState!.artifactFailures?.[key]?.details).toMatchObject({
+            corruptRecovery: expect.objectContaining({
+                expectedSha256: originalSha,
+                actualSha256: createHash('sha256').update(corruptBody, 'utf8').digest('hex'),
+            }),
+        });
+        expect(h.log.progress.some((p) => p.includes('digest mismatch') || p.includes('corrupt recovery'))).toBe(true);
+        expect(h.parent().stageState!.reviewTaskIds).toHaveLength(1);
+    });
+
+    it('R9-01: corrupt recovery-file body under original digest name does not apply on resume', async () => {
+        const h = harness();
+        await h.implDone('a1');
+        const childId = h.lastChild().id;
+        h.ports.artifacts.register = (input) => {
+            if (input.kind === 'review_verdict') {
+                return {
+                    ok: false as const,
+                    code: 'artifact_storage_budget_exceeded',
+                    message: 'budget',
+                    retryable: true,
+                    preserved: true,
+                };
+            }
+            const id = `art_${input.kind}_${h.log.artifacts.length}`;
+            h.log.artifacts.push(id);
+            return { ok: true as const, artifactId: id };
+        };
+        // Default harness writeRecovery succeeds into recoveryStore — park via file, not inline.
+        await h.review({
+            verdict: 'changes_requested',
+            findings: [h.f('R9B', 'major')],
+            checked: ['a'],
+            notChecked: ['b'],
+        });
+        const key = Object.keys(h.parent().stageState!.artifactFailures ?? {}).find((k) => k.startsWith('review_verdict-'))!;
+        const hold = h.parent().stageState!.artifactFailures![key]!;
+        expect(hold.recoveryRelPath).toBeTruthy();
+        expect(hold.inlineEvidence).toBeUndefined();
+        const originalSha = hold.evidenceSha256;
+        const storeKey = `${PARENT}\0${hold.operationKey}\0${originalSha}`;
+        const corrupt = JSON.stringify({
+            round: 1,
+            reviewTaskId: childId,
+            independenceUsed: 'different_provider',
+            verdict: 'approve',
+            findings: [],
+            checked: ['a'],
+            notChecked: ['b'],
+        }, null, 2);
+        h.recoveryStore.set(storeKey, corrupt);
+        // Prefer file over absent inline.
+        h.ports.queue.mutate(MESH, PARENT, (e) => {
+            delete e.stageState!.artifactFailures![key]!.inlineEvidence;
+        });
+        __resetStageReportStashForTests();
+        await h.rt.tick();
+        await h.rt.idle();
+        expect(h.parent().stageState!.lastVerdict).toBeUndefined();
+        expect(h.parent().stageState!.artifacts.verdict).toHaveLength(0);
+        expect(h.parent().stageState!.artifactFailures?.[key]?.evidenceSha256).toBe(originalSha);
+        expect(h.parent().stageState!.artifactFailures?.[key]?.details?.corruptRecovery).toMatchObject({
+            expectedSha256: originalSha,
+        });
+    });
+
+    it('same-kind later bounce success does not erase unrecovered prior op hold; ENOSPC recovery survives restart', async () => {
+        const big = `ENOSPC-BODY-START\n${'y'.repeat(6_000)}\nENOSPC-BODY-END`;
+        const h = harness({
+            selfChecks: [
+                { status: 'failed', log: big },
+                { status: 'passed', log: 'bounce-1-ok' },
+            ],
+        });
+        h.ports.artifacts.register = (input) => {
+            if (input.kind === 'self_check' && input.operationKey === 'self_check-r0-b0') {
+                return {
+                    ok: false as const,
+                    code: 'ENOSPC',
+                    message: 'disk full before publish',
+                    retryable: true,
+                    preserved: true,
+                    details: { errno: 'ENOSPC', recovery: 'free_disk_or_reduce_payload' },
+                };
+            }
+            const id = `art_${input.kind}_${h.log.artifacts.length}`;
+            h.log.artifacts.push(id);
+            return { ok: true as const, artifactId: id };
+        };
+        await h.implDone('a1');
+        const b0Key = Object.keys(h.parent().stageState!.artifactFailures ?? {}).find((k) => k.startsWith('self_check-r0-b0#'))!;
+        expect(h.parent().stageState!.artifactFailures?.[b0Key]?.code).toBe('ENOSPC');
+        const b0Hold = h.parent().stageState!.artifactFailures![b0Key]!;
+        const b0Bytes = b0Hold.evidenceBytes!;
+        expect(b0Bytes).toBeGreaterThan(4_000);
+        // Bounce revises; next self-check (b1) succeeds — must NOT clear b0 hold (different op + digest).
+        await h.implDone('a2');
+        expect(h.parent().stageState!.artifactFailures?.[b0Key]?.code).toBe('ENOSPC');
+        expect(Object.keys(h.parent().stageState!.artifactFailures ?? {}).some((k) => k.startsWith('self_check-r0-b1#'))).toBe(false);
+        __resetStageReportStashForTests();
+        const recovered = h.ports.artifacts.readRecovery!({
+            taskId: PARENT,
+            operationKey: 'self_check-r0-b0',
+            sha256: b0Hold.evidenceSha256,
+        })!;
+        expect(recovered).toContain('ENOSPC-BODY-END');
+        expect(recovered.length).toBe(b0Bytes);
+        // Unrelated verdict success also leaves b0 intact.
+        await h.review({ verdict: 'approve' });
+        expect(h.parent().stageState!.artifactFailures?.[b0Key]?.code).toBe('ENOSPC');
+        expect(h.log.commits[0].text).toContain('op=self_check-r0-b0');
+    });
+
+    it('R7-02: success clears only matching opKey+digest; sibling digest hold remains', async () => {
+        const bodyA = `HOLD-A\n${'a'.repeat(3_000)}\nEND-A`;
+        const contentA = `# Self-check (failed)\n\n${bodyA}\n`;
+        const shaA = createHash('sha256').update(contentA, 'utf8').digest('hex');
+        const shaB = createHash('sha256').update(`${contentA}-CHANGED`, 'utf8').digest('hex');
+        expect(shaA).not.toBe(shaB);
+        const h = harness({ selfChecks: [{ status: 'failed', log: bodyA }, { status: 'failed', log: bodyA }] });
+        h.ports.artifacts.register = (input) => {
+            if (input.kind === 'self_check' && input.operationKey === 'self_check-r0-b0') {
+                return {
+                    ok: false as const,
+                    code: 'artifact_storage_budget_exceeded',
+                    message: 'budget',
+                    retryable: true,
+                    preserved: true,
+                };
+            }
+            const id = `art_${input.kind}_${h.log.artifacts.length}`;
+            h.log.artifacts.push(id);
+            return { ok: true as const, artifactId: id };
+        };
+        await h.implDone('a1');
+        const keyA = `self_check-r0-b0#${shaA}`;
+        const keyB = `self_check-r0-b0#${shaB}`;
+        expect(h.parent().stageState!.artifactFailures?.[keyA]?.preserved).toBe(true);
+        // Seed a sibling digest hold for the same operation (changed-payload recovery coexistence).
+        h.ports.queue.mutate(MESH, PARENT, (e) => {
+            const base = e.stageState!.artifactFailures![keyA]!;
+            e.stageState!.artifactFailures![keyB] = {
+                ...base,
+                evidenceSha256: shaB,
+                evidencePreview: 'sibling digest hold',
+                recoveryRelPath: `.recovery/self_check-r0-b0.${shaB.slice(0, 12)}.md`,
+            };
+            // Re-enter same bounce so a successful register clears only the matching digest.
+            e.stageState!.phase = 'self_checking';
+            e.stageState!.selfCheckBounces = 0;
+        });
+        h.ports.artifacts.register = (input) => {
+            const id = `art_${input.kind}_${h.log.artifacts.length}`;
+            h.log.artifacts.push(id);
+            return { ok: true as const, artifactId: id };
+        };
+        await h.rt.tick();
+        await h.rt.idle();
+        expect(h.parent().stageState!.artifactFailures?.[keyA]).toBeUndefined();
+        expect(h.parent().stageState!.artifactFailures?.[keyB]?.evidenceSha256).toBe(shaB);
+        expect(h.ports.artifacts.readRecovery!({ taskId: PARENT, operationKey: 'self_check-r0-b0', sha256: shaA })).toContain('END-A');
+    });
+
+    it('R7-01: dual ENOSPC on huge diff fail-closes with preserved=false (no inline, no advance claim)', async () => {
+        const huge = `DIFF-START\n${'z'.repeat(300_000)}\nDIFF-END`;
+        const h = harness({ selfChecks: [{ status: 'passed', log: 'ok' }] });
+        h.ports.git.diff = async () => huge;
+        h.ports.artifacts.register = (input) => {
+            if (input.kind === 'diff') {
+                return {
+                    ok: false as const,
+                    code: 'ENOSPC',
+                    message: 'disk full on register',
+                    retryable: true,
+                    preserved: false,
+                };
+            }
+            const id = `art_${input.kind}_${h.log.artifacts.length}`;
+            h.log.artifacts.push(id);
+            return { ok: true as const, artifactId: id };
+        };
+        h.ports.artifacts.writeRecovery = () => ({
+            ok: false as const,
+            code: 'artifact_storage_unavailable',
+            message: 'ENOSPC on recovery',
+            preserved: false,
+        });
+        await h.implDone('a1');
+        const diffHold = Object.values(h.parent().stageState!.artifactFailures ?? {}).find((x) => x.kind === 'diff');
+        expect(diffHold).toMatchObject({
+            code: 'ENOSPC',
+            preserved: false,
+            recoveryWriteFailed: true,
+            retryable: false,
+        });
+        expect(diffHold!.inlineEvidence).toBeUndefined();
+        expect(diffHold!.recoveryRelPath).toBeUndefined();
+        // Pipeline continued for self-check, but hold must not claim the discarded body was preserved.
+        expect(h.log.progress.some((p) => p.includes('recovery write failed and body not durable'))).toBe(true);
+    });
+
+    it('R7-01: dual ENOSPC on self-check keeps admission-bounded body via inlineEvidence (honest preserved)', async () => {
+        const h = harness({ selfChecks: [{ status: 'failed', log: `lint\n${'x'.repeat(5_000)}\nEND` }] });
+        h.ports.artifacts.register = (input) => {
+            if (input.kind === 'self_check') {
+                return {
+                    ok: false as const,
+                    code: 'ENOSPC',
+                    message: 'disk full',
+                    retryable: true,
+                    preserved: false,
+                };
+            }
+            const id = `art_${input.kind}_${h.log.artifacts.length}`;
+            h.log.artifacts.push(id);
+            return { ok: true as const, artifactId: id };
+        };
+        h.ports.artifacts.writeRecovery = () => ({
+            ok: false as const,
+            code: 'artifact_storage_unavailable',
+            message: 'ENOSPC on recovery',
+            preserved: false,
+        });
+        await h.implDone('a1');
+        const hold = Object.values(h.parent().stageState!.artifactFailures ?? {}).find((x) => x.kind === 'self_check')!;
+        expect(hold).toMatchObject({
+            code: 'ENOSPC',
+            recoveryWriteFailed: true,
+            preserved: true,
+            kind: 'self_check',
+        });
+        expect(hold.inlineEvidence).toContain('END');
+        expect(hold.recoveryRelPath).toBeUndefined();
+        expect(h.parent().stageState!.selfCheck).toBe('failed');
+    });
+
+    it('passes stable operationKey for diff and review_verdict registrations', async () => {
+        const h = harness();
+        const keys: string[] = [];
+        const inner = h.ports.artifacts.register;
+        h.ports.artifacts.register = (input) => {
+            if (typeof input.operationKey === 'string') keys.push(input.operationKey);
+            return inner(input);
+        };
+        await h.implDone('a1');
+        await h.review({ verdict: 'approve' });
+        expect(keys.some((k) => /^diff-base0000-head/.test(k))).toBe(true);
+        expect(keys.some((k) => /^review_verdict-r1-/.test(k))).toBe(true);
+        expect(keys.some((k) => /^self_check-r0-b0$/.test(k))).toBe(true);
     });
 
     it('unavailable / not-configured self-check skips without bouncing', async () => {

@@ -2,10 +2,11 @@
 // All I/O goes through StageRuntimePorts (stage-ports.ts); production wiring is stage-ports-default.ts.
 // The runtime never emits turn states — it reads what the ledger already committed and writes queue rows.
 
+import { createHash } from 'node:crypto';
 import { recoverPendingStageReview, type StageReviewRecoveryHost, type StageReviewRecoveryRequest } from './stage-review-recovery.js';
-import { reviewIndependenceOf, type MeshReviewReport, type MeshTaskStageState } from '@adhdev/mesh-shared';
+import { reviewIndependenceOf, type MeshReviewReport, type MeshStageArtifactFailure, type MeshTaskStageState } from '@adhdev/mesh-shared';
 import { reduceStage, type StageEffect, type StageEvent } from './stage-pipeline.js';
-import { FINGERPRINT_V2, type StageRuntimePorts } from './stage-ports.js';
+import { FINGERPRINT_V2, type StageArtifactRegisterResult, type StageRuntimePorts } from './stage-ports.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue-types.js';
 import { dropStageReport, peekStageReport } from './stage-report-stash.js';
 import { buildFinalReport, buildReviewerMessage, buildRevisionMemo } from './stage-synthesis.js';
@@ -17,6 +18,241 @@ const STAGE_PARENT_ENDED = new Set(['completed', 'failed', 'blocked', 'cancelled
 
 const SELF_CHECK_LOG_MAX = 60_000;
 const DIFF_MAX = 1_500_000;
+/** Queue-row inline ceiling when disk recovery write fails (honest fail-closed above this). */
+const INLINE_EVIDENCE_MAX = 256_000;
+
+type StageArtifactKind = 'diff' | 'self_check' | 'review_verdict';
+
+function holdKey(operationKey: string, sha256: string): string {
+    return `${operationKey}#${sha256}`;
+}
+
+function contentSha256(content: string): string {
+    return createHash('sha256').update(content, 'utf8').digest('hex');
+}
+
+export type StageArtifactFailureRecordResult = {
+    /** Full evidence is reachable via recovery file and/or inlineEvidence. */
+    evidenceDurable: boolean
+    hold: MeshStageArtifactFailure
+};
+
+/** Persist failure by opKey+digest; never claim preserved without durable body. */
+function recordStageArtifactFailure(
+    ports: StageRuntimePorts,
+    meshId: string,
+    parentId: string,
+    kind: StageArtifactKind,
+    art: Extract<StageArtifactRegisterResult, { ok: false }>,
+    opts: {
+        operationKey: string
+        inspectionStatus?: string
+        /** Full admission-bounded payload (not a truncated preview). */
+        fullContent: string
+        ext: string
+        evidencePreview?: string
+    },
+): StageArtifactFailureRecordResult {
+    const opKey = opts.operationKey;
+    const sha256 = contentSha256(opts.fullContent);
+    const bytes = Buffer.byteLength(opts.fullContent, 'utf8');
+    let recoveryRelPath: string | undefined;
+    let recoveryWriteFailed = false;
+    let inlineEvidence: string | undefined;
+    const written = ports.artifacts.writeRecovery?.({
+        taskId: parentId,
+        operationKey: opKey,
+        content: opts.fullContent,
+        ext: opts.ext,
+    });
+    if (written?.ok) {
+        recoveryRelPath = written.relPath;
+    } else {
+        recoveryWriteFailed = true;
+        // Last-resort durable body on the queue row when disk cannot hold it.
+        // review_verdict is already admission-bounded by task-stages validation — always keep the
+        // accepted body (may exceed INLINE_EVIDENCE_MAX) so restart can replay instead of
+        // silently replacing the reviewer. Other kinds stay under the soft inline ceiling.
+        if (kind === 'review_verdict' || bytes <= INLINE_EVIDENCE_MAX) inlineEvidence = opts.fullContent;
+    }
+    const preserved = !!(recoveryRelPath || inlineEvidence);
+    const failure: MeshStageArtifactFailure = {
+        kind,
+        code: art.code,
+        message: art.message.slice(0, 500),
+        retryable: art.retryable && preserved,
+        preserved,
+        operationKey: opKey,
+        evidenceSha256: sha256,
+        evidenceBytes: bytes,
+        ...(art.details || written && !written.ok
+            ? {
+                details: {
+                    ...(art.details ?? {}),
+                    ...(written && !written.ok
+                        ? {
+                            recoveryWrite: {
+                                code: written.code,
+                                message: written.message,
+                                preserved: written.preserved === true,
+                                ...(written.existingSha256 ? { existingSha256: written.existingSha256 } : {}),
+                            },
+                        }
+                        : {}),
+                },
+            }
+            : {}),
+        ...(opts.inspectionStatus ? { inspectionStatus: opts.inspectionStatus } : {}),
+        ...(recoveryRelPath ? { recoveryRelPath } : {}),
+        ...(inlineEvidence ? { inlineEvidence } : {}),
+        ...(recoveryWriteFailed ? { recoveryWriteFailed: true } : {}),
+        evidencePreview: opts.evidencePreview?.slice(0, 200)
+            ?? `${kind} hold op=${opKey} sha=${sha256.slice(0, 12)}`
+                + (recoveryRelPath ? ` recovery=${recoveryRelPath}` : '')
+                + (inlineEvidence ? ' inline=1' : '')
+                + (recoveryWriteFailed && !inlineEvidence ? ' recovery_write_failed_no_body' : ''),
+        at: new Date(ports.now()).toISOString(),
+    };
+    const key = holdKey(opKey, sha256);
+    ports.queue.mutate(meshId, parentId, (e) => {
+        if (!e.stageState) return;
+        const next = { ...(e.stageState.artifactFailures ?? {}) };
+        next[key] = failure;
+        e.stageState.artifactFailures = next;
+        e.stageState.lastArtifactFailure = failure;
+    });
+    return { evidenceDurable: preserved, hold: failure };
+}
+
+/** Clear only holds whose operationKey AND payload digest both match. */
+function clearStageArtifactFailureOp(
+    ports: StageRuntimePorts,
+    meshId: string,
+    parentId: string,
+    operationKey: string,
+    contentSha: string,
+): void {
+    const key = holdKey(operationKey, contentSha);
+    ports.queue.mutate(meshId, parentId, (e) => {
+        if (!e.stageState) return;
+        const next = { ...(e.stageState.artifactFailures ?? {}) };
+        if (!next[key] && !(e.stageState.lastArtifactFailure?.operationKey === operationKey
+            && e.stageState.lastArtifactFailure?.evidenceSha256 === contentSha)) return;
+        delete next[key];
+        if (Object.keys(next).length) e.stageState.artifactFailures = next;
+        else delete e.stageState.artifactFailures;
+        if (e.stageState.lastArtifactFailure?.operationKey === operationKey
+            && e.stageState.lastArtifactFailure?.evidenceSha256 === contentSha) {
+            const remaining = Object.values(next);
+            if (remaining.length) e.stageState.lastArtifactFailure = remaining[remaining.length - 1];
+            else delete e.stageState.lastArtifactFailure;
+        }
+    });
+}
+
+function clearStageArtifactFailureOpOnState(state: MeshTaskStageState, operationKey: string, contentSha: string): void {
+    const key = holdKey(operationKey, contentSha);
+    if (!state.artifactFailures?.[key] && !(state.lastArtifactFailure?.operationKey === operationKey
+        && state.lastArtifactFailure?.evidenceSha256 === contentSha)) return;
+    const next = { ...(state.artifactFailures ?? {}) };
+    delete next[key];
+    if (Object.keys(next).length) state.artifactFailures = next;
+    else delete state.artifactFailures;
+    if (state.lastArtifactFailure?.operationKey === operationKey
+        && state.lastArtifactFailure?.evidenceSha256 === contentSha) {
+        const remaining = Object.values(next);
+        if (remaining.length) state.lastArtifactFailure = remaining[remaining.length - 1];
+        else delete state.lastArtifactFailure;
+    }
+}
+
+function sanitizeChildIdForOpKey(childId: string): string {
+    return childId.replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 48);
+}
+
+function reviewVerdictHoldsForChild(state: MeshTaskStageState, childId: string): MeshStageArtifactFailure[] {
+    const needle = sanitizeChildIdForOpKey(childId);
+    return Object.values(state.artifactFailures ?? {}).filter(
+        (h) => h.kind === 'review_verdict' && h.operationKey.includes(needle),
+    );
+}
+
+function resolveHeldEvidenceBody(
+    ports: StageRuntimePorts,
+    parentId: string,
+    hold: MeshStageArtifactFailure,
+): string | null {
+    if (hold.inlineEvidence) return hold.inlineEvidence;
+    if (!ports.artifacts.readRecovery || !hold.evidenceSha256) return null;
+    return ports.artifacts.readRecovery({
+        taskId: parentId,
+        operationKey: hold.operationKey,
+        sha256: hold.evidenceSha256,
+    });
+}
+
+/** True only when recovered bytes are bit-identical to the parked hold (sha + byte count). */
+function recoveredEvidenceMatchesHold(body: string, hold: MeshStageArtifactFailure): boolean {
+    const actualSha = contentSha256(body);
+    const actualBytes = Buffer.byteLength(body, 'utf8');
+    if (actualSha !== hold.evidenceSha256) return false;
+    if (typeof hold.evidenceBytes === 'number' && actualBytes !== hold.evidenceBytes) return false;
+    return true;
+}
+
+/** Annotate hold with structured corrupt-recovery block; never clear or replace the original digest key. */
+function markCorruptReviewRecovery(
+    ports: StageRuntimePorts,
+    meshId: string,
+    parentId: string,
+    hold: MeshStageArtifactFailure,
+    body: string,
+): void {
+    const actualSha = contentSha256(body);
+    const actualBytes = Buffer.byteLength(body, 'utf8');
+    const key = holdKey(hold.operationKey, hold.evidenceSha256);
+    ports.queue.mutate(meshId, parentId, (e) => {
+        if (!e.stageState?.artifactFailures?.[key]) return;
+        const cur = e.stageState.artifactFailures[key]!;
+        cur.details = {
+            ...(cur.details ?? {}),
+            corruptRecovery: {
+                expectedSha256: hold.evidenceSha256,
+                actualSha256: actualSha,
+                expectedBytes: hold.evidenceBytes,
+                actualBytes,
+                at: new Date(ports.now()).toISOString(),
+            },
+        };
+        e.stageState.lastArtifactFailure = cur;
+    });
+}
+
+function parseHeldReviewPayload(body: string): {
+    review: MeshReviewReport
+    independenceUsed?: 'different_provider' | 'fresh_session_fallback'
+} | null {
+    try {
+        const parsed = JSON.parse(body) as Record<string, unknown>;
+        if (!parsed || typeof parsed !== 'object') return null;
+        const {
+            round: _round,
+            reviewTaskId: _reviewTaskId,
+            independenceUsed,
+            ...rest
+        } = parsed;
+        const review = rest as unknown as MeshReviewReport;
+        if (!review || typeof review.verdict !== 'string' || !Array.isArray(review.findings)
+            || !Array.isArray(review.checked) || !Array.isArray(review.notChecked)) return null;
+        const used =
+            independenceUsed === 'different_provider' || independenceUsed === 'fresh_session_fallback'
+                ? independenceUsed
+                : undefined;
+        return { review, ...(used ? { independenceUsed: used } : {}) };
+    } catch {
+        return null;
+    }
+}
 
 /**
  * create_review_child failures that retrying cannot fix: the required input evidence is unauthorized, gone or
@@ -130,22 +366,153 @@ export class StagePipelineRuntime {
                     return;
                 }
             }
+            // Restart path: stash may be gone — replay a parked review_verdict hold before treating as unavailable.
+            if (fresh.status === 'completed') {
+                const replay = await this.tryReplayHeldReviewVerdict(meshId, parentId, childId, fresh);
+                if (replay !== 'none') return;
+            }
             if (fresh.status === 'completed' && report?.review) {
+                // Include child id so a replacement reviewer success cannot erase an unrecovered prior hold.
+                const verdictOpKey = `review_verdict-r${st.round}-${sanitizeChildIdForOpKey(childId)}`;
+                const verdictContent = JSON.stringify({ round: st.round, reviewTaskId: childId, independenceUsed, ...report.review }, null, 2);
                 const verdictArt = this.ports.artifacts.register({
                     meshId, ...(parent.missionId ? { missionId: parent.missionId } : {}), taskId: parentId, kind: 'review_verdict',
                     title: `Review verdict r${st.round}: ${report.review.verdict}`, ext: '.json',
-                    content: JSON.stringify({ round: st.round, reviewTaskId: childId, independenceUsed, ...report.review }, null, 2),
+                    content: verdictContent,
+                    operationKey: verdictOpKey,
                 });
+                if (!verdictArt.ok) {
+                    // Full review JSON via writeRecovery/inline on the queue row; never replace the reviewer.
+                    const recorded = recordStageArtifactFailure(this.ports, meshId, parentId, 'review_verdict', verdictArt, {
+                        inspectionStatus: report.review.verdict,
+                        operationKey: verdictOpKey,
+                        fullContent: verdictContent,
+                        ext: '.json',
+                        evidencePreview: `review_verdict=${report.review.verdict} findings=${report.review.findings?.length ?? 0}`,
+                    });
+                    this.ports.events.progress(
+                        meshId,
+                        parentId,
+                        `stage: verdict artifact failed (${verdictArt.code}): ${verdictArt.message}` +
+                            (recorded.evidenceDurable
+                                ? `; review evidence parked for durable replay (verdict=${report.review.verdict})`
+                                : `; recovery write failed and body not durable — recoverable block, not replacing reviewer (verdict=${report.review.verdict})`),
+                    );
+                    // Keep process-local stash as a best-effort secondary copy until replay succeeds.
+                    return;
+                }
                 dropStageReport(meshId, childId);
+                const verdictSha = contentSha256(verdictContent);
                 await this.apply(meshId, parentId, {
                     kind: 'review_verdict', childTaskId: childId, report: report.review, independenceUsed,
                     ...(fresh.assignedSessionId ? { reviewerSessionId: fresh.assignedSessionId } : {}), at: this.iso(),
-                }, state => { if (verdictArt) state.artifacts.verdict.push(verdictArt); (state as MeshTaskStageState & { reviewerProvider?: string }).reviewerProvider = fresh.assignedProviderType; });
+                }, state => {
+                    clearStageArtifactFailureOpOnState(state, verdictOpKey, verdictSha);
+                    state.artifacts.verdict.push(verdictArt.artifactId);
+                    (state as MeshTaskStageState & { reviewerProvider?: string }).reviewerProvider = fresh.assignedProviderType;
+                });
                 return;
             }
             if (fresh.status === 'cancelled' && st.phase === 'awaiting_review' && fresh.cancelReason?.startsWith('stage_')) return;
+            // Unresolved review_verdict hold (even without body) must not be silently replaced.
+            if (reviewVerdictHoldsForChild(st, childId).length) {
+                this.ports.events.progress(
+                    meshId,
+                    parentId,
+                    'stage: review verdict hold still unresolved — recoverable block, not replacing reviewer',
+                );
+                return;
+            }
             await this.apply(meshId, parentId, { kind: 'reviewer_unavailable', childTaskId: childId, at: this.iso() });
         });
+    }
+
+    /**
+     * Replay a parked review_verdict hold (queue inlineEvidence and/or recovery file) after stash loss.
+     * Returns 'applied' | 'pending' (still held, do not replace reviewer) | 'none'.
+     */
+    private async tryReplayHeldReviewVerdict(
+        meshId: string,
+        parentId: string,
+        childId: string,
+        child: MeshWorkQueueEntry,
+    ): Promise<'applied' | 'pending' | 'none'> {
+        const parent = this.ports.queue.get(meshId, parentId);
+        if (!parent?.stageState) return 'none';
+        const holds = reviewVerdictHoldsForChild(parent.stageState, childId);
+        if (!holds.length) return 'none';
+        const hold = holds[holds.length - 1]!;
+        const body = resolveHeldEvidenceBody(this.ports, parentId, hold);
+        if (!body) {
+            this.ports.events.progress(
+                meshId,
+                parentId,
+                `stage: review verdict hold op=${hold.operationKey} has no durable body — recoverable block, not replacing reviewer`,
+            );
+            return 'pending';
+        }
+        // Integrity gate: never parse/register/apply bytes that do not match the parked digest.
+        if (!recoveredEvidenceMatchesHold(body, hold)) {
+            markCorruptReviewRecovery(this.ports, meshId, parentId, hold, body);
+            this.ports.events.progress(
+                meshId,
+                parentId,
+                `stage: review verdict hold op=${hold.operationKey} recovered body digest mismatch — corrupt recovery block, original hold preserved`,
+            );
+            return 'pending';
+        }
+        const parsed = parseHeldReviewPayload(body);
+        if (!parsed) {
+            this.ports.events.progress(
+                meshId,
+                parentId,
+                `stage: review verdict hold op=${hold.operationKey} body is not replayable JSON — recoverable block, not replacing reviewer`,
+            );
+            return 'pending';
+        }
+        const independenceUsed = parsed.independenceUsed
+            ?? (reviewIndependenceOf(child.review ?? {}) === 'fresh_session' ? 'fresh_session_fallback' as const : 'different_provider' as const);
+        const verdictArt = this.ports.artifacts.register({
+            meshId,
+            ...(parent.missionId ? { missionId: parent.missionId } : {}),
+            taskId: parentId,
+            kind: 'review_verdict',
+            title: `Review verdict r${parent.stageState.round}: ${parsed.review.verdict}`,
+            ext: '.json',
+            content: body,
+            operationKey: hold.operationKey,
+        });
+        if (!verdictArt.ok) {
+            // Refresh the hold (same digest) but never replace the reviewer.
+            recordStageArtifactFailure(this.ports, meshId, parentId, 'review_verdict', verdictArt, {
+                inspectionStatus: parsed.review.verdict,
+                operationKey: hold.operationKey,
+                fullContent: body,
+                ext: '.json',
+                evidencePreview: `review_verdict_replay=${parsed.review.verdict}`,
+            });
+            this.ports.events.progress(
+                meshId,
+                parentId,
+                `stage: review verdict replay register failed (${verdictArt.code}) — hold retained for retry`,
+            );
+            return 'pending';
+        }
+        dropStageReport(meshId, childId);
+        const verdictSha = hold.evidenceSha256;
+        await this.apply(meshId, parentId, {
+            kind: 'review_verdict',
+            childTaskId: childId,
+            report: parsed.review,
+            independenceUsed,
+            ...(child.assignedSessionId ? { reviewerSessionId: child.assignedSessionId } : {}),
+            at: this.iso(),
+        }, state => {
+            clearStageArtifactFailureOpOnState(state, hold.operationKey, verdictSha);
+            state.artifacts.verdict.push(verdictArt.artifactId);
+            (state as MeshTaskStageState & { reviewerProvider?: string }).reviewerProvider = child.assignedProviderType;
+        });
+        return 'applied';
     }
 
     /** A review child was claimed (phase awaiting_review → reviewing). */
@@ -167,8 +534,14 @@ export class StagePipelineRuntime {
             // Never block the housekeeping tick on a long self-check; skip parents with work already in flight.
             if (this.chains.has(this.key(parent.meshId, parent.id))) continue;
             if (age > this.ports.pipelineCeilingMs()) {
-                void this.serial(parent.meshId, parent.id, () => this.apply(parent.meshId, parent.id, { kind: 'ceiling', at: this.iso() }));
-                continue;
+                // Do not ceiling-block over a parked review_verdict body — resume/replay instead of replacing evidence.
+                const pendingVerdict = Object.values(st.artifactFailures ?? {}).some(
+                    (h) => h.kind === 'review_verdict' && !!(h.inlineEvidence || h.recoveryRelPath),
+                );
+                if (!pendingVerdict) {
+                    void this.serial(parent.meshId, parent.id, () => this.apply(parent.meshId, parent.id, { kind: 'ceiling', at: this.iso() }));
+                    continue;
+                }
             }
             void this.serial(parent.meshId, parent.id, () => this.resumeOne(parent.meshId, parent.id));
         }
@@ -343,14 +716,47 @@ export class StagePipelineRuntime {
                     try { result = await this.ports.selfCheck.run({ meshId, taskId: id, workspace, baseSha: st.baseSha, profile: 'fast' }); }
                     catch (e: any) { result = { status: 'skipped_infra_error', log: `self-check runner error: ${e?.message || e}` }; }
                 }
+                const selfCheckOpKey = `self_check-r${st.round}-b${st.selfCheckBounces}`;
+                const selfCheckContent = `# Self-check (${result.status})\n\n${result.log.slice(-SELF_CHECK_LOG_MAX)}\n`;
                 const art = this.ports.artifacts.register({
                     meshId, ...(parent.missionId ? { missionId: parent.missionId } : {}), taskId: id, kind: 'self_check',
-                    title: `Self-check: ${result.status}`, ext: '.md', content: `# Self-check (${result.status})\n\n${result.log.slice(-SELF_CHECK_LOG_MAX)}\n`,
+                    title: `Self-check: ${result.status}`, ext: '.md', content: selfCheckContent,
+                    // Stable per bounce cycle: same-bytes retry is a no-op; content change conflicts; next bounce gets a new key.
+                    operationKey: selfCheckOpKey,
                 });
+                if (!art.ok) {
+                    // Full admission-bounded log via writeRecovery; clear only matching op+digest on later success.
+                    // Never upgrade a failed check to skipped_infra_error (that would skip revision/block).
+                    const recorded = recordStageArtifactFailure(this.ports, meshId, id, 'self_check', art, {
+                        inspectionStatus: result.status,
+                        operationKey: selfCheckOpKey,
+                        fullContent: selfCheckContent,
+                        ext: '.md',
+                        evidencePreview: `self_check=${result.status} bytes=${Buffer.byteLength(selfCheckContent, 'utf8')}`,
+                    });
+                    this.ports.events.progress(
+                        meshId,
+                        id,
+                        `stage: self-check artifact failed (${art.code}): ${art.message}` +
+                            (result.status === 'failed' ? '; preserving failed self-check status' : '') +
+                            (recorded.evidenceDurable
+                                ? `; hold recorded (retryable=${recorded.hold.retryable})`
+                                : '; recovery write failed and body not durable — fail-closed pending retry'),
+                    );
+                    // Without durable evidence, do not emit self_check_done (would advance while discarding the body).
+                    if (!recorded.evidenceDurable) return;
+                    const status =
+                        result.status === 'failed' || result.status === 'unavailable'
+                            ? result.status
+                            : 'skipped_infra_error';
+                    await this.apply(meshId, id, { kind: 'self_check_done', status, at: this.iso() });
+                    return;
+                }
+                clearStageArtifactFailureOp(this.ports, meshId, id, selfCheckOpKey, contentSha256(selfCheckContent));
                 // A restart in self_checking may not have registered the round diff yet.
                 const head = st.stageHeads.at(-1)?.rootSha;
                 if (workspace && st.baseSha && head && !st.artifacts.diff.length) await this.registerDiff(id, workspace, st.baseSha, head);
-                await this.apply(meshId, id, { kind: 'self_check_done', status: result.status, at: this.iso() }, s => { if (art) s.artifacts.selfCheck.push(art); });
+                await this.apply(meshId, id, { kind: 'self_check_done', status: result.status, at: this.iso() }, s => { s.artifacts.selfCheck.push(art.artifactId); });
                 return;
             }
             case 'create_review_child': {
@@ -473,11 +879,33 @@ export class StagePipelineRuntime {
         if (!parent) return;
         let diff = '';
         try { diff = (await this.ports.git.diff(workspace, base, head)).slice(0, DIFF_MAX); } catch { return; }
-        const id = this.ports.artifacts.register({
+        const diffOpKey = `diff-${base.slice(0, 12)}-${head.slice(0, 12)}`;
+        const registered = this.ports.artifacts.register({
             meshId: parent.meshId, ...(parent.missionId ? { missionId: parent.missionId } : {}), taskId: parentId, kind: 'diff',
             title: `Diff ${base.slice(0, 8)}..${head.slice(0, 8)}`, ext: '.diff', content: diff,
+            operationKey: diffOpKey,
         });
-        if (id) this.ports.queue.mutate(parent.meshId, parentId, e => { e.stageState!.artifacts.diff.push(id); });
+        if (!registered.ok) {
+            const recorded = recordStageArtifactFailure(this.ports, parent.meshId, parentId, 'diff', registered, {
+                operationKey: diffOpKey,
+                fullContent: diff,
+                ext: '.diff',
+                evidencePreview: `diff bytes=${Buffer.byteLength(diff, 'utf8')}`,
+            });
+            this.ports.events.progress(
+                parent.meshId,
+                parentId,
+                `stage: diff artifact failed (${registered.code}): ${registered.message}` +
+                    (recorded.evidenceDurable
+                        ? `; hold recorded (retryable=${recorded.hold.retryable})`
+                        : '; recovery write failed and body not durable — fail-closed pending retry'),
+            );
+            return;
+        }
+        clearStageArtifactFailureOp(this.ports, parent.meshId, parentId, diffOpKey, contentSha256(diff));
+        this.ports.queue.mutate(parent.meshId, parentId, e => {
+            e.stageState!.artifacts.diff.push(registered.artifactId);
+        });
     }
 
     private findParentById(parentId: string): MeshWorkQueueEntry | null {

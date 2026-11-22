@@ -175,11 +175,14 @@ export class SnapshotReconciler {
         // A row with no project yet (written before attribution) is this session's own file, not another project's.
         if (local.mesh_id !== null && local.mesh_id !== this.c.meshId) throw snapshotConflict('session_artifacts', key, `path belongs to another project's artifact ${String(local.artifact_id)}`);
         const origin = String(local.origin_daemon_id ?? '');
+        // Reference-safe preservation: never DELETE a local session_artifacts row
+        // on path collision (including same-origin copies). Owner must settle.
         if (daemonIdsEquivalent(origin, this.c.sourceDaemonId)) {
-            this.run('DELETE FROM session_artifacts WHERE artifact_id=?', local.artifact_id);
-            this.map('session_artifacts', TARGET_LOCAL_KEY_SPACE, [local.artifact_id], [v('artifact_id')]);
-            this.resolutions.push({ table: 'session_artifacts', index: 'idx_session_artifacts_unique_path', key, winner: 'source', local, incomingKey: v('artifact_id') });
-            return 'apply';
+            throw snapshotConflict(
+                'session_artifacts',
+                key,
+                `preserving local artifact ${String(local.artifact_id)}; refuse replace with incoming ${String(v('artifact_id'))}`,
+            );
         }
         if (local.mesh_id === null) this.run('UPDATE session_artifacts SET mesh_id=?, mission_id=COALESCE(mission_id,?) WHERE artifact_id=?', this.c.meshId, v('mission_id'), local.artifact_id);
         this.map('session_artifacts', this.c.sourceDaemonId, [v('artifact_id')], [local.artifact_id]);

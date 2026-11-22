@@ -16,7 +16,8 @@
 
 import {
     ARTIFACT_KINDS,
-    MAX_ARTIFACTS_PER_MESH,
+    ArtifactGuardError,
+    MAX_ARTIFACT_LIST_PAGE,
     toChatAttachmentMeta,
     type ArtifactKind,
     type ArtifactRecord,
@@ -56,10 +57,6 @@ function parseCursor(raw: unknown): Cursor | null {
     return { createdAt, artifactId };
 }
 
-function encodeCursor(record: ArtifactRecord): string {
-    return `${record.createdAt}:${record.artifactId}`;
-}
-
 export function handleOwnerMeshArtifactList(
     ctx: ArtifactCommandContext,
     args: Record<string, unknown>,
@@ -79,30 +76,32 @@ export function handleOwnerMeshArtifactList(
     const rawLimit = args.limit;
     const limit =
         typeof rawLimit === 'number' && Number.isFinite(rawLimit) && rawLimit > 0
-            ? Math.min(Math.trunc(rawLimit), MAX_ARTIFACTS_PER_MESH)
+            ? Math.min(Math.trunc(rawLimit), MAX_ARTIFACT_LIST_PAGE)
             : OWNER_MESH_LIST_DEFAULT_LIMIT;
     const cursor = parseCursor(args.cursor);
 
     const store = getArtifactStore(ctx);
-    // Oldest-first list of the mesh's records (bounded by MAX_ARTIFACTS_PER_MESH).
-    let records = store.listByMesh(meshId, { ...(missionId ? { missionId } : {}) });
-    if (kind) records = records.filter((rec) => rec.kind === (kind as ArtifactKind));
-    if (cursor) {
-        const at = records.findIndex((rec) => rec.artifactId === cursor.artifactId);
-        // Cursor record deleted between pages: the store orders same-millisecond rows by
-        // insertion, which the cursor cannot express, so include every row at the cursor's
-        // millisecond. The page may repeat an already-shown sibling; the dashboard merges by
-        // artifactId, so a repeat is harmless while a skip would lose an artifact.
-        records = at >= 0 ? records.slice(0, at) : records.filter((rec) => rec.createdAt <= cursor.createdAt);
+    try {
+        // SQL keyset over the full canonical table — kind/mission/cursor are WHERE
+        // predicates so rows beyond the soft 500 hot window remain reachable.
+        const page = store.listByMeshKeyset(meshId, {
+            ...(missionId ? { missionId } : {}),
+            ...(kind ? { kind: kind as ArtifactKind } : {}),
+            ...(cursor ? { cursor } : {}),
+            limit,
+        });
+        return {
+            success: true,
+            meshId,
+            artifacts: page.records,
+            attachments: page.records.map((record) => toChatAttachmentMeta(record)),
+            hasMore: page.hasMore,
+            nextCursor: page.nextCursor,
+        };
+    } catch (err) {
+        if (err instanceof ArtifactGuardError && err.code === 'stale_cursor') {
+            return { success: false, code: 'stale_cursor', error: err.message };
+        }
+        throw err;
     }
-    const hasMore = records.length > limit;
-    const page = hasMore ? records.slice(records.length - limit) : records;
-    return {
-        success: true,
-        meshId,
-        artifacts: page,
-        attachments: page.map((record) => toChatAttachmentMeta(record)),
-        hasMore,
-        nextCursor: hasMore && page.length > 0 ? encodeCursor(page[0]!) : null,
-    };
 }

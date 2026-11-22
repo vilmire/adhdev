@@ -61,6 +61,18 @@ export function buildFinalReport(opts: {
     if (s.selfCheck) lines.push(`self-check: ${s.selfCheck}`);
     const art = [...s.artifacts.diff.slice(-1), ...s.artifacts.selfCheck.slice(-1), ...s.artifacts.verdict.slice(-1)];
     if (art.length) lines.push(`stage artifacts: ${art.join(', ')}`);
+    const holds = Object.values(s.artifactFailures ?? {});
+    if (holds.length) {
+        lines.push('unresolved stage artifact storage failures (recover before treating as clean):');
+        for (const h of holds) {
+            lines.push(
+                `- [${h.kind}] ${h.code}: ${h.message}` +
+                    (h.inspectionStatus ? ` (inspection=${h.inspectionStatus})` : '') +
+                    ` retryable=${h.retryable}` +
+                    (h.operationKey ? ` op=${h.operationKey}` : ''),
+            );
+        }
+    }
     if (opts.outcome === 'blocked') lines.push('Decide with mesh_task_stage_decide {task_id, action: accept | revise_once | rereview | abandon}.');
     return lines.join('\n');
 }

@@ -4,13 +4,18 @@
 
 export {
     ARTIFACT_EXTENSION_MAP,
+    ARTIFACT_FREE_RESERVE_BYTES,
     ARTIFACT_KINDS,
+    ARTIFACT_METADATA_BUDGET_BYTES,
+    ARTIFACT_METADATA_ROW_FLOOR_BYTES,
+    ARTIFACT_PAYLOAD_BUDGET_BYTES,
     ARTIFACT_RETENTION_MS,
     ArtifactGuardError,
     MAX_ARTIFACTS_PER_MESH,
     MAX_ARTIFACTS_PER_MISSION,
     MAX_ARTIFACTS_PER_SESSION,
     MAX_ARTIFACT_BYTES,
+    MAX_ARTIFACT_LIST_PAGE,
     MAX_ARTIFACT_MCP_PAGE_BYTES,
     MAX_PREVIEW_TEXT_CHARS,
     MIME_BY_KIND,
@@ -28,6 +33,15 @@ export {
     type ChatAttachmentMeta,
     type ExtensionKindMimeSpec,
 } from './types.js';
+
+export {
+    assertArtifactAdmissionAllows,
+    estimateArtifactMetadataBytes,
+    mapStorageErrnoToArtifactError,
+    readArtifactAdmissionTotals,
+    type ArtifactAdmissionDelta,
+    type ArtifactAdmissionTotals,
+} from './artifact-admission.js';
 
 export {
     assertNotSecretContent,
@@ -57,6 +71,9 @@ export {
     type ArtifactStoreTransactionFn,
     type FetchArtifactContentOptions,
     type FetchArtifactContentResult,
+    type ArtifactListCursor,
+    type ListMeshArtifactsKeysetOptions,
+    type ListMeshArtifactsKeysetResult,
     type ListSessionArtifactsOptions,
     type ReadArtifactContentOptions,
     type ReadArtifactContentResult,

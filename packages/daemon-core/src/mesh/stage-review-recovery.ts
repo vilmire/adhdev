@@ -204,9 +204,11 @@ export async function recoverPendingStageReview(request: StageReviewRecoveryRequ
         fingerprint, diffSha256, artifactDigest: before.artifactDigest, inputArtifactIds: before.ids, workspace: before.proof.checkout.worktree };
     if (r.dryRun) { store.transaction(check); return result; }
     // Pipeline artifacts live outside the checkout. A later CAS refusal can leave an ungranted evidence record, never a partial queue repair.
-    const diffId = ports.artifacts.register({ meshId: r.meshId, missionId: before.parent.missionId, taskId: r.parentTaskId, kind: 'diff', ext: '.diff',
-        title: `Review recovery continuation ${r.expectedStageHeadSha}..${r.expectedHeadSha}`, content: diff });
-    if (!diffId) throw new Error('review_recovery_diff_registration_failed');
+    const registered = ports.artifacts.register({ meshId: r.meshId, missionId: before.parent.missionId, taskId: r.parentTaskId, kind: 'diff', ext: '.diff',
+        title: `Review recovery continuation ${r.expectedStageHeadSha}..${r.expectedHeadSha}`, content: diff,
+        operationKey: `diff-recovery-${r.expectedStageHeadSha.slice(0, 12)}-${r.expectedHeadSha.slice(0, 12)}` });
+    if (!registered.ok) throw new Error(`review_recovery_diff_registration_failed:${registered.code}`);
+    const diffId = registered.artifactId;
     // Recheck after artifact I/O as well; source or ignored-file changes cannot refresh the baseline silently.
     if (await ports.git.fingerprint(host.workspace) !== fingerprint) throw new Error('review_fingerprint_changed');
     return store.transaction(() => {
@@ -396,9 +398,10 @@ async function recoverTerminalStageReview(
             inputArtifactIds: rechecked.existingChild.inputArtifactIds ?? rechecked.ids,
         };
     }
-    const diffId = ports.artifacts.register({ meshId: r.meshId, missionId: before.parent.missionId, taskId: r.parentTaskId, kind: 'diff', ext: '.diff',
+    const registered = ports.artifacts.register({ meshId: r.meshId, missionId: before.parent.missionId, taskId: r.parentTaskId, kind: 'diff', ext: '.diff',
         title: `Review recovery continuation ${r.expectedStageHeadSha}..${r.expectedHeadSha}`, content: diff });
-    if (!diffId) throw new Error('review_recovery_diff_registration_failed');
+    if (!registered.ok) throw new Error('review_recovery_diff_registration_failed');
+    const diffId = registered.artifactId;
     if (await ports.git.fingerprint(host.workspace) !== fingerprint) throw new Error('review_fingerprint_changed');
     return store.transaction(() => {
         const checked = check();

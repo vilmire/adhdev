@@ -6,6 +6,20 @@
 // Everything else is implemented here against the real queue, git, artifact store and notice runtime.
 
 import type { ArtifactKind } from '../artifacts/types.js';
+
+/** Layer-neutral guard shape (mesh must not value-import artifacts/). */
+function isArtifactGuardLike(e: unknown): e is {
+    name?: string
+    code: string
+    message: string
+    retryable: boolean
+    details?: Record<string, unknown>
+} {
+    if (!e || typeof e !== 'object') return false;
+    const o = e as Record<string, unknown>;
+    return typeof o.code === 'string' && typeof o.message === 'string' && typeof o.retryable === 'boolean'
+        && (o.name === 'ArtifactGuardError' || o.details !== undefined || /^artifact_/.test(String(o.code)));
+}
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
@@ -204,6 +218,14 @@ export function setStageArtifactRegistrar(fn: StageArtifactRegistrar | null): vo
 /** The boot-installed registrar (also used by light-task result capture); null until boot wires it. */
 export function getStageArtifactRegistrar(): StageArtifactRegistrar | null { return artifactRegistrar; }
 
+function stageArtifactOperationKey(input: { kind: string; content: string; operationKey?: string }): string {
+    if (typeof input.operationKey === 'string' && input.operationKey.trim()) {
+        return input.operationKey.trim().replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 80);
+    }
+    const digest = createHash('sha256').update(input.kind).update('\0').update(input.content).digest('hex').slice(0, 16);
+    return `${input.kind}-${digest}`;
+}
+
 const defaultSelfCheck = createRefineProfileSelfCheck();
 let overrides: { selfCheck?: SelfCheckRunner; reviewerWorkspace?: ReviewerWorkspaceProvider } = {};
 /** Connect the light-workspace seams. Call before (or after) installStagePipeline; read lazily per use. */
@@ -229,20 +251,187 @@ export function createProductionStagePorts(components: Pick<DaemonComponents, 's
         git: defaultStageGit,
         artifacts: {
             register(input) {
+                const opKey = stageArtifactOperationKey(input);
                 try {
                     const dir = stageArtifactDir(input.taskId);
                     fs.mkdirSync(dir, { recursive: true });
-                    const name = `${input.kind}-${Date.now().toString(36)}${input.ext}`;
-                    fs.writeFileSync(path.join(dir, name), input.content, 'utf8');
-                    if (!artifactRegistrar) return null;
-                    return artifactRegistrar({
+                    const name = `${opKey}${input.ext}`;
+                    const full = path.join(dir, name);
+                    // Idempotent retry: same operation key + same bytes → reuse file; never overwrite a different revision.
+                    // Publish via temp+rename. Never unlink a final path just because new bytes extend an old prefix —
+                    // a successfully registered shorter body must conflict (preserve evidence), not be "recovered".
+                    const nextBuf = Buffer.from(input.content, 'utf8');
+                    if (fs.existsSync(full)) {
+                        const existingBuf = fs.readFileSync(full);
+                        if (!existingBuf.equals(nextBuf)) {
+                            return {
+                                ok: false as const,
+                                code: 'artifact_revision_conflict',
+                                message: `Stage artifact path "${name}" already exists with different content`,
+                                retryable: false,
+                                preserved: true,
+                            };
+                        }
+                    } else {
+                        // Best-effort: remove leftover incomplete publish temps for this key (never the final).
+                        try {
+                            for (const entry of fs.readdirSync(dir)) {
+                                if (entry.startsWith(`${name}.publishing.`)) {
+                                    try { fs.unlinkSync(path.join(dir, entry)); } catch { /* best-effort */ }
+                                }
+                            }
+                        } catch { /* dir listing optional */ }
+                        const tmp = `${full}.publishing.${process.pid}.${Date.now()}`;
+                        try {
+                            const fd = fs.openSync(tmp, 'wx');
+                            try {
+                                fs.writeFileSync(fd, nextBuf);
+                                fs.fsyncSync(fd);
+                            } finally {
+                                fs.closeSync(fd);
+                            }
+                            fs.renameSync(tmp, full);
+                        } catch (e) {
+                            try { fs.unlinkSync(tmp); } catch { /* best-effort */ }
+                            throw e;
+                        }
+                    }
+                    if (!artifactRegistrar) {
+                        return {
+                            ok: false as const,
+                            code: 'artifact_storage_unavailable',
+                            message: 'Stage artifact registrar is not wired',
+                            retryable: false,
+                            preserved: true,
+                        };
+                    }
+                    const id = artifactRegistrar({
                         sessionId: `stage:${input.taskId}`, workspaceRoot: dir, path: name, taskId: input.taskId, meshId: input.meshId,
                         ...(input.missionId ? { missionId: input.missionId } : {}), producerRole: 'pipeline', title: input.title,
                     });
+                    if (!id) {
+                        return {
+                            ok: false as const,
+                            code: 'artifact_storage_unavailable',
+                            message: 'Stage artifact registrar returned null',
+                            retryable: false,
+                            preserved: true,
+                        };
+                    }
+                    return { ok: true as const, artifactId: id };
                 } catch (e: any) {
-                    LOG.warn('StagePipeline', `artifact registration failed for ${input.taskId}: ${e?.message || e}`);
-                    return null;
+                    if (isArtifactGuardLike(e)) {
+                        LOG.warn('StagePipeline', `artifact registration failed for ${input.taskId}: ${e.message}`);
+                        return {
+                            ok: false as const,
+                            code: e.code,
+                            message: e.message,
+                            retryable: e.retryable,
+                            preserved: e.details?.preserved === true || e.details?.preserved === undefined,
+                            ...(e.details ? { details: { ...e.details } } : {}),
+                        };
+                    }
+                    const code = String(e?.code ?? '');
+                    const message = String(e?.message || e);
+                    const mapped =
+                        code === 'EEXIST' ? 'artifact_revision_conflict'
+                            : (code === 'ENOSPC' || /artifact_storage_budget_exceeded|artifact_storage_unavailable|session_artifact_limit|mission_artifact_limit|mesh_artifact_limit|artifact_revision_conflict/i.test(message))
+                                ? (message.match(/\(([a-z0-9_]+)\)\s*$/i)?.[1] ?? (code === 'ENOSPC' ? 'artifact_storage_unavailable' : 'artifact_storage_unavailable'))
+                                : 'artifact_storage_unavailable';
+                    LOG.warn('StagePipeline', `artifact registration failed for ${input.taskId}: ${message}`);
+                    return {
+                        ok: false as const,
+                        code: mapped,
+                        message,
+                        retryable: false,
+                        preserved: true,
+                        ...(code === 'ENOSPC' ? { details: { errno: 'ENOSPC', recovery: 'free_disk_or_reduce_payload' } } : {}),
+                    };
                 }
+            },
+            writeRecovery(input) {
+                const opKey = input.operationKey.trim().replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 80);
+                if (!opKey) return { ok: false as const, code: 'artifact_storage_unavailable', message: 'recovery operationKey required' };
+                const ext = input.ext.startsWith('.') ? input.ext : `.${input.ext}`;
+                const buf = Buffer.from(input.content, 'utf8');
+                const sha256 = createHash('sha256').update(buf).digest('hex');
+                const digest12 = sha256.slice(0, 12);
+                // Digest-immutable name: never overwrite a different payload for the same opKey.
+                const fileName = `${opKey}.${digest12}${ext}`;
+                try {
+                    const dir = path.join(stageArtifactDir(input.taskId), '.recovery');
+                    fs.mkdirSync(dir, { recursive: true });
+                    const full = path.join(dir, fileName);
+                    const relPath = path.posix.join('.recovery', fileName);
+                    if (fs.existsSync(full)) {
+                        const existing = fs.readFileSync(full);
+                        if (existing.equals(buf)) {
+                            return { ok: true as const, relPath, sha256, bytes: buf.length, reused: true };
+                        }
+                        // Same path should be unique per digest; treat as conflict without overwrite.
+                        return {
+                            ok: false as const,
+                            code: 'artifact_revision_conflict',
+                            message: `Recovery path "${fileName}" exists with different content`,
+                            preserved: true,
+                            existingSha256: createHash('sha256').update(existing).digest('hex'),
+                        };
+                    }
+                    // Detect a prior different-digest recovery for this op (do not delete it).
+                    try {
+                        for (const entry of fs.readdirSync(dir)) {
+                            if (entry.includes('.publishing.')) continue;
+                            if (!entry.startsWith(`${opKey}.`) || entry === fileName) continue;
+                            // Another digest for this op already held — keep it; still publish this digest beside it.
+                            break;
+                        }
+                    } catch { /* listing optional */ }
+                    const tmp = `${full}.publishing.${process.pid}.${Date.now()}`;
+                    try {
+                        const fd = fs.openSync(tmp, 'wx');
+                        try {
+                            fs.writeFileSync(fd, buf);
+                            fs.fsyncSync(fd);
+                        } finally {
+                            fs.closeSync(fd);
+                        }
+                        fs.renameSync(tmp, full);
+                    } catch (e) {
+                        try { fs.unlinkSync(tmp); } catch { /* best-effort */ }
+                        throw e;
+                    }
+                    return { ok: true as const, relPath, sha256, bytes: buf.length };
+                } catch (e: any) {
+                    const code = String(e?.code ?? '');
+                    return {
+                        ok: false as const,
+                        code: code === 'ENOSPC' ? 'artifact_storage_unavailable' : 'artifact_storage_unavailable',
+                        message: String(e?.message || e),
+                        preserved: false,
+                    };
+                }
+            },
+            readRecovery(input) {
+                const opKey = input.operationKey.trim().replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 80);
+                if (!opKey) return null;
+                const base = path.join(stageArtifactDir(input.taskId), '.recovery');
+                const want = input.sha256?.toLowerCase();
+                try {
+                    const entries = fs.readdirSync(base).filter((e) => !e.includes('.publishing.') && e.startsWith(`${opKey}.`));
+                    if (want) {
+                        // Always hash file contents — digest-prefix filename alone is not integrity proof
+                        // (a same-name file can be replaced with different valid JSON).
+                        const prefer = entries.filter((e) => e.includes(`.${want.slice(0, 12)}.`));
+                        const ordered = [...prefer, ...entries.filter((e) => !prefer.includes(e))];
+                        for (const entry of ordered) {
+                            const raw = fs.readFileSync(path.join(base, entry));
+                            if (createHash('sha256').update(raw).digest('hex') === want) return raw.toString('utf8');
+                        }
+                        return null;
+                    }
+                    if (entries.length === 1) return fs.readFileSync(path.join(base, entries[0]!), 'utf8');
+                } catch { /* missing dir */ }
+                return null;
             },
         },
         queue: {

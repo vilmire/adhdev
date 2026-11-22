@@ -89,7 +89,7 @@ describe('stage readonly input attestation', () => {
             const rel = `${id}.md`; fs.writeFileSync(path.join(ws, rel), input.content);
             store.db.prepare(`INSERT INTO session_artifacts (artifact_id,session_id,task_id,mesh_id,producer_role,workspace_root,rel_path,kind,mime,title,size_bytes,sha256,created_at,updated_at)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, `stage:${parent.id}`, parent.id, parent.meshId, 'pipeline', ws, rel, 'markdown', 'text/markdown', input.title, Buffer.byteLength(input.content), createHash('sha256').update(input.content).digest('hex'), 1, 1);
-            return id;
+            return { ok: true as const, artifactId: id };
         };
         const runtime = new StagePipelineRuntime(ports);
         await runtime.onImplCompleted(parent.meshId, parent.id, 'completed-attempt');

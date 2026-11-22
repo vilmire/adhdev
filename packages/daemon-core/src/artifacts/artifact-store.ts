@@ -15,23 +15,64 @@
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import {
     assertNotSecretContent,
     assertNotSecretPath,
-    readVerifiedArtifactFile,
     resolveArtifactFile,
     sanitizeArtifactTitle,
     type ArtifactTestRaceHooks,
 } from './artifact-path-guard.js';
+
+/** Attribution no-op when both empty or both resolve to the same machine core. */
+function originDaemonAttributionUnchanged(
+    existing: string | null | undefined,
+    next: string | null | undefined,
+): boolean {
+    const a = typeof existing === 'string' && existing.trim() ? existing.trim() : null;
+    const b = typeof next === 'string' && next.trim() ? next.trim() : null;
+    if (!a && !b) return true;
+    if (!a || !b) return false;
+    return daemonIdsEquivalent(a, b);
+}
+
+/** True when both ids are set and are different machines (alias forms still count as same). */
+function originDaemonAttributionConflict(
+    existing: string | null | undefined,
+    next: string | null | undefined,
+): boolean {
+    const a = typeof existing === 'string' && existing.trim() ? existing.trim() : null;
+    const b = typeof next === 'string' && next.trim() ? next.trim() : null;
+    return !!(a && b && !daemonIdsEquivalent(a, b));
+}
+import {
+    assertArtifactAdmissionAllows,
+    estimateArtifactMetadataBytes,
+    mapStorageErrnoToArtifactError,
+    readArtifactAdmissionTotals,
+} from './artifact-admission.js';
+import {
+    listArtifactsByMesh,
+    listArtifactsByMeshKeyset,
+    listArtifactsByMission,
+    listArtifactsBySession,
+    type ArtifactListCursor,
+    type ListMeshArtifactsKeysetOptions,
+    type ListMeshArtifactsKeysetResult,
+} from './artifact-store-list.js';
+import {
+    buildFetchArtifactContentResult,
+    readArtifactRecordPaged,
+    type FetchArtifactContentOptions,
+    type FetchArtifactContentResult,
+    type ReadArtifactContentOptions,
+    type ReadArtifactContentResult,
+} from './artifact-store-read.js';
 import {
     ARTIFACT_KINDS,
     ARTIFACT_RETENTION_MS,
     ArtifactGuardError,
-    MAX_ARTIFACTS_PER_MESH,
-    MAX_ARTIFACTS_PER_MISSION,
-    MAX_ARTIFACTS_PER_SESSION,
     MAX_ARTIFACT_BYTES,
-    MAX_ARTIFACT_MCP_PAGE_BYTES,
     MAX_PREVIEW_TEXT_CHARS,
     MIME_BY_KIND,
     toChatAttachmentMeta,
@@ -40,6 +81,18 @@ import {
     type ArtifactRecord,
     type ChatAttachmentMeta,
 } from './types.js';
+
+export type {
+    ArtifactListCursor,
+    ListMeshArtifactsKeysetOptions,
+    ListMeshArtifactsKeysetResult,
+};
+export type {
+    FetchArtifactContentOptions,
+    FetchArtifactContentResult,
+    ReadArtifactContentOptions,
+    ReadArtifactContentResult,
+};
 
 export interface ArtifactStoreStatement<Row = unknown> {
     run(...params: unknown[]): { changes: number; lastInsertRowid?: number | bigint };
@@ -127,19 +180,6 @@ export interface UpsertForwardedArtifactInput {
     updatedAt?: number;
 }
 
-export interface ReadArtifactContentOptions extends FetchArtifactContentOptions {
-    offset?: number;
-    limit?: number;
-}
-
-export interface ReadArtifactContentResult extends FetchArtifactContentResult {
-    totalBytes: number;
-    offset: number;
-    pageBytes: number;
-    hasMore: boolean;
-    nextOffset: number | null;
-}
-
 export interface RegisterArtifactResult {
     record: ArtifactRecord;
     isUpdate: boolean;
@@ -148,30 +188,6 @@ export interface RegisterArtifactResult {
 
 export interface ListSessionArtifactsOptions {
     limit?: number;
-}
-
-export interface FetchArtifactContentOptions {
-    /** Optional caller-verified session ID to enforce session ownership at read time. */
-    sessionId?: string;
-    /** Optional trusted workspace root to cross-check against the stored workspaceRoot. */
-    trustedWorkspaceRoot?: string;
-    _testHooks?: ArtifactTestRaceHooks;
-}
-
-export interface FetchArtifactContentResult {
-    artifactId: string;
-    sessionId: string;
-    relPath: string;
-    kind: ArtifactKind;
-    mime: string;
-    title: string;
-    content: string;
-    encoding: 'utf8' | 'base64';
-    sizeBytes: number;
-    sha256: string;
-    registeredSha256: string;
-    sha256Changed: boolean;
-    hashChanged: boolean;
 }
 
 export const SESSION_ARTIFACTS_SCHEMA_DDL = `
@@ -293,17 +309,6 @@ function runInImmediateTransaction<T>(db: ArtifactStoreDatabase, fn: () => T): T
     }
 }
 
-/**
- * Wrap a filtered `session_artifacts` select (which must expose `rowid AS window_rowid`)
- * so its trailing `LIMIT ?` keeps the newest rows, then return them oldest-first.
- */
-function newestWindowSql(filteredSelect: string): string {
-    return `SELECT * FROM (${filteredSelect}
-                 ORDER BY created_at DESC, window_rowid DESC
-                 LIMIT ?)
-             ORDER BY created_at ASC, window_rowid ASC`;
-}
-
 export class ArtifactStore {
     readonly db: ArtifactStoreDatabase;
 
@@ -319,8 +324,9 @@ export class ArtifactStore {
      *   `artifactId` (`art_<16hex>`) and `createdAt`, updates `sizeBytes`, `sha256`,
      *   `previewText`, `title`, `mime`, `kind`, and `updatedAt`, and reports
      *   `isUpdate: true`.
-     * - Enforces `MAX_ARTIFACTS_PER_SESSION = 50` on NEW records per session;
-     *   updates to an already-registered `(sessionId, relPath)` at cap 50 remain valid.
+     * - Soft list windows (50/200/500) are advisory; NEW rows are gated by the
+     *   daemon-wide hard byte budget. Same `(sessionId, relPath)` upserts keep
+     *   their ID; identical source bytes are an idempotent no-op.
      */
     register(input: RegisterArtifactInput): RegisterArtifactResult {
         if (typeof input?.sessionId !== 'string' || input.sessionId.trim().length === 0) {
@@ -337,15 +343,22 @@ export class ArtifactStore {
             )
             .get(sessionId);
 
-        const resolved = resolveArtifactFile(input.workspaceRoot, rawPath, {
-            declaredKind,
-            declaredMime,
-            title: input.title,
-            pinnedCanonicalWorkspaceRoot: prePriorRootRow
-                ? path.resolve(prePriorRootRow.workspace_root)
-                : undefined,
-            _testHooks: input._testHooks,
-        });
+        let resolved;
+        try {
+            resolved = resolveArtifactFile(input.workspaceRoot, rawPath, {
+                declaredKind,
+                declaredMime,
+                title: input.title,
+                pinnedCanonicalWorkspaceRoot: prePriorRootRow
+                    ? path.resolve(prePriorRootRow.workspace_root)
+                    : undefined,
+                _testHooks: input._testHooks,
+            });
+        } catch (err) {
+            const mapped = mapStorageErrnoToArtifactError(err);
+            if (mapped) throw mapped;
+            throw err;
+        }
 
         const now = typeof input.now === 'number' && Number.isFinite(input.now) ? Math.trunc(input.now) : Date.now();
         const meshId = typeof input.meshId === 'string' && input.meshId.trim() ? input.meshId.trim() : null;
@@ -359,238 +372,317 @@ export class ArtifactStore {
                 ? input.originDaemonId.trim()
                 : null;
 
-        return runInImmediateTransaction(this.db, () => {
-            if (now >= 100_000_000_000) {
-                this.pruneExpired(now, ARTIFACT_RETENTION_MS, 100_000_000_000);
-            }
-            const priorRootRow = this.db
-                .prepare<{ workspace_root: string }>(
-                    `SELECT workspace_root FROM session_artifacts WHERE session_id = ? LIMIT 1`,
-                )
-                .get(sessionId);
-            if (priorRootRow) {
-                const pinnedSessionRoot = path.resolve(priorRootRow.workspace_root);
-                let currentPinnedReal: string | null = null;
-                try {
-                    const rootLstat = fs.lstatSync(pinnedSessionRoot);
-                    if (!rootLstat.isSymbolicLink() && rootLstat.isDirectory()) {
-                        currentPinnedReal = fs.realpathSync(pinnedSessionRoot);
+        try {
+            return runInImmediateTransaction(this.db, () => {
+                // Preservation policy: age-based DELETE is a no-op (see pruneExpired).
+                if (now >= 100_000_000_000) {
+                    this.pruneExpired(now, ARTIFACT_RETENTION_MS, 100_000_000_000);
+                }
+                const priorRootRow = this.db
+                    .prepare<{ workspace_root: string }>(
+                        `SELECT workspace_root FROM session_artifacts WHERE session_id = ? LIMIT 1`,
+                    )
+                    .get(sessionId);
+                if (priorRootRow) {
+                    const pinnedSessionRoot = path.resolve(priorRootRow.workspace_root);
+                    let currentPinnedReal: string | null = null;
+                    try {
+                        const rootLstat = fs.lstatSync(pinnedSessionRoot);
+                        if (!rootLstat.isSymbolicLink() && rootLstat.isDirectory()) {
+                            currentPinnedReal = fs.realpathSync(pinnedSessionRoot);
+                        }
+                    } catch {
+                        currentPinnedReal = null;
                     }
-                } catch {
-                    currentPinnedReal = null;
+                    if (
+                        currentPinnedReal !== pinnedSessionRoot ||
+                        resolved.workspaceRoot !== pinnedSessionRoot
+                    ) {
+                        throw new ArtifactGuardError(
+                            'path_outside_workspace',
+                            'Session canonical workspace root was redirected or replaced (path_outside_workspace)',
+                        );
+                    }
                 }
-                if (
-                    currentPinnedReal !== pinnedSessionRoot ||
-                    resolved.workspaceRoot !== pinnedSessionRoot
+
+                const existing = this.db
+                    .prepare<SessionArtifactDbRow>(
+                        `SELECT * FROM session_artifacts WHERE session_id = ? AND rel_path = ?`,
+                    )
+                    .get(sessionId, resolved.relPath);
+
+                if (existing) {
+                    const nextTitle =
+                        input.title !== undefined && input.title.trim().length > 0
+                            ? resolved.title
+                            : existing.title || resolved.title;
+                    const sameBytes =
+                        existing.sha256 === resolved.sha256 &&
+                        existing.kind === resolved.kind &&
+                        existing.mime === resolved.mime &&
+                        existing.size_bytes === resolved.sizeBytes &&
+                        (existing.title || '') === (nextTitle || '');
+                    const nextTaskId = input.taskId !== undefined ? (input.taskId ?? null) : existing.task_id;
+                    const nextMeshId = meshId ?? existing.mesh_id ?? null;
+                    const nextMissionId = missionId ?? existing.mission_id ?? null;
+                    const nextProducerRole = producerRole ?? existing.producer_role ?? null;
+                    const nextOriginDaemonId = originDaemonId ?? existing.origin_daemon_id ?? null;
+                    const attributionUnchanged =
+                        (existing.task_id || null) === (nextTaskId || null) &&
+                        (existing.mesh_id || null) === (nextMeshId || null) &&
+                        (existing.mission_id || null) === (nextMissionId || null) &&
+                        (existing.producer_role || null) === (nextProducerRole || null) &&
+                        originDaemonAttributionUnchanged(existing.origin_daemon_id, nextOriginDaemonId);
+                    if (sameBytes && attributionUnchanged) {
+                        const record = rowToArtifactRecord(existing);
+                        return {
+                            record,
+                            isUpdate: true,
+                            attachment: toChatAttachmentMeta(record),
+                        };
+                    }
+                    // Same bytes may still need attribution fill-in (null→mesh/mission/task) for list/grant paths.
+                    // Changing an already-set attribution field to a different value is an explicit conflict.
+                    if (sameBytes) {
+                        const conflictField =
+                            (existing.task_id && nextTaskId && existing.task_id !== nextTaskId && 'task_id') ||
+                            (existing.mesh_id && nextMeshId && existing.mesh_id !== nextMeshId && 'mesh_id') ||
+                            (existing.mission_id && nextMissionId && existing.mission_id !== nextMissionId && 'mission_id') ||
+                            (existing.producer_role && nextProducerRole && existing.producer_role !== nextProducerRole && 'producer_role') ||
+                            (originDaemonAttributionConflict(existing.origin_daemon_id, nextOriginDaemonId) && 'origin_daemon_id') ||
+                            null;
+                        if (conflictField) {
+                            throw new ArtifactGuardError(
+                                'artifact_revision_conflict',
+                                `Artifact "${existing.artifact_id}" attribution ${conflictField} conflict (artifact_revision_conflict)`,
+                                {
+                                    artifactId: existing.artifact_id,
+                                    preserved: true,
+                                    retryable: false,
+                                },
+                            );
+                        }
+                    } else if ((producerRole ?? existing.producer_role) === 'pipeline') {
+                        throw new ArtifactGuardError(
+                            'artifact_revision_conflict',
+                            `Pipeline artifact "${existing.artifact_id}" source changed; register a new path (artifact_revision_conflict)`,
+                            {
+                                artifactId: existing.artifact_id,
+                                preserved: true,
+                                retryable: false,
+                            },
+                        );
+                    }
+
+                    const updatedAt = Math.max(now, existing.updated_at + 1);
+                    const metaDelta =
+                        estimateArtifactMetadataBytes({
+                            artifactId: existing.artifact_id,
+                            sessionId,
+                            taskId: nextTaskId,
+                            meshId: nextMeshId,
+                            missionId: nextMissionId,
+                            producerRole: nextProducerRole,
+                            originDaemonId: nextOriginDaemonId,
+                            workspaceRoot: resolved.workspaceRoot,
+                            relPath: resolved.relPath,
+                            kind: resolved.kind,
+                            mime: resolved.mime,
+                            title: nextTitle,
+                            sha256: resolved.sha256,
+                            previewText: resolved.previewText,
+                        }) -
+                        estimateArtifactMetadataBytes({
+                            artifactId: existing.artifact_id,
+                            sessionId: existing.session_id,
+                            taskId: existing.task_id,
+                            meshId: existing.mesh_id,
+                            missionId: existing.mission_id,
+                            producerRole: existing.producer_role,
+                            originDaemonId: existing.origin_daemon_id,
+                            workspaceRoot: existing.workspace_root,
+                            relPath: existing.rel_path,
+                            kind: existing.kind,
+                            mime: existing.mime,
+                            title: existing.title,
+                            sha256: existing.sha256,
+                            previewText: existing.preview_text,
+                        });
+                    const payloadDelta = resolved.sizeBytes - existing.size_bytes;
+                    if (metaDelta > 0 || payloadDelta > 0) {
+                        assertArtifactAdmissionAllows(readArtifactAdmissionTotals(this.db), {
+                            metadataBytes: Math.max(0, metaDelta),
+                            payloadBytes: Math.max(0, payloadDelta),
+                        });
+                    }
+
+                    this.db
+                        .prepare(
+                            `UPDATE session_artifacts
+                             SET task_id = ?,
+                                 mesh_id = ?,
+                                 mission_id = ?,
+                                 producer_role = ?,
+                                 origin_daemon_id = ?,
+                                 workspace_root = ?,
+                                 kind = ?,
+                                 mime = ?,
+                                 title = ?,
+                                 size_bytes = ?,
+                                 sha256 = ?,
+                                 preview_text = ?,
+                                 updated_at = ?
+                             WHERE artifact_id = ?`,
+                        )
+                        .run(
+                            nextTaskId,
+                            nextMeshId,
+                            nextMissionId,
+                            nextProducerRole,
+                            nextOriginDaemonId,
+                            resolved.workspaceRoot,
+                            resolved.kind,
+                            resolved.mime,
+                            nextTitle,
+                            resolved.sizeBytes,
+                            resolved.sha256,
+                            resolved.previewText,
+                            updatedAt,
+                            existing.artifact_id,
+                        );
+
+                    const record: ArtifactRecord = {
+                        artifactId: existing.artifact_id,
+                        sessionId,
+                        taskId: nextTaskId ?? null,
+                        ...(nextMeshId != null ? { meshId: nextMeshId } : {}),
+                        ...(nextMissionId != null ? { missionId: nextMissionId } : {}),
+                        ...(nextProducerRole != null ? { producerRole: nextProducerRole } : {}),
+                        ...(nextOriginDaemonId != null ? { originDaemonId: nextOriginDaemonId } : {}),
+                        workspaceRoot: resolved.workspaceRoot,
+                        relPath: resolved.relPath,
+                        kind: resolved.kind,
+                        mime: resolved.mime,
+                        title: nextTitle,
+                        sizeBytes: resolved.sizeBytes,
+                        sha256: resolved.sha256,
+                        previewText: resolved.previewText,
+                        createdAt: existing.created_at,
+                        updatedAt,
+                    };
+
+                    return {
+                        record,
+                        isUpdate: true,
+                        attachment: toChatAttachmentMeta(record),
+                    };
+                }
+
+                const taskId = input.taskId ?? null;
+                assertArtifactAdmissionAllows(readArtifactAdmissionTotals(this.db), {
+                    metadataBytes: estimateArtifactMetadataBytes({
+                        artifactId: 'art_0123456789abcdef',
+                        sessionId,
+                        taskId,
+                        meshId,
+                        missionId,
+                        producerRole,
+                        originDaemonId,
+                        workspaceRoot: resolved.workspaceRoot,
+                        relPath: resolved.relPath,
+                        kind: resolved.kind,
+                        mime: resolved.mime,
+                        title: resolved.title,
+                        sha256: resolved.sha256,
+                        previewText: resolved.previewText,
+                    }),
+                    payloadBytes: resolved.sizeBytes,
+                });
+
+                let artifactId = generateArtifactId();
+                while (
+                    this.db
+                        .prepare<{ one: number }>(
+                            `SELECT 1 AS one FROM session_artifacts WHERE artifact_id = ?`,
+                        )
+                        .get(artifactId)
                 ) {
-                    throw new ArtifactGuardError(
-                        'path_outside_workspace',
-                        'Session canonical workspace root was redirected or replaced (path_outside_workspace)',
-                    );
+                    artifactId = generateArtifactId();
                 }
-            }
-
-            const existing = this.db
-                .prepare<SessionArtifactDbRow>(
-                    `SELECT * FROM session_artifacts WHERE session_id = ? AND rel_path = ?`,
-                )
-                .get(sessionId, resolved.relPath);
-
-            if (existing) {
-                const updatedAt = Math.max(now, existing.updated_at + 1);
-                const nextTaskId = input.taskId !== undefined ? (input.taskId ?? null) : existing.task_id;
-                const nextMeshId = meshId ?? existing.mesh_id ?? null;
-                const nextMissionId = missionId ?? existing.mission_id ?? null;
-                const nextProducerRole = producerRole ?? existing.producer_role ?? null;
-                const nextOriginDaemonId = originDaemonId ?? existing.origin_daemon_id ?? null;
-                const nextTitle =
-                    input.title !== undefined && input.title.trim().length > 0
-                        ? resolved.title
-                        : existing.title || resolved.title;
 
                 this.db
                     .prepare(
-                        `UPDATE session_artifacts
-                         SET task_id = ?,
-                             mesh_id = ?,
-                             mission_id = ?,
-                             producer_role = ?,
-                             origin_daemon_id = ?,
-                             workspace_root = ?,
-                             kind = ?,
-                             mime = ?,
-                             title = ?,
-                             size_bytes = ?,
-                             sha256 = ?,
-                             preview_text = ?,
-                             updated_at = ?
-                         WHERE artifact_id = ?`,
+                        `INSERT INTO session_artifacts (
+                            artifact_id,
+                            session_id,
+                            task_id,
+                            mesh_id,
+                            mission_id,
+                            producer_role,
+                            origin_daemon_id,
+                            workspace_root,
+                            rel_path,
+                            kind,
+                            mime,
+                            title,
+                            size_bytes,
+                            sha256,
+                            preview_text,
+                            created_at,
+                            updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                     )
                     .run(
-                        nextTaskId,
-                        nextMeshId,
-                        nextMissionId,
-                        nextProducerRole,
-                        nextOriginDaemonId,
+                        artifactId,
+                        sessionId,
+                        taskId,
+                        meshId,
+                        missionId,
+                        producerRole,
+                        originDaemonId,
                         resolved.workspaceRoot,
+                        resolved.relPath,
                         resolved.kind,
                         resolved.mime,
-                        nextTitle,
+                        resolved.title,
                         resolved.sizeBytes,
                         resolved.sha256,
                         resolved.previewText,
-                        updatedAt,
-                        existing.artifact_id,
+                        now,
+                        now,
                     );
 
                 const record: ArtifactRecord = {
-                    artifactId: existing.artifact_id,
+                    artifactId,
                     sessionId,
-                    taskId: nextTaskId ?? null,
-                    ...(nextMeshId != null ? { meshId: nextMeshId } : {}),
-                    ...(nextMissionId != null ? { missionId: nextMissionId } : {}),
-                    ...(nextProducerRole != null ? { producerRole: nextProducerRole } : {}),
-                    ...(nextOriginDaemonId != null ? { originDaemonId: nextOriginDaemonId } : {}),
+                    taskId,
+                    ...(meshId != null ? { meshId } : {}),
+                    ...(missionId != null ? { missionId } : {}),
+                    ...(producerRole != null ? { producerRole } : {}),
+                    ...(originDaemonId != null ? { originDaemonId } : {}),
                     workspaceRoot: resolved.workspaceRoot,
                     relPath: resolved.relPath,
                     kind: resolved.kind,
                     mime: resolved.mime,
-                    title: nextTitle,
+                    title: resolved.title,
                     sizeBytes: resolved.sizeBytes,
                     sha256: resolved.sha256,
                     previewText: resolved.previewText,
-                    createdAt: existing.created_at,
-                    updatedAt,
+                    createdAt: now,
+                    updatedAt: now,
                 };
 
                 return {
                     record,
-                    isUpdate: true,
+                    isUpdate: false,
                     attachment: toChatAttachmentMeta(record),
                 };
-            }
-
-            const countRow = this.db
-                .prepare<{ count: number }>(
-                    `SELECT COUNT(*) AS count FROM session_artifacts WHERE session_id = ?`,
-                )
-                .get(sessionId);
-            const currentCount = countRow?.count ?? 0;
-            if (currentCount >= MAX_ARTIFACTS_PER_SESSION) {
-                throw new ArtifactGuardError(
-                    'session_artifact_limit_reached',
-                    `Session "${sessionId}" has reached the maximum of ${MAX_ARTIFACTS_PER_SESSION} artifacts (session_artifact_limit_reached)`,
-                );
-            }
-
-            if (missionId) {
-                const missionCountRow = this.db
-                    .prepare<{ count: number }>(
-                        `SELECT COUNT(*) AS count FROM session_artifacts WHERE mission_id = ?`,
-                    )
-                    .get(missionId);
-                if ((missionCountRow?.count ?? 0) >= MAX_ARTIFACTS_PER_MISSION) {
-                    throw new ArtifactGuardError(
-                        'mission_artifact_limit_exceeded',
-                        `Mission "${missionId}" has reached the maximum of ${MAX_ARTIFACTS_PER_MISSION} artifacts (mission_artifact_limit_exceeded)`,
-                    );
-                }
-            }
-
-            if (meshId) {
-                const meshCountRow = this.db
-                    .prepare<{ count: number }>(
-                        `SELECT COUNT(*) AS count FROM session_artifacts WHERE mesh_id = ?`,
-                    )
-                    .get(meshId);
-                if ((meshCountRow?.count ?? 0) >= MAX_ARTIFACTS_PER_MESH) {
-                    throw new ArtifactGuardError(
-                        'mesh_artifact_limit_exceeded',
-                        `Mesh "${meshId}" has reached the maximum of ${MAX_ARTIFACTS_PER_MESH} artifacts (mesh_artifact_limit_exceeded)`,
-                    );
-                }
-            }
-
-            let artifactId = generateArtifactId();
-            while (
-                this.db
-                    .prepare<{ one: number }>(
-                        `SELECT 1 AS one FROM session_artifacts WHERE artifact_id = ?`,
-                    )
-                    .get(artifactId)
-            ) {
-                artifactId = generateArtifactId();
-            }
-
-            const taskId = input.taskId ?? null;
-            this.db
-                .prepare(
-                    `INSERT INTO session_artifacts (
-                        artifact_id,
-                        session_id,
-                        task_id,
-                        mesh_id,
-                        mission_id,
-                        producer_role,
-                        origin_daemon_id,
-                        workspace_root,
-                        rel_path,
-                        kind,
-                        mime,
-                        title,
-                        size_bytes,
-                        sha256,
-                        preview_text,
-                        created_at,
-                        updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                )
-                .run(
-                    artifactId,
-                    sessionId,
-                    taskId,
-                    meshId,
-                    missionId,
-                    producerRole,
-                    originDaemonId,
-                    resolved.workspaceRoot,
-                    resolved.relPath,
-                    resolved.kind,
-                    resolved.mime,
-                    resolved.title,
-                    resolved.sizeBytes,
-                    resolved.sha256,
-                    resolved.previewText,
-                    now,
-                    now,
-                );
-
-            const record: ArtifactRecord = {
-                artifactId,
-                sessionId,
-                taskId,
-                ...(meshId != null ? { meshId } : {}),
-                ...(missionId != null ? { missionId } : {}),
-                ...(producerRole != null ? { producerRole } : {}),
-                ...(originDaemonId != null ? { originDaemonId } : {}),
-                workspaceRoot: resolved.workspaceRoot,
-                relPath: resolved.relPath,
-                kind: resolved.kind,
-                mime: resolved.mime,
-                title: resolved.title,
-                sizeBytes: resolved.sizeBytes,
-                sha256: resolved.sha256,
-                previewText: resolved.previewText,
-                createdAt: now,
-                updatedAt: now,
-            };
-
-            return {
-                record,
-                isUpdate: false,
-                attachment: toChatAttachmentMeta(record),
-            };
-        });
+            });
+        } catch (err) {
+            const mapped = mapStorageErrnoToArtifactError(err);
+            if (mapped) throw mapped;
+            throw err;
+        }
     }
 
     /** Alias for `register`. */
@@ -642,25 +734,7 @@ export class ArtifactStore {
 
     /** List artifacts for a session in deterministic creation order. */
     listBySession(sessionId: string, options?: ListSessionArtifactsOptions): ArtifactRecord[] {
-        if (typeof sessionId !== 'string' || !sessionId) {
-            return [];
-        }
-        const rawLimit = options?.limit;
-        const limit =
-            typeof rawLimit === 'number' && Number.isFinite(rawLimit) && rawLimit > 0
-                ? Math.min(Math.trunc(rawLimit), MAX_ARTIFACTS_PER_SESSION)
-                : MAX_ARTIFACTS_PER_SESSION;
-
-        const rows = this.db
-            .prepare<SessionArtifactDbRow>(
-                `SELECT * FROM session_artifacts
-                 WHERE session_id = ?
-                 ORDER BY created_at ASC, rowid ASC
-                 LIMIT ?`,
-            )
-            .all(sessionId, limit);
-
-        return rows.map(rowToArtifactRecord);
+        return listArtifactsBySession(this.db, sessionId, options);
     }
 
     /** Alias for `listBySession`. */
@@ -686,15 +760,24 @@ export class ArtifactStore {
         return row?.count ?? 0;
     }
 
-    /** Delete all artifact metadata rows for a session. */
+    /**
+     * Explicit session-wide artifact metadata DELETE is refused under the
+     * reference-safe preservation policy. Callers must not use this to reclaim
+     * quota; existing IDs/grants/evidence stay readable.
+     */
     deleteBySession(sessionId: string): number {
         if (typeof sessionId !== 'string' || !sessionId) {
             return 0;
         }
-        const res = this.db
-            .prepare(`DELETE FROM session_artifacts WHERE session_id = ?`)
-            .run(sessionId);
-        return res.changes;
+        const count = this.countBySession(sessionId);
+        if (count > 0) {
+            throw new ArtifactGuardError(
+                'artifact_preserved_refuse_delete',
+                `Refusing to delete ${count} artifact row(s) for session "${sessionId}" (artifact_preserved_refuse_delete)`,
+                { sessionId, count, preserved: true, retryable: false },
+            );
+        }
+        return 0;
     }
 
     /**
@@ -782,124 +865,211 @@ export class ArtifactStore {
         const missionId = typeof input.missionId === 'string' && input.missionId.trim() ? input.missionId.trim() : null;
         const producerRole = typeof input.producerRole === 'string' && input.producerRole.trim() ? input.producerRole.trim() : 'worker';
 
-        return runInImmediateTransaction(this.db, () => {
-            if (now >= 100_000_000_000) this.pruneExpired(now, ARTIFACT_RETENTION_MS, 100_000_000_000);
-            const existing = this.db
-                .prepare<SessionArtifactDbRow>(`SELECT * FROM session_artifacts WHERE session_id = ? AND rel_path = ?`)
-                .get(sessionId, relPath);
+        try {
+            return runInImmediateTransaction(this.db, () => {
+                if (now >= 100_000_000_000) this.pruneExpired(now, ARTIFACT_RETENTION_MS, 100_000_000_000);
+                const existing = this.db
+                    .prepare<SessionArtifactDbRow>(`SELECT * FROM session_artifacts WHERE session_id = ? AND rel_path = ?`)
+                    .get(sessionId, relPath);
 
-            if (existing) {
-                const nextUpdatedAt = Math.max(updatedAt, existing.updated_at);
-                this.db
-                    .prepare(
-                        `UPDATE session_artifacts
-                         SET task_id = ?, mesh_id = ?, mission_id = ?, producer_role = ?, origin_daemon_id = ?,
-                             workspace_root = ?, kind = ?, mime = ?, title = ?, size_bytes = ?, sha256 = ?,
-                             preview_text = ?, updated_at = ?
-                         WHERE artifact_id = ?`,
-                    )
-                    .run(
-                        taskId ?? existing.task_id, meshId ?? existing.mesh_id ?? null,
-                        missionId ?? existing.mission_id ?? null, producerRole ?? existing.producer_role ?? null,
-                        originDaemonId, workspaceRoot, kind, mime, title, sizeBytes, sha256, previewText,
-                        nextUpdatedAt, existing.artifact_id,
-                    );
+                if (existing) {
+                    const sameBytes =
+                        existing.sha256 === sha256 &&
+                        existing.kind === kind &&
+                        existing.mime === mime &&
+                        existing.size_bytes === sizeBytes &&
+                        (existing.title || '') === (title || '');
+                    const nextTaskId = taskId ?? existing.task_id;
+                    const nextMeshId = meshId ?? existing.mesh_id ?? null;
+                    const nextMissionId = missionId ?? existing.mission_id ?? null;
+                    const nextProducerRole = producerRole ?? existing.producer_role ?? null;
+                    const nextOriginDaemonId = originDaemonId || existing.origin_daemon_id || null;
+                    const attributionUnchanged =
+                        (existing.task_id || null) === (nextTaskId || null) &&
+                        (existing.mesh_id || null) === (nextMeshId || null) &&
+                        (existing.mission_id || null) === (nextMissionId || null) &&
+                        (existing.producer_role || null) === (nextProducerRole || null) &&
+                        originDaemonAttributionUnchanged(existing.origin_daemon_id, nextOriginDaemonId);
+                    if (sameBytes && attributionUnchanged) {
+                        const record = rowToArtifactRecord(existing);
+                        return {
+                            record,
+                            isUpdate: true,
+                            attachment: toChatAttachmentMeta(record),
+                        };
+                    }
+                    if (sameBytes) {
+                        const conflictField =
+                            (existing.task_id && nextTaskId && existing.task_id !== nextTaskId && 'task_id') ||
+                            (existing.mesh_id && nextMeshId && existing.mesh_id !== nextMeshId && 'mesh_id') ||
+                            (existing.mission_id && nextMissionId && existing.mission_id !== nextMissionId && 'mission_id') ||
+                            (existing.producer_role && nextProducerRole && existing.producer_role !== nextProducerRole && 'producer_role') ||
+                            (originDaemonAttributionConflict(existing.origin_daemon_id, nextOriginDaemonId) && 'origin_daemon_id') ||
+                            null;
+                        if (conflictField) {
+                            throw new ArtifactGuardError(
+                                'artifact_revision_conflict',
+                                `Forwarded artifact "${existing.artifact_id}" attribution ${conflictField} conflict (artifact_revision_conflict)`,
+                                { artifactId: existing.artifact_id, preserved: true, retryable: false },
+                            );
+                        }
+                    } else if ((producerRole ?? existing.producer_role) === 'pipeline') {
+                        throw new ArtifactGuardError(
+                            'artifact_revision_conflict',
+                            `Pipeline forwarded artifact "${existing.artifact_id}" source changed (artifact_revision_conflict)`,
+                            { artifactId: existing.artifact_id, preserved: true, retryable: false },
+                        );
+                    }
+                    const nextUpdatedAt = Math.max(updatedAt, existing.updated_at);
+                    const metaDelta =
+                        estimateArtifactMetadataBytes({
+                            artifactId: existing.artifact_id,
+                            sessionId,
+                            taskId: nextTaskId,
+                            meshId: nextMeshId,
+                            missionId: nextMissionId,
+                            producerRole: nextProducerRole,
+                            originDaemonId: nextOriginDaemonId,
+                            workspaceRoot,
+                            relPath,
+                            kind,
+                            mime,
+                            title,
+                            sha256,
+                            previewText,
+                        }) -
+                        estimateArtifactMetadataBytes({
+                            artifactId: existing.artifact_id,
+                            sessionId: existing.session_id,
+                            taskId: existing.task_id,
+                            meshId: existing.mesh_id,
+                            missionId: existing.mission_id,
+                            producerRole: existing.producer_role,
+                            originDaemonId: existing.origin_daemon_id,
+                            workspaceRoot: existing.workspace_root,
+                            relPath: existing.rel_path,
+                            kind: existing.kind,
+                            mime: existing.mime,
+                            title: existing.title,
+                            sha256: existing.sha256,
+                            previewText: existing.preview_text,
+                        });
+                    const payloadDelta = sizeBytes - existing.size_bytes;
+                    if (metaDelta > 0 || payloadDelta > 0) {
+                        assertArtifactAdmissionAllows(readArtifactAdmissionTotals(this.db), {
+                            metadataBytes: Math.max(0, metaDelta),
+                            payloadBytes: Math.max(0, payloadDelta),
+                        });
+                    }
+                    this.db
+                        .prepare(
+                            `UPDATE session_artifacts
+                             SET task_id = ?, mesh_id = ?, mission_id = ?, producer_role = ?, origin_daemon_id = ?,
+                                 workspace_root = ?, kind = ?, mime = ?, title = ?, size_bytes = ?, sha256 = ?,
+                                 preview_text = ?, updated_at = ?
+                             WHERE artifact_id = ?`,
+                        )
+                        .run(
+                            nextTaskId, nextMeshId, nextMissionId, nextProducerRole,
+                            nextOriginDaemonId, workspaceRoot, kind, mime, title, sizeBytes, sha256, previewText,
+                            nextUpdatedAt, existing.artifact_id,
+                        );
 
-                const record: ArtifactRecord = {
-                    artifactId: existing.artifact_id,
-                    sessionId,
-                    taskId: taskId ?? existing.task_id ?? null,
-                    ...(meshId ?? existing.mesh_id ? { meshId: meshId ?? existing.mesh_id } : {}),
-                    ...(missionId ?? existing.mission_id ? { missionId: missionId ?? existing.mission_id } : {}),
-                    ...(producerRole ?? existing.producer_role
-                        ? { producerRole: producerRole ?? existing.producer_role }
-                        : {}),
-                    originDaemonId,
-                    workspaceRoot,
-                    relPath,
-                    kind,
-                    mime,
-                    title,
-                    sizeBytes,
-                    sha256,
-                    previewText,
-                    createdAt: existing.created_at,
-                    updatedAt: nextUpdatedAt,
-                };
-                return {
-                    record,
-                    isUpdate: true,
-                    attachment: toChatAttachmentMeta(record),
-                };
-            }
-
-            const countRow = this.db
-                .prepare<{ count: number }>(
-                    `SELECT COUNT(*) AS count FROM session_artifacts WHERE session_id = ?`,
-                )
-                .get(sessionId);
-            if ((countRow?.count ?? 0) >= MAX_ARTIFACTS_PER_SESSION) {
-                throw new ArtifactGuardError(
-                    'session_artifact_limit_reached',
-                    `Session "${sessionId}" has reached the maximum of ${MAX_ARTIFACTS_PER_SESSION} artifacts (session_artifact_limit_reached)`,
-                );
-            }
-            if (missionId) {
-                const missionCountRow = this.db
-                    .prepare<{ count: number }>(
-                        `SELECT COUNT(*) AS count FROM session_artifacts WHERE mission_id = ?`,
-                    )
-                    .get(missionId);
-                if ((missionCountRow?.count ?? 0) >= MAX_ARTIFACTS_PER_MISSION) {
-                    throw new ArtifactGuardError(
-                        'mission_artifact_limit_exceeded',
-                        `Mission "${missionId}" has reached the maximum of ${MAX_ARTIFACTS_PER_MISSION} artifacts (mission_artifact_limit_exceeded)`,
-                    );
-                }
-            }
-            if (meshId) {
-                const meshCountRow = this.db
-                    .prepare<{ count: number }>(
-                        `SELECT COUNT(*) AS count FROM session_artifacts WHERE mesh_id = ?`,
-                    )
-                    .get(meshId);
-                if ((meshCountRow?.count ?? 0) >= MAX_ARTIFACTS_PER_MESH) {
-                    throw new ArtifactGuardError(
-                        'mesh_artifact_limit_exceeded',
-                        `Mesh "${meshId}" has reached the maximum of ${MAX_ARTIFACTS_PER_MESH} artifacts (mesh_artifact_limit_exceeded)`,
-                    );
-                }
-            }
-
-            this.db
-                .prepare(
-                    `INSERT INTO session_artifacts (
-                        artifact_id,
-                        session_id,
-                        task_id,
-                        mesh_id,
-                        mission_id,
-                        producer_role,
-                        origin_daemon_id,
-                        workspace_root,
-                        rel_path,
+                    const record: ArtifactRecord = {
+                        artifactId: existing.artifact_id,
+                        sessionId,
+                        taskId: nextTaskId ?? null,
+                        ...(nextMeshId ? { meshId: nextMeshId } : {}),
+                        ...(nextMissionId ? { missionId: nextMissionId } : {}),
+                        ...(nextProducerRole ? { producerRole: nextProducerRole } : {}),
+                        ...(nextOriginDaemonId ? { originDaemonId: nextOriginDaemonId } : {}),
+                        workspaceRoot,
+                        relPath,
                         kind,
                         mime,
                         title,
-                        size_bytes,
+                        sizeBytes,
                         sha256,
-                        preview_text,
-                        created_at,
-                        updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                )
-                .run(
+                        previewText,
+                        createdAt: existing.created_at,
+                        updatedAt: nextUpdatedAt,
+                    };
+                    return {
+                        record,
+                        isUpdate: true,
+                        attachment: toChatAttachmentMeta(record),
+                    };
+                }
+
+                assertArtifactAdmissionAllows(readArtifactAdmissionTotals(this.db), {
+                    metadataBytes: estimateArtifactMetadataBytes({
+                        artifactId,
+                        sessionId,
+                        taskId,
+                        meshId,
+                        missionId,
+                        producerRole,
+                        originDaemonId,
+                        workspaceRoot,
+                        relPath,
+                        kind,
+                        mime,
+                        title,
+                        sha256,
+                        previewText,
+                    }),
+                    payloadBytes: sizeBytes,
+                });
+
+                this.db
+                    .prepare(
+                        `INSERT INTO session_artifacts (
+                            artifact_id,
+                            session_id,
+                            task_id,
+                            mesh_id,
+                            mission_id,
+                            producer_role,
+                            origin_daemon_id,
+                            workspace_root,
+                            rel_path,
+                            kind,
+                            mime,
+                            title,
+                            size_bytes,
+                            sha256,
+                            preview_text,
+                            created_at,
+                            updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    )
+                    .run(
+                        artifactId,
+                        sessionId,
+                        taskId,
+                        meshId,
+                        missionId,
+                        producerRole,
+                        originDaemonId,
+                        workspaceRoot,
+                        relPath,
+                        kind,
+                        mime,
+                        title,
+                        sizeBytes,
+                        sha256,
+                        previewText,
+                        createdAt,
+                        updatedAt,
+                    );
+
+                const record: ArtifactRecord = {
                     artifactId,
                     sessionId,
                     taskId,
-                    meshId,
-                    missionId,
-                    producerRole,
+                    ...(meshId != null ? { meshId } : {}),
+                    ...(missionId != null ? { missionId } : {}),
+                    ...(producerRole != null ? { producerRole } : {}),
                     originDaemonId,
                     workspaceRoot,
                     relPath,
@@ -911,34 +1081,19 @@ export class ArtifactStore {
                     previewText,
                     createdAt,
                     updatedAt,
-                );
+                };
 
-            const record: ArtifactRecord = {
-                artifactId,
-                sessionId,
-                taskId,
-                ...(meshId != null ? { meshId } : {}),
-                ...(missionId != null ? { missionId } : {}),
-                ...(producerRole != null ? { producerRole } : {}),
-                originDaemonId,
-                workspaceRoot,
-                relPath,
-                kind,
-                mime,
-                title,
-                sizeBytes,
-                sha256,
-                previewText,
-                createdAt,
-                updatedAt,
-            };
-
-            return {
-                record,
-                isUpdate: false,
-                attachment: toChatAttachmentMeta(record),
-            };
-        });
+                return {
+                    record,
+                    isUpdate: false,
+                    attachment: toChatAttachmentMeta(record),
+                };
+            });
+        } catch (err) {
+            const mapped = mapStorageErrnoToArtifactError(err);
+            if (mapped) throw mapped;
+            throw err;
+        }
     }
 
     /** Alias for `upsertForwarded`. */
@@ -954,32 +1109,7 @@ export class ArtifactStore {
         meshId: string,
         options?: { sessionId?: string; missionId?: string; limit?: number },
     ): ArtifactRecord[] {
-        if (typeof meshId !== 'string' || !meshId.trim()) {
-            return [];
-        }
-        const rawLimit = options?.limit;
-        const limit =
-            typeof rawLimit === 'number' && Number.isFinite(rawLimit) && rawLimit > 0
-                ? Math.min(Math.trunc(rawLimit), MAX_ARTIFACTS_PER_MESH)
-                : MAX_ARTIFACTS_PER_MESH;
-        const clauses: string[] = ['mesh_id = ?'];
-        const params: unknown[] = [meshId.trim()];
-        if (typeof options?.sessionId === 'string' && options.sessionId.trim()) {
-            clauses.push('session_id = ?');
-            params.push(options.sessionId.trim());
-        }
-        if (typeof options?.missionId === 'string' && options.missionId.trim()) {
-            clauses.push('mission_id = ?');
-            params.push(options.missionId.trim());
-        }
-        params.push(limit);
-        const rows = this.db
-            .prepare<SessionArtifactDbRow>(
-                newestWindowSql(`SELECT rowid AS window_rowid, * FROM session_artifacts
-                 WHERE ${clauses.join(' AND ')}`),
-            )
-            .all(...params);
-        return rows.map(rowToArtifactRecord);
+        return listArtifactsByMesh(this.db, meshId, options);
     }
 
     /**
@@ -990,60 +1120,36 @@ export class ArtifactStore {
         missionId: string,
         options?: { artifactIds?: readonly string[]; limit?: number; meshId?: string },
     ): ArtifactRecord[] {
-        if (typeof missionId !== 'string' || !missionId.trim()) {
-            return [];
-        }
-        const meshFilter = typeof options?.meshId === 'string' && options.meshId.trim() ? options.meshId.trim() : '';
-        const meshClause = meshFilter ? ' AND mesh_id = ?' : '';
-        const meshParams: string[] = meshFilter ? [meshFilter] : [];
-        const rawLimit = options?.limit;
-        const limit =
-            typeof rawLimit === 'number' && Number.isFinite(rawLimit) && rawLimit > 0
-                ? Math.min(Math.trunc(rawLimit), MAX_ARTIFACTS_PER_MISSION)
-                : MAX_ARTIFACTS_PER_MISSION;
-        if (options?.artifactIds !== undefined) {
-            const ids = options.artifactIds.filter((id) => typeof id === 'string' && id.trim().length > 0);
-            if (ids.length === 0) {
-                return [];
-            }
-            const placeholders = ids.map(() => '?').join(', ');
-            const rows = this.db
-                .prepare<SessionArtifactDbRow>(
-                    newestWindowSql(`SELECT rowid AS window_rowid, * FROM session_artifacts
-                     WHERE mission_id = ?${meshClause} AND artifact_id IN (${placeholders})`),
-                )
-                .all(missionId.trim(), ...meshParams, ...ids, limit);
-            return rows.map(rowToArtifactRecord);
-        }
-        const rows = this.db
-            .prepare<SessionArtifactDbRow>(
-                newestWindowSql(`SELECT rowid AS window_rowid, * FROM session_artifacts
-                 WHERE mission_id = ?${meshClause}`),
-            )
-            .all(missionId.trim(), ...meshParams, limit);
-        return rows.map(rowToArtifactRecord);
+        return listArtifactsByMission(this.db, missionId, options);
     }
 
     /**
-     * Prune artifact metadata rows older than `retentionMs` (default 30 days, OD-7).
+     * Age-based metadata DELETE is disabled: referenced evidence (active/held
+     * review inputs, grants, mission/handoff refs) cannot be proven safe to drop
+     * from this layer alone. Returns 0 and leaves all rows intact.
      */
     pruneExpired(
-        now: number = Date.now(),
-        retentionMs: number = ARTIFACT_RETENTION_MS,
-        minTimestamp: number = 0,
+        _now: number = Date.now(),
+        _retentionMs: number = ARTIFACT_RETENTION_MS,
+        _minTimestamp: number = 0,
     ): number {
-        const cutoff = Math.trunc(now) - Math.trunc(retentionMs);
-        const res = this.db
-            .prepare(
-                `DELETE FROM session_artifacts WHERE updated_at >= ? AND updated_at < ?`,
-            )
-            .run(minTimestamp, cutoff);
-        return res.changes;
+        return 0;
     }
 
     /**
-     * Read and page an artifact's content at 256 KiB boundaries (OD-7).
+     * Owner/SQL keyset listing over the full canonical table (not a preloaded
+     * 500-row window). Filters and cursor predicates are applied in SQL so
+     * archive-window rows remain reachable page-by-page. Direct get-by-id is
+     * unchanged and does not require paging through this window.
      */
+    listByMeshKeyset(
+        meshId: string,
+        options?: ListMeshArtifactsKeysetOptions,
+    ): ListMeshArtifactsKeysetResult {
+        return listArtifactsByMeshKeyset(this.db, meshId, options);
+    }
+
+    /** Read and page an artifact's content at 256 KiB boundaries (OD-7). */
     readArtifactContent(
         artifactId: string,
         options?: ReadArtifactContentOptions,
@@ -1058,15 +1164,7 @@ export class ArtifactStore {
         return readArtifactRecordPaged(record, options);
     }
 
-    /**
-     * Re-validate and read the artifact file from disk at fetch time.
-     *
-     * Re-checks canonical workspace root, symlink/traversal containment,
-     * regular-file status, extension/kind/MIME allowlist, and 4 MiB size cap
-     * via descriptor-verified bounded reads, returning `encoding: 'utf8'` for
-     * text kinds and `encoding: 'base64'` for images, plus `sha256Changed`
-     * (`hashChanged`) comparing current bytes against the registered `sha256`.
-     */
+    /** Re-validate and read the artifact file from disk at fetch time. */
     fetchArtifactContent(
         artifactId: string,
         options?: FetchArtifactContentOptions,
@@ -1078,30 +1176,7 @@ export class ArtifactStore {
                 `Artifact "${artifactId}" not found (artifact_not_found)`,
             );
         }
-
-        const verified = verifyAndReadArtifactBuffer(record, options);
-        const encoding: 'utf8' | 'base64' = record.kind === 'image' ? 'base64' : 'utf8';
-        const content =
-            encoding === 'base64'
-                ? verified.buffer.toString('base64')
-                : verified.buffer.toString('utf8');
-        const sha256Changed = verified.sha256 !== record.sha256;
-
-        return {
-            artifactId: record.artifactId,
-            sessionId: record.sessionId,
-            relPath: record.relPath,
-            kind: record.kind,
-            mime: record.mime,
-            title: record.title,
-            content,
-            encoding,
-            sizeBytes: verified.sizeBytes,
-            sha256: verified.sha256,
-            registeredSha256: record.sha256,
-            sha256Changed,
-            hashChanged: sha256Changed,
-        };
+        return buildFetchArtifactContentResult(record, options);
     }
 
     /** Alias for `fetchArtifactContent`. */
@@ -1140,121 +1215,6 @@ export function fetchArtifactContent(
 ): FetchArtifactContentResult {
     const store = storeOrDb instanceof ArtifactStore ? storeOrDb : new ArtifactStore(storeOrDb);
     return store.fetchArtifactContent(artifactId, options);
-}
-
-function verifyAndReadArtifactBuffer(
-    record: ArtifactRecord,
-    options?: FetchArtifactContentOptions,
-) {
-    if (options?.sessionId !== undefined && record.sessionId !== options.sessionId) {
-        throw new ArtifactGuardError(
-            'artifact_session_mismatch',
-            `Artifact "${record.artifactId}" does not belong to session "${options.sessionId}" (artifact_session_mismatch)`,
-        );
-    }
-
-    const pinnedCanonicalRoot = path.resolve(record.workspaceRoot);
-    let storedRootLstat: fs.Stats;
-    let currentRealStoredRoot: string;
-    try {
-        storedRootLstat = fs.lstatSync(pinnedCanonicalRoot);
-        currentRealStoredRoot = fs.realpathSync(pinnedCanonicalRoot);
-    } catch {
-        throw new ArtifactGuardError(
-            'path_outside_workspace',
-            'Stored canonical workspace root is missing or inaccessible (path_outside_workspace)',
-        );
-    }
-    if (
-        storedRootLstat.isSymbolicLink() ||
-        !storedRootLstat.isDirectory() ||
-        currentRealStoredRoot !== pinnedCanonicalRoot
-    ) {
-        throw new ArtifactGuardError(
-            'path_outside_workspace',
-            'Stored canonical workspace root was redirected or replaced by a symbolic link (path_outside_workspace)',
-        );
-    }
-
-    if (options?.trustedWorkspaceRoot !== undefined) {
-        let realTrustedRoot: string;
-        try {
-            realTrustedRoot = fs.realpathSync(options.trustedWorkspaceRoot);
-        } catch {
-            throw new ArtifactGuardError(
-                'invalid_workspace_root',
-                'Trusted workspace root cannot be resolved (invalid_workspace_root)',
-            );
-        }
-        if (realTrustedRoot !== pinnedCanonicalRoot) {
-            throw new ArtifactGuardError(
-                'path_outside_workspace',
-                'Artifact workspace root does not match trusted workspace root (path_outside_workspace)',
-            );
-        }
-    }
-
-    return readVerifiedArtifactFile(pinnedCanonicalRoot, record.relPath, {
-        declaredKind: record.kind,
-        declaredMime: record.mime,
-        title: record.title,
-        pinnedCanonicalWorkspaceRoot: pinnedCanonicalRoot,
-        _testHooks: options?._testHooks,
-    });
-}
-
-function readArtifactRecordPaged(
-    record: ArtifactRecord,
-    options?: ReadArtifactContentOptions,
-): ReadArtifactContentResult {
-    const verified = verifyAndReadArtifactBuffer(record, options);
-
-    const encoding: 'utf8' | 'base64' = record.kind === 'image' ? 'base64' : 'utf8';
-    const rawTotalBytes = verified.buffer.byteLength;
-    const rawOffsetOpt =
-        typeof options?.offset === 'number'
-            ? options.offset
-            : typeof (options as { pageOffset?: unknown } | undefined)?.pageOffset === 'number'
-              ? ((options as { pageOffset?: number }).pageOffset as number)
-              : undefined;
-    const requestedOffset =
-        typeof rawOffsetOpt === 'number' && Number.isFinite(rawOffsetOpt) && rawOffsetOpt >= 0
-            ? Math.trunc(rawOffsetOpt)
-            : 0;
-    const requestedLimit =
-        typeof options?.limit === 'number' && Number.isFinite(options.limit) && options.limit > 0
-            ? Math.min(Math.trunc(options.limit), MAX_ARTIFACT_MCP_PAGE_BYTES)
-            : MAX_ARTIFACT_MCP_PAGE_BYTES;
-
-    const safeOffset = Math.min(requestedOffset, rawTotalBytes);
-    const endOffset = Math.min(safeOffset + requestedLimit, rawTotalBytes);
-    const slice = verified.buffer.subarray(safeOffset, endOffset);
-    const pageBytes = slice.byteLength;
-    const hasMore = endOffset < rawTotalBytes;
-    const nextOffset = hasMore ? endOffset : null;
-    const content = encoding === 'base64' ? slice.toString('base64') : slice.toString('utf8');
-    const sha256Changed = verified.sha256 !== record.sha256;
-
-    return {
-        artifactId: record.artifactId,
-        sessionId: record.sessionId,
-        relPath: record.relPath,
-        kind: record.kind,
-        mime: record.mime,
-        title: record.title,
-        content,
-        encoding,
-        sizeBytes: verified.sizeBytes,
-        totalBytes: rawTotalBytes,
-        offset: safeOffset,
-        pageBytes,
-        hasMore,
-        nextOffset,
-        sha256: verified.sha256,
-        registeredSha256: record.sha256,
-        sha256Changed,
-        hashChanged: sha256Changed,
-    };
 }
 
 /**

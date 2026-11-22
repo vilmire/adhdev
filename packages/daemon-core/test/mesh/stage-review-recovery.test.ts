@@ -67,7 +67,7 @@ function setup() {
     };
     register('art_report', p0.id, 'existing report');
     const fp = { value: 'fresh-fingerprint' as string | null };
-    const ports = { git: { diff: async () => 'continuation diff', fingerprint: async () => fp.value }, artifacts: { register: (i: any) => register(`art_diff_${++n}`, i.taskId, i.content, 'pipeline') } } as Pick<StageRuntimePorts, 'git' | 'artifacts'>;
+    const ports = { git: { diff: async () => 'continuation diff', fingerprint: async () => fp.value }, artifacts: { register: (i: any) => ({ ok: true as const, artifactId: register(`art_diff_${++n}`, i.taskId, i.content, 'pipeline') }) } } as Pick<StageRuntimePorts, 'git' | 'artifacts'>;
     const host = { actor: 'test-machine', repoIdentity: 'fixture/repo', machineId: 'test-machine', nodeId: 'node_a', workspace: ws };
     const request = (): StageReviewRecoveryRequest => ({ v: 1, meshId: currentMesh!, parentTaskId: p0.id, reviewTaskId: c0.id, expectedParentRevision: parent().revision ?? 0, expectedReviewRevision: child().revision ?? 0, expectedStageHeadSha: head, expectedHeadSha: head, expectedWorkspace: fs.realpathSync.native(ws), ownerDecisionId: 'approval', ownerAnswerRevision: 1, ownerOptionId: 'a', difficulty: 'medium', reviewerProvider: 'antigravity-cli', inputArtifactIds: [], dryRun: true });
     const apply = async (r = request()) => {
@@ -329,7 +329,7 @@ function setupTerminalBlocked() {
     const fp = { value: 'fp2\nfresh-d919-fingerprint' as string | null };
     const ports = {
         git: { diff: async () => 'r5 continuation diff', fingerprint: async () => fp.value },
-        artifacts: { register: (i: any) => register(`art_diff_r6_${++n}`, i.taskId, i.content, 'pipeline') },
+        artifacts: { register: (i: any) => ({ ok: true as const, artifactId: register(`art_diff_r6_${++n}`, i.taskId, i.content, 'pipeline') }) },
     } as Pick<StageRuntimePorts, 'git' | 'artifacts'>;
     const host = {
         actor: 'test-machine', repoIdentity: 'fixture/repo', machineId: 'test-machine',

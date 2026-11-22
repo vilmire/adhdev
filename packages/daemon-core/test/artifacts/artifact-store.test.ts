@@ -13,8 +13,10 @@ import {
     MAX_ARTIFACT_BYTES,
     MAX_PREVIEW_TEXT_CHARS,
     MIME_BY_KIND,
+    estimateArtifactMetadataBytes,
     fetchArtifactContent,
     listSessionArtifacts,
+    readArtifactAdmissionTotals,
     registerSessionArtifact,
     resolveArtifactFile,
     toChatAttachmentMeta,
@@ -510,7 +512,7 @@ describe('Task A — Artifact Store & File Guard', () => {
             );
         });
 
-        it('enforces MAX_ARTIFACTS_PER_SESSION (50) on new records while allowing updates at cap 50', () => {
+        it('treats MAX_ARTIFACTS_PER_SESSION (50) as a soft window: 51st register succeeds and old IDs remain', () => {
             const ids: string[] = [];
             for (let i = 1; i <= MAX_ARTIFACTS_PER_SESSION; i++) {
                 const rel = `file-${String(i).padStart(2, '0')}.txt`;
@@ -526,21 +528,18 @@ describe('Task A — Artifact Store & File Guard', () => {
             }
             expect(store.countBySession('sess-cap')).toBe(50);
 
-            // 51st distinct file in the same session must fail with session_artifact_limit_reached
             const extraRel = 'file-51.txt';
             fs.writeFileSync(path.join(workspaceDir, extraRel), 'content 51', 'utf8');
-            expectArtifactError(
-                () =>
-                    store.register({
-                        sessionId: 'sess-cap',
-                        workspaceRoot: workspaceDir,
-                        path: extraRel,
-                    }),
-                'session_artifact_limit_reached',
-            );
-            expect(store.countBySession('sess-cap')).toBe(50);
+            const overflow = store.register({
+                sessionId: 'sess-cap',
+                workspaceRoot: workspaceDir,
+                path: extraRel,
+            });
+            expect(overflow.isUpdate).toBe(false);
+            expect(store.countBySession('sess-cap')).toBe(51);
+            expect(store.get(ids[0]!)?.artifactId).toBe(ids[0]);
+            expect(store.listBySession('sess-cap')).toHaveLength(50);
 
-            // Updating an existing file at cap 50 must still succeed and retain its ID
             fs.writeFileSync(path.join(workspaceDir, 'file-25.txt'), 'updated content 25', 'utf8');
             const updatedAtCap = store.register({
                 sessionId: 'sess-cap',
@@ -552,15 +551,7 @@ describe('Task A — Artifact Store & File Guard', () => {
             expect(updatedAtCap.isUpdate).toBe(true);
             expect(updatedAtCap.record.artifactId).toBe(ids[24]);
             expect(updatedAtCap.record.previewText).toBe('updated content 25');
-            expect(store.countBySession('sess-cap')).toBe(50);
-
-            // Another session is unaffected by sess-cap's 50 limit
-            const otherSessionRes = store.register({
-                sessionId: 'sess-other',
-                workspaceRoot: workspaceDir,
-                path: extraRel,
-            });
-            expect(otherSessionRes.isUpdate).toBe(false);
+            expect(store.countBySession('sess-cap')).toBe(51);
         });
     });
 
@@ -1031,7 +1022,7 @@ describe('Task A — Artifact Store & File Guard', () => {
                 'secret_file_refused' as ArtifactErrorCode,
             );
 
-            // Fill 50 expired rows for sess-fwd-prune, then verify upsertForwarded prunes them before enforcing the 50/session cap
+            // Preservation: expired rows stay; forwarded insert still admits under soft counts.
             const now = Date.UTC(2026, 9, 23, 0, 0, 0);
             const expiredTime = now - 35 * 24 * 60 * 60 * 1000;
             for (let i = 0; i < 50; i++) {
@@ -1061,7 +1052,7 @@ describe('Task A — Artifact Store & File Guard', () => {
                 updatedAt: now,
             });
             expect(fwd.record.artifactId).toBe('art_fedcba9876543210');
-            expect(store.countBySession('sess-fwd-prune')).toBe(1);
+            expect(store.countBySession('sess-fwd-prune')).toBe(51);
         });
 
         it('wrapUntrustedArtifactContent defangs opening and closing tags with or without attributes', () => {
@@ -1188,7 +1179,7 @@ describe('Task A — Artifact Store & File Guard', () => {
             expect(page1.content + page2.content + page3.content).toBe(totalText);
         });
 
-        it('prunes metadata rows older than 30 days while retaining fresher rows', () => {
+        it('preserves metadata rows older than 30 days (age DELETE is a no-op)', () => {
             expect((artifactsMod as any).ARTIFACT_RETENTION_MS).toBe(30 * 24 * 60 * 60 * 1000);
             const now = Date.UTC(2026, 9, 23, 0, 0, 0);
             const thirtyOneDaysAgo = now - 31 * 24 * 60 * 60 * 1000;
@@ -1211,8 +1202,8 @@ describe('Task A — Artifact Store & File Guard', () => {
             });
 
             const prunedCount = (store as any).pruneExpired?.(now);
-            expect(prunedCount).toBe(1);
-            expect(store.get(expired.record.artifactId)).toBeNull();
+            expect(prunedCount).toBe(0);
+            expect(store.get(expired.record.artifactId)?.artifactId).toBe(expired.record.artifactId);
             expect(store.get(fresh.record.artifactId)?.artifactId).toBe(fresh.record.artifactId);
         });
 
@@ -1257,34 +1248,84 @@ describe('Task A — Artifact Store & File Guard', () => {
             expect(store.get(localRec.record.artifactId)?.artifactId).toBe(localRec.record.artifactId);
         });
 
-        it('enforces 200 per mission and 500 per mesh caps while allowing updates', () => {
+        it('treats 200/mission and 500/mesh as soft windows: overflow register succeeds', () => {
             expect((artifactsMod as any).MAX_ARTIFACTS_PER_MISSION).toBe(200);
             expect((artifactsMod as any).MAX_ARTIFACTS_PER_MESH).toBe(500);
 
+            const firstIds: string[] = [];
             for (let i = 0; i < 200; i++) {
                 const rel = `m_${i}.txt`;
                 fs.writeFileSync(path.join(workspaceDir, rel), `item ${i}`);
-                (store as any).register({
+                const res = (store as any).register({
                     sessionId: `sess-mission-${Math.floor(i / 45)}`,
                     missionId: 'mission-cap-test',
                     meshId: 'mesh-cap-test',
                     workspaceRoot: workspaceDir,
                     path: rel,
                 });
+                if (i < 3) firstIds.push(res.record.artifactId);
             }
 
             fs.writeFileSync(path.join(workspaceDir, 'm_200.txt'), 'overflow');
-            expectArtifactError(
-                () =>
-                    (store as any).register({
-                        sessionId: 'sess-mission-overflow',
-                        missionId: 'mission-cap-test',
-                        meshId: 'mesh-cap-test',
-                        workspaceRoot: workspaceDir,
-                        path: 'm_200.txt',
-                    }),
-                'mission_artifact_limit_exceeded' as ArtifactErrorCode,
-            );
+            const overflow = (store as any).register({
+                sessionId: 'sess-mission-overflow',
+                missionId: 'mission-cap-test',
+                meshId: 'mesh-cap-test',
+                workspaceRoot: workspaceDir,
+                path: 'm_200.txt',
+            });
+            expect(overflow.isUpdate).toBe(false);
+            expect(store.get(firstIds[0]!)?.artifactId).toBe(firstIds[0]);
+            expect(store.listByMission('mission-cap-test')).toHaveLength(200);
+            expect(store.get(overflow.record.artifactId)?.missionId).toBe('mission-cap-test');
+        });
+    });
+
+    describe('metadata admission UTF-8 billing (SQLite)', () => {
+        it('LENGTH(CAST AS BLOB) matches JS byteLength for Hangul metadata fields', () => {
+            const hangul = '한'.repeat(5000);
+            expect(hangul.length).toBe(5000);
+            expect(Buffer.byteLength(hangul, 'utf8')).toBe(15_000);
+            const charLen = db.prepare(`SELECT LENGTH(?) AS n`).get(hangul) as { n: number };
+            const byteLen = db.prepare(`SELECT LENGTH(CAST(? AS BLOB)) AS n`).get(hangul) as { n: number };
+            expect(charLen.n).toBe(5000);
+            expect(byteLen.n).toBe(15_000);
+
+            // Titles are capped at 200 code points; bill a long Hangul workspaceRoot via forwarded upsert.
+            const hangulRoot = `/remote/${'한'.repeat(2000)}`;
+            const reg = store.upsertForwarded({
+                artifactId: 'art_0123456789abcdef',
+                sessionId: 'sess-hangul',
+                workspaceRoot: hangulRoot,
+                relPath: 'hangul.txt',
+                kind: 'text',
+                mime: 'text/plain',
+                title: 'hangul.txt',
+                sizeBytes: 1,
+                sha256: 'c'.repeat(64),
+                originDaemonId: 'daemon-hangul',
+                createdAt: 1_000,
+                updatedAt: 1_000,
+            });
+            const expected = estimateArtifactMetadataBytes({
+                artifactId: reg.record.artifactId,
+                sessionId: reg.record.sessionId,
+                workspaceRoot: reg.record.workspaceRoot,
+                relPath: reg.record.relPath,
+                kind: reg.record.kind,
+                mime: reg.record.mime,
+                title: reg.record.title,
+                sha256: reg.record.sha256,
+                previewText: reg.record.previewText,
+                originDaemonId: reg.record.originDaemonId,
+                producerRole: reg.record.producerRole,
+                taskId: reg.record.taskId,
+                meshId: reg.record.meshId,
+                missionId: reg.record.missionId,
+            });
+            expect(readArtifactAdmissionTotals(db).metadataBytes).toBe(expected);
+            expect(expected).toBeGreaterThan(4096);
+            expect(Buffer.byteLength(reg.record.workspaceRoot, 'utf8')).toBeGreaterThan(reg.record.workspaceRoot.length);
         });
     });
 });

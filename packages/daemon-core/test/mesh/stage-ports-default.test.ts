@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 vi.mock('../../src/config/config.js', () => ({ getConfigDir: () => join(tmpdir(), 'adhdev-stage-ports-cfg'), loadConfig: () => ({}), getMachineId: () => 'm', getMachineNickname: () => null }));
 vi.mock('../../src/config/mesh-config.js', () => ({ getMesh: vi.fn(() => undefined), getMeshByRepo: vi.fn(), listMeshes: vi.fn(() => []) }));
 
+import { ArtifactGuardError } from '../../src/artifacts/types.js';
 import { defaultStageGit, noReviewerWorkspace, resolveStagePipelineCeilingMs, unavailableSelfCheck, mapProfileSummary, createRefineProfileSelfCheck, createLightReviewerWorkspaceProvider, createProductionStagePorts, setStageArtifactRegistrar, setStagePorts } from '../../src/mesh/stage-ports-default.js';
 
 const dirs: string[] = [];
@@ -151,10 +152,103 @@ describe('production stage ports', () => {
         setStageArtifactRegistrar((input) => { calls.push(input); return 'art_1'; });
         const ports = createProductionStagePorts({} as never);
         const id = ports.artifacts.register({ meshId: 'm', missionId: 'mi', taskId: 'task-1', kind: 'diff', title: 'Diff', content: 'x', ext: '.diff' });
-        expect(id).toBe('art_1');
+        expect(id).toEqual({ ok: true, artifactId: 'art_1' });
         expect(calls[0]).toMatchObject({ sessionId: 'stage:task-1', taskId: 'task-1', meshId: 'm', missionId: 'mi', producerRole: 'pipeline' });
+        expect(String(calls[0]?.path)).toMatch(/^diff-[0-9a-f]{16}\.diff$/);
+        const again = ports.artifacts.register({ meshId: 'm', missionId: 'mi', taskId: 'task-1', kind: 'diff', title: 'Diff', content: 'x', ext: '.diff' });
+        expect(again).toEqual({ ok: true, artifactId: 'art_1' });
+        expect(calls).toHaveLength(2);
         setStageArtifactRegistrar(null);
-        expect(ports.artifacts.register({ meshId: 'm', taskId: 't', kind: 'diff', title: 'D', content: 'x', ext: '.diff' })).toBeNull();
+        expect(ports.artifacts.register({ meshId: 'm', taskId: 't', kind: 'diff', title: 'D', content: 'x', ext: '.diff' })).toMatchObject({
+            ok: false,
+            code: 'artifact_storage_unavailable',
+        });
+    });
+
+    it('stable operationKey same-bytes no-ops; changed bytes and prefix-extension conflict preserve finals', () => {
+        const calls: Array<Record<string, unknown>> = [];
+        setStageArtifactRegistrar((input) => { calls.push(input); return `art_${calls.length}`; });
+        const ports = createProductionStagePorts({} as never);
+        const base = {
+            meshId: 'm', taskId: 'task-op', kind: 'self_check' as const, title: 'Self-check', ext: '.md' as const,
+            operationKey: 'self_check-r0-b0',
+        };
+        const first = ports.artifacts.register({ ...base, content: '# Self-check (passed)\n\nok\n' });
+        expect(first).toEqual({ ok: true, artifactId: 'art_1' });
+        expect(String(calls[0]?.path)).toBe('self_check-r0-b0.md');
+        const noop = ports.artifacts.register({ ...base, content: '# Self-check (passed)\n\nok\n' });
+        expect(noop).toEqual({ ok: true, artifactId: 'art_2' });
+        const conflict = ports.artifacts.register({ ...base, content: '# Self-check (failed)\n\nbad\n' });
+        expect(conflict).toMatchObject({ ok: false, code: 'artifact_revision_conflict', preserved: true });
+
+        // R4-01: a successful shorter body that is a proper prefix of the retry must NOT be unlinked/replaced.
+        const dir = join(tmpdir(), 'adhdev-stage-ports-cfg', 'stage-artifacts', 'task-op');
+        const prefixPath = join(dir, 'self_check-r0-b1.md');
+        mkdirSync(dir, { recursive: true });
+        const shortBody = 'abc';
+        writeFileSync(prefixPath, shortBody);
+        const beforeCalls = calls.length;
+        const prefixConflict = ports.artifacts.register({
+            ...base,
+            operationKey: 'self_check-r0-b1',
+            content: 'abcdef',
+        });
+        expect(prefixConflict).toMatchObject({ ok: false, code: 'artifact_revision_conflict', preserved: true });
+        expect(readFileSync(prefixPath, 'utf8')).toBe(shortBody);
+        expect(calls.length).toBe(beforeCalls);
+
+        // Leftover .publishing temp is cleaned; a missing final still publishes via temp+rename.
+        writeFileSync(join(dir, 'self_check-r0-b2.md.publishing.999.1'), 'partial');
+        const published = ports.artifacts.register({
+            ...base,
+            operationKey: 'self_check-r0-b2',
+            content: 'fresh body\n',
+        });
+        expect(published).toEqual({ ok: true, artifactId: `art_${beforeCalls + 1}` });
+        expect(readFileSync(join(dir, 'self_check-r0-b2.md'), 'utf8')).toBe('fresh body\n');
+        setStageArtifactRegistrar(null);
+    });
+
+    it('ArtifactGuardError details/retryable propagate on registrar failure without replacing finals', () => {
+        let attempts = 0;
+        setStageArtifactRegistrar(() => {
+            attempts += 1;
+            if (attempts === 1) return 'art_ok';
+            throw new ArtifactGuardError('artifact_storage_budget_exceeded', 'budget', {
+                scope: 'mesh',
+                currentBytes: 10,
+                deltaBytes: 5,
+                limitBytes: 12,
+                retryable: false,
+                preserved: true,
+            });
+        });
+        const ports = createProductionStagePorts({} as never);
+        const base = {
+            meshId: 'm', taskId: 'task-guard', kind: 'diff' as const, title: 'Diff', ext: '.diff' as const,
+            operationKey: 'diff-guard',
+        };
+        expect(ports.artifacts.register({ ...base, content: 'abc' })).toEqual({ ok: true, artifactId: 'art_ok' });
+        const fail = ports.artifacts.register({ ...base, content: 'abcdef' });
+        expect(fail).toMatchObject({
+            ok: false,
+            code: 'artifact_revision_conflict',
+            preserved: true,
+        });
+        const dir = join(tmpdir(), 'adhdev-stage-ports-cfg', 'stage-artifacts', 'task-guard');
+        expect(readFileSync(join(dir, 'diff-guard.diff'), 'utf8')).toBe('abc');
+
+        // Same bytes retry still reaches registrar; GuardError details are preserved.
+        const budget = ports.artifacts.register({ ...base, content: 'abc' });
+        expect(budget).toMatchObject({
+            ok: false,
+            code: 'artifact_storage_budget_exceeded',
+            retryable: false,
+            preserved: true,
+            details: expect.objectContaining({ scope: 'mesh', currentBytes: 10, limitBytes: 12 }),
+        });
+        expect(readFileSync(join(dir, 'diff-guard.diff'), 'utf8')).toBe('abc');
+        setStageArtifactRegistrar(null);
     });
 
     it('pipeline ceiling defaults to 4h and clamps the env override', () => {
@@ -207,5 +301,85 @@ describe('production stage ports', () => {
         expect(ports.queue.reviewInputValid!(parent, child)).toBe(false);
         writeFileSync(artFile, 'continuation evidence');
         expect(ports.queue.reviewInputValid!(parent, child)).toBe(true);
+    });
+
+    it('R7-02: writeRecovery is digest-immutable — same bytes no-op; different bytes coexist without overwrite', () => {
+        const ports = createProductionStagePorts({} as never);
+        const taskId = 'task-recovery-digest';
+        const op = 'self_check-r0-b0';
+        const bodyA = `recovery-A\n${'a'.repeat(2_000)}\n`;
+        const bodyB = `recovery-B\n${'b'.repeat(2_000)}\n`;
+        const first = ports.artifacts.writeRecovery!({ taskId, operationKey: op, content: bodyA, ext: '.md' });
+        expect(first.ok).toBe(true);
+        if (!first.ok) return;
+        const reused = ports.artifacts.writeRecovery!({ taskId, operationKey: op, content: bodyA, ext: '.md' });
+        expect(reused).toMatchObject({ ok: true, reused: true, sha256: first.sha256, relPath: first.relPath });
+        const second = ports.artifacts.writeRecovery!({ taskId, operationKey: op, content: bodyB, ext: '.md' });
+        expect(second.ok).toBe(true);
+        if (!second.ok) return;
+        expect(second.sha256).not.toBe(first.sha256);
+        expect(second.relPath).not.toBe(first.relPath);
+        expect(ports.artifacts.readRecovery!({ taskId, operationKey: op, sha256: first.sha256 })).toBe(bodyA);
+        expect(ports.artifacts.readRecovery!({ taskId, operationKey: op, sha256: second.sha256 })).toBe(bodyB);
+        const dir = join(tmpdir(), 'adhdev-stage-ports-cfg', 'stage-artifacts', taskId, '.recovery');
+        expect(readFileSync(join(dir, `${op}.${first.sha256.slice(0, 12)}.md`), 'utf8')).toBe(bodyA);
+        expect(readFileSync(join(dir, `${op}.${second.sha256.slice(0, 12)}.md`), 'utf8')).toBe(bodyB);
+    });
+
+    it('R9-01: production readRecovery refuses digest-prefix file whose contents no longer match sha256', () => {
+        const ports = createProductionStagePorts({} as never);
+        // Unique task dir so a prior corrupt overwrite cannot make writeRecovery hit revision_conflict.
+        const taskId = `task-recovery-corrupt-${Date.now()}`;
+        const op = 'review_verdict-r1-child';
+        const bodyA = JSON.stringify({
+            round: 1,
+            reviewTaskId: 'child',
+            independenceUsed: 'different_provider',
+            verdict: 'changes_requested',
+            findings: [{ id: 'F1', severity: 'major', category: 'correctness', claim: 'c', evidence: 'e' }],
+            checked: ['a'],
+            notChecked: ['b'],
+        }, null, 2);
+        const written = ports.artifacts.writeRecovery!({ taskId, operationKey: op, content: bodyA, ext: '.json' });
+        expect(written).toMatchObject({ ok: true });
+        if (!written.ok) return;
+        const dir = join(tmpdir(), 'adhdev-stage-ports-cfg', 'stage-artifacts', taskId, '.recovery');
+        const fileName = `${op}.${written.sha256.slice(0, 12)}.json`;
+        const bodyB = JSON.stringify({
+            round: 1,
+            reviewTaskId: 'child',
+            independenceUsed: 'different_provider',
+            verdict: 'approve',
+            findings: [],
+            checked: ['a'],
+            notChecked: ['b'],
+        }, null, 2);
+        writeFileSync(join(dir, fileName), bodyB);
+        // Same digest-prefix path, different bytes → must not return the corrupt body.
+        expect(ports.artifacts.readRecovery!({ taskId, operationKey: op, sha256: written.sha256 })).toBeNull();
+    });
+
+    it('R7-01: production writeRecovery persistence failure returns preserved=false without discarding prior digest files', () => {
+        const ports = createProductionStagePorts({} as never);
+        const taskId = 'task-recovery-enospc';
+        const op = 'diff-base-head';
+        const prior = ports.artifacts.writeRecovery!({ taskId, operationKey: op, content: 'prior-body\n', ext: '.diff' });
+        expect(prior.ok).toBe(true);
+        if (!prior.ok) return;
+        const dir = join(tmpdir(), 'adhdev-stage-ports-cfg', 'stage-artifacts', taskId, '.recovery');
+        // Real fs failure (no ESM spy on fsync): make the recovery dir non-writable so the next publish fails.
+        chmodSync(dir, 0o555);
+        try {
+            const failed = ports.artifacts.writeRecovery!({ taskId, operationKey: op, content: 'new-body-after-enospc\n', ext: '.diff' });
+            expect(failed).toMatchObject({
+                ok: false,
+                code: 'artifact_storage_unavailable',
+                preserved: false,
+            });
+        } finally {
+            chmodSync(dir, 0o755);
+        }
+        // Prior digest file must still be readable (failed write did not clobber it).
+        expect(ports.artifacts.readRecovery!({ taskId, operationKey: op, sha256: prior.sha256 })).toBe('prior-body\n');
     });
 });

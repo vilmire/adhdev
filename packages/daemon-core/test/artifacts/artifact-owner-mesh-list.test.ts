@@ -125,7 +125,7 @@ describe('owner mesh-wide artifact_list', () => {
         expect(page3.nextCursor).toBeNull();
     });
 
-    it('falls back to a (createdAt, artifactId) tuple when the cursor record was deleted', async () => {
+    it('rejects a stale cursor when the cursor record was deleted (no silent skip)', async () => {
         // Two same-millisecond siblings; the cursor points at the (soon deleted) newer one.
         const at = base + 20_000;
         const mk = (id: string) => store.upsertForwarded({
@@ -138,10 +138,9 @@ describe('owner mesh-wide artifact_list', () => {
         const cursor = `${at}:art_0000000000000bb2`;
         store.db.prepare('DELETE FROM session_artifacts WHERE artifact_id = ?').run('art_0000000000000bb2');
         const res = await ownerList({ meshId: 'mesh-A', limit: 50, cursor });
-        const rel = paths(res);
-        expect(rel).toContain('tie/art_0000000000000aa1.md');
-        expect(rel).not.toContain('tie/art_0000000000000bb2.md');
-        expect(rel).toContain('a0.md');
+        expect(res.success).toBe(false);
+        expect(res.code).toBe('stale_cursor');
+        expect(res.artifacts).toBeUndefined();
     });
 
     it('does not widen non-owner access', async () => {

@@ -137,6 +137,40 @@ export interface MeshTaskStageState {
     reviewFingerprintUnavailable?: boolean
     /** True once the parent was released to a terminal by the pipeline (hold lifted). */
     released?: boolean
+    /**
+     * Unresolved stage artifact storage failures keyed by `operationKey#evidenceSha256`.
+     * Cleared only when BOTH operationKey and payload digest match a successful registration.
+     * Full bodies live at recoveryRelPath and/or inlineEvidence (never claimed preserved without one).
+     */
+    artifactFailures?: Record<string, MeshStageArtifactFailure>
+    /** @deprecated Prefer artifactFailures[holdKey]; retained briefly for older readers. */
+    lastArtifactFailure?: MeshStageArtifactFailure
+}
+
+/** One unresolved stage artifact storage failure (budget/ENOSPC/conflict/etc.). */
+export interface MeshStageArtifactFailure {
+    kind: 'diff' | 'self_check' | 'review_verdict'
+    code: string
+    message: string
+    retryable: boolean
+    /** True only when full evidence is durably reachable (recovery file and/or inlineEvidence). */
+    preserved: boolean
+    details?: Record<string, unknown>
+    /** Original self-check status or review verdict when storage failed after a successful inspection. */
+    inspectionStatus?: string
+    /** Stable operation key — clear requires this AND evidenceSha256. */
+    operationKey: string
+    /** Relative path under the stage artifact dir for the digest-named recovery payload. */
+    recoveryRelPath?: string
+    evidenceSha256: string
+    evidenceBytes: number
+    /** When disk recovery write failed: admission-bounded body kept on the queue row (restart-safe). */
+    inlineEvidence?: string
+    /** Disk writeRecovery failed (ENOSPC/fsync); see inlineEvidence or fail-closed. */
+    recoveryWriteFailed?: boolean
+    /** Short status line only — never a substitute for the full recovery payload. */
+    evidencePreview?: string
+    at: string
 }
 
 export interface MeshReviewFinding {
