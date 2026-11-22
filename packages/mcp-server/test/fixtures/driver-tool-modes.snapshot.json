@@ -31,6 +31,7 @@
     "mesh_queue_revise",
     "mesh_recover_node_identity",
     "mesh_light_land",
+    "mesh_light_continue_integration",
     "mesh_light_discard",
     "mesh_send_task",
     "mesh_read_chat",

@@ -32,7 +32,7 @@ export async function meshLightDiscard(ctx: MeshContext, args: { task_ids?: stri
 }
 
 export async function meshLightContinueIntegration(ctx: MeshContext, args: {
-    task_id?: string; expected_revision?: number; owner_decision_id?: string;
+    task_id: string; expected_revision?: number; owner_decision_id?: string;
     owner_option_id?: string; owner_answer_revision?: number; dry_run?: boolean;
 }): Promise<string> {
     const taskId = typeof args.task_id === 'string' ? args.task_id.trim() : '';

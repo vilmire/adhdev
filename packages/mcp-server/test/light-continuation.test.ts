@@ -28,6 +28,8 @@ test('light continuation requires and forwards the exact owner answer and source
         } },
     } as unknown as Parameters<typeof meshLightContinueIntegration>[0];
     for (const invalid of [
+        { expected_revision: 8, owner_decision_id: 'owner-answer', owner_option_id: 'a', owner_answer_revision: 2 },
+        { ...args, task_id: '' },
         { ...args, owner_answer_revision: undefined },
         { ...args, owner_answer_revision: '2' },
         { ...args, dry_run: 'true' },
@@ -35,6 +37,7 @@ test('light continuation requires and forwards the exact owner answer and source
         const input = invalid as Parameters<typeof meshLightContinueIntegration>[1];
         assert.equal(JSON.parse(await meshLightContinueIntegration(ctx, input)).code, 'bad_request');
     }
+    assert.deepEqual(calls, []);
     assert.deepEqual(JSON.parse(await meshLightContinueIntegration(ctx, args)), { success: true });
     assert.deepEqual(calls, [{
         command: 'light_continue_integration',
