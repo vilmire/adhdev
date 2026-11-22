@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -19,8 +19,13 @@ describe('delegated worker launch env — git never prompts', () => {
   it('stamps GIT_TERMINAL_PROMPT=0 and GCM_INTERACTIVE=never on every delegated worker', () => {
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-worker-git-prompt-'))
     dirs.push(workspace)
+    const realHome = join(workspace, 'source-home')
+    const workerHomeBaseDir = join(workspace, 'worker-homes')
+    mkdirSync(realHome, { mode: 0o700 })
     for (const cliType of ['claude-cli', 'codex-cli', 'kimi', 'cursor-cli']) {
-      const { env } = buildCoordinatorDelegatedCliLaunchOptions({ cliType, workspace, env: { KEEP: 'yes' } })
+      const { env } = buildCoordinatorDelegatedCliLaunchOptions({
+        cliType, workspace, realHome, workerHomeBaseDir, env: { KEEP: 'yes' },
+      })
       expect(env.GIT_TERMINAL_PROMPT).toBe('0')
       expect(env.GCM_INTERACTIVE).toBe('never')
       expect(env.KEEP).toBe('yes')

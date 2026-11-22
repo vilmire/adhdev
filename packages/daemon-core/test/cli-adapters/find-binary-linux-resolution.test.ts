@@ -97,14 +97,15 @@ describe.skipIf(process.platform === 'win32')('findBinary linux resolution', () 
     it('consults `npm config get prefix` and probes <prefix>/bin (nvm / custom prefix)', () => {
         const prefixDir = path.join(tmpDir, 'nvm-prefix');
         const prefixBin = path.join(prefixDir, 'bin');
-        const bin = writeExecutable(prefixBin, 'codex');
+        const name = path.basename(tmpDir);
+        const bin = writeExecutable(prefixBin, name);
         // The active npm prefix is surfaced only by `npm config get prefix`.
         mocks.execSync.mockReturnValue(`${prefixDir}\n`);
 
         // Not on PATH and not in any hard-coded extraDir.
         process.env.PATH = '';
 
-        const resolved = findBinary('codex');
+        const resolved = findBinary(name);
         expect(resolved).toBe(bin);
     });
 
