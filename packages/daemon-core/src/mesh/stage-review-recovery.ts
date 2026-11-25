@@ -2,17 +2,102 @@
 import { execFileSync } from 'node:child_process';
 import { isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
-import { meshNodeIdMatches } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { enqueueTask } from './mesh-work-queue-enqueue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue-types.js';
 import type { StageRuntimePorts } from './stage-ports.js';
-import { attestStageReviewInput, stageReviewArtifactGrants } from './stage-review-input.js';
+import { attestStageReviewInput, attestStageReviewCheckoutForRecovery, readStageReviewArtifact, stageReviewArtifactGrants } from './stage-review-input.js';
 import { isStageBlockOverwritten, isStageChild, selectStageInputArtifacts } from './stage-state.js';
 import { buildReviewerMessage } from './stage-synthesis.js';
 import { reviewInputBusy } from './mesh-task-routing-contract.js';
 import { isTaskDispatchInFlight } from './mesh-task-inflight.js';
 import { findOpenQueueAttempt } from './mesh-queue-attempt-guard.js';
+import { registerStageDiff, stageDiffScope, stageDiffSources } from './stage-diff-stream.js';
+
+import { decodeStageSourceGenerated, previewStageSourceGenerated, stageSourceGeneratedDigest } from './stage-source-generated-provider.js';
+import { decodeStageDiffManifest } from './stage-diff-manifest.js';
+import { gitChildEnv } from '../git/git-locale.js';
+
+type RecoveryPorts = Pick<StageRuntimePorts, 'git' | 'artifacts'> & Partial<Pick<StageRuntimePorts, 'now' | 'artifactOrigin' | 'sourceGenerated' | 'reviewerWorkspace'>>;
+
+/** Dry-run hashes the complete input; apply reproduces that digest before any queue CAS. */
+export async function prepareRecoveryDiff(ports: RecoveryPorts, host: StageReviewRecoveryHost, r: StageReviewRecoveryRequest, baseSha: string, round: number, missionId?: string) {
+    // Recovery must rebuild the FULL historical stage range, even when old diff=[] or
+    // expectedStageHead===expectedHead. A zero continuation must never stand in for that input.
+    if (!/^[a-f0-9]{40,64}$/.test(baseSha)) throw new Error('review_diff_full_stage_base_required');
+    if (!ports.git.diffStream) {
+        const diff = await ports.git.diff(host.workspace, baseSha, r.expectedHeadSha);
+        if (Buffer.byteLength(diff) > 4 * 1024 * 1024) throw new Error('review_recovery_diff_too_large');
+        const sha256 = createHash('sha256').update(diff).digest('hex');
+        return { sha256, manifest: false, register: () => {
+            const result = ports.artifacts.register({ meshId: r.meshId, taskId: r.parentTaskId, missionId, kind: 'diff', ext: '.diff', title: 'Full stage diff recovery', content: diff,
+                operationKey: `diff-recovery-${baseSha.slice(0, 12)}-${r.expectedHeadSha.slice(0, 12)}-r${round}` });
+            if (!result.ok) throw new Error(`review_recovery_diff_registration_failed:${result.code}`);
+            return Promise.resolve(result.artifactId);
+        } };
+    }
+    const sources = stageDiffSources(host.workspace, baseSha, r.expectedHeadSha, ports.git);
+    const hash = createHash('sha256');
+    for (const source of sources.sources) for await (const b of source.stream()) hash.update(b);
+    const sha256 = hash.digest('hex');
+    return { sha256, manifest: true, register: async () => {
+        const origin = ports.artifactOrigin?.();
+        if (!origin) throw new Error('review_diff_origin_required');
+        const result = await registerStageDiff({ git: ports.git, artifacts: ports.artifacts, workspace: host.workspace,
+            base: baseSha, head: r.expectedHeadSha, meshId: r.meshId, taskId: r.parentTaskId, missionId,
+            round, originDaemonId: origin, operationKey: `diff-recovery-${baseSha.slice(0, 12)}-${r.expectedHeadSha.slice(0, 12)}-r${round}` });
+        if (result.manifest.sha256 !== sha256) throw new Error('review_recovery_diff_hash_mismatch');
+        return result.artifactId;
+    } };
+}
+
+async function prepareBeforeChildDiff(ports: RecoveryPorts, host: StageReviewRecoveryHost, r: StageReviewRecoveryRequest, base: string, round: number, missionId?: string) {
+    const originDaemonId = ports.artifactOrigin?.();
+    if (!ports.git.diffStream || !originDaemonId || !daemonIdsEquivalent(originDaemonId, host.actor)) throw new Error('review_diff_origin_required');
+    execFileSync('git', ['--no-replace-objects', 'merge-base', '--is-ancestor', base, r.expectedHeadSha], {
+        cwd: host.workspace, env: gitChildEnv(), windowsHide: true, timeout: 5000, stdio: 'pipe',
+    });
+    const input = { git: ports.git, artifacts: ports.artifacts, workspace: host.workspace, base, head: r.expectedHeadSha,
+        meshId: r.meshId, taskId: r.parentTaskId, missionId, round, originDaemonId,
+        operationKey: `diff-recovery-${base.slice(0, 12)}-${r.expectedHeadSha.slice(0, 12)}-r${round}` };
+    const evidence = stageDiffSources(host.workspace, base, r.expectedHeadSha, ports.git);
+    const scope = stageDiffScope(input, evidence);
+    if (!evidence.sources.some(source => source.repo === 'oss')) {
+        const diff = await prepareRecoveryDiff(ports, host, r, base, round, missionId);
+        return { ...diff, canonicalDigest: createHash('sha256').update(JSON.stringify([scope, diff.sha256])).digest('hex'), detached: false };
+    }
+    if (!ports.sourceGenerated || !ports.reviewerWorkspace) throw new Error('review_source_generated_producer_authority');
+    const preview = previewStageSourceGenerated(scope);
+    const canonicalDigest = stageSourceGeneratedDigest(preview);
+    return { manifest: true, detached: true, canonicalDigest, sha256: preview.source.sha256, register: async () => {
+        const result = await registerStageDiff({ ...input, sourceGenerated: ports.sourceGenerated });
+        if (!('sourceChunks' in result.manifest) || stageSourceGeneratedDigest(result.manifest) !== canonicalDigest) throw new Error('review_recovery_diff_hash_mismatch');
+        return result.artifactId;
+    } };
+}
+
+function beforeChildEvidence(store: MeshRuntimeStore, parent: MeshWorkQueueEntry, host: StageReviewRecoveryHost, r: StageReviewRecoveryRequest, ports: RecoveryPorts) {
+    const st = parent.stageState!;
+    const head = st.stageHeads[0];
+    if (parent.status !== 'blocked' || st.blockedReason !== 'review_unavailable'
+        || !['review_input_artifacts_missing', 'review_diff_input_incomplete'].includes(st.blockedDetail ?? '')
+        || st.selfCheck !== 'passed' || st.stageHeads.length !== 1 || head?.round !== 1 || ![1, 2].includes(st.round)
+        || parent.stageReviewInput || parent.stageReviewRecoveries?.length || st.artifacts.diff.length
+        || st.artifacts.selfCheck.length || st.artifacts.verdict.length || st.lastVerdict
+        || Object.keys(st.artifactFailures ?? {}).length || st.lastArtifactFailure
+        || r.continuationTaskId || r.inputArtifactIds.length || r.expectedHeadSha !== r.expectedStageHeadSha
+        || !/^[a-f0-9]{40,64}$/.test(st.baseSha) || st.baseSha === head.rootSha) throw new Error('terminal_blocked_stage_review_required');
+    const attempt = store.turnStore().findLatestAttemptForTask(parent.meshId, parent.id);
+    if (!attempt || attempt.scope !== 'mesh_queue' || attempt.terminal?.outcome !== 'completed'
+        || attempt.attemptId !== parent.attemptId || st.handledAttemptIds?.at(-1) !== attempt.attemptId
+        || attempt.sessionId !== parent.assignedSessionId || attempt.providerType !== parent.assignedProviderType
+        || !attempt.nodeId || !meshNodeIdMatches({ nodeId: attempt.nodeId }, host.nodeId)
+        || !daemonIdsEquivalent(attempt.ownerDaemonId, host.actor)) throw new Error('review_source_attempt_mismatch');
+    const retained = ports.artifacts.readLegacySelfCheck?.(parent.id, attempt.acceptedAt, Date.parse(st.phaseSince));
+    if (!retained) throw new Error('review_self_check_evidence_missing');
+    return { ...retained, attemptId: attempt.attemptId, generation: attempt.generation };
+}
 
 export interface StageReviewSourceProvenance {
     nodeId: string;
@@ -136,7 +221,7 @@ export function resolveRecoverySourceNodeId(
     return resolveStageSourceProvenance(store, parent)?.nodeId ?? parent.assignedNodeId ?? parent.stageReviewInput?.checkout?.nodeId;
 }
 
-export async function recoverPendingStageReview(request: StageReviewRecoveryRequest, host: StageReviewRecoveryHost, ports: Pick<StageRuntimePorts, 'git' | 'artifacts'> & Partial<Pick<StageRuntimePorts, 'now'>>) {
+export async function recoverPendingStageReview(request: StageReviewRecoveryRequest, host: StageReviewRecoveryHost, ports: RecoveryPorts) {
     const r = decodeStageReviewRecovery(request);
     if (!host.actor || !host.machineId || !host.repoIdentity || !host.nodeId || !host.workspace) throw new Error('authenticated_local_host_required');
     const store = MeshRuntimeStore.getInstance();
@@ -180,11 +265,12 @@ export async function recoverPendingStageReview(request: StageReviewRecoveryRequ
         const prepared = structuredClone(parent);
         if (r.expectedHeadSha !== r.expectedStageHeadSha) prepared.stageState!.stageHeads.push({ round: child.stageRound!, rootSha: r.expectedHeadSha });
         prepared.inputArtifactIds = [...new Set([...(parent.inputArtifactIds ?? []), ...r.inputArtifactIds])];
-        const ids = [...new Set([...selectStageInputArtifacts(parent.stageState), ...(child.inputArtifactIds ?? []), ...r.inputArtifactIds])];
-        const grants = stageReviewArtifactGrants(store, prepared, ids);
+        const requestedIds = [...new Set([...selectStageInputArtifacts(parent.stageState), ...(child.inputArtifactIds ?? []), ...r.inputArtifactIds])];
+        const grants = stageReviewArtifactGrants(store, prepared, requestedIds);
+        const ids = grants.map(grant => grant.id);
         const artifactDigest = createHash('sha256').update(JSON.stringify(grants.map(grant => ({ ...grant, provenance: store.db.prepare('SELECT task_id, mesh_id, session_id, producer_role FROM session_artifacts WHERE artifact_id = ?').get(grant.id) })))).digest('hex');
         if (!r.dryRun && artifactDigest !== r.expectedArtifactDigest) throw new Error('review_artifact_digest_changed');
-        const proof = attestStageReviewInput(prepared, host, grants);
+        const proof = attestStageReviewCheckoutForRecovery(prepared, host, grants);
         if (proof.checkout.worktree !== r.expectedWorkspace) throw new Error('review_workspace_mismatch');
         const claims = store.assignedRowsMeshWide(r.meshId).map(row => ({ ...JSON.parse(row.payload), status: 'assigned' } as MeshWorkQueueEntry));
         if (reviewInputBusy(parent, proof.checkout, [...claims, ...store.getQueueEntries(r.meshId, ['pending'])], true)) throw new Error('review_input_busy');
@@ -193,9 +279,8 @@ export async function recoverPendingStageReview(request: StageReviewRecoveryRequ
     // No lock is held during the potentially expensive fingerprint; every predicate is checked again inside CAS.
     const before = store.transaction(check);
     if (r.expectedHeadSha !== r.expectedStageHeadSha) execFileSync('git', ['-C', host.workspace, 'merge-base', '--is-ancestor', r.expectedStageHeadSha, r.expectedHeadSha], { windowsHide: true, timeout: 5000, stdio: 'pipe' });
-    const diff = await ports.git.diff(host.workspace, r.expectedStageHeadSha, r.expectedHeadSha);
-    if (Buffer.byteLength(diff) > 4 * 1024 * 1024) throw new Error('review_recovery_diff_too_large');
-    const diffSha256 = createHash('sha256').update(diff).digest('hex');
+    const diffInput = await prepareRecoveryDiff(ports, host, r, before.parent.stageState!.baseSha, before.parent.stageState!.round, before.parent.missionId);
+    const diffSha256 = diffInput.sha256;
     const fingerprint = await ports.git.fingerprint(host.workspace);
     if (!fingerprint) throw new Error('review_fingerprint_unavailable');
     if (!r.dryRun && fingerprint !== r.expectedFingerprint) throw new Error('review_fingerprint_changed');
@@ -204,18 +289,17 @@ export async function recoverPendingStageReview(request: StageReviewRecoveryRequ
         fingerprint, diffSha256, artifactDigest: before.artifactDigest, inputArtifactIds: before.ids, workspace: before.proof.checkout.worktree };
     if (r.dryRun) { store.transaction(check); return result; }
     // Pipeline artifacts live outside the checkout. A later CAS refusal can leave an ungranted evidence record, never a partial queue repair.
-    const registered = ports.artifacts.register({ meshId: r.meshId, missionId: before.parent.missionId, taskId: r.parentTaskId, kind: 'diff', ext: '.diff',
-        title: `Review recovery continuation ${r.expectedStageHeadSha}..${r.expectedHeadSha}`, content: diff,
-        operationKey: `diff-recovery-${r.expectedStageHeadSha.slice(0, 12)}-${r.expectedHeadSha.slice(0, 12)}` });
-    if (!registered.ok) throw new Error(`review_recovery_diff_registration_failed:${registered.code}`);
-    const diffId = registered.artifactId;
+    const diffId = await diffInput.register();
     // Recheck after artifact I/O as well; source or ignored-file changes cannot refresh the baseline silently.
     if (await ports.git.fingerprint(host.workspace) !== fingerprint) throw new Error('review_fingerprint_changed');
     return store.transaction(() => {
         const { parent, child, prepared, ids, proof, artifactDigest } = check();
         const diffGrant = stageReviewArtifactGrants(store, parent, [diffId]);
-        if (diffGrant[0].sha256 !== diffSha256) throw new Error('review_recovery_diff_hash_mismatch');
-        ids.push(diffId); proof.artifacts.push(...diffGrant); proof.childTaskId = child.id;
+        if (!diffInput.manifest && diffGrant[0].sha256 !== diffSha256) throw new Error('review_recovery_diff_hash_mismatch');
+        for (const grant of diffGrant) if (!ids.includes(grant.id)) { ids.push(grant.id); proof.artifacts.push(grant); }
+        prepared.stageState!.artifacts.diff.push(diffId);
+        Object.assign(proof, attestStageReviewInput(prepared, host, proof.artifacts));
+        proof.childTaskId = child.id;
         const audit: StageReviewRecoveryAudit = { v: 1, at: new Date().toISOString(), actor: host.actor, parentRevision: parent.revision ?? 0, reviewRevision: child.revision ?? 0,
             ownerDecisionId: r.ownerDecisionId, ownerAnswerRevision: r.ownerAnswerRevision, ownerOptionId: r.ownerOptionId,
             previousHeadSha: r.expectedStageHeadSha, headSha: r.expectedHeadSha, previousFingerprint: parent.stageState!.reviewFingerprint, previousFingerprintUnavailable: parent.stageState!.reviewFingerprintUnavailable, fingerprint,
@@ -226,7 +310,6 @@ export async function recoverPendingStageReview(request: StageReviewRecoveryRequ
         parent.stageState = prepared.stageState;
         if (r.expectedHeadSha !== r.expectedStageHeadSha) parent.stageState!.selfCheck = 'unavailable'; // old pass remains in history/artifacts, never attributed to the new head
         parent.inputArtifactIds = prepared.inputArtifactIds;
-        parent.stageState!.artifacts.diff.push(diffId);
         parent.stageState!.reviewFingerprint = fingerprint; delete parent.stageState!.reviewFingerprintUnavailable;
         parent.stageReviewInput = proof;
         child.difficulty = 'medium'; child.inputArtifactIds = ids; child.targetNodeId = host.nodeId; delete child.targetSessionId;
@@ -241,11 +324,11 @@ export async function recoverPendingStageReview(request: StageReviewRecoveryRequ
 async function recoverTerminalStageReview(
     r: StageReviewRecoveryRequest,
     host: StageReviewRecoveryHost,
-    ports: Pick<StageRuntimePorts, 'git' | 'artifacts'> & Partial<Pick<StageRuntimePorts, 'now'>>,
+    ports: RecoveryPorts,
     store: MeshRuntimeStore,
 ) {
     const nowIso = () => new Date(ports.now?.() ?? Date.now()).toISOString();
-    const verifyCommon = (parent: MeshWorkQueueEntry, baseInputIds: string[]) => {
+    const verifyCommon = (parent: MeshWorkQueueEntry, baseInputIds: string[], beforeChild = false) => {
         const source = resolveStageSourceProvenance(store, parent);
         if (!source) throw new Error('review_unknown_source_provenance');
         if (!meshNodeIdMatches({ nodeId: source.nodeId }, host.nodeId)) throw new Error('review_source_node_mismatch');
@@ -257,6 +340,9 @@ async function recoverTerminalStageReview(
             || item.decision.answer.optionId !== r.ownerOptionId || item.decision.answerRevision !== r.ownerAnswerRevision
             || !item.decision.options.some(o => o.id === r.ownerOptionId)
             || item.refs?.filter(ref => ref.kind === 'task').length !== 1 || !item.refs.some(ref => ref.kind === 'task' && ref.value === parent.id)) throw new Error('review_owner_authorization_required');
+        const prepared = structuredClone(parent);
+        prepared.inputArtifactIds = [...new Set([...baseInputIds, ...r.inputArtifactIds])];
+        if (beforeChild) return { source, prepared };
         if (!r.continuationTaskId) throw new Error('review_continuation_required');
         const continuation = store.findQueueEntryById(r.meshId, r.continuationTaskId) ?? undefined;
         if (!continuation || continuation.id === parent.id || isStageChild(continuation) || continuation.readonly
@@ -275,9 +361,7 @@ async function recoverTerminalStageReview(
             if (artifact.task_id === continuation.id) hasContinuationArt = true;
         }
         if (r.expectedHeadSha !== r.expectedStageHeadSha && !hasContinuationArt) throw new Error('review_continuation_evidence_mismatch');
-        const prepared = structuredClone(parent);
-        prepared.inputArtifactIds = [...new Set([...baseInputIds, ...r.inputArtifactIds])];
-        return { source, continuation, prepared };
+        return { source, prepared };
     };
     const assertNotBusy = (parent: MeshWorkQueueEntry, source: StageReviewSourceProvenance, checkout: import('@adhdev/mesh-shared').PhysicalOwnershipScope) => {
         const claims = store.assignedRowsMeshWide(r.meshId).map(row => ({ ...JSON.parse(row.payload), status: 'assigned' } as MeshWorkQueueEntry));
@@ -292,7 +376,7 @@ async function recoverTerminalStageReview(
         if (!parent || !parent.stagePlan || !parent.stageState || parent.light) throw new Error('terminal_blocked_stage_review_required');
         const lastAudit = parent.stageReviewRecoveries?.at(-1);
         const isReplayState = !r.dryRun && parent.status === 'assigned' && parent.stageState.phase === 'awaiting_review' && !parent.stageState.released
-            && lastAudit?.v === 2 && !!lastAudit.reviewTaskId
+            && lastAudit?.v === 2 && !!lastAudit.continuationTaskId && !!lastAudit.reviewTaskId
             && lastAudit.ownerDecisionId === r.ownerDecisionId && lastAudit.ownerAnswerRevision === r.ownerAnswerRevision && lastAudit.ownerOptionId === r.ownerOptionId
             && lastAudit.previousHeadSha === r.expectedStageHeadSha && lastAudit.headSha === r.expectedHeadSha
             && lastAudit.continuationTaskId === r.continuationTaskId && lastAudit.reviewerProvider === r.reviewerProvider;
@@ -311,8 +395,8 @@ async function recoverTerminalStageReview(
                 || isTaskDispatchInFlight(r.meshId, existingChild.id) || store.turnStore().findLatestAttemptForTask(r.meshId, existingChild.id)) throw new Error('review_already_started');
             const { source, prepared } = verifyCommon(parent, parent.inputArtifactIds ?? []);
             if (lastAudit.preApplyArtifactDigest !== r.expectedArtifactDigest && lastAudit.artifactDigest !== r.expectedArtifactDigest) throw new Error('review_artifact_digest_changed');
-            const ids = [...(existingChild.inputArtifactIds ?? [])];
-            const grants = stageReviewArtifactGrants(store, prepared, ids);
+            const grants = stageReviewArtifactGrants(store, prepared, existingChild.inputArtifactIds ?? []);
+            const ids = grants.map(grant => grant.id);
             const proof = attestStageReviewInput(prepared, host, grants);
             if (proof.checkout.worktree !== r.expectedWorkspace) throw new Error('review_workspace_mismatch');
             assertNotBusy(parent, source, proof.checkout);
@@ -327,7 +411,7 @@ async function recoverTerminalStageReview(
             && parent.stageState.phase === 'done' && !!parent.stageState.released && !!parent.stageState.blockedReason;
         if (!terminalBlocked) throw new Error('terminal_blocked_stage_review_required');
         const childIds = parent.stageState.reviewTaskIds;
-        if (!childIds.length) throw new Error('terminal_blocked_stage_review_required');
+        const beforeChild = childIds.length === 0;
         const allChildren = store.getQueueEntries(r.meshId).filter(e => e.parentTaskId === parent.id);
         if (allChildren.length !== childIds.length || allChildren.some(e => !childIds.includes(e.id))) throw new Error('terminal_blocked_stage_review_required');
         for (const cid of childIds) {
@@ -338,8 +422,9 @@ async function recoverTerminalStageReview(
         }
         if ((parent.revision ?? 0) !== r.expectedParentRevision) throw new Error('stale_review_recovery_cas');
         if (parent.stageState.stageHeads.at(-1)?.rootSha !== r.expectedStageHeadSha) throw new Error('review_stage_head_mismatch');
-        const { source, prepared } = verifyCommon(parent, parent.inputArtifactIds ?? []);
-        const nextRound = parent.stageState.round + 1;
+        const { source, prepared } = verifyCommon(parent, parent.inputArtifactIds ?? [], beforeChild);
+        const retained = beforeChild ? beforeChildEvidence(store, parent, host, r, ports) : undefined;
+        const nextRound = beforeChild ? parent.stageState.round : parent.stageState.round + 1;
         const at = nowIso();
         prepared.status = 'assigned';
         prepared.assignedNodeId = source.nodeId;
@@ -356,25 +441,44 @@ async function recoverTerminalStageReview(
         delete prepared.stageState!.blockedDetail;
         delete prepared.stageState!.reviewerSessionId;
         prepared.stageState!.reviewerFailures = 0;
-        prepared.stageState!.stageHeads.push({ round: nextRound, rootSha: r.expectedHeadSha });
-        prepared.stageState!.selfCheck = 'unavailable';
-        const ids = [...new Set([...selectStageInputArtifacts(parent.stageState), ...r.inputArtifactIds])];
-        const grants = stageReviewArtifactGrants(store, prepared, ids);
+        if (!beforeChild || prepared.stageState!.stageHeads.at(-1)?.round !== nextRound) {
+            prepared.stageState!.stageHeads.push({ round: nextRound, rootSha: r.expectedHeadSha });
+        }
+        if (!beforeChild) prepared.stageState!.selfCheck = 'unavailable';
+        const requestedIds = beforeChild ? [] : [...new Set([...selectStageInputArtifacts(parent.stageState), ...r.inputArtifactIds])];
+        const grants = beforeChild ? [] : stageReviewArtifactGrants(store, prepared, requestedIds);
+        const ids = grants.map(grant => grant.id);
         const artifactDigest = createHash('sha256').update(JSON.stringify(grants.map(grant => ({ ...grant, provenance: store.db.prepare('SELECT task_id, mesh_id, session_id, producer_role FROM session_artifacts WHERE artifact_id = ?').get(grant.id) })))).digest('hex');
-        if (!r.dryRun && artifactDigest !== r.expectedArtifactDigest) throw new Error('review_artifact_digest_changed');
-        const proof = attestStageReviewInput(prepared, host, grants);
+        if (!beforeChild && !r.dryRun && artifactDigest !== r.expectedArtifactDigest) throw new Error('review_artifact_digest_changed');
+        const proof = attestStageReviewCheckoutForRecovery(prepared, host, grants);
         if (proof.checkout.worktree !== r.expectedWorkspace) throw new Error('review_workspace_mismatch');
+        if (beforeChild) {
+            const original = parent.ownershipScope;
+            const actual = proof.checkout;
+            if (!original || original.repoIdentity !== actual.repoIdentity || original.machineId !== actual.machineId
+                || !meshNodeIdMatches({ nodeId: original.nodeId }, actual.nodeId) || original.worktree !== actual.worktree
+                || original.worktreeIdentity !== actual.worktreeIdentity || original.gitDir !== actual.gitDir
+                || original.commonGitDir !== actual.commonGitDir) throw new Error('review_workspace_mismatch');
+        }
         assertNotBusy(prepared, source, proof.checkout);
         return {
             replay: false as const, parent, existingChild: undefined, source, prepared, ids, proof, artifactDigest,
-            nextRound, preservedCompletedChildIds: [...childIds],
+            nextRound, retained, preservedCompletedChildIds: [...childIds],
         };
     };
     const before = store.transaction(check);
     if (r.expectedHeadSha !== r.expectedStageHeadSha) execFileSync('git', ['-C', host.workspace, 'merge-base', '--is-ancestor', r.expectedStageHeadSha, r.expectedHeadSha], { windowsHide: true, timeout: 5000, stdio: 'pipe' });
-    const diff = await ports.git.diff(host.workspace, r.expectedStageHeadSha, r.expectedHeadSha);
-    if (Buffer.byteLength(diff) > 4 * 1024 * 1024) throw new Error('review_recovery_diff_too_large');
-    const diffSha256 = createHash('sha256').update(diff).digest('hex');
+    const retained = before.replay ? undefined : before.retained;
+    if (retained && !(await ports.git.isClean(host.workspace))) throw new Error('review_input_dirty');
+    const diffInput = await (retained ? prepareBeforeChildDiff : prepareRecoveryDiff)(
+        ports, host, r, before.parent.stageState!.baseSha, before.nextRound, before.parent.missionId);
+    const diffSha256 = diffInput.sha256;
+    const canonicalDigest = 'canonicalDigest' in diffInput ? diffInput.canonicalDigest : undefined;
+    const digest = (evidence: typeof retained) => createHash('sha256').update(JSON.stringify([
+        evidence?.operationKey, evidence?.sha256, evidence?.attemptId, evidence?.generation, canonicalDigest,
+    ])).digest('hex');
+    const artifactDigest = retained ? digest(retained) : before.artifactDigest;
+    if (!r.dryRun && artifactDigest !== r.expectedArtifactDigest && !before.replay) throw new Error('review_artifact_digest_changed');
     const fingerprint = await ports.git.fingerprint(host.workspace);
     if (!fingerprint) throw new Error('review_fingerprint_unavailable');
     if (!r.dryRun && fingerprint !== r.expectedFingerprint) throw new Error('review_fingerprint_changed');
@@ -382,11 +486,15 @@ async function recoverTerminalStageReview(
         success: true, v: 2 as const, dryRun: r.dryRun, parentTaskId: r.parentTaskId,
         round: before.nextRound, parentRevision: before.parent.revision ?? 0,
         previousHeadSha: r.expectedStageHeadSha, headSha: r.expectedHeadSha,
-        fingerprint, diffSha256, artifactDigest: before.artifactDigest, inputArtifactIds: before.ids,
+        fingerprint, diffSha256, artifactDigest, inputArtifactIds: before.ids,
         workspace: before.proof.checkout.worktree, sourceProvenance: before.source,
         preservedCompletedChildIds: before.preservedCompletedChildIds,
     };
-    if (r.dryRun) { store.transaction(check); return baseResult; }
+    if (r.dryRun) {
+        const checked = store.transaction(check);
+        if (retained && (checked.replay || digest(checked.retained) !== artifactDigest)) throw new Error('review_artifact_digest_changed');
+        return baseResult;
+    }
     if (before.replay) {
         const rechecked = store.transaction(check);
         if (!rechecked.replay || !rechecked.existingChild) throw new Error('stale_review_recovery_cas');
@@ -398,12 +506,14 @@ async function recoverTerminalStageReview(
             inputArtifactIds: rechecked.existingChild.inputArtifactIds ?? rechecked.ids,
         };
     }
-    const registered = ports.artifacts.register({ meshId: r.meshId, missionId: before.parent.missionId, taskId: r.parentTaskId, kind: 'diff', ext: '.diff',
-        title: `Review recovery continuation ${r.expectedStageHeadSha}..${r.expectedHeadSha}`, content: diff });
-    if (!registered.ok) throw new Error('review_recovery_diff_registration_failed');
-    const diffId = registered.artifactId;
-    if (await ports.git.fingerprint(host.workspace) !== fingerprint) throw new Error('review_fingerprint_changed');
-    return store.transaction(() => {
+    const diffId = await diffInput.register();
+    const detached = 'detached' in diffInput && diffInput.detached === true;
+    const ws = detached ? await ports.reviewerWorkspace!.prepare({
+        meshId: r.meshId, parentTaskId: r.parentTaskId, reviewTaskId: `${r.parentTaskId}:review:${before.nextRound}:0`,
+        round: before.nextRound, rootSha: r.expectedHeadSha, required: true, baseSha: before.parent.stageState!.baseSha,
+        sourceWorkspace: host.workspace,
+    }) : null;
+    const apply = () => store.transaction(() => {
         const checked = check();
         if (checked.replay && checked.existingChild) {
             return {
@@ -414,25 +524,54 @@ async function recoverTerminalStageReview(
                 inputArtifactIds: checked.existingChild.inputArtifactIds ?? checked.ids,
             };
         }
-        const { parent, source, prepared, ids, proof, artifactDigest, nextRound } = checked;
+        const { parent, source, prepared, ids, proof, nextRound } = checked;
+        if (retained) {
+            if (checked.replay || digest(checked.retained) !== artifactDigest) throw new Error('review_artifact_digest_changed');
+            const registered = ports.artifacts.register({ meshId: parent.meshId, taskId: parent.id,
+                missionId: parent.missionId, kind: 'self_check', title: 'Self-check: passed', ext: '.md',
+                content: retained.content, operationKey: retained.operationKey });
+            if (!registered.ok || !ports.artifacts.verifyRegistered?.({ meshId: parent.meshId, taskId: parent.id,
+                artifactId: registered.artifactId, bytes: retained.content.length, sha256: retained.sha256 })) {
+                throw new Error('review_self_check_registration_unverified');
+            }
+            prepared.stageState!.artifacts.selfCheck.push(registered.artifactId);
+            const selfCheckGrant = stageReviewArtifactGrants(store, parent, [registered.artifactId])[0];
+            ids.push(selfCheckGrant.id);
+            proof.artifacts.push(selfCheckGrant);
+        }
         const diffGrant = stageReviewArtifactGrants(store, parent, [diffId]);
-        if (diffGrant[0].sha256 !== diffSha256) throw new Error('review_recovery_diff_hash_mismatch');
-        ids.push(diffId); proof.artifacts.push(...diffGrant);
+        if (retained) {
+            const raw = readStageReviewArtifact(diffGrant[0]);
+            const generated = detached && decodeStageSourceGenerated(raw);
+            const plain = !detached && decodeStageDiffManifest(raw);
+            const registeredDigest = generated ? stageSourceGeneratedDigest(generated)
+                : plain ? createHash('sha256').update(JSON.stringify([plain.scope, plain.sha256])).digest('hex') : undefined;
+            if (registeredDigest !== canonicalDigest) throw new Error('review_recovery_diff_hash_mismatch');
+        }
+        if (!diffInput.manifest && diffGrant[0].sha256 !== diffSha256) throw new Error('review_recovery_diff_hash_mismatch');
+        for (const grant of diffGrant) if (!ids.includes(grant.id)) { ids.push(grant.id); proof.artifacts.push(grant); }
+        prepared.stageState!.artifacts.diff.push(diffId);
+        Object.assign(proof, attestStageReviewInput(prepared, ws ? { ...host, workspace: ws.path } : host, proof.artifacts));
+        if (ws) assertNotBusy(prepared, source, proof.checkout);
         const msg = `${buildReviewerMessage({
             originalMessage: parent.stageState!.originalMessage ?? parent.message,
             implementerSummary: '(see artifacts)',
             round: nextRound,
             maxRevisions: parent.stagePlan!.maxRevisions,
-            selfCheck: 'unavailable',
+            selfCheck: prepared.stageState!.selfCheck,
+            ...(ws ? { workspace: ws.path } : {}),
             priorOpenFindingIds: parent.stageState!.openFindingIds ?? [],
             baseSha: parent.stageState!.baseSha || r.expectedStageHeadSha,
             headSha: r.expectedHeadSha,
-        })}\n\nOwner-authorized input recovery: review ${r.expectedHeadSha} in the authenticated local checkout. Continuation base ${r.expectedStageHeadSha}; historical pipeline base ${parent.stageState!.baseSha}. Prior self-check applies to the prior head; use the named continuation evidence for new validation. Artifact grants: ${ids.join(', ')}.`;
+        })}${retained
+            ? `\n\nRead the self-check, diff manifest and complete diff with artifact_read, following nextOffset until hasMore is false. For a source/generated manifest, read every sourceChunks artifact in order and review the generated inventory. Artifact grants: ${ids.join(', ')}.`
+            : `\n\nOwner-authorized input recovery: review ${r.expectedHeadSha} in the authenticated local checkout. Continuation base ${r.expectedStageHeadSha}; historical pipeline base ${parent.stageState!.baseSha}. Prior self-check applies to the prior head; use the named continuation evidence for new validation. Artifact grants: ${ids.join(', ')}.`}`;
         const child = enqueueTask(r.meshId, msg, {
             stageChild: {
                 parentTaskId: parent.id,
                 round: nextRound,
                 review: { sourceTaskId: parent.id, independence: 'different_provider' },
+                ...(ws ? { reviewerWorkspace: { path: ws.path, headSha: ws.headSha } } : {}),
             },
             difficulty: 'medium',
             ...(parent.missionId ? { missionId: parent.missionId } : {}),
@@ -469,8 +608,8 @@ async function recoverTerminalStageReview(
         parent.stageState = prepared.stageState;
         parent.inputArtifactIds = prepared.inputArtifactIds;
         parent.stageState!.reviewTaskIds.push(child.id);
-        parent.stageState!.artifacts.diff.push(diffId);
-        parent.stageState!.reviewFingerprint = fingerprint;
+        if (ws) delete parent.stageState!.reviewFingerprint;
+        else parent.stageState!.reviewFingerprint = fingerprint;
         delete parent.stageState!.reviewFingerprintUnavailable;
         parent.stageReviewInput = proof;
         store.updateQueueEntry(parent);
@@ -482,4 +621,12 @@ async function recoverTerminalStageReview(
             inputArtifactIds: ids,
         };
     });
+    try {
+        if (detached && (!ws || ws.path === before.proof.checkout.worktree || ws.headSha !== r.expectedHeadSha)) throw new Error('review_detached_checkout_required');
+        if (await ports.git.fingerprint(host.workspace) !== fingerprint || (retained && !(await ports.git.isClean(host.workspace)))) throw new Error('review_fingerprint_changed');
+        return apply();
+    } catch (error) {
+        await ws?.release().catch(() => undefined);
+        throw error;
+    }
 }

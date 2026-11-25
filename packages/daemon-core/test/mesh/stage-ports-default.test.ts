@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 vi.mock('../../src/config/config.js', () => ({ getConfigDir: () => join(tmpdir(), 'adhdev-stage-ports-cfg'), loadConfig: () => ({}), getMachineId: () => 'm', getMachineNickname: () => null }));
 vi.mock('../../src/config/mesh-config.js', () => ({ getMesh: vi.fn(() => undefined), getMeshByRepo: vi.fn(), listMeshes: vi.fn(() => []) }));
@@ -259,9 +259,12 @@ describe('production stage ports', () => {
     });
 
     it('reviewInputValid accepts a resumed round-6 managed review child at the attested head/submodule and rejects head or artifact drift', async () => {
-        const { createHash } = await import('node:crypto');
+        const { default: Database } = await import('better-sqlite3');
+        const { ArtifactStore } = await import('../../src/artifacts/artifact-store.js');
+        const { MeshRuntimeStore } = await import('../../src/mesh/mesh-runtime-store.js');
+        const { registerStageDiff } = await import('../../src/mesh/stage-diff-stream.js');
         const { realpathSync } = await import('node:fs');
-        const { attestStageReviewInput } = await import('../../src/mesh/stage-review-input.js');
+        const { attestStageReviewInput, stageReviewArtifactGrants } = await import('../../src/mesh/stage-review-input.js');
         const { initialStageState } = await import('../../src/mesh/stage-state.js');
         const ws = mkdtempSync(join(tmpdir(), 'stage-ports-r6-')); dirs.push(ws);
         const sub = mkdtempSync(join(tmpdir(), 'stage-ports-sub-')); dirs.push(sub);
@@ -274,7 +277,6 @@ describe('production stage ports', () => {
         const newHead = (await defaultStageGit.headSha(ws))!;
         const artFile = join(realpathSync.native(ws), 'art_cont.md');
         writeFileSync(artFile, 'continuation evidence');
-        const grant = { id: 'art_cont', file: artFile, sha256: createHash('sha256').update('continuation evidence').digest('hex'), size: Buffer.byteLength('continuation evidence') };
 
         const st = initialStageState(new Date().toISOString());
         Object.assign(st, {
@@ -285,22 +287,51 @@ describe('production stage ports', () => {
             artifacts: { diff: ['d_old', 'd_r6'], selfCheck: ['sc_old'], verdict: ['v1', 'v2', 'v3', 'v4', 'v5'] },
             selfCheck: 'unavailable',
         });
-        const parent: any = { id: 'parent_3e2', meshId: 'm', status: 'assigned', stagePlan: { review: true, maxRevisions: 2, independence: 'different_provider' }, stageState: st };
-        const proof = attestStageReviewInput(parent, { repoIdentity: 'repo', machineId: 'm', nodeId: 'node_a992', workspace: ws }, [grant]);
-        proof.childTaskId = 'c6';
-        parent.stageReviewInput = proof;
-        const child: any = { id: 'c6', origin: 'stage', parentTaskId: 'parent_3e2', stageRole: 'review', stageRound: 6, readonly: true, inputArtifactIds: ['art_cont'] };
+        const parent: any = { id: basename(ws), meshId: 'm', status: 'assigned', stagePlan: { review: true, maxRevisions: 2, independence: 'different_provider' }, stageState: st };
+        dirs.push(join(tmpdir(), 'adhdev-stage-ports-cfg', 'stage-artifacts', parent.id));
+        const db = new Database(':memory:');
+        const artifacts = new ArtifactStore(db);
+        const facade = { db, findQueueEntryById: () => parent } as any;
+        const storeSpy = vi.spyOn(MeshRuntimeStore, 'getInstance').mockReturnValue(facade);
+        setStageArtifactRegistrar(input => artifacts.register(input).record.artifactId);
+        try {
+            const ports = createProductionStagePorts({ statusInstanceId: 'm' } as never);
+            const continuationId = artifacts.register({ sessionId: 'implementation', taskId: parent.id, meshId: parent.meshId,
+                producerRole: 'worker', workspaceRoot: realpathSync.native(ws), path: 'art_cont.md', kind: 'markdown', title: 'Continuation evidence' }).record.artifactId;
+            const diff = await registerStageDiff({ git: defaultStageGit, artifacts: ports.artifacts, workspace: ws, base: oldHead, head: newHead,
+                meshId: parent.meshId, taskId: parent.id, round: 6, originDaemonId: 'm', operationKey: 'diff-round6' });
+            st.artifacts.diff = ['d_old', diff.artifactId];
+            const grants = stageReviewArtifactGrants(facade, parent, [diff.artifactId, continuationId]);
+            expect(grants.map(g => g.id)).toEqual([diff.artifactId, ...diff.manifest.chunks.map(c => c.id), continuationId]);
+            expect(diff.manifest.scope).toMatchObject({ baseSha: oldHead, headSha: newHead, round: 6, taskId: parent.id, producerRole: 'pipeline', originDaemonId: 'm' });
+            const proof = attestStageReviewInput(parent, { repoIdentity: 'repo', machineId: 'm', nodeId: 'fixture-node', workspace: ws }, grants);
+            proof.childTaskId = 'c6';
+            parent.stageReviewInput = proof;
+            const child: any = { id: 'c6', origin: 'stage', parentTaskId: parent.id, stageRole: 'review', stageRound: 6, readonly: true, inputArtifactIds: grants.map(g => g.id) };
+            expect(ports.queue.reviewInputValid!(parent, child)).toBe(true);
+            expect(st.baseSha).toBe(oldHead);
+            expect(st.selfCheck).toBe('unavailable');
+            expect(st.artifacts.selfCheck).toEqual(['sc_old']);
 
-        const ports = createProductionStagePorts({} as never);
-        expect(ports.queue.reviewInputValid!(parent, child)).toBe(true);
-        expect(parent.stageState.selfCheck).toBe('unavailable');
-        expect(parent.stageState.artifacts.selfCheck).toEqual(['sc_old']);
-
-        // Artifact tampering invalidates the review input fail-closed
-        writeFileSync(artFile, 'tampered');
-        expect(ports.queue.reviewInputValid!(parent, child)).toBe(false);
-        writeFileSync(artFile, 'continuation evidence');
-        expect(ports.queue.reviewInputValid!(parent, child)).toBe(true);
+            // Missing latest diff, stale historical diff and continuation-only input stay refused.
+            for (const ids of [[], ['d_old'], [continuationId], [diff.artifactId, continuationId]]) {
+                expect(ports.queue.reviewInputValid!(parent, { ...child, inputArtifactIds: ids })).toBe(false);
+            }
+            expect(() => attestStageReviewInput(parent, { repoIdentity: 'repo', machineId: 'm', nodeId: 'fixture-node', workspace: ws }, grants.filter(g => g.id === continuationId))).toThrow('review_diff_latest_missing');
+            st.round = 7;
+            expect(ports.queue.reviewInputValid!(parent, child)).toBe(false);
+            st.round = 6;
+            writeFileSync(artFile, 'tampered');
+            expect(ports.queue.reviewInputValid!(parent, child)).toBe(false);
+            writeFileSync(artFile, 'continuation evidence');
+            expect(ports.queue.reviewInputValid!(parent, child)).toBe(true);
+            git(ws, 'commit', '--allow-empty', '-m', 'changed head');
+            expect(ports.queue.reviewInputValid!(parent, child)).toBe(false);
+        } finally {
+            setStageArtifactRegistrar(null);
+            storeSpy.mockRestore();
+            db.close();
+        }
     });
 
     it('R7-02: writeRecovery is digest-immutable — same bytes no-op; different bytes coexist without overwrite', () => {

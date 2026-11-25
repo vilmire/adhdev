@@ -1,3 +1,4 @@
+import { currentStageReviewScope, validateStageReviewRetainedGrants } from './stage-review-input.js';
 import { reuseIdleTaskSession } from './mesh-session-reuse.js';
 import { realpathSync } from 'node:fs';
 import { noteReviewRefusal } from './stage-independence.js';
@@ -341,6 +342,10 @@ function screenNodeForAutoLaunch(
     freshnessGate: Parameters<typeof isMeshNodeFreshEnoughToLaunch>[1],
     markSkip: AutoLaunchSkipMarker,
 ): ReturnType<typeof resolveAutoLaunchTarget> | null {
+    if (task.reviewerWorkspace && !isLocalAutoLaunchNode(node)) {
+        markSkip(nodeId, 'review_input_unavailable');
+        return null;
+    }
     if (task.ownershipScope) {
         const proof = task.ownedPaths && plannedPhysicalScope(task.ownershipScope, task.ownedPaths);
         let same = false;
@@ -634,7 +639,7 @@ export async function resolveAutoLaunchPlan(
         return null;
     }
     const resolved = await resolveUsableProvider(components, nodeId, node, meshId, task.requiredTags, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags, routingPreferences: task.routingPreferences }, mesh?.policy?.quotaRouting ?? null, quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader), task.id, provider => {
-        const refusal = reviewRoutingRefusal(task, task.review ? getQueueEntryById(meshId, task.review.sourceTaskId) : undefined, provider, isLocalAutoLaunchNode(node) ? { workspace: node.workspace, machineId: getMachineId() ?? '' } : undefined, getQueue(meshId, { status: [...CAPACITY_OCCUPYING_STATUSES] }));
+        const refusal = reviewRoutingRefusal(task, task.review ? getQueueEntryById(meshId, task.review.sourceTaskId) : undefined, provider, isLocalAutoLaunchNode(node) ? { workspace: task.reviewerWorkspace?.path ?? node.workspace, machineId: getMachineId() ?? '' } : undefined, getQueue(meshId, { status: [...CAPACITY_OCCUPYING_STATUSES] }));
         if (task.origin === 'stage') noteReviewRefusal(task.id, refusal); // review-in-task R2 fallback window
         return refusal;
     });
@@ -913,6 +918,16 @@ async function launchQueueTaskOnLocalNode(
     plan: AutoLaunchPlan,
 ): Promise<boolean> {
     const { resolved, effectiveProviderType, effectiveModel, effectiveThinkingLevel, launchProvenance, launchSettings, buildRoutingDecision } = plan;
+    let workspace = node.workspace;
+    if (task.reviewerWorkspace) {
+        const source = task.parentTaskId && getQueueEntryById(meshId, task.parentTaskId);
+        const proof = source ? currentStageReviewScope(source, task) : undefined;
+        if (!proof || !source || proof.worktree !== task.reviewerWorkspace.path || proof.machineId !== getMachineId()
+            || !meshNodeIdMatches(node, proof.nodeId)) return false;
+        try { validateStageReviewRetainedGrants(MeshRuntimeStore.getInstance(), source, task.inputArtifactIds ?? []); }
+        catch { return false; }
+        workspace = proof.worktree;
+    }
     // SPAWN-CAP-TRANSPORT-AWARE: pre-dispatch intent — spends no budget (above).
     markAutoLaunch(meshId, task.id, { status: 'started', nodeId, providerType: effectiveProviderType, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
     // B4: through the router (src:mesh) — command log, invalidation, launch annotations.
@@ -920,8 +935,8 @@ async function launchQueueTaskOnLocalNode(
     assertMaintenanceNode(meshId, nodeId);
     const launchResult: any = await components.router.execute('launch_cli', {
         cliType: effectiveProviderType,
-        dir: node.workspace,
-        settings: launchSettings,
+        dir: workspace,
+        settings: task.reviewerWorkspace ? { ...launchSettings, stageReviewerCheckout: true } : launchSettings,
         // Model axis: local launch forwards the effective model
         // (task override, else matched slot) as initialModel (CLI → modelLaunchArgs; ACP → setConfigOption).
         ...(effectiveModel ? { initialModel: effectiveModel } : {}),
@@ -1080,7 +1095,7 @@ async function autoLaunchUnderMaintenanceGate(components: DaemonComponents, mesh
                 );
                 continue;
             }
-            const reuse = reuseIdleTaskSession(components, meshId, task, mesh.nodes ?? [], tryAssignQueueTask);
+            const reuse = task.reviewerWorkspace ? undefined : reuseIdleTaskSession(components, meshId, task, mesh.nodes ?? [], tryAssignQueueTask);
             if (reuse === 'claimed') { madeProgress = true; continue; }
             if (task.targetSessionId) {
                 // Owner targets are hard constraints, including legacy pins. An unavailable

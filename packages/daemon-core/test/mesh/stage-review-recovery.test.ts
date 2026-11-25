@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 
-const testTmpDir = path.join(tmpdir(), `adhdev-review-recovery-${randomUUID().slice(0, 8)}`);
+const testTmpDir = path.join(fs.realpathSync.native(tmpdir()), `adhdev-review-recovery-${randomUUID().slice(0, 8)}`);
 const testConfigDir = path.join(testTmpDir, '.adhdev');
 vi.mock('../../src/config/config.js', () => ({
     getConfigDir: () => { if (!fs.existsSync(testConfigDir)) fs.mkdirSync(testConfigDir, { recursive: true }); return testConfigDir; },
@@ -25,10 +25,15 @@ import { initialStageState } from '../../src/mesh/stage-state.js';
 import { recoverPendingStageReview, decodeStageReviewRecovery, type StageReviewRecoveryRequest } from '../../src/mesh/stage-review-recovery.js';
 import { reviewRoutingRefusal } from '../../src/mesh/mesh-task-routing-contract.js';
 import { meshQueueHandlers } from '../../src/commands/med-family/mesh-queue.js';
-import { installStagePipeline } from '../../src/mesh/stage-ports-default.js';
+import { createProductionStagePorts, installStagePipeline, setStageArtifactRegistrar } from '../../src/mesh/stage-ports-default.js';
 import { seedMeshAttempt } from '../helpers/turn-attempt-seed.js';
 import { beginTaskDispatchInFlight, __resetTaskDispatchInFlightForTests } from '../../src/mesh/mesh-task-inflight.js';
 import type { StageRuntimePorts } from '../../src/mesh/stage-ports.js';
+import { ArtifactStore } from '../../src/artifacts/artifact-store.js';
+import { attestLocalOwnership } from '../../src/mesh/mesh-physical-ownership.js';
+import { currentStageReviewScope } from '../../src/mesh/stage-review-input.js';
+import { artifactHandlers } from '../../src/commands/med-family/artifacts.js';
+import { mintWorkerTaskToken } from '../../src/mesh/worker-mcp-isolation.js';
 const dirs: string[] = [];
 let currentMesh: string | undefined;
 afterEach(() => {
@@ -42,7 +47,7 @@ afterEach(() => {
 });
 
 function setup() {
-    const ws = fs.mkdtempSync(path.join(tmpdir(), 'review-recovery-')); dirs.push(ws);
+    const ws = fs.mkdtempSync(path.join(fs.realpathSync.native(tmpdir()), 'review-recovery-')); dirs.push(ws);
     const git = (...args: string[]) => execFileSync('git', args, { cwd: ws, windowsHide: true, encoding: 'utf8', stdio: 'pipe' }).trim();
     git('init', '-q'); git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'base');
     const head = git('rev-parse', 'HEAD'); currentMesh = `mesh_recover_${randomUUID()}`;
@@ -201,8 +206,8 @@ describe('owner/CAS pending review recovery', () => {
 });
 
 function setupTerminalBlocked() {
-    const ws = fs.mkdtempSync(path.join(tmpdir(), 'review-terminal-resume-')); dirs.push(ws);
-    const subOrigin = fs.mkdtempSync(path.join(tmpdir(), 'review-terminal-sub-')); dirs.push(subOrigin);
+    const ws = fs.mkdtempSync(path.join(fs.realpathSync.native(tmpdir()), 'review-terminal-resume-')); dirs.push(ws);
+    const subOrigin = fs.mkdtempSync(path.join(fs.realpathSync.native(tmpdir()), 'review-terminal-sub-')); dirs.push(subOrigin);
     const gitAt = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, windowsHide: true, encoding: 'utf8', stdio: 'pipe' }).trim();
     gitAt(subOrigin, 'init', '-q');
     fs.writeFileSync(path.join(subOrigin, 'runtime.ts'), 'export const r5 = true;\n');
@@ -226,21 +231,21 @@ function setupTerminalBlocked() {
         id: currentMesh, repoIdentity: 'fixture/repo',
         meshHost: { role: 'host', hostDaemonId: 'test-machine' },
         nodes: [
-            { id: 'node_a9928da204ce4db1a41723f8a067414f', daemonId: 'test-machine', workspace: ws },
-            { id: 'node_22cc62baf3754b35b5177910e415abf1', daemonId: 'test-machine', workspace: path.join(ws, 'other') },
+            { id: 'node_11111111111111111111111111111111', daemonId: 'test-machine', workspace: ws },
+            { id: 'node_22222222222222222222222222222222', daemonId: 'test-machine', workspace: path.join(ws, 'other') },
         ],
     });
     const store = MeshRuntimeStore.getInstance();
     const p0 = enqueueTask(currentMesh, 'implement #13', {
-        id: '3e2b83f3-b933-4c73-bd27-186c2720fb16',
+        id: '00000000-0000-4000-8000-000000000001',
         taskMode: 'code_change', difficulty: 'difficult', review: true, missionId: 'mission_13', ownedPaths: ['oss'],
     });
     const completedChildIds = [
-        'ffce685b-da14-408b-9ef8-10995546a2b3',
-        'e163a6c8-971b-40ca-8c59-ccc3e875e0f2',
-        'df9fbe0b-102c-4a3d-a2e4-12283bd6af56',
-        'b45503a5-d34a-4dca-bc2a-1a23bfa5c2cd',
-        '139a82b8-29c9-4ea3-b873-3b6609ecaad5',
+        '00000000-0000-4000-8000-000000000011',
+        '00000000-0000-4000-8000-000000000012',
+        '00000000-0000-4000-8000-000000000013',
+        '00000000-0000-4000-8000-000000000014',
+        '00000000-0000-4000-8000-000000000015',
     ];
     for (let i = 0; i < completedChildIds.length; i++) {
         const c = enqueueTask(currentMesh, `review round ${i + 1}`, {
@@ -250,14 +255,14 @@ function setupTerminalBlocked() {
         });
         store.updateQueueEntry({
             ...c, status: 'completed',
-            assignedNodeId: 'node_a9928da204ce4db1a41723f8a067414f',
-            targetNodeId: 'node_a9928da204ce4db1a41723f8a067414f',
+            assignedNodeId: 'node_11111111111111111111111111111111',
+            targetNodeId: 'node_11111111111111111111111111111111',
             assignedProviderType: 'codex-cli',
             assignedSessionId: `reviewer-session-${i + 1}`,
         });
     }
     let n = 0;
-    const register = (id: string, taskId: string, content: string, role = 'worker', sessionId = 'impl-session-3e2') => {
+    const register = (id: string, taskId: string, content: string, role = 'worker', sessionId = 'fixture-implementer') => {
         fs.writeFileSync(path.join(ws, `${id}.md`), content);
         store.db.prepare(`INSERT INTO session_artifacts (artifact_id,session_id,task_id,mesh_id,producer_role,workspace_root,rel_path,kind,mime,title,size_bytes,sha256,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
             .run(id, role === 'pipeline' ? `stage:${taskId}` : sessionId, taskId, currentMesh, role, ws, `${id}.md`, 'markdown', 'text/markdown', 'Evidence', Buffer.byteLength(content), createHash('sha256').update(content).digest('hex'), 1, 1);
@@ -266,25 +271,25 @@ function setupTerminalBlocked() {
     for (let i = 1; i <= 5; i++) register(`art_verdict_${i}`, p0.id, `verdict r${i}`, 'pipeline');
     register('art_old_diff', p0.id, 'old diff', 'pipeline');
     register('art_old_self_check', p0.id, 'old failed self-check', 'pipeline');
-    register('art_175_pass', p0.id, '175 scoped PASS evidence', 'worker', 'impl-session-3e2');
+    register('art_175_pass', p0.id, '175 scoped PASS evidence', 'worker', 'fixture-implementer');
 
-    // Continuation task fbb189f7 ran in its own same-mission session and produced art_e4ec721b0297e1aa
+    // Continuation task fbb189f7 ran in its own same-mission session and produced art_cont_fixture
     const continuation = enqueueTask(currentMesh, 'finish root integration', {
-        id: 'fbb189f7-d149-4964-bbab-7e0dc812ac20',
+        id: '00000000-0000-4000-8000-000000000002',
         taskMode: 'code_change', difficulty: 'medium', missionId: 'mission_13',
     });
     store.updateQueueEntry({
         ...continuation, status: 'completed',
-        assignedNodeId: 'node_a9928da204ce4db1a41723f8a067414f',
-        assignedSessionId: 'continuation-session-fbb',
+        assignedNodeId: 'node_11111111111111111111111111111111',
+        assignedSessionId: 'fixture-continuation',
         assignedProviderType: 'claude-cli',
     });
-    register('art_e4ec721b0297e1aa', continuation.id, 'root d919 / oss a08d integration receipt', 'worker', 'continuation-session-fbb');
+    register('art_cont_fixture', continuation.id, 'fixture integration receipt', 'worker', 'fixture-continuation');
 
     // Audit evidence of the parent's implementer attempt in turn_attempts (even after requeueForRevision cleared parent.assigned*)
     seedMeshAttempt({
-        meshId: currentMesh, taskId: p0.id, sessionId: 'impl-session-3e2',
-        nodeId: 'node_a9928da204ce4db1a41723f8a067414f', providerType: 'claude-cli',
+        meshId: currentMesh, taskId: p0.id, sessionId: 'fixture-implementer',
+        nodeId: 'node_11111111111111111111111111111111', providerType: 'claude-cli',
         attemptId: `mesh_queue:${currentMesh}:${p0.id}:0`, attemptNo: 0, stage: 'completed',
     });
 
@@ -306,13 +311,13 @@ function setupTerminalBlocked() {
         selfCheck: 'failed',
         reviewFingerprint: 'old-r5-fingerprint',
     });
-    // Parent row mirrors live parent3e2: status blocked, target retargeted to recovery 22cc, assigned* cleared
+    // Terminal parent, retargeted for recovery with its assignment cleared.
     store.updateQueueEntry({
         ...p0, status: 'blocked',
-        targetNodeId: 'node_22cc62baf3754b35b5177910e415abf1',
+        targetNodeId: 'node_22222222222222222222222222222222',
         assignedNodeId: undefined, assignedSessionId: undefined, assignedProviderType: undefined,
         hold: { reason: 'node_health_not_launchable', since: '2026-11-21T09:48:26.321Z', blockingTaskIds: [], detail: {} } as any,
-        autoLaunch: { status: 'skipped', reason: 'node_health_not_launchable', nodeId: 'node_22cc62baf3754b35b5177910e415abf1', updatedAt: '2026-11-21T09:48:26.322Z' },
+        autoLaunch: { status: 'skipped', reason: 'node_health_not_launchable', nodeId: 'node_22222222222222222222222222222222', updatedAt: '2026-11-21T09:48:26.322Z' },
         stageState: state,
     });
     const decision = {
@@ -322,7 +327,7 @@ function setupTerminalBlocked() {
         answerRevision: 1,
     } as any;
     store.missionItems().insertItem({
-        id: 'mi_cf4d2178ff17', meshId: currentMesh, missionId: 'mission_13',
+        id: 'mi_owner_fixture', meshId: currentMesh, missionId: 'mission_13',
         kind: 'decision', state: 'answered', text: 'Owner approval for terminal-blocked review resume',
         refs: [{ kind: 'task', value: p0.id }], decision,
     });
@@ -333,7 +338,7 @@ function setupTerminalBlocked() {
     } as Pick<StageRuntimePorts, 'git' | 'artifacts'>;
     const host = {
         actor: 'test-machine', repoIdentity: 'fixture/repo', machineId: 'test-machine',
-        nodeId: 'node_a9928da204ce4db1a41723f8a067414f', workspace: ws,
+        nodeId: 'node_11111111111111111111111111111111', workspace: ws,
     };
     const parent = () => store.findQueueEntryById(currentMesh!, p0.id)!;
     const children = () => parent().stageState!.reviewTaskIds.map(id => store.findQueueEntryById(currentMesh!, id)!);
@@ -342,10 +347,10 @@ function setupTerminalBlocked() {
         expectedParentRevision: parent().revision ?? 0,
         expectedStageHeadSha: oldHead, expectedHeadSha: currentHead,
         expectedWorkspace: fs.realpathSync.native(ws),
-        ownerDecisionId: 'mi_cf4d2178ff17', ownerAnswerRevision: 1, ownerOptionId: 'a',
+        ownerDecisionId: 'mi_owner_fixture', ownerAnswerRevision: 1, ownerOptionId: 'a',
         difficulty: 'medium', reviewerProvider: 'antigravity-cli',
         continuationTaskId: continuation.id,
-        inputArtifactIds: ['art_e4ec721b0297e1aa', 'art_175_pass'],
+        inputArtifactIds: ['art_cont_fixture', 'art_175_pass'],
         dryRun: true,
     });
     const apply = async (r = request()) => {
@@ -371,8 +376,8 @@ describe('owner/CAS terminal-blocked review resume (v2)', () => {
             previousHeadSha: h.oldHead, headSha: h.currentHead,
             fingerprint: 'fp2\nfresh-d919-fingerprint',
             sourceProvenance: {
-                nodeId: 'node_a9928da204ce4db1a41723f8a067414f',
-                sessionId: 'impl-session-3e2',
+                nodeId: 'node_11111111111111111111111111111111',
+                sessionId: 'fixture-implementer',
                 providerType: 'claude-cli',
                 via: 'turn_attempt',
             },
@@ -397,10 +402,10 @@ describe('owner/CAS terminal-blocked review resume (v2)', () => {
         const p = h.parent();
         expect(p).toMatchObject({
             status: 'assigned',
-            assignedNodeId: 'node_a9928da204ce4db1a41723f8a067414f',
-            assignedSessionId: 'impl-session-3e2',
+            assignedNodeId: 'node_11111111111111111111111111111111',
+            assignedSessionId: 'fixture-implementer',
             assignedProviderType: 'claude-cli',
-            targetNodeId: 'node_a9928da204ce4db1a41723f8a067414f',
+            targetNodeId: 'node_11111111111111111111111111111111',
         });
         expect(p.hold).toBeUndefined();
         expect(p.autoLaunch).toBeUndefined();
@@ -420,11 +425,11 @@ describe('owner/CAS terminal-blocked review resume (v2)', () => {
         expect(newChild).toMatchObject({
             status: 'pending', readonly: true, taskMode: 'validation',
             origin: 'stage', parentTaskId: p.id, stageRole: 'review', stageRound: 6,
-            difficulty: 'medium', targetNodeId: 'node_a9928da204ce4db1a41723f8a067414f',
+            difficulty: 'medium', targetNodeId: 'node_11111111111111111111111111111111',
             review: { sourceTaskId: p.id, independence: 'different_provider' },
-            routingPreferences: { nodeIds: ['node_a9928da204ce4db1a41723f8a067414f'], providers: ['antigravity-cli'] },
+            routingPreferences: { nodeIds: ['node_11111111111111111111111111111111'], providers: ['antigravity-cli'] },
         });
-        expect(newChild.inputArtifactIds).toContain('art_e4ec721b0297e1aa');
+        expect(newChild.inputArtifactIds).toContain('art_cont_fixture');
         expect(newChild.inputArtifactIds).toContain('art_175_pass');
         expect(reviewRoutingRefusal(newChild, p, 'antigravity-cli', { workspace: h.ws, machineId: 'test-machine', repoIdentity: 'fixture/repo' }, [p])).toBeUndefined();
         expect(reviewRoutingRefusal(newChild, p, 'claude-cli', { workspace: h.ws, machineId: 'test-machine', repoIdentity: 'fixture/repo' }, [p])).toBe('review_independence_required');
@@ -457,7 +462,7 @@ describe('owner/CAS terminal-blocked review resume (v2)', () => {
     it('refuses unknown source provenance without borrowing reviewer child provider or accepting caller anchor strings', async () => {
         const h = setupTerminalBlocked();
         // Reject caller-supplied source anchor strings at decode boundary
-        for (const extra of [{ sourceProvider: 'claude-cli' }, { assignedProviderType: 'claude-cli' }, { sourceSessionId: 'impl-session-3e2' }, { sourceNodeId: h.host.nodeId }]) {
+        for (const extra of [{ sourceProvider: 'claude-cli' }, { assignedProviderType: 'claude-cli' }, { sourceSessionId: 'fixture-implementer' }, { sourceNodeId: h.host.nodeId }]) {
             expect(() => decodeStageReviewRecovery({ ...h.request(), ...extra } as any)).toThrow('invalid_stage_review_recovery');
         }
         // Remove parent turn_attempts and verify that completed review children (codex-cli) are never used as implementer provenance
@@ -471,13 +476,13 @@ describe('owner/CAS terminal-blocked review resume (v2)', () => {
             'INSERT INTO mesh_local_records (event_id, mesh_id, kind, node_id, session_id, provider_type, task_id, at_ms, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
         ).run(
             'evt_dispatch_3e2', h.request().meshId, 'task_dispatched',
-            'node_a9928da204ce4db1a41723f8a067414f', 'impl-session-3e2', 'claude-cli',
+            'node_11111111111111111111111111111111', 'fixture-implementer', 'claude-cli',
             h.parent().id, Date.now(), JSON.stringify({ taskId: h.parent().id }),
         );
         await expect(recoverPendingStageReview({ ...h.request(), reviewerProvider: 'claude-cli' }, h.host, h.ports)).rejects.toThrow('review_independence_required');
         await expect(recoverPendingStageReview(h.request(), h.host, h.ports)).resolves.toMatchObject({
             dryRun: true,
-            sourceProvenance: { providerType: 'claude-cli', sessionId: 'impl-session-3e2', via: 'local_record' },
+            sourceProvenance: { providerType: 'claude-cli', sessionId: 'fixture-implementer', via: 'local_record' },
         });
     });
 
@@ -492,11 +497,11 @@ describe('owner/CAS terminal-blocked review resume (v2)', () => {
         // Actual checkout head mismatch
         await expect(recoverPendingStageReview({ ...h.request(), expectedHeadSha: h.oldHead }, h.host, h.ports)).rejects.toThrow('review_input_head_changed');
         // Owner decision scoped to wrong task or non-owner answer
-        h.store.missionItems().updateItem(h.request().meshId, 'mi_cf4d2178ff17', { refs: [{ kind: 'task', value: h.completedChildIds[4] }] } as any);
+        h.store.missionItems().updateItem(h.request().meshId, 'mi_owner_fixture', { refs: [{ kind: 'task', value: h.completedChildIds[4] }] } as any);
         await expect(recoverPendingStageReview(h.request(), h.host, h.ports)).rejects.toThrow('review_owner_authorization_required');
-        h.store.missionItems().updateItem(h.request().meshId, 'mi_cf4d2178ff17', { refs: [{ kind: 'task', value: h.parent().id }], decision: { ...h.decision, answerRevision: 9 } } as any);
+        h.store.missionItems().updateItem(h.request().meshId, 'mi_owner_fixture', { refs: [{ kind: 'task', value: h.parent().id }], decision: { ...h.decision, answerRevision: 9 } } as any);
         await expect(recoverPendingStageReview(h.request(), h.host, h.ports)).rejects.toThrow('review_owner_authorization_required');
-        h.store.missionItems().updateItem(h.request().meshId, 'mi_cf4d2178ff17', { refs: [{ kind: 'task', value: h.parent().id }], decision: h.decision } as any);
+        h.store.missionItems().updateItem(h.request().meshId, 'mi_owner_fixture', { refs: [{ kind: 'task', value: h.parent().id }], decision: h.decision } as any);
 
         // Non-completed child in history is refused by v2 (must use v1 if pending)
         const c5 = h.store.findQueueEntryById(h.request().meshId, h.completedChildIds[4])!;
@@ -540,5 +545,173 @@ describe('owner/CAS terminal-blocked review resume (v2)', () => {
             expect(applied).toMatchObject({ success: true, v: 2, dryRun: false, round: 6 });
             expect(h.parent().stageState!.reviewTaskIds).toEqual([...h.completedChildIds, applied.reviewTaskId]);
         } finally { handle.dispose(); }
+    });
+});
+
+describe('owner recovery of inputs before the first review child', () => {
+    function setupBeforeChild(mode: 'root' | 'oss' | 'unsigned' = 'root') {
+        const ws = fs.realpathSync.native(fs.mkdtempSync(path.join(fs.realpathSync.native(tmpdir()), 'review-before-child-')));
+        dirs.push(ws);
+        const git = (...args: string[]) => execFileSync('git', args, { cwd: ws, encoding: 'utf8', stdio: 'pipe' }).trim();
+        git('init', '-q');
+        if (mode !== 'root') {
+            const upstream = fs.realpathSync.native(fs.mkdtempSync(path.join(fs.realpathSync.native(tmpdir()), 'review-before-child-oss-')));
+            dirs.push(upstream);
+            const ossGit = (...args: string[]) => execFileSync('git', args, { cwd: upstream, stdio: 'pipe' });
+            ossGit('init', '-q');
+            fs.writeFileSync(path.join(upstream, 'source.txt'), 'OSS source\n');
+            ossGit('add', 'source.txt');
+            ossGit('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'OSS base');
+            git('-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', upstream, 'oss');
+        }
+        git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'base');
+        const base = git('rev-parse', 'HEAD');
+        fs.writeFileSync(path.join(ws, 'feature.txt'), 'recoverable change\n');
+        if (mode === 'unsigned') {
+            const vendorDir = path.join(ws, 'packages', 'daemon-cloud', 'vendor', 'mcp-server');
+            fs.mkdirSync(vendorDir, { recursive: true });
+            fs.writeFileSync(path.join(vendorDir, 'index.js'), 'generated output\n');
+        }
+        git('add', '.');
+        git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'feature');
+        const head = git('rev-parse', 'HEAD');
+        const meshId = currentMesh = `mesh_before_child_${randomUUID()}`;
+        const nodeId = 'node_11111111111111111111111111111111';
+        const mesh = { id: meshId, repoIdentity: 'fixture/repo', meshHost: { role: 'host', hostDaemonId: 'test-machine' },
+            nodes: [{ id: nodeId, daemonId: 'test-machine', workspace: ws }] };
+        meshConfigMocks.getMesh.mockReturnValue(mesh);
+        bindMeshNoticeRuntime({ notify: () => ({ eventId: 'x', queued: true }), retract: () => 0 } as any);
+        const store = MeshRuntimeStore.getInstance();
+        const task = enqueueTask(meshId, 'implement', { taskMode: 'code_change', difficulty: 'difficult', review: true, missionId: 'mission' });
+        const acceptedAt = Date.now() - 10_000;
+        const impl = seedMeshAttempt({ meshId, taskId: task.id, stage: 'completed', nodeId, sessionId: 'impl',
+            providerType: 'codex-cli', nowMs: acceptedAt });
+        store.turnStore().upsertAttempt({ ...impl, ownerDaemonId: 'test-machine' }, acceptedAt);
+        const at = new Date().toISOString();
+        const ownershipScope = attestLocalOwnership({ workspace: ws, machineId: 'test-machine', nodeId,
+            repoIdentity: mesh.repoIdentity, phase: 'source', paths: { paths: [] } });
+        store.updateQueueEntry({ ...task, status: 'blocked', ownershipScope, attemptId: impl.attemptId,
+            assignedNodeId: nodeId, assignedSessionId: 'impl', assignedProviderType: 'codex-cli',
+            stageState: { ...initialStageState(at), round: 2, phase: 'done', released: true, baseSha: base,
+                stageHeads: [{ round: 1, rootSha: head }], handledAttemptIds: [impl.attemptId], selfCheck: 'passed',
+                blockedReason: 'review_unavailable', blockedDetail: 'review_input_artifacts_missing' } });
+        const dir = path.join(testConfigDir, 'stage-artifacts', task.id);
+        fs.mkdirSync(dir, { recursive: true });
+        const retainedFile = path.join(dir, `self_check-${(acceptedAt + 100).toString(36)}.md`);
+        const body = '# Self-check (passed)\n\nOriginal retained evidence.\n';
+        fs.writeFileSync(retainedFile, body);
+        store.missionItems().insertItem({ id: 'recover-owner-answer', meshId, missionId: 'mission', kind: 'decision',
+            state: 'answered', text: 'Resume review', refs: [{ kind: 'task', value: task.id }],
+            decision: { question: 'Resume review?', options: [{ id: 'a', label: 'Resume' }], answerRevision: 1,
+                answer: { optionId: 'a', by: 'owner', via: 'dashboard', at } } });
+        const components = { statusInstanceId: 'test-machine' } as any;
+        const ports = createProductionStagePorts(components);
+        setStageArtifactRegistrar(input => new ArtifactStore(MeshRuntimeStore.getInstance().db).register(input).record.artifactId);
+        const handle = installStagePipeline(components, ports);
+        const ctx = { deps: components, requireMeshHostMutationOwner: async () => null } as any;
+        const parent = () => MeshRuntimeStore.getInstance().findQueueEntryById(meshId, task.id)!;
+        const request: StageReviewRecoveryRequest = { v: 2, meshId, parentTaskId: task.id, expectedParentRevision: parent().revision!,
+            expectedStageHeadSha: head, expectedHeadSha: head, expectedWorkspace: ws, ownerDecisionId: 'recover-owner-answer',
+            ownerAnswerRevision: 1, ownerOptionId: 'a', difficulty: 'medium', reviewerProvider: 'claude-cli', inputArtifactIds: [], dryRun: true };
+        const call = (patch: Partial<StageReviewRecoveryRequest> = {}) => meshQueueHandlers.stage_recover_mesh_review(ctx, { ...request, ...patch }) as Promise<any>;
+        const dispose = () => { handle.dispose(); setStageArtifactRegistrar(null); };
+        return { ws, git, mesh, nodeId, store, parent, request, call, retainedFile, body, dispose };
+    }
+
+    it.each(['root', 'oss'] as const)('reopens a %s parent with one independent child and readable inputs after SQLite reopen', async mode => {
+        const h = setupBeforeChild(mode);
+        try {
+            const before = h.parent();
+            const preview = await h.call();
+            expect(preview, JSON.stringify(preview)).toMatchObject({ success: true, dryRun: true, round: 2, inputArtifactIds: [] });
+            expect(h.parent()).toEqual(before);
+            const payload = { dryRun: false, expectedFingerprint: preview.fingerprint, expectedArtifactDigest: preview.artifactDigest };
+            const applied = await h.call(payload);
+            expect(applied, JSON.stringify(applied)).toMatchObject({ success: true, dryRun: false, round: 2 });
+            expect(await h.call(payload)).toMatchObject({ success: false });
+            expect(fs.readFileSync(h.retainedFile, 'utf8')).toBe(h.body);
+            __resetMeshRuntimeStoreForTests();
+            const parent = h.parent();
+            const store = MeshRuntimeStore.getInstance();
+            expect(parent).toMatchObject({ status: 'assigned', stageState: { phase: 'awaiting_review', selfCheck: 'passed',
+                released: false, reviewTaskIds: [applied.reviewTaskId] } });
+            const child = store.findQueueEntryById(parent.meshId, applied.reviewTaskId)!;
+            expect(child).toMatchObject({ readonly: true, status: 'pending', origin: 'stage', stageRole: 'review', stageRound: 2,
+                review: { independence: 'different_provider', sourceTaskId: parent.id } });
+            const reviewerWorkspace = child.reviewerWorkspace?.path ?? h.ws;
+            if (mode === 'oss') expect(reviewerWorkspace).not.toBe(h.ws);
+            expect(currentStageReviewScope(parent, child)?.worktree).toBe(reviewerWorkspace);
+            expect(reviewRoutingRefusal(child, parent, 'codex-cli', undefined)).toBe('review_independence_required');
+            const attempt = seedMeshAttempt({ meshId: parent.meshId, taskId: child.id, stage: 'consumed', nodeId: h.nodeId,
+                sessionId: 'reviewer', providerType: 'claude-cli' });
+            store.updateQueueEntry({ ...child, status: 'assigned', assignedSessionId: 'reviewer',
+                assignedNodeId: h.nodeId, assignedProviderType: 'claude-cli', attemptId: attempt.attemptId });
+            const { token } = mintWorkerTaskToken({ ...attempt, meshId: parent.meshId, taskId: child.id, nodeId: h.nodeId });
+            const ctx = { deps: { statusInstanceId: 'test-machine', sessionRegistry: { get: () => ({ workspace: reviewerWorkspace }) } },
+                getMeshForCommand: async () => h.mesh } as any;
+            const read = (artifactId: string) => artifactHandlers.artifact_read(ctx, { token, artifactId });
+            expect(await read(parent.stageState!.artifacts.selfCheck[0])).toMatchObject({ success: true, content: expect.stringContaining('Original retained evidence') });
+            const diffId = parent.stageState!.artifacts.diff[0];
+            if (mode === 'oss') {
+                expect(await read(diffId)).toMatchObject({ success: true, content: expect.stringContaining('adhdev-stage-source-generated') });
+                const chunkId = child.inputArtifactIds!.find(id => id !== diffId && id !== parent.stageState!.artifacts.selfCheck[0])!;
+                expect(await read(chunkId)).toMatchObject({ success: true, content: expect.stringContaining('+recoverable change') });
+            } else {
+                expect(await read(diffId)).toMatchObject({ success: true, content: expect.stringContaining('+recoverable change') });
+            }
+            expect(await read('ungranted')).toMatchObject({ success: false });
+            const foreign = mintWorkerTaskToken({ ...attempt, meshId: parent.meshId, taskId: child.id,
+                nodeId: h.nodeId, sessionId: 'other-worker' });
+            expect(await artifactHandlers.artifact_read(ctx, { token: foreign.token, artifactId: diffId })).toMatchObject({ success: false });
+        } finally { h.dispose(); }
+    });
+
+    it('refuses generated output without the installed host attestation and leaves formal inputs absent', async () => {
+        const h = setupBeforeChild('unsigned');
+        try {
+            const before = h.parent();
+            expect(await h.call()).toMatchObject({ error: 'review_source_generated_producer_authority' });
+            expect(h.parent()).toEqual(before);
+            expect(new ArtifactStore(h.store.db).listBySession(`stage:${before.id}`)).toEqual([]);
+        } finally { h.dispose(); }
+    });
+
+    it('fails closed for missing or changed evidence, stale attempts, dirty checkout, foreign scope, wrong round, and duplicate children', async () => {
+        const h = setupBeforeChild();
+        try {
+            const original = h.parent();
+            const preview = await h.call();
+            expect(preview.success, JSON.stringify(preview)).toBe(true);
+            expect(await h.call({ expectedWorkspace: path.dirname(h.ws) })).toMatchObject({ error: 'review_workspace_mismatch' });
+            expect(await h.call({ expectedHeadSha: 'a'.repeat(40) })).toMatchObject({ success: false });
+            h.git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'head drift');
+            expect(await h.call()).toMatchObject({ error: 'review_input_head_changed' });
+            h.git('checkout', '--detach', h.request.expectedHeadSha);
+            expect(await h.call({ inputArtifactIds: ['art_worker_markdown'] })).toMatchObject({ success: false });
+            expect(await h.call({ expectedParentRevision: h.request.expectedParentRevision + 1 })).toMatchObject({ error: 'stale_review_recovery_cas' });
+            fs.writeFileSync(path.join(h.ws, 'feature.txt'), 'dirty');
+            expect(await h.call()).toMatchObject({ error: 'review_input_dirty' });
+            fs.writeFileSync(path.join(h.ws, 'feature.txt'), 'recoverable change\n');
+            fs.writeFileSync(h.retainedFile, h.body + 'changed');
+            expect(await h.call({ dryRun: false, expectedFingerprint: preview.fingerprint, expectedArtifactDigest: preview.artifactDigest }))
+                .toMatchObject({ error: 'review_artifact_digest_changed' });
+            fs.renameSync(h.retainedFile, h.retainedFile + '.missing');
+            expect(await h.call()).toMatchObject({ error: 'review_self_check_evidence_missing' });
+            fs.renameSync(h.retainedFile + '.missing', h.retainedFile);
+            const update = async (patch: Partial<typeof original>, error: string) => {
+                h.store.updateQueueEntry({ ...original, ...patch });
+                expect(await h.call({ expectedParentRevision: h.parent().revision })).toMatchObject({ error });
+                h.store.updateQueueEntry(original);
+            };
+            await update({ stageState: { ...original.stageState!, round: 3 } }, 'terminal_blocked_stage_review_required');
+            await update({ status: 'assigned' }, 'terminal_blocked_stage_review_required');
+            await update({ attemptId: 'older-attempt' }, 'review_source_attempt_mismatch');
+            await update({ assignedSessionId: 'other-worker' }, 'review_source_attempt_mismatch');
+            await update({ ownershipScope: { ...original.ownershipScope!, repoIdentity: 'foreign/repo' } }, 'review_workspace_mismatch');
+            enqueueTask(original.meshId, 'unexpected child', { difficulty: 'medium', stageChild: { parentTaskId: original.id, round: 2,
+                review: { sourceTaskId: original.id, independence: 'different_provider' } } });
+            expect(await h.call({ expectedParentRevision: h.parent().revision })).toMatchObject({ error: 'terminal_blocked_stage_review_required' });
+            expect(h.parent().stageState!.reviewTaskIds).toEqual([]);
+        } finally { h.dispose(); }
     });
 });

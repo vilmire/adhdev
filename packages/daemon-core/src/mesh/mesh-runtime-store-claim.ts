@@ -182,6 +182,7 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
             allowedTaskDifficulties?: readonly import('@adhdev/mesh-shared').MeshTaskDifficulty[];
             /** LIGHT-TASK: the light workspace the claiming session was launched into (see light-claim-rule.ts). */
             lightWorkspaceId?: string;
+            stageReviewerTaskId?: string;
             /**
              * GIT-GATE (owner-requested follow-up to H1): the claiming node's git
              * telemetry verdict, resolved by the CALLER (mesh-queue-assignment.ts
@@ -336,6 +337,10 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
                 ORDER BY created_at ASC
             `, meshId),
         ].filter(candidate => lightClaimAllows(candidate, sessionId, opts?.lightWorkspaceId))
+            .filter(candidate => opts?.stageReviewerTaskId
+                ? candidate.id === opts.stageReviewerTaskId && !!candidate.reviewerWorkspace
+                    && !!candidate.autoLaunch?.sessionId && sessionIdsEquivalent(candidate.autoLaunch.sessionId, sessionId)
+                : !candidate.reviewerWorkspace)
             .filter(candidate => !opts?.onlyQuotaOverridden || candidate.quotaGateOverride?.by === 'owner');
 
         // M1: a task with unmet dependencies is not claimable.
@@ -514,7 +519,7 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
         let reviewActive: MeshWorkQueueEntry[] | undefined;
         const reviewRefusal = (candidate: MeshWorkQueueEntry) => candidate.review
             ? noteStageReviewRefusal(candidate, reviewRoutingRefusal(candidate, reviewSource(candidate.review.sourceTaskId), providerType, opts?.physicalContext,
-                reviewActive ??= host.getQueueEntries(meshId, ['pending', 'assigned']), sessionId))
+                reviewActive ??= host.getQueueEntries(meshId, ['pending', 'assigned']), sessionId, host))
             : undefined;
         const targetMatches = (candidate: MeshWorkQueueEntry): boolean => {
             // Session ids are single-form (unlike node/daemon ids with their 3
@@ -682,9 +687,11 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
 
         const now = new Date().toISOString();
         entry.status = 'assigned';
-        if (entry.review && !entry.reviewerWorkspace) {
+        if (entry.review) {
             const source = reviewSource(entry.review.sourceTaskId);
-            entry.reviewInputScope = source?.stagePlan ? currentStageReviewScope(source, entry) : source?.ownershipScope;
+            if (!entry.reviewerWorkspace || source?.stageReviewInput) {
+                entry.reviewInputScope = source?.stagePlan ? currentStageReviewScope(source, entry) : source?.ownershipScope;
+            }
         }
         entry.revision = (entry.revision ?? 0) + 1;
         if (entry.ownedPaths && entry.ownershipScope) {

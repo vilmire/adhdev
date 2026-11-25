@@ -1,4 +1,6 @@
-import { getMachineId } from '../config/config.js';
+import { join, sep } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { getConfigDir, getMachineId } from '../config/config.js';
 import { notifyStageChildClaimed } from './stage-hooks.js';
 import { assertMaintenanceAdmission, assertMaintenanceNode, withMaintenanceEffect } from '../maintenance/cooperative-gate.js';
 import { isNewWorkHeld } from '../maintenance/new-work-hold.js';
@@ -216,7 +218,7 @@ function isClaimGatedByWorktreeBootstrap(components: DaemonComponents, meshId: s
  * Returns the claiming session's live state (null when refused).
  */
 function resolveClaimingSessionState(components: DaemonComponents, nodeId: string, sessionId: string, node: any): { claimState: any } | null {
-    const localClaimAdapter = components.cliManager?.adapters?.get(sessionId) as { workingDir?: string } | undefined;
+    const localClaimAdapter = components.cliManager?.adapters?.get(sessionId) as { workingDir?: string; getPid?: () => number | undefined } | undefined;
     let claimInstanceWorkspace = '';
     let claimStampedNodeId = '', claimState: any;
     try {
@@ -229,6 +231,15 @@ function resolveClaimingSessionState(components: DaemonComponents, nodeId: strin
     const nodeWorkspaceRaw = readText(node?.workspace);
     const sessionWorkspaceRaw = readText(localClaimAdapter?.workingDir) || claimInstanceWorkspace;
 
+    // Local launch success publishes the adapter before the async host create
+    // has produced a native process. Detached-review claims synchronously
+    // revalidate retained evidence; defer them so that work cannot starve the
+    // host readiness RPC or assign grants to an adapter that never started.
+    if (isDetachedStageReviewer(claimState?.settings, sessionWorkspaceRaw)) {
+        const pid = localClaimAdapter?.getPid?.();
+        if (!Number.isSafeInteger(pid) || Number(pid) <= 0) return null;
+    }
+
     if (claimStampedNodeId && nodeId) {
         if (!meshNodeIdMatches({ id: claimStampedNodeId } as MeshNodeIdentified, nodeId)) {
             LOG.info('MeshQueue', `WTDISPATCH: refusing claim for node ${nodeId} (${sessionId}) — session is bound to node "${claimStampedNodeId}" (cross-node claim blocked)`);
@@ -239,6 +250,15 @@ function resolveClaimingSessionState(components: DaemonComponents, nodeId: strin
         return null;
     }
     return { claimState };
+}
+
+function isDetachedStageReviewer(settings: Record<string, unknown> | undefined, workspace: string): boolean {
+    if (settings?.stageReviewerCheckout === true) return true;
+    if (!workspace) return false;
+    try {
+        const root = realpathSync.native(join(getConfigDir(), 'stage-review-checkouts'));
+        return realpathSync.native(workspace).startsWith(root + sep);
+    } catch { return false; }
 }
 
 /** The atomic claim's filter inputs for this (node, session, provider). */
@@ -310,6 +330,12 @@ function buildClaimOptions(p: {
     // (light-claim-rule.ts) and is physically anchored to that workspace, not to the base node's checkout.
     // The settings marker can be missing on a session reattached after a daemon restart, so a session
     // whose working directory is a registered light workspace is a light session all the same.
+    const claimSettings = p.claimState?.settings as Record<string, unknown> | undefined;
+    const sessionWorkspace = readText((components.cliManager?.adapters?.get(sessionId) as { workingDir?: string } | undefined)?.workingDir)
+        || readText(p.claimState?.workspace);
+    const stageReviewerTaskId = isDetachedStageReviewer(claimSettings, sessionWorkspace)
+        ? readText(claimSettings?.autoLaunchedForQueueTaskId) || 'invalid-reviewer-launch'
+        : undefined;
     const lightWorkspaceId = readText((p.claimState?.settings as Record<string, unknown> | undefined)?.lightWorkspaceId)
         || lightWorkspaceIdForPath(readText((components.cliManager?.adapters?.get(sessionId) as { workingDir?: string } | undefined)?.workingDir) || readText(p.claimState?.workspace))
         || undefined;
@@ -333,12 +359,13 @@ function buildClaimOptions(p: {
         assignedTranscriptProfile,
         options: {
             physicalContext: {
-                workspace: (lightWorkspaceId && readText(p.claimState?.workspace)) || readText(node?.workspace),
+                workspace: stageReviewerTaskId ? sessionWorkspace : (lightWorkspaceId && sessionWorkspace) || readText(node?.workspace),
                 machineId: getMachineId() ?? '',
                 repoIdentity: mesh.repoIdentity,
                 ...(remoteOwnership ? { remoteOwnership } : {}),
             },
             ...(lightWorkspaceId ? { lightWorkspaceId } : {}),
+            ...(stageReviewerTaskId ? { stageReviewerTaskId } : {}),
             providerType,
             ...(providerMaxParallel !== undefined ? { providerMaxParallel } : {}),
             ...(assignedModel ? { assignedModel } : {}),

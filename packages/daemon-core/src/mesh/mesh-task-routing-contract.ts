@@ -4,7 +4,8 @@ import type { MeshRoutingPreferences, MeshTaskStatus, PhysicalOwnershipScope } f
 import type { MeshWorkQueueEntry } from './mesh-work-queue-types.js';
 import { currentPhysicalScope, comparePhysicalOwnership } from './mesh-physical-ownership.js';
 import { reviewIndependenceOf } from '@adhdev/mesh-shared';
-import { currentStageReviewScope } from './stage-review-input.js';
+import { currentStageReviewScope, validateStageReviewRetainedGrants } from './stage-review-input.js';
+import type { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { isStageParent } from './stage-state.js';
 import { resolvePathOwnershipGate } from './mesh-path-ownership-gate.js';
 
@@ -31,7 +32,7 @@ export interface ReviewRoutingContext {
     remoteOwnership?: (candidate: MeshWorkQueueEntry) => { scope: import('@adhdev/mesh-shared').PhysicalOwnershipScope } | { error: string };
 }
 /** Input availability is proven locally; a remote source needs a future verified transfer contract. */
-export function reviewRoutingRefusal(task: Pick<MeshWorkQueueEntry, 'review' | 'readonly' | 'taskMode'> & Partial<MeshWorkQueueEntry>, source: MeshWorkQueueEntry | undefined | null, provider: string | undefined, context: ReviewRoutingContext | undefined, active: readonly MeshWorkQueueEntry[] = [], claimingSessionId?: string): string | undefined {
+export function reviewRoutingRefusal(task: Pick<MeshWorkQueueEntry, 'review' | 'readonly' | 'taskMode'> & Partial<MeshWorkQueueEntry>, source: MeshWorkQueueEntry | undefined | null, provider: string | undefined, context: ReviewRoutingContext | undefined, active: readonly MeshWorkQueueEntry[] = [], claimingSessionId?: string, artifactStore?: Pick<MeshRuntimeStore, 'db'>): string | undefined {
     if (!task.review) return undefined;
     if (!task.readonly && task.taskMode !== 'live_debug_readonly') return 'review_requires_readonly';
     if (!source?.assignedProviderType || !provider) return 'review_independence_required';
@@ -42,9 +43,13 @@ export function reviewRoutingRefusal(task: Pick<MeshWorkQueueEntry, 'review' | '
     } else if (claimingSessionId && source.assignedSessionId && claimingSessionId === source.assignedSessionId) {
         return 'review_independence_required';
     }
+    if (artifactStore && source.stageState) {
+        try { validateStageReviewRetainedGrants(artifactStore, source, task.inputArtifactIds ?? []); }
+        catch { return 'review_input_unavailable'; }
+    }
     // A daemon-prepared reviewer workspace (light workspace pinned to the round head) cannot collide with the
     // implementer's checkout: no input-availability or busy-writer check applies.
-    if (task.reviewerWorkspace) return undefined;
+    if (task.reviewerWorkspace && !source.stageReviewInput) return undefined;
     // A stage parent awaiting/under review is `assigned` by design (it keeps its write slot for the revise loop),
     // so it counts as available input and is never the writer that blocks its own review.
     const stageSource = isStageParent(source) && source.status === 'assigned'

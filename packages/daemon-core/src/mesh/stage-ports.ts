@@ -20,14 +20,14 @@ export interface SelfCheckRunner { run(req: SelfCheckRequest): Promise<SelfCheck
 export interface ReviewerWorkspaceRequest {
     meshId: string; parentTaskId: string; reviewTaskId: string; round: number;
     /** Round head the reviewer must see. */
-    rootSha: string; baseSha: string; submodules?: Record<string, string>;
+    rootSha: string; required?: boolean; baseSha: string; submodules?: Record<string, string>;
     /** The parent's own checkout (source of the commits). */
     sourceWorkspace: string;
 }
 export interface ReviewerWorkspace { path: string; headSha: string; release(): Promise<void> }
 
 /** Light workspace at a commit, or null → fall back to the read lease on the parent's checkout. */
-export interface ReviewerWorkspaceProvider { prepare(req: ReviewerWorkspaceRequest): Promise<ReviewerWorkspace | null> }
+export interface ReviewerWorkspaceProvider { prepare(req: ReviewerWorkspaceRequest): Promise<ReviewerWorkspace | null>; release?(path: string): Promise<void> }
 
 /** First line of a current-format checkout fingerprint; a stored value without it was written by an earlier build. */
 export const FINGERPRINT_V2 = 'fp2';
@@ -36,8 +36,10 @@ export interface StageGitPort {
     /** Merge-base of HEAD with the integration branch; null when it cannot be resolved. */
     baseSha(workspace: string): Promise<string | null>;
     headSha(workspace: string): Promise<string | null>;
-    /** `git diff base..head` text (root only; bounded by the caller). */
+    /** Legacy single-artifact text (root only, <=4MiB); larger input requires diffStream. */
     diff(workspace: string, base: string, head: string): Promise<string>;
+    /** Production lossless stream. Optional only for legacy/test ports. */
+    diffStream?(workspace: string, args: string[]): AsyncIterable<Buffer>;
     /** Opaque fingerprint of HEAD + working-tree status; equal fingerprints = the checkout did not change. Null when unreadable. */
     fingerprint(workspace: string, limits?: { budgetMs?: number; maxEntries?: number; concurrency?: number; legacy?: boolean }): Promise<string | null>;
     /** True when the working tree has no uncommitted changes. */
@@ -46,7 +48,7 @@ export interface StageGitPort {
 
 export interface StageArtifactInput {
     meshId: string; missionId?: string; taskId: string; kind: 'diff' | 'self_check' | 'review_verdict';
-    title: string; content: string; ext: '.diff' | '.md' | '.json';
+    title: string; content: string | Buffer; ext: '.diff' | '.md' | '.json' | '.txt';
     /** Optional stable operation key; production ports derive one from kind+content when omitted. */
     operationKey?: string;
 }
@@ -78,11 +80,15 @@ export type StageArtifactRecoveryResult =
 
 export interface StageArtifactPort {
     register(input: StageArtifactInput): StageArtifactRegisterResult
+    /** Original host-retained self-check from before registration metadata was required. */
+    readLegacySelfCheck?(taskId: string, after: number, before: number): { operationKey: string; sha256: string; content: Buffer } | null
+    /** Host-authenticated registration + retained-byte verification, never a manifest-derived grant. */
+    verifyRegistered?(input: { meshId: string; taskId: string; artifactId: string; bytes: number; sha256: string }): boolean
     /**
      * Persist the full admission-bounded payload for an unresolved hold (not registered).
      * Path is digest-immutable: same op+bytes no-op; different bytes never overwrite prior recovery.
      */
-    writeRecovery?(input: { taskId: string; operationKey: string; content: string; ext: string }): StageArtifactRecoveryResult
+    writeRecovery?(input: { taskId: string; operationKey: string; content: string | Buffer; ext: string }): StageArtifactRecoveryResult
     /** Read back a recovery payload after stash/process loss (prefer sha256 when known). */
     readRecovery?(input: { taskId: string; operationKey: string; sha256?: string }): string | null
 }
@@ -93,6 +99,8 @@ export interface StageQueuePort {
     mutate(meshId: string, taskId: string, fn: (entry: MeshWorkQueueEntry) => void): MeshWorkQueueEntry | null;
     listStageParents(): MeshWorkQueueEntry[];
     /** Revalidate read evidence before accepting a verdict (production read lease). */
+    reviewReplacementReady?(parent: MeshWorkQueueEntry): boolean;
+    requiresDetachedReview?(parent: MeshWorkQueueEntry): boolean;
     reviewInputValid?(parent: MeshWorkQueueEntry, child: MeshWorkQueueEntry): boolean;
     enqueueReviewChild(parent: MeshWorkQueueEntry, spec: {
         round: number; message: string; inputArtifactIds: string[];
@@ -123,6 +131,8 @@ export interface StageEventPort {
 
 export interface StageRuntimePorts {
     now(): number;
+    artifactOrigin?(): string;
+    sourceGenerated?: typeof import('./stage-source-generated-provider.js').writeStageSourceGenerated;
     selfCheck: SelfCheckRunner;
     reviewerWorkspace: ReviewerWorkspaceProvider;
     git: StageGitPort;

@@ -83,6 +83,9 @@ const MAX_CANDIDATE_RUNS_PER_SUBLAYER = 128;
 const MAX_NON_DECODABLE_CACHE_ENTRIES = 4_096;
 
 interface DecodeBudget {
+    /** Complete bounded stage scan: no window/slice truncation. Legacy callers unchanged. */
+    complete?: boolean;
+    remainingDecodeChars?: number;
     operations: number;
     maxOperations: number;
     visited: Set<string>;
@@ -111,8 +114,16 @@ function matchesAnyPattern(text: string, patterns: readonly RegExp[], liveCred: 
     return false;
 }
 
-function decodeOnePercentLayer(input: string): string {
+function chargeDecode(budget: DecodeBudget | undefined, chars: number): boolean {
+    if (!budget?.complete) return true;
+    if (chars > (budget.remainingDecodeChars ?? 0)) { budget.exhausted = true; return false; }
+    budget.remainingDecodeChars! -= chars;
+    return true;
+}
+
+function decodeOnePercentLayer(input: string, budget?: DecodeBudget): string {
     if (!input.includes('%') || !/%[0-9A-Fa-f]{2}/.test(input)) return input;
+    if (!chargeDecode(budget, input.length * 2)) return input;
     try {
         return decodeURIComponent(input);
     } catch {
@@ -158,14 +169,18 @@ function isUniformRepeatedChar(s: string): boolean {
 type DecodedBase64Slice =
     | { kind: 'none' }
     | { kind: 'match' }
+    | { kind: 'incomplete' }
     | { kind: 'text'; text: string };
 
 function decodeBase64Slice(
     candidate: string,
     patterns: readonly RegExp[],
     liveCred: string,
+    complete = false,
+    budget?: DecodeBudget,
 ): DecodedBase64Slice {
-    if (candidate.length < 12 || candidate.length > MAX_BASE64_SLICE_CHARS) return { kind: 'none' };
+    if (candidate.length < 12 || (!complete && candidate.length > MAX_BASE64_SLICE_CHARS)) return { kind: 'none' };
+    if (!chargeDecode(budget, candidate.length * 2)) return { kind: 'incomplete' };
     const normalized = candidate.replace(/-/g, '+').replace(/_/g, '/');
     const padMod = normalized.length % 4;
     if (padMod === 1) return { kind: 'none' };
@@ -173,7 +188,10 @@ function decodeBase64Slice(
     try {
         const buf = Buffer.from(padded, 'base64');
         if (buf.byteLength < 6) return { kind: 'none' };
+        if (complete && ((buf[0] === 0x1f && buf[1] === 0x8b) || (buf[0] === 0x50 && buf[1] === 0x4b)
+            || (buf[0] === 0x78 && ((buf[0] * 256 + buf[1]!) % 31 === 0)))) { return { kind: 'incomplete' }; }
         const decoded = buf.toString('utf8');
+        if (complete && /\\(?:u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2})/.test(decoded)) { return { kind: 'incomplete' }; }
         // Always scan the FULL decoded buffer for literal or live credentials regardless of
         // whether a binary prefix is present in the first 512 bytes.
         if (matchesAnyPattern(decoded, patterns, liveCred)) {
@@ -230,7 +248,8 @@ function rememberNonDecodable(budget: DecodeBudget, run: string): void {
     }
 }
 
-function* iterateBase64Slices(run: string): Generator<string> {
+function* iterateBase64Slices(run: string, complete = false): Generator<string> {
+    if (complete) { yield run; return; }
     if (run.length <= MAX_BASE64_SLICE_CHARS) {
         yield run;
         return;
@@ -260,6 +279,7 @@ function classifyDecodedCandidate(
     budget: DecodeBudget,
 ): 'match' | 'plausible' | 'benign' {
     if (!decodedText) return 'benign';
+    if (budget.complete && /\\(?:u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2})/.test(decodedText)) { budget.exhausted = true; return 'plausible'; }
     if (matchesAnyPattern(decodedText, patterns, liveCred)) return 'match';
 
     let collapsed = '';
@@ -273,7 +293,7 @@ function classifyDecodedCandidate(
     }
 
     if (decodedText.includes('%') && /%[0-9A-Fa-f]{2}/.test(decodedText)) {
-        const nextPercent = decodeOnePercentLayer(decodedText);
+        const nextPercent = decodeOnePercentLayer(decodedText, budget);
         if (nextPercent !== decodedText) {
             if (matchesAnyPattern(nextPercent, patterns, liveCred)) return 'match';
             return 'plausible';
@@ -286,9 +306,10 @@ function classifyDecodedCandidate(
             const subRun = match[0];
             if (isUniformRepeatedChar(subRun)) continue;
             if (subRun.length <= MAX_BASE64_SLICE_CHARS && budget.nonDecodableCache.has(subRun)) continue;
-            for (const slice of iterateBase64Slices(subRun)) {
+            for (const slice of iterateBase64Slices(subRun, budget.complete)) {
                 if (budget.nonDecodableCache.has(slice)) continue;
-                const subDecoded = decodeBase64Slice(slice, patterns, liveCred);
+                const subDecoded = decodeBase64Slice(slice, patterns, liveCred, budget.complete, budget);
+                if (subDecoded.kind === 'incomplete') { budget.exhausted = true; return 'plausible'; }
                 if (subDecoded.kind === 'match') return 'match';
                 if (subDecoded.kind === 'text') return 'plausible';
                 rememberNonDecodable(budget, slice);
@@ -312,9 +333,10 @@ function examineBase64Run(
         return false;
     }
     let anyDecoded = false;
-    for (const slice of iterateBase64Slices(run)) {
+    for (const slice of iterateBase64Slices(run, budget.complete)) {
         if (budget.nonDecodableCache.has(slice)) continue;
-        const decodedRes = decodeBase64Slice(slice, patterns, liveCred);
+        const decodedRes = decodeBase64Slice(slice, patterns, liveCred, budget.complete, budget);
+        if (decodedRes.kind === 'incomplete') { budget.exhausted = true; return true; }
         if (decodedRes.kind === 'none') {
             rememberNonDecodable(budget, slice);
             continue;
@@ -355,8 +377,9 @@ function examineWindowTransforms(
         let cur = windowText;
         for (let d = depth; d < MAX_CREDENTIAL_DECODE_DEPTH; d++) {
             if (!cur.includes('%') || !/%[0-9A-Fa-f]{2}/.test(cur)) break;
-            const next = decodeOnePercentLayer(cur);
+            const next = decodeOnePercentLayer(cur, budget);
             if (next === cur) break;
+            if (budget.complete && /\\(?:u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2})/.test(next)) { budget.exhausted = true; return true; }
             if (matchesAnyPattern(next, patterns, liveCred)) {
                 return true;
             }
@@ -405,7 +428,7 @@ function scanPercentRuns(
                 pctCount = 0;
             }
         }
-        const decodedRun = decodeOnePercentLayer(run);
+        const decodedRun = decodeOnePercentLayer(run, budget);
         if (decodedRun === run) continue;
         const classification = classifyDecodedCandidate(decodedRun, patterns, liveCred, budget);
         if (classification === 'match') {
@@ -475,6 +498,7 @@ function checkLayerRecursive(
     budget: DecodeBudget,
 ): boolean {
     if (!rawText) return false;
+    if (budget.complete && /\\(?:u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2})/.test(rawText)) { budget.exhausted = true; return true; }
     // Full-input linear literal scan with no character cap.
     if (matchesAnyPattern(rawText, patterns, liveCred)) return true;
 
@@ -495,6 +519,7 @@ function checkLayerRecursive(
     INTRA_TOKEN_SPLIT_RE.lastIndex = 0;
     if (INTRA_TOKEN_SPLIT_RE.test(rawText)) {
         INTRA_TOKEN_SPLIT_RE.lastIndex = 0;
+        if (!chargeDecode(budget, rawText.length)) return true;
         fullCollapsed = rawText.replace(INTRA_TOKEN_SPLIT_RE, '');
         if (fullCollapsed && fullCollapsed !== rawText && matchesAnyPattern(fullCollapsed, patterns, liveCred)) {
             return true;
@@ -502,7 +527,7 @@ function checkLayerRecursive(
     }
 
     // 1. Windowed whole-window percent decoding
-    if (rawText.length <= SCAN_WINDOW_CHARS) {
+    if (budget.complete || rawText.length <= SCAN_WINDOW_CHARS) {
         if (examineWindowTransforms(rawText, patterns, liveCred, depth, budget)) {
             return true;
         }
@@ -550,23 +575,30 @@ function checkLayerRecursive(
     return budget.exhausted;
 }
 
-export function containsEncodedOrRawSecret(
-    value: string,
-    extraPatterns: readonly RegExp[] = [],
-): boolean {
-    if (!value) return false;
+export function containsEncodedOrRawSecret(value: string, extraPatterns: readonly RegExp[] = []): boolean {
+    return inspectCredentialContent(value, extraPatterns).blocked;
+}
+
+/** Internal diagnostic seam. Complete mode requires an admission-bounded caller and deadline. */
+export function inspectCredentialContent(value: string, extraPatterns: readonly RegExp[] = [], complete = false): {
+    blocked: boolean; exhausted: boolean;
+} {
+    if (!value) return { blocked: false, exhausted: false };
     const patterns =
         extraPatterns.length > 0 ? [...RAW_CREDENTIAL_PATTERNS, ...extraPatterns] : RAW_CREDENTIAL_PATTERNS;
     const liveCred = getLiveSessionCredential();
     const numWindows = Math.max(1, Math.ceil(value.length / SCAN_WINDOW_STEP_CHARS));
     const budget: DecodeBudget = {
         operations: 0,
-        maxOperations: numWindows * MAX_DECODE_OPS_PER_WINDOW,
+        maxOperations: complete ? MAX_DECODE_OPS_PER_WINDOW : numWindows * MAX_DECODE_OPS_PER_WINDOW,
+        complete,
+        remainingDecodeChars: 32 * 1024 * 1024,
         visited: new Set(),
         nonDecodableCache: new Set(),
         exhausted: false,
     };
-    return checkLayerRecursive(value, patterns, liveCred, 0, budget);
+    const blocked = checkLayerRecursive(value, patterns, liveCred, 0, budget);
+    return { blocked, exhausted: budget.exhausted };
 }
 
 export function containsCredentialValue(value: unknown): value is string {

@@ -1,3 +1,4 @@
+import { validateStageSourceGeneratedRead } from '../../mesh/stage-review-input.js';
 /**
  * Cross-session (OD-4), mesh, and cross-machine P2P (artifact_index_forwarded /
  * artifact_fetch_origin) helpers for daemon artifact commands.
@@ -591,7 +592,7 @@ export async function authorizeCrossSessionArtifactAccess(
     record: ArtifactRecord,
 ): Promise<{ ok: true; trustedWorkspaceRoot: string | null } | { ok: false; result: CommandRouterResult }> {
     const artifactId = record.artifactId;
-    if (sessionIdsEquivalent(record.sessionId, authority.sessionId)) {
+    if (!authority.detachedReviewInput && sessionIdsEquivalent(record.sessionId, authority.sessionId)) {
         return { ok: true, trustedWorkspaceRoot: authority.workspaceRoot || record.workspaceRoot };
     }
     if (authority.producerRole === 'worker') {
@@ -617,6 +618,23 @@ export async function authorizeCrossSessionArtifactAccess(
                     error: `Worker session "${authority.sessionId}" is not authorized to read artifact "${artifactId}" (OD-4: the coordinator must name it in this task's inputArtifactIds, same mesh) (artifact_access_denied)`,
                 },
             };
+        }
+        if (authority.detachedReviewInput
+            || (taskEntry?.origin === 'stage' && taskEntry.stageRole === 'review' && record.producerRole === 'pipeline')) {
+            try {
+                const child = meshStore.findQueueEntryById(authority.meshId!, authority.taskId!);
+                const parent = child?.parentTaskId && meshStore.findQueueEntryById(authority.meshId!, child.parentTaskId);
+                if (!child || !parent) throw new Error('review_input_unavailable');
+                const scope = validateStageSourceGeneratedRead(meshStore, parent, child);
+                if (scope && !authority.isRemoteWorker && scope.worktree !== authority.workspaceRoot) {
+                    throw new Error('review_input_unavailable');
+                }
+                if (authority.detachedReviewInput && (!scope || scope.worktree !== authority.workspaceRoot
+                    || record.producerRole !== 'pipeline' || record.taskId !== parent.id
+                    || record.sessionId !== `stage:${parent.id}`)) throw new Error('review_input_unavailable');
+            } catch {
+                return { ok: false, result: { success: false, code: 'artifact_access_denied', error: 'Review input is unavailable' } };
+            }
         }
         return { ok: true, trustedWorkspaceRoot: record.workspaceRoot || null };
     }

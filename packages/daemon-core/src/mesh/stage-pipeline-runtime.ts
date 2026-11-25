@@ -331,99 +331,115 @@ export class StagePipelineRuntime {
         if (!child || !isStageChild(child)) return Promise.resolve();
         const parentId = child.parentTaskId!;
         return this.serial(meshId, parentId, async () => {
-            const parent = this.ports.queue.get(meshId, parentId);
-            if (!parent || !isStageParent(parent)) return;
-            await this.releaseReviewerWorkspace(childId); // the review child ended: its workspace is no longer needed
-            // A parent that already ended (or was released) takes no further rounds: cancelling an orphaned
-            // review child must not start a new review for a finished task.
-            if (STAGE_PARENT_ENDED.has(parent.status) || parent.stageState!.released) return;
-            const st = parent.stageState!;
-            if (st.phase !== 'reviewing' && st.phase !== 'awaiting_review') return;
-            if (!st.reviewTaskIds.includes(childId) || st.reviewTaskIds[st.reviewTaskIds.length - 1] !== childId) return; // a superseded child
-            const fresh = this.ports.queue.get(meshId, childId)!;
-            // A child from an earlier round already delivered its outcome; after a rereview/revision whose
-            // new child could not be created it is still the last id, and must never judge the new round.
-            if (typeof fresh.stageRound === 'number' && fresh.stageRound !== st.round) return;
-            const report = peekStageReport(meshId, childId);
-            const independenceUsed = reviewIndependenceOf(fresh.review ?? {}) === 'fresh_session' ? 'fresh_session_fallback' as const : 'different_provider' as const;
-            // §11 (fail closed): a read-lease reviewer must leave the checkout exactly as it found it. No baseline, an
-            // unreadable current fingerprint, or any difference all void the verdict. Light-workspace reviewers are exempt.
-            if (!fresh.reviewerWorkspace && fresh.status === 'completed') {
-                const workspace = this.ports.workspaceOf(parent);
-                // A baseline written before the fingerprint format changed carries no version line: verify it in
-                // its own (stricter) format rather than voiding a review that was already in flight.
-                const legacyBaseline = !!st.reviewFingerprint && !st.reviewFingerprint.startsWith(`${FINGERPRINT_V2}\n`);
-                const now = workspace ? await this.safeFingerprint(workspace, legacyBaseline) : null;
-                if (!st.reviewFingerprint || st.reviewFingerprintUnavailable || !now
-                    || this.ports.queue.reviewInputValid?.(parent, fresh) === false) {
+            let preserveCheckout = false;
+            try {
+                const parent = this.ports.queue.get(meshId, parentId);
+                if (!parent || !isStageParent(parent)) return;
+                // A parent that already ended (or was released) takes no further rounds: cancelling an orphaned
+                // review child must not start a new review for a finished task.
+                if (STAGE_PARENT_ENDED.has(parent.status) || parent.stageState!.released) return;
+                const st = parent.stageState!;
+                if (st.phase !== 'reviewing' && st.phase !== 'awaiting_review') return;
+                if (!st.reviewTaskIds.includes(childId) || st.reviewTaskIds[st.reviewTaskIds.length - 1] !== childId) return; // a superseded child
+                const fresh = this.ports.queue.get(meshId, childId)!;
+                // A child from an earlier round already delivered its outcome; after a rereview/revision whose
+                // new child could not be created it is still the last id, and must never judge the new round.
+                if (typeof fresh.stageRound === 'number' && fresh.stageRound !== st.round) return;
+                if (fresh.status !== 'completed' && this.ports.queue.reviewReplacementReady?.(parent) === false) {
+                    preserveCheckout = true;
+                    return;
+                }
+                const report = peekStageReport(meshId, childId);
+                const independenceUsed = reviewIndependenceOf(fresh.review ?? {}) === 'fresh_session' ? 'fresh_session_fallback' as const : 'different_provider' as const;
+                if (fresh.status === 'completed' && this.ports.queue.reviewInputValid?.(parent, fresh) === false) {
                     dropStageReport(meshId, childId);
                     await this.apply(meshId, parentId, { kind: 'reviewer_integrity_unverifiable', childTaskId: childId, at: this.iso() });
                     return;
                 }
-                if (now !== st.reviewFingerprint) {
+                // §11 (fail closed): a read-lease reviewer must leave the checkout exactly as it found it. No baseline, an
+                // unreadable current fingerprint, or any difference all void the verdict. Light-workspace reviewers are exempt.
+                if (!fresh.reviewerWorkspace && fresh.status === 'completed') {
+                    const workspace = this.ports.workspaceOf(parent);
+                    // A baseline written before the fingerprint format changed carries no version line: verify it in
+                    // its own (stricter) format rather than voiding a review that was already in flight.
+                    const legacyBaseline = !!st.reviewFingerprint && !st.reviewFingerprint.startsWith(`${FINGERPRINT_V2}\n`);
+                    const now = workspace ? await this.safeFingerprint(workspace, legacyBaseline) : null;
+                    if (!st.reviewFingerprint || st.reviewFingerprintUnavailable || !now) {
+                        dropStageReport(meshId, childId);
+                        await this.apply(meshId, parentId, { kind: 'reviewer_integrity_unverifiable', childTaskId: childId, at: this.iso() });
+                        return;
+                    }
+                    if (now !== st.reviewFingerprint) {
+                        dropStageReport(meshId, childId);
+                        await this.apply(meshId, parentId, { kind: 'reviewer_mutated_source', childTaskId: childId, at: this.iso() });
+                        return;
+                    }
+                }
+                // Restart path: stash may be gone — replay a parked review_verdict hold before treating as unavailable.
+                if (fresh.status === 'completed') {
+                    const replay = await this.tryReplayHeldReviewVerdict(meshId, parentId, childId, fresh);
+                    if (replay !== 'none') return;
+                }
+                if (fresh.status === 'completed' && report?.review) {
+                    // Include child id so a replacement reviewer success cannot erase an unrecovered prior hold.
+                    const verdictOpKey = `review_verdict-r${st.round}-${sanitizeChildIdForOpKey(childId)}`;
+                    const verdictContent = JSON.stringify({ round: st.round, reviewTaskId: childId, independenceUsed, ...report.review }, null, 2);
+                    const verdictArt = this.ports.artifacts.register({
+                        meshId, ...(parent.missionId ? { missionId: parent.missionId } : {}), taskId: parentId, kind: 'review_verdict',
+                        title: `Review verdict r${st.round}: ${report.review.verdict}`, ext: '.json',
+                        content: verdictContent,
+                        operationKey: verdictOpKey,
+                    });
+                    if (!verdictArt.ok) {
+                        // Full review JSON via writeRecovery/inline on the queue row; never replace the reviewer.
+                        const recorded = recordStageArtifactFailure(this.ports, meshId, parentId, 'review_verdict', verdictArt, {
+                            inspectionStatus: report.review.verdict,
+                            operationKey: verdictOpKey,
+                            fullContent: verdictContent,
+                            ext: '.json',
+                            evidencePreview: `review_verdict=${report.review.verdict} findings=${report.review.findings?.length ?? 0}`,
+                        });
+                        this.ports.events.progress(
+                            meshId,
+                            parentId,
+                            `stage: verdict artifact failed (${verdictArt.code}): ${verdictArt.message}` +
+                                (recorded.evidenceDurable
+                                    ? `; review evidence parked for durable replay (verdict=${report.review.verdict})`
+                                    : `; recovery write failed and body not durable — recoverable block, not replacing reviewer (verdict=${report.review.verdict})`),
+                        );
+                        // Keep process-local stash as a best-effort secondary copy until replay succeeds.
+                        return;
+                    }
                     dropStageReport(meshId, childId);
-                    await this.apply(meshId, parentId, { kind: 'reviewer_mutated_source', childTaskId: childId, at: this.iso() });
+                    const verdictSha = contentSha256(verdictContent);
+                    await this.apply(meshId, parentId, {
+                        kind: 'review_verdict', childTaskId: childId, report: report.review, independenceUsed,
+                        ...(fresh.assignedSessionId ? { reviewerSessionId: fresh.assignedSessionId } : {}), at: this.iso(),
+                    }, state => {
+                        clearStageArtifactFailureOpOnState(state, verdictOpKey, verdictSha);
+                        state.artifacts.verdict.push(verdictArt.artifactId);
+                        (state as MeshTaskStageState & { reviewerProvider?: string }).reviewerProvider = fresh.assignedProviderType;
+                    });
                     return;
                 }
-            }
-            // Restart path: stash may be gone — replay a parked review_verdict hold before treating as unavailable.
-            if (fresh.status === 'completed') {
-                const replay = await this.tryReplayHeldReviewVerdict(meshId, parentId, childId, fresh);
-                if (replay !== 'none') return;
-            }
-            if (fresh.status === 'completed' && report?.review) {
-                // Include child id so a replacement reviewer success cannot erase an unrecovered prior hold.
-                const verdictOpKey = `review_verdict-r${st.round}-${sanitizeChildIdForOpKey(childId)}`;
-                const verdictContent = JSON.stringify({ round: st.round, reviewTaskId: childId, independenceUsed, ...report.review }, null, 2);
-                const verdictArt = this.ports.artifacts.register({
-                    meshId, ...(parent.missionId ? { missionId: parent.missionId } : {}), taskId: parentId, kind: 'review_verdict',
-                    title: `Review verdict r${st.round}: ${report.review.verdict}`, ext: '.json',
-                    content: verdictContent,
-                    operationKey: verdictOpKey,
-                });
-                if (!verdictArt.ok) {
-                    // Full review JSON via writeRecovery/inline on the queue row; never replace the reviewer.
-                    const recorded = recordStageArtifactFailure(this.ports, meshId, parentId, 'review_verdict', verdictArt, {
-                        inspectionStatus: report.review.verdict,
-                        operationKey: verdictOpKey,
-                        fullContent: verdictContent,
-                        ext: '.json',
-                        evidencePreview: `review_verdict=${report.review.verdict} findings=${report.review.findings?.length ?? 0}`,
-                    });
+                if (fresh.status === 'cancelled' && st.phase === 'awaiting_review' && fresh.cancelReason?.startsWith('stage_')) return;
+                // Unresolved review_verdict hold (even without body) must not be silently replaced.
+                if (reviewVerdictHoldsForChild(st, childId).length) {
                     this.ports.events.progress(
                         meshId,
                         parentId,
-                        `stage: verdict artifact failed (${verdictArt.code}): ${verdictArt.message}` +
-                            (recorded.evidenceDurable
-                                ? `; review evidence parked for durable replay (verdict=${report.review.verdict})`
-                                : `; recovery write failed and body not durable — recoverable block, not replacing reviewer (verdict=${report.review.verdict})`),
+                        'stage: review verdict hold still unresolved — recoverable block, not replacing reviewer',
                     );
-                    // Keep process-local stash as a best-effort secondary copy until replay succeeds.
                     return;
                 }
-                dropStageReport(meshId, childId);
-                const verdictSha = contentSha256(verdictContent);
-                await this.apply(meshId, parentId, {
-                    kind: 'review_verdict', childTaskId: childId, report: report.review, independenceUsed,
-                    ...(fresh.assignedSessionId ? { reviewerSessionId: fresh.assignedSessionId } : {}), at: this.iso(),
-                }, state => {
-                    clearStageArtifactFailureOpOnState(state, verdictOpKey, verdictSha);
-                    state.artifacts.verdict.push(verdictArt.artifactId);
-                    (state as MeshTaskStageState & { reviewerProvider?: string }).reviewerProvider = fresh.assignedProviderType;
-                });
-                return;
+                await this.apply(meshId, parentId, { kind: 'reviewer_unavailable', childTaskId: childId, at: this.iso() });
+            } finally {
+                const current = this.ports.queue.get(meshId, parentId);
+                const state = current?.stageState;
+                const needsReplay = state && !state.released && !STAGE_PARENT_ENDED.has(current.status)
+                    && state.reviewTaskIds.at(-1) === childId && reviewVerdictHoldsForChild(state, childId).length > 0;
+                if (!preserveCheckout && !needsReplay) await this.releaseReviewerWorkspace(childId, child.reviewerWorkspace?.path);
             }
-            if (fresh.status === 'cancelled' && st.phase === 'awaiting_review' && fresh.cancelReason?.startsWith('stage_')) return;
-            // Unresolved review_verdict hold (even without body) must not be silently replaced.
-            if (reviewVerdictHoldsForChild(st, childId).length) {
-                this.ports.events.progress(
-                    meshId,
-                    parentId,
-                    'stage: review verdict hold still unresolved — recoverable block, not replacing reviewer',
-                );
-                return;
-            }
-            await this.apply(meshId, parentId, { kind: 'reviewer_unavailable', childTaskId: childId, at: this.iso() });
         });
     }
 
@@ -703,7 +719,7 @@ export class StagePipelineRuntime {
                 for (const cid of st.reviewTaskIds) {
                     const c = this.ports.queue.get(meshId, cid);
                     if (c && (c.status === 'pending' || c.status === 'assigned')) this.ports.queue.cancel(meshId, cid, 'stage_parent_closed');
-                    await this.releaseReviewerWorkspace(cid);
+                    await this.releaseReviewerWorkspace(cid, this.ports.queue.get(meshId, cid)?.reviewerWorkspace?.path);
                 }
                 return;
             case 'run_self_check': {
@@ -762,14 +778,17 @@ export class StagePipelineRuntime {
             case 'create_review_child': {
                 // A persisted child owns its original baseline; retries must never refresh a started review.
                 if (st.reviewTaskIds.some(cid => { const c = this.ports.queue.get(meshId, cid); return c?.stageRound === effect.round && (c.status === 'pending' || c.status === 'assigned'); })) return;
+                if (this.ports.queue.reviewReplacementReady?.(parent) === false) return;
                 const workspace = this.ports.workspaceOf(parent);
                 const head = st.stageHeads[st.stageHeads.length - 1]?.rootSha ?? '';
                 const plan = parent.stagePlan!;
                 const child0 = st.reviewTaskIds.length;
                 const reviewId = `${id}:review:${effect.round}:${child0}`;
+                const required = this.ports.queue.requiresDetachedReview?.(parent) ?? false;
                 const ws = workspace && head
-                    ? await this.ports.reviewerWorkspace.prepare({ meshId, parentTaskId: id, reviewTaskId: reviewId, round: effect.round, rootSha: head, baseSha: st.baseSha, sourceWorkspace: workspace })
+                    ? await this.ports.reviewerWorkspace.prepare({ meshId, parentTaskId: id, reviewTaskId: reviewId, round: effect.round, rootSha: head, required, baseSha: st.baseSha, sourceWorkspace: workspace })
                     : null;
+                if (required && !ws) throw new Error('review_detached_checkout_required');
                 // Light parents: keep the lasting refusal unless a host-prepared reviewer workspace
                 // is attested against a confirmed committed source candidate (Contract B). Enqueue
                 // still refuses light+review; only this attested stage path may proceed.
@@ -783,7 +802,7 @@ export class StagePipelineRuntime {
                 // Reuse the prior reviewer only when it can actually claim this round: a session below the
                 // review's difficulty floor would sit pinned, never claim, and park the review after the TTL.
                 const reviewDifficulty = parent.difficulty === 'difficult' ? 'difficult' as const : 'medium' as const;
-                const reuse = effect.reuseSessionId && this.ports.queue.sessionAlive(effect.reuseSessionId)
+                const reuse = !ws && effect.reuseSessionId && this.ports.queue.sessionAlive(effect.reuseSessionId)
                     && (this.ports.queue.sessionMeetsDifficulty?.(meshId, effect.reuseSessionId, reviewDifficulty) ?? true) ? effect.reuseSessionId : undefined;
                 const stash = peekStageReport(meshId, id);
                 const msg = buildReviewerMessage({
@@ -819,7 +838,10 @@ export class StagePipelineRuntime {
                     if (ws) await ws.release().catch(() => undefined);
                     throw e;
                 }
-                if (ws) this.reviewerWorkspaces.set(child.id, ws);
+                if (ws) {
+                    if (child.reviewerWorkspace?.path === ws.path) this.reviewerWorkspaces.set(child.id, ws);
+                    else await ws.release().catch(() => undefined);
+                }
                 this.ports.queue.mutate(meshId, id, e => {
                     if (e.stageState!.reviewTaskIds.includes(child.id)) return; // production persisted child + baseline atomically
                     e.stageState!.reviewTaskIds.push(child.id);
@@ -863,9 +885,12 @@ export class StagePipelineRuntime {
         }
     }
 
-    private async releaseReviewerWorkspace(childId: string): Promise<void> {
+    private async releaseReviewerWorkspace(childId: string, persistedPath?: string): Promise<void> {
         const ws = this.reviewerWorkspaces.get(childId);
-        if (!ws) return;
+        if (!ws) {
+            if (persistedPath) await this.ports.reviewerWorkspace.release?.(persistedPath).catch(() => undefined);
+            return;
+        }
         this.reviewerWorkspaces.delete(childId);
         try { await ws.release(); } catch { /* the light-workspace sweep reclaims leftovers */ }
     }

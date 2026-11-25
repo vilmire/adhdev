@@ -1,3 +1,4 @@
+import { decodeStageSourceGenerated } from '../../mesh/stage-source-generated-provider.js';
 /**
  * Daemon artifact commands (Task B):
  *   - `artifact_register` (alias `session_artifact_register`)
@@ -24,6 +25,9 @@
  */
 
 import * as fs from 'node:fs';
+import { verifyAndReadArtifactBuffer } from '../../artifacts/artifact-store-read.js';
+import { ArtifactGuardError } from '../../artifacts/types.js';
+import { decodeStageDiffManifest, readStageDiffPage } from '../../mesh/stage-diff-manifest.js';
 import { daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import { readRouterCommandIngress } from '../command-args.js';
 import { hasWorkerCredentialInput, verifyArtifactCommandIngress } from './artifact-command-ingress.js';
@@ -96,6 +100,7 @@ function canonicalizeDir(dirPath: string): string | null {
 }
 
 export interface ResolvedSessionAuthority {
+    readonly detachedReviewInput?: boolean;
     readonly sessionId: string;
     readonly taskId: string | null;
     readonly meshId: string | null;
@@ -504,10 +509,32 @@ async function resolveCallerAuthority(
             artifactId: requestedArtifactId,
         });
 
+        // A detached reviewer may reach the read grant check for pipeline inputs only.
+        // The grant check revalidates the physical checkout and retained evidence.
+        const child = mode === 'fetch' ? meshStore.findQueueEntryById(identity.meshId, identity.taskId) : null;
+        const detached = child?.origin === 'stage' && child.stageRole === 'review' && child.reviewerWorkspace;
+        let detachedRead = false;
+        if (detached && resolved.workspaceRoot === detached.path
+            && child.inputArtifactIds?.includes(requestedArtifactId) && child.parentTaskId) {
+            const parent = meshStore.findQueueEntryById(identity.meshId, child.parentTaskId);
+            const record = getArtifactStore(ctx).get(requestedArtifactId);
+            detachedRead = !!parent && record?.producerRole === 'pipeline' && record.taskId === parent.id
+                && record.meshId === identity.meshId && record.sessionId === `stage:${parent.id}`
+                && verifyLocalWorkerQueueAndLedgerFence({ meshStore, identity, workerSessionId, explicitTaskId,
+                    explicitAttemptId: fenceRes.attemptId, rawBind }).ok;
+        }
+
+        if (detached && !detachedRead) {
+            return {
+                ok: false,
+                result: { success: false, code: 'invalid_workspace_root', error: 'Detached review workspace or input grant is unavailable' },
+            };
+        }
+
         if (resolved.workspaceRoot && resolved.nodeWorkspaceRoot) {
             const canonSession = canonicalizeDir(resolved.workspaceRoot);
             const canonNode = canonicalizeDir(resolved.nodeWorkspaceRoot);
-            if (canonSession && canonNode && canonSession !== canonNode) {
+            if (canonSession && canonNode && canonSession !== canonNode && !detachedRead) {
                 return {
                     ok: false,
                     result: {
@@ -570,6 +597,7 @@ async function resolveCallerAuthority(
                 producerRole: 'worker',
                 originDaemonId: selfDaemonId,
                 workspaceRoot: resolved.workspaceRoot,
+                ...(detachedRead ? { detachedReviewInput: true } : {}),
                 providerType: resolved.providerType,
                 status: resolved.status,
                 title: resolved.title,
@@ -1081,6 +1109,36 @@ async function executeArtifactFetchOrRead(
                       ? args.pageOffset
                       : undefined;
             const readLimit = typeof args?.limit === 'number' ? args.limit : undefined;
+            if (record.kind === 'json') {
+                const retained = verifyAndReadArtifactBuffer(record, { sessionId: record.sessionId, ...(trustedWorkspaceRoot ? { trustedWorkspaceRoot } : {}) });
+                const manifest = decodeStageSourceGenerated(retained.buffer) ? null : decodeStageDiffManifest(retained.buffer);
+                if (manifest) {
+                    if (retained.sha256 !== record.sha256 || record.meshId !== manifest.scope.meshId || record.taskId !== manifest.scope.taskId
+                        || record.producerRole !== 'pipeline' || record.sessionId !== `stage:${manifest.scope.taskId}`
+                        // eslint-disable-next-line no-restricted-syntax -- canon-ok: match the exact origin stamp in the hashed manifest to its stored registration.
+                        || record.originDaemonId !== manifest.scope.originDaemonId) throw new ArtifactGuardError('artifact_session_mismatch', 'Review input manifest provenance changed'); // canon-ok: exact manifest origin stamp.
+                    const authorized = new Map<string, { record: ArtifactRecord; trustedWorkspaceRoot?: string }>();
+                    // Every component requires the existing caller grant. A manifest never confers access.
+                    for (const c of manifest.chunks) {
+                        const chunk = store.get(c.id);
+                        if (!chunk || chunk.meshId !== record.meshId || chunk.taskId !== record.taskId || chunk.sessionId !== record.sessionId
+                            || chunk.producerRole !== record.producerRole
+                            // eslint-disable-next-line no-restricted-syntax -- canon-ok: a chunk must carry the same stored origin stamp as its manifest.
+                            || chunk.originDaemonId !== record.originDaemonId // canon-ok: exact shared origin stamp.
+                            || chunk.workspaceRoot !== record.workspaceRoot || chunk.sha256 !== c.sha256 || chunk.sizeBytes !== c.bytes) throw new ArtifactGuardError('artifact_session_mismatch', 'Review input chunk provenance changed or missing');
+                        const access = await authorizeCrossSessionArtifactAccess(ctx, authority, chunk);
+                        if (!access.ok) return access.result;
+                        authorized.set(c.id, { record: chunk, trustedWorkspaceRoot: access.trustedWorkspaceRoot ?? undefined });
+                    }
+                    const page = readStageDiffPage(manifest, c => {
+                        const grant = authorized.get(c.id)!;
+                        return verifyAndReadArtifactBuffer(grant.record, { sessionId: grant.record.sessionId,
+                            ...(grant.trustedWorkspaceRoot ? { trustedWorkspaceRoot: grant.trustedWorkspaceRoot } : {}) }).buffer;
+                    }, readOffset, readLimit);
+                    return { success: true, ...page, artifactId, content: wrapUntrustedArtifactContent(page.content),
+                        manifest, manifestSha256: retained.sha256, artifact: record, attachment: toChatAttachmentMeta(record) };
+                }
+            }
             const readRes = store.readArtifactContent(artifactId, {
                 sessionId: record.sessionId,
                 ...(trustedWorkspaceRoot ? { trustedWorkspaceRoot } : {}),

@@ -39,6 +39,8 @@ export interface ReadArtifactContentOptions extends FetchArtifactContentOptions 
 }
 
 export interface ReadArtifactContentResult extends FetchArtifactContentResult {
+    /** Exact page bytes, including split UTF-8 sequences. Text display is not a byte receipt. */
+    byteContentBase64: string;
     totalBytes: number;
     offset: number;
     pageBytes: number;
@@ -147,6 +149,7 @@ export function readArtifactRecordPaged(
         mime: record.mime,
         title: record.title,
         content,
+        byteContentBase64: slice.toString('base64'),
         encoding,
         sizeBytes: verified.sizeBytes,
         totalBytes: rawTotalBytes,

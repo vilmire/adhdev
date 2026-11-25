@@ -8,12 +8,12 @@ const recovery = { v: 1 as const, review_task_id: 'child', expected_parent_revis
     owner_decision_id: 'owner-answer', owner_answer_revision: 1, owner_option_id: 'a', difficulty: 'medium' as const,
     reviewer_provider: 'antigravity-cli', continuation_task_id: 'continuation', input_artifact_ids: ['art_report'], dry_run: true };
 const terminalResume = { v: 2 as const, expected_parent_revision: 118,
-    expected_stage_head_sha: 'fb928c2a4bba8d7b47d7ffdd79cc7a0f8c65f59b',
-    expected_head_sha: 'd919a78f7c9e1fce8a891a394dd3224a74ae3944',
+    expected_stage_head_sha: '1111111111111111111111111111111111111111',
+    expected_head_sha: '2222222222222222222222222222222222222222',
     expected_workspace: '/fixture/terminal-review-checkout',
-    owner_decision_id: 'mi_cf4d2178ff17', owner_answer_revision: 1, owner_option_id: 'a', difficulty: 'medium' as const,
-    reviewer_provider: 'antigravity-cli', continuation_task_id: 'fbb189f7-d149-4964-bbab-7e0dc812ac20',
-    input_artifact_ids: ['art_e4ec721b0297e1aa'], dry_run: true };
+    owner_decision_id: 'mi_owner_fixture', owner_answer_revision: 1, owner_option_id: 'a', difficulty: 'medium' as const,
+    reviewer_provider: 'antigravity-cli', continuation_task_id: '00000000-0000-4000-8000-000000000002',
+    input_artifact_ids: ['art_cont_fixture'], dry_run: true };
 test('existing stage decide advertises a strictly scoped versioned recovery schema without new global policy or a new tool', () => {
     const tool = ALL_MESH_TOOLS.find(t => t.name === 'mesh_task_stage_decide')!;
     const schema = (tool.inputSchema.properties as any).recovery;
@@ -38,18 +38,18 @@ test('recovery preserves both CAS revisions, owner answer and exact input/head/c
 test('forwards terminal review resume (v2) wire args and rejects review_task_id, missing continuation or caller source-anchor fields', async () => {
     const calls: any[] = [];
     const ctx = { mesh: { id: 'mesh' }, transport: { command: async (name: string, args: unknown) => { calls.push({ name, args }); return { success: true, v: 2, dryRun: true, round: 6, fingerprint: 'fp2' }; } } } as any;
-    const preview = JSON.parse(await meshTaskStageDecide(ctx, { task_id: '3e2b83f3-b933-4c73-bd27-186c2720fb16', action: 'rereview', recovery: terminalResume }));
+    const preview = JSON.parse(await meshTaskStageDecide(ctx, { task_id: '00000000-0000-4000-8000-000000000001', action: 'rereview', recovery: terminalResume }));
     assert.equal(preview.round, 6); assert.equal(calls.length, 1);
     assert.deepEqual(calls[0].args, {
-        v: 2, meshId: 'mesh', parentTaskId: '3e2b83f3-b933-4c73-bd27-186c2720fb16',
+        v: 2, meshId: 'mesh', parentTaskId: '00000000-0000-4000-8000-000000000001',
         expectedParentRevision: 118,
-        expectedStageHeadSha: 'fb928c2a4bba8d7b47d7ffdd79cc7a0f8c65f59b',
-        expectedHeadSha: 'd919a78f7c9e1fce8a891a394dd3224a74ae3944',
+        expectedStageHeadSha: '1111111111111111111111111111111111111111',
+        expectedHeadSha: '2222222222222222222222222222222222222222',
         expectedWorkspace: '/fixture/terminal-review-checkout',
-        ownerDecisionId: 'mi_cf4d2178ff17', ownerAnswerRevision: 1, ownerOptionId: 'a',
+        ownerDecisionId: 'mi_owner_fixture', ownerAnswerRevision: 1, ownerOptionId: 'a',
         difficulty: 'medium', reviewerProvider: 'antigravity-cli',
-        continuationTaskId: 'fbb189f7-d149-4964-bbab-7e0dc812ac20',
-        inputArtifactIds: ['art_e4ec721b0297e1aa'], dryRun: true,
+        continuationTaskId: '00000000-0000-4000-8000-000000000002',
+        inputArtifactIds: ['art_cont_fixture'], dryRun: true,
     });
     for (const bad of [
         { ...terminalResume, review_task_id: 'child' },
@@ -70,4 +70,24 @@ test('apply fingerprint is transmitted unchanged; old-runtime refusal is surface
         return { success: false, error: 'unknown command' };
     } } } as any;
     assert.deepEqual(JSON.parse(await meshTaskStageDecide(ctx, { task_id: 'parent', action: 'rereview', recovery: { ...recovery, dry_run: false, expected_fingerprint: 'exact-preview', expected_artifact_digest: 'c'.repeat(64) } })), { success: false, error: 'unknown command' });
+});
+
+test('pre-child v2 forwards same-head recovery without a continuation or caller artifacts', async () => {
+    const { continuation_task_id: _continuation, ...rest } = terminalResume;
+    const calls: any[] = [];
+    const ctx = { mesh: { id: 'mesh' }, transport: { command: async (name: string, args: unknown) => {
+        calls.push({ name, args }); return { success: true };
+    } } } as any;
+    const input = { ...rest, expected_head_sha: rest.expected_stage_head_sha, input_artifact_ids: [] };
+    const request = { task_id: 'parent', action: 'rereview' as const, recovery: input };
+    assert.equal(validateMeshToolArgs('mesh_task_stage_decide', request), null);
+    assert.deepEqual(JSON.parse(await meshTaskStageDecide(ctx, request)), { success: true });
+    assert.equal(calls[0].name, 'stage_recover_mesh_review');
+    assert.deepEqual(calls[0].args.inputArtifactIds, []);
+    assert.equal('continuationTaskId' in calls[0].args, false);
+    const apply = { ...input, dry_run: false, expected_fingerprint: 'fp2\nexact', expected_artifact_digest: 'c'.repeat(64) };
+    await meshTaskStageDecide(ctx, { ...request, recovery: apply });
+    assert.equal(calls[1].args.dryRun, false);
+    assert.equal(calls[1].args.expectedFingerprint, apply.expected_fingerprint);
+    assert.equal(calls[1].args.expectedArtifactDigest, apply.expected_artifact_digest);
 });
