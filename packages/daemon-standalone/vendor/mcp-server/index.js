@@ -142689,7 +142689,8 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         cwd,
         env: { ...gitChildEnv(), GIT_NO_REPLACE_OBJECTS: "1", GIT_GRAFT_FILE: import_node_os13.devNull },
         encoding: "utf8",
-        timeout: 1e4
+        timeout: 1e4,
+        windowsHide: true
       });
       return stdout.trim();
     }
@@ -142812,7 +142813,8 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
           cwd: "/",
           env: { PATH: approvedPath },
           encoding: "utf8",
-          timeout: 5e3
+          timeout: 5e3,
+          windowsHide: true
         })).stdout.trim();
         const versions = await Promise.all([
           run4(nodePath2, "-p", 'process.version + "/" + process.versions.modules'),

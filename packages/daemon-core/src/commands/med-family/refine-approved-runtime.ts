@@ -39,7 +39,7 @@ const exec = promisify(execFile);
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
     const { stdout } = await exec('git', ['--no-replace-objects', ...args], {
-        cwd, env: { ...gitChildEnv(), GIT_NO_REPLACE_OBJECTS: '1', GIT_GRAFT_FILE: devNull }, encoding: 'utf8', timeout: 10_000,
+        cwd, env: { ...gitChildEnv(), GIT_NO_REPLACE_OBJECTS: '1', GIT_GRAFT_FILE: devNull }, encoding: 'utf8', timeout: 10_000, windowsHide: true,
     });
     return stdout.trim();
 }
@@ -182,7 +182,7 @@ export async function resolveApprovedRefineRuntime(ctx: MedFamilyContext, args: 
         [nodePath, npmPath, npxPath].forEach(file => accessSync(file, constants.X_OK));
         requireApproval(!existsSync(join(npmBin, 'node')), 'approved_runtime_shadowed');
         const run = async (command: string, ...params: string[]) => (await exec(command, params, {
-            cwd: '/', env: { PATH: approvedPath }, encoding: 'utf8', timeout: 5_000,
+            cwd: '/', env: { PATH: approvedPath }, encoding: 'utf8', timeout: 5_000, windowsHide: true,
         })).stdout.trim();
         const versions = await Promise.all([
             run(nodePath, '-p', 'process.version + "/" + process.versions.modules'),
