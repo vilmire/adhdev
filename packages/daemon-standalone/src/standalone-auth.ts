@@ -362,6 +362,37 @@ function isStandaloneHostAllowed(input: {
   return allowed.has(requestHostname);
 }
 
+function isStandaloneTrustedForwardedProto(input: {
+  req: IncomingMessage;
+  trustForwardedProto?: boolean;
+}): 'http:' | 'https:' | null {
+  const explicitTrust = input.trustForwardedProto !== undefined
+    ? input.trustForwardedProto
+    : /^(1|true|yes)$/i.test(String(process.env.ADHDEV_STANDALONE_TRUST_PROXY ?? '').trim());
+  if (!explicitTrust) return null;
+  if (isNonLoopbackSocketPeer(input.req)) return null;
+  const rawHeader = input.req.headers['x-forwarded-proto'];
+  const values = Array.isArray(rawHeader)
+    ? rawHeader
+    : typeof rawHeader === 'string'
+      ? [rawHeader]
+      : [];
+  const hops: string[] = [];
+  for (const val of values) {
+    for (const part of val.split(',')) {
+      const trimmed = part.trim().toLowerCase();
+      if (trimmed) hops.push(trimmed);
+    }
+  }
+  if (hops.length === 0) return null;
+  for (const hop of hops) {
+    if (hop !== 'http' && hop !== 'https') return null;
+  }
+  const unique = new Set(hops);
+  if (unique.size !== 1) return null;
+  return hops[0] === 'https' ? 'https:' : 'http:';
+}
+
 /**
  * Validate both `Host` (DNS rebinding guard) and `Origin` (cross-origin guard)
  * for HTTP requests and WebSocket upgrades.
@@ -370,8 +401,9 @@ function isStandaloneOriginAllowed(input: {
   req: IncomingMessage;
   listenHost: string;
   allowedHosts?: Iterable<string>;
+  trustForwardedProto?: boolean;
 }): boolean {
-  const { req, listenHost, allowedHosts } = input;
+  const { req, listenHost, allowedHosts, trustForwardedProto } = input;
   if (!isStandaloneHostAllowed({ req, listenHost, allowedHosts })) return false;
   const originHeader = typeof req.headers.origin === 'string' ? req.headers.origin.trim() : '';
   if (!originHeader) return true;
@@ -388,13 +420,11 @@ function isStandaloneOriginAllowed(input: {
     const rawHost = typeof req.headers.host === 'string' ? req.headers.host.trim() : '';
     const requestHostname = rawHost ? parseHostHeaderHostname(rawHost) : null;
     if (!requestHostname) return false;
-    const forwardedProtoHeader = req.headers['x-forwarded-proto'];
-    const forwardedProtoRaw = Array.isArray(forwardedProtoHeader) ? forwardedProtoHeader[0] : forwardedProtoHeader;
-    const forwardedProto = typeof forwardedProtoRaw === 'string'
-      ? forwardedProtoRaw.split(',')[0]?.trim().toLowerCase() ?? ''
-      : '';
     const socketEncrypted = Boolean((req.socket as typeof req.socket & { encrypted?: boolean })?.encrypted);
-    const requestProtocol: 'http:' | 'https:' = (socketEncrypted || forwardedProto === 'https') ? 'https:' : 'http:';
+    const trustedForwardedProto = isStandaloneTrustedForwardedProto({ req, trustForwardedProto });
+    const requestProtocol: 'http:' | 'https:' = socketEncrypted
+      ? 'https:'
+      : (trustedForwardedProto ?? 'http:');
     const parsedHost = new URL(`${requestProtocol}//${rawHost}`);
     const originEffectivePort = origin.port || (origin.protocol === 'https:' ? '443' : '80');
     const hostEffectivePort = parsedHost.port || (requestProtocol === 'https:' ? '443' : '80');
@@ -470,6 +500,7 @@ export {
   isStandaloneRequestAuthenticated,
   isStandaloneHostAllowed,
   isStandaloneOriginAllowed,
+  isStandaloneTrustedForwardedProto,
 };
 export type { StandalonePasswordConfig };
 

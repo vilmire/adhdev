@@ -67,6 +67,7 @@ import {
   isStandaloneRequestAuthenticated,
   isStandaloneHostAllowed,
   isStandaloneOriginAllowed,
+  isStandaloneTrustedForwardedProto,
   UNAUTHENTICATED_ARTIFACT_READ_VERBS,
   UNAUTHENTICATED_OWNER_APPROVAL_VERBS,
   type StandalonePasswordConfig,
@@ -107,6 +108,8 @@ export interface StandaloneHttpDeps {
   onAuthEpochChanged?(): void;
   /** Additional Host header values explicitly permitted alongside local interfaces/hostnames. */
   allowedHosts?: Iterable<string>;
+  /** Explicit opt-in to trust X-Forwarded-Proto from a local loopback reverse proxy. */
+  trustForwardedProto?: boolean;
 }
 
 /**
@@ -207,11 +210,15 @@ export class StandaloneHttpApi {
   authSessions = new StandaloneSessionStore();
   listenHost = '127.0.0.1';
   allowedHosts = new Set<string>();
+  trustForwardedProto?: boolean;
   readonly meshJoinLimiter = new MeshJoinRateLimiter();
 
   constructor(private readonly deps: StandaloneHttpDeps) {
     if (deps.allowedHosts) {
       for (const h of deps.allowedHosts) this.allowedHosts.add(h);
+    }
+    if (deps.trustForwardedProto !== undefined) {
+      this.trustForwardedProto = deps.trustForwardedProto;
     }
   }
 
@@ -275,9 +282,8 @@ export class StandaloneHttpApi {
   }
 
   private getCookieSecureFlag(req: IncomingMessage): boolean {
-    const forwardedProto = req.headers['x-forwarded-proto'];
     return !!(req.socket as typeof req.socket & { encrypted?: boolean }).encrypted
-      || (typeof forwardedProto === 'string' && forwardedProto.toLowerCase().includes('https'));
+      || isStandaloneTrustedForwardedProto({ req, trustForwardedProto: this.trustForwardedProto }) === 'https:';
   }
 
   private getRequestTokens(req: IncomingMessage, rawUrl: string): { bearerToken: string | null; queryToken: string | null } {
@@ -406,30 +412,14 @@ export class StandaloneHttpApi {
     return this.isAllowedOrigin(req);
   }
 
-  /**
-   * Validate the request's `Host` header against this daemon's allow-list
-   * (`localhost`, `127.0.0.1`, `[::1]`, the configured bind address, this
-   * machine's own interface addresses and hostnames, plus `allowedHosts`).
-   */
+  /** Validate the request's `Host` header against this daemon's allow-list. */
   isAllowedHost(req: IncomingMessage): boolean {
-    return isStandaloneHostAllowed({
-      req,
-      listenHost: this.listenHost,
-      allowedHosts: this.allowedHosts,
-    });
+    return isStandaloneHostAllowed({ req, listenHost: this.listenHost, allowedHosts: this.allowedHosts });
   }
 
-  /**
-   * Allow same-origin requests, requests without an Origin header (curl, native
-   * fetches that omit it), and the well-known dashboard dev origins on
-   * loopback — after validating the `Host` header against DNS rebinding.
-   */
+  /** Allow same-origin requests and requests without an Origin header after validating `Host`. */
   isAllowedOrigin(req: IncomingMessage): boolean {
-    return isStandaloneOriginAllowed({
-      req,
-      listenHost: this.listenHost,
-      allowedHosts: this.allowedHosts,
-    });
+    return isStandaloneOriginAllowed({ req, listenHost: this.listenHost, allowedHosts: this.allowedHosts, trustForwardedProto: this.trustForwardedProto });
   }
 
   private originHeaderFor(req: IncomingMessage): string | null {

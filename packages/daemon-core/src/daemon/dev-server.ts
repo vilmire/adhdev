@@ -226,6 +226,9 @@ export class DevServer implements DevServerContext {
   public authFilePath: string | null = null;
   private readonly explicitAuthToken?: string | null;
   private readonly configDir?: string;
+  private startPromise: Promise<void> | null = null;
+  private pendingServer: http.Server | null = null;
+  private startEpoch = 0;
 
   constructor(options: {
     providerLoader: ProviderLoader;
@@ -288,16 +291,28 @@ export class DevServer implements DevServerContext {
     }
   }
 
-  private isRequestAuthenticated(req: http.IncomingMessage, _parsedUrl: URL): boolean {
-    if (!this.authToken) return true;
+  private isRequestAuthenticated(
+    req: http.IncomingMessage,
+    _parsedUrl: URL,
+    listenerServer?: http.Server,
+    listenerToken?: string | null,
+  ): boolean {
+    if (listenerServer && this.server !== listenerServer) return false;
+    const expectedToken = listenerToken !== undefined ? listenerToken : this.authToken;
+    if (!expectedToken) {
+      return this.explicitAuthToken === null && (!listenerServer || this.server === listenerServer);
+    }
+    if (!this.authToken || !devTokensEqual(expectedToken, this.authToken)) {
+      return false;
+    }
     const headerVal = req.headers[ADHDEV_DEV_SERVER_TOKEN_HEADER];
     const headerToken = typeof headerVal === 'string' ? headerVal.trim() : '';
-    if (headerToken && devTokensEqual(headerToken, this.authToken)) return true;
+    if (headerToken && devTokensEqual(headerToken, expectedToken)) return true;
     const authHeader = req.headers['authorization'];
     const bearerToken = typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
       ? authHeader.slice(7).trim()
       : '';
-    if (bearerToken && devTokensEqual(bearerToken, this.authToken)) return true;
+    if (bearerToken && devTokensEqual(bearerToken, expectedToken)) return true;
     return false;
   }
 
@@ -389,6 +404,11 @@ export class DevServer implements DevServerContext {
     if (this.server) {
       return;
     }
+    if (this.startPromise) {
+      return this.startPromise;
+    }
+    const epoch = ++this.startEpoch;
+    let listenerToken: string | null = null;
     const server = http.createServer(async (req, res) => {
       const hostAllowed = isDevServerHostAllowed(req);
       const rawOrigin = typeof req.headers.origin === 'string' ? req.headers.origin.trim() : '';
@@ -427,7 +447,7 @@ export class DevServer implements DevServerContext {
       const url = new URL(req.url || '/', `http://localhost:${port}`);
       const pathname = url.pathname;
 
-      if (!this.isRequestAuthenticated(req, url)) {
+      if (!this.isRequestAuthenticated(req, url, server, listenerToken)) {
         this.json(res, 401, { error: 'Unauthorized. DevServer token required.' });
         return;
       }
@@ -446,14 +466,25 @@ export class DevServer implements DevServerContext {
       }
     });
 
-    return new Promise((resolve, reject) => {
+    this.pendingServer = server;
+    const promise = new Promise<void>((resolve, reject) => {
       server.listen(port, '127.0.0.1', () => {
+        if (this.pendingServer === server) {
+          this.pendingServer = null;
+        }
+        if (epoch !== this.startEpoch) {
+          server.closeAllConnections?.();
+          server.close(() => resolve());
+          return;
+        }
         const address = server.address();
         const boundPort = address && typeof address === 'object' ? address.port : port;
         try {
           this.publishBoundAuth(boundPort);
+          listenerToken = this.authToken;
         } catch (err: any) {
           this.cleanupPublishedAuth();
+          server.closeAllConnections?.();
           server.close(() => {
             reject(new Error(`Failed to publish DevServer auth credential: ${err?.message || err}`));
           });
@@ -464,6 +495,13 @@ export class DevServer implements DevServerContext {
         resolve();
       });
       server.on('error', (e: any) => {
+        if (this.pendingServer === server) {
+          this.pendingServer = null;
+        }
+        if (epoch !== this.startEpoch) {
+          resolve();
+          return;
+        }
         if (e.code === 'EADDRINUSE') {
           this.log(`Port ${port} in use, skipping dev server`);
           resolve(); // non-fatal; do not touch incumbent auth file or token
@@ -472,11 +510,24 @@ export class DevServer implements DevServerContext {
         }
       });
     });
+
+    this.startPromise = promise.finally(() => {
+      if (this.startPromise === promise) {
+        this.startPromise = null;
+      }
+    });
+    return this.startPromise;
   }
 
   stop(): void {
+    this.startEpoch += 1;
+    this.startPromise = null;
+    const pending = this.pendingServer;
+    this.pendingServer = null;
     const srv = this.server;
     this.server = null;
+    pending?.closeAllConnections?.();
+    pending?.close();
     srv?.closeAllConnections?.();
     srv?.close();
     this.cleanupPublishedAuth();

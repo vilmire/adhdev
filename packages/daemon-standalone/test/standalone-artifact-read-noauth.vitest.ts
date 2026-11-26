@@ -377,10 +377,11 @@ describe('no-auth standalone — artifact read verbs', () => {
     });
     expect(tailscaleOk.status).toBe(200);
 
-    // 4. INGRESS-03: Default-port scheme mismatch (Host: <host> on direct HTTP vs Origin: https://<host>)
-    // must be rejected across HTTP and WS because effective ports differ (80 vs 443) and scheme is http:,
-    // whereas reverse-proxy HTTPS termination (X-Forwarded-Proto: https) with matching HTTPS Origin succeeds.
+    // 4. INGRESS-03 & INGRESS-07: Default-port scheme mismatch (Host: <host> on direct HTTP vs Origin: https://<host>)
+    // must be rejected across HTTP and WS because effective ports differ (80 vs 443) and scheme is http:.
+    // Client-supplied X-Forwarded-Proto: https on a direct listener (without trusted proxy opt-in) must ALSO be rejected.
     http.listenHost = '127.0.0.1';
+    http.trustForwardedProto = undefined;
     const schemeMismatchHttp = await rawHttp(port, {
       headers: { Host: 'localhost', Origin: 'https://localhost' },
       body: cmdBody,
@@ -395,7 +396,25 @@ describe('no-auth standalone — artifact read verbs', () => {
     expect(schemeMismatchExplicitPort.status).toBe(403);
     expect(await dialStatus({ Host: `localhost:${port}`, Origin: `https://localhost:${port}` })).toBe(403);
 
-    // Reverse proxy with X-Forwarded-Proto: https and matching HTTPS Origin succeeds on HTTP and WS
+    // INGRESS-07: Direct listener without trusted proxy contract rejects forged X-Forwarded-Proto: https
+    const untrustedForwardedProtoHttp = await rawHttp(port, {
+      headers: {
+        Host: 'localhost',
+        Origin: 'https://localhost',
+        'X-Forwarded-Proto': 'https',
+      },
+      body: cmdBody,
+    });
+    expect(untrustedForwardedProtoHttp.status).toBe(403);
+    expect(await dialStatus({
+      Host: 'localhost',
+      Origin: 'https://localhost',
+      'X-Forwarded-Proto': 'https',
+    })).toBe(403);
+
+    // INGRESS-07: With explicit trusted proxy contract enabled on a loopback proxy hop,
+    // single consistent X-Forwarded-Proto: https and matching HTTPS Origin succeeds on HTTP and WS.
+    http.trustForwardedProto = true;
     const httpsProxyDefaultPort = await rawHttp(port, {
       headers: {
         Host: 'localhost',
@@ -410,6 +429,35 @@ describe('no-auth standalone — artifact read verbs', () => {
       Origin: 'https://localhost',
       'X-Forwarded-Proto': 'https',
     })).toBe('open');
+
+    // INGRESS-07: Conflicting/appended X-Forwarded-Proto chain (e.g. client injected "https" before an HTTP proxy appended "http")
+    // or non-loopback peer socket is rejected even when trustForwardedProto is enabled.
+    const conflictingForwardedChain = await rawHttp(port, {
+      headers: {
+        Host: 'localhost',
+        Origin: 'https://localhost',
+        'X-Forwarded-Proto': 'https, http',
+      },
+      body: cmdBody,
+    });
+    expect(conflictingForwardedChain.status).toBe(403);
+    expect(await dialStatus({
+      Host: 'localhost',
+      Origin: 'https://localhost',
+      'X-Forwarded-Proto': 'https, http',
+    })).toBe(403);
+
+    lanPeerHttp.trustForwardedProto = true;
+    const nonLoopbackPeerForwardedProto = await rawHttp(lanPeerPort, {
+      headers: {
+        Host: `${lanIfaceIp}`,
+        Origin: `https://${lanIfaceIp}`,
+        'X-Forwarded-Proto': 'https',
+      },
+      body: cmdBody,
+    });
+    expect(nonLoopbackPeerForwardedProto.status).toBe(403);
+    lanPeerHttp.trustForwardedProto = undefined;
 
     // Reverse proxy with X-Forwarded-Proto: https still rejects mismatched port or http:// Origin
     const httpsProxyCrossPort = await rawHttp(port, {
@@ -430,6 +478,7 @@ describe('no-auth standalone — artifact read verbs', () => {
       body: cmdBody,
     });
     expect(httpsProxyDowngradeOrigin.status).toBe(403);
+    http.trustForwardedProto = undefined;
 
     // 5. Real IPv6 [::1] socket listener test (HTTP + WS): same-origin [::1] succeeds, cross-port and scheme mismatch fail
     const v6Server = createServer((req, res) => http.handle(req, res));

@@ -108,7 +108,7 @@ export async function handleCdpDomQuery(ctx: DevServerContext, req: http.Incomin
 
 export async function handleScreenshot(ctx: DevServerContext, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const url = new URL(req.url || '/', 'http://localhost');
-  const ideType = url.searchParams.get('ideType') || undefined;
+  const ideType = url.searchParams.get('ideType') || url.searchParams.get('ide') || undefined;
   const cdp = ctx.getCdp(ideType);
   if (!cdp) {
     ctx.json(res, 503, { error: 'No CDP connection available' });

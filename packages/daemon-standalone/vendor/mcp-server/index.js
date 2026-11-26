@@ -166970,7 +166970,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     }
     async function handleScreenshot2(ctx, req, res) {
       const url = new URL(req.url || "/", "http://localhost");
-      const ideType = url.searchParams.get("ideType") || void 0;
+      const ideType = url.searchParams.get("ideType") || url.searchParams.get("ide") || void 0;
       const cdp = ctx.getCdp(ideType);
       if (!cdp) {
         ctx.json(res, 503, { error: "No CDP connection available" });
@@ -168971,6 +168971,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           authFilePath = null;
           explicitAuthToken;
           configDir;
+          startPromise = null;
+          pendingServer = null;
+          startEpoch = 0;
           constructor(options) {
             this.providerLoader = options.providerLoader;
             this.cdpManagers = options.cdpManagers;
@@ -169017,14 +169020,21 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             } catch {
             }
           }
-          isRequestAuthenticated(req, _parsedUrl) {
-            if (!this.authToken) return true;
+          isRequestAuthenticated(req, _parsedUrl, listenerServer, listenerToken) {
+            if (listenerServer && this.server !== listenerServer) return false;
+            const expectedToken = listenerToken !== void 0 ? listenerToken : this.authToken;
+            if (!expectedToken) {
+              return this.explicitAuthToken === null && (!listenerServer || this.server === listenerServer);
+            }
+            if (!this.authToken || !devTokensEqual(expectedToken, this.authToken)) {
+              return false;
+            }
             const headerVal = req.headers[ADHDEV_DEV_SERVER_TOKEN_HEADER];
             const headerToken = typeof headerVal === "string" ? headerVal.trim() : "";
-            if (headerToken && devTokensEqual(headerToken, this.authToken)) return true;
+            if (headerToken && devTokensEqual(headerToken, expectedToken)) return true;
             const authHeader = req.headers["authorization"];
             const bearerToken = typeof authHeader === "string" && authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
-            if (bearerToken && devTokensEqual(bearerToken, this.authToken)) return true;
+            if (bearerToken && devTokensEqual(bearerToken, expectedToken)) return true;
             return false;
           }
           log(msg) {
@@ -169105,6 +169115,11 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             if (this.server) {
               return;
             }
+            if (this.startPromise) {
+              return this.startPromise;
+            }
+            const epoch = ++this.startEpoch;
+            let listenerToken = null;
             const server = http3.createServer(async (req, res) => {
               const hostAllowed = isDevServerHostAllowed(req);
               const rawOrigin = typeof req.headers.origin === "string" ? req.headers.origin.trim() : "";
@@ -169137,7 +169152,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
               }
               const url = new URL(req.url || "/", `http://localhost:${port}`);
               const pathname = url.pathname;
-              if (!this.isRequestAuthenticated(req, url)) {
+              if (!this.isRequestAuthenticated(req, url, server, listenerToken)) {
                 this.json(res, 401, { error: "Unauthorized. DevServer token required." });
                 return;
               }
@@ -169153,14 +169168,25 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
                 this.json(res, 500, { error: e.message });
               }
             });
-            return new Promise((resolve82, reject) => {
+            this.pendingServer = server;
+            const promise = new Promise((resolve82, reject) => {
               server.listen(port, "127.0.0.1", () => {
+                if (this.pendingServer === server) {
+                  this.pendingServer = null;
+                }
+                if (epoch !== this.startEpoch) {
+                  server.closeAllConnections?.();
+                  server.close(() => resolve82());
+                  return;
+                }
                 const address = server.address();
                 const boundPort = address && typeof address === "object" ? address.port : port;
                 try {
                   this.publishBoundAuth(boundPort);
+                  listenerToken = this.authToken;
                 } catch (err2) {
                   this.cleanupPublishedAuth();
+                  server.closeAllConnections?.();
                   server.close(() => {
                     reject(new Error(`Failed to publish DevServer auth credential: ${err2?.message || err2}`));
                   });
@@ -169171,6 +169197,13 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
                 resolve82();
               });
               server.on("error", (e) => {
+                if (this.pendingServer === server) {
+                  this.pendingServer = null;
+                }
+                if (epoch !== this.startEpoch) {
+                  resolve82();
+                  return;
+                }
                 if (e.code === "EADDRINUSE") {
                   this.log(`Port ${port} in use, skipping dev server`);
                   resolve82();
@@ -169179,10 +169212,22 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
                 }
               });
             });
+            this.startPromise = promise.finally(() => {
+              if (this.startPromise === promise) {
+                this.startPromise = null;
+              }
+            });
+            return this.startPromise;
           }
           stop() {
+            this.startEpoch += 1;
+            this.startPromise = null;
+            const pending = this.pendingServer;
+            this.pendingServer = null;
             const srv = this.server;
             this.server = null;
+            pending?.closeAllConnections?.();
+            pending?.close();
             srv?.closeAllConnections?.();
             srv?.close();
             this.cleanupPublishedAuth();
