@@ -508,6 +508,7 @@ describe('DevServer /api/scaffold', () => {
     const redirectSockets = new Set<any>()
     const redirectTimers = new Set<NodeJS.Timeout>()
     let pyStreamingRedirectCloses = 0
+    let pySlowStreamCloses = 0
     const redirectServer = http.createServer((req, res) => {
       redirectSockets.add(req.socket)
       req.socket.on('close', () => {
@@ -518,6 +519,26 @@ describe('DevServer /api/scaffold', () => {
         redirectTargetLeakedToken = req.headers[ADHDEV_DEV_SERVER_TOKEN_HEADER] as string | undefined
         res.writeHead(200, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ leaked: true }))
+        return
+      }
+      if (req.url?.startsWith('/slow-ok') || req.url?.startsWith('/slow-err')) {
+        const statusCode = req.url.startsWith('/slow-err') ? 500 : 200
+        const timer = setInterval(() => {
+          if (!res.destroyed) {
+            res.write(' ')
+          }
+        }, 25)
+        redirectTimers.add(timer)
+        req.socket.on('close', () => {
+          pySlowStreamCloses += 1
+          clearInterval(timer)
+          redirectTimers.delete(timer)
+        })
+        res.writeHead(statusCode, {
+          'Content-Type': 'application/json',
+          'Content-Length': '65536',
+        })
+        res.write('{"slow":')
         return
       }
       if (req.url?.startsWith('/stream-redirect')) {
@@ -747,6 +768,12 @@ describe('DevServer /api/scaffold', () => {
         'redir_stream_vp = vp.api_call("/stream-redirect", method="GET", timeout=1)',
         'redir_stream_vcp = vcp.api_call("/stream-redirect", method="GET", timeout=1)',
         'redir_shot = vp.capture_screenshot("demo-ide", "redir")',
+        // INGRESS-16: Slowly trickle-streaming accepted (200) and non-redirect error (500) responses
+        // must be aborted at the total deadline and close their sockets promptly
+        'slow_ok_vp = vp.api_call("/slow-ok", method="GET", timeout=0.15)',
+        'slow_ok_vcp = vcp.api_call("/slow-ok", method="GET", timeout=0.15)',
+        'slow_err_vp = vp.api_call("/slow-err", method="GET", timeout=0.15)',
+        'slow_err_vcp = vcp.api_call("/slow-err", method="GET", timeout=0.15)',
         'print(json.dumps({',
         '  "vp_devMode": s1.get("devMode"),',
         '  "vcp_has_providers": isinstance(s2.get("providers"), list),',
@@ -769,6 +796,10 @@ describe('DevServer /api/scaffold', () => {
         '  "redir_stream_vp_err": redir_stream_vp.get("error", ""),',
         '  "redir_stream_vcp_err": redir_stream_vcp.get("error", ""),',
         '  "redir_shot": redir_shot,',
+        '  "slow_ok_vp_err": slow_ok_vp.get("error", ""),',
+        '  "slow_ok_vcp_err": slow_ok_vcp.get("error", ""),',
+        '  "slow_err_vp_err": slow_err_vp.get("error", ""),',
+        '  "slow_err_vcp_err": slow_err_vcp.get("error", ""),',
         '}))',
       ].join('\n')
 
@@ -820,7 +851,12 @@ describe('DevServer /api/scaffold', () => {
       expect(parsed.redir_stream_vp_err).toMatch(/Redirects are disallowed for DevServer requests \(HTTP 302\)/)
       expect(parsed.redir_stream_vcp_err).toMatch(/Redirects are disallowed for DevServer requests \(HTTP 302\)/)
       expect(parsed.redir_shot).toBeNull()
+      expect(parsed.slow_ok_vp_err).toBe('timeout')
+      expect(parsed.slow_ok_vcp_err).toBe('timeout')
+      expect(parsed.slow_err_vp_err).toBe('timeout')
+      expect(parsed.slow_err_vcp_err).toBe('timeout')
       expect(pyStreamingRedirectCloses).toBe(2)
+      expect(pySlowStreamCloses).toBe(4)
       expect(redirectTargetHits).toBe(0)
       expect(redirectTargetLeakedToken).toBeUndefined()
     } finally {
