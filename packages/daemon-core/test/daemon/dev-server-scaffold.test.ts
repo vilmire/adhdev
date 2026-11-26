@@ -581,6 +581,38 @@ describe('DevServer /api/scaffold', () => {
         }),
       ).rejects.toThrow(/Invalid DevServer path/)
 
+      // INGRESS-11: A response that disconnects after sending headers / partial body must promptly
+      // reject requestDevServerLoopback rather than leaving callers (such as daemon:status) hanging.
+      const truncatedServer = http.createServer((_req, res) => {
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'Content-Length': '128',
+        })
+        res.write('{"partial":')
+        setTimeout(() => {
+          res.socket?.destroy()
+        }, 15)
+      })
+      const truncatedPort = await new Promise<number>((resolve) => {
+        truncatedServer.listen(0, '127.0.0.1', () => {
+          const addr = truncatedServer.address()
+          resolve(typeof addr === 'object' && addr ? addr.port : 0)
+        })
+      })
+      try {
+        await expect(
+          requestDevServerLoopback({
+            port: truncatedPort,
+            path: '/api/status',
+            method: 'GET',
+            timeoutMs: 1000,
+            configDir: tempRoot,
+          }),
+        ).rejects.toThrow(/DevServer (response|request)|aborted|closed|socket hang up/i)
+      } finally {
+        truncatedServer.close()
+      }
+
       const pySnippet = [
         'import sys, os, json',
         `sys.path.insert(0, ${JSON.stringify(scriptsDir)})`,

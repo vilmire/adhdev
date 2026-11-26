@@ -175,9 +175,14 @@ export function requestDevServerLoopback<T = any>(
 
   return new Promise<DirectLoopbackDevServerResponse<T>>((resolve, reject) => {
     let settled = false;
+    let deadlineTimer: NodeJS.Timeout | null = null;
     const finish = (fn: () => void) => {
       if (settled) return;
       settled = true;
+      if (deadlineTimer !== null) {
+        clearTimeout(deadlineTimer);
+        deadlineTimer = null;
+      }
       fn();
     };
     const req = http.request(
@@ -201,7 +206,22 @@ export function requestDevServerLoopback<T = any>(
         res.on('data', (chunk: string) => {
           raw += chunk;
         });
+        res.on('aborted', () => {
+          finish(() => reject(new Error('DevServer response aborted before completion')));
+        });
+        res.on('error', (err) => {
+          finish(() => reject(err));
+        });
+        res.on('close', () => {
+          if (!res.complete) {
+            finish(() => reject(new Error('DevServer response closed before completion')));
+          }
+        });
         res.on('end', () => {
+          if (!res.complete) {
+            finish(() => reject(new Error('DevServer response ended before completion')));
+            return;
+          }
           let data: any;
           try {
             data = raw ? JSON.parse(raw) : {};
@@ -221,12 +241,25 @@ export function requestDevServerLoopback<T = any>(
       },
     );
     if (options.timeoutMs && options.timeoutMs > 0) {
+      const timeoutError = () => new Error('DevServer request timed out');
+      deadlineTimer = setTimeout(() => {
+        const err = timeoutError();
+        req.destroy(err);
+        finish(() => reject(err));
+      }, options.timeoutMs);
       req.setTimeout(options.timeoutMs, () => {
-        req.destroy(new Error('DevServer request timed out'));
+        const err = timeoutError();
+        req.destroy(err);
+        finish(() => reject(err));
       });
     }
     req.on('error', (err) => {
       finish(() => reject(err));
+    });
+    req.on('close', () => {
+      if (!settled) {
+        finish(() => reject(new Error('DevServer request closed before response completed')));
+      }
     });
     if (payload !== undefined) {
       req.write(payload);

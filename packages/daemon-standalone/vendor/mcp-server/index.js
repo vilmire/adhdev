@@ -168898,9 +168898,14 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const headers = buildDevServerAuthHeaders(baseHeaders, port, options.configDir);
       return new Promise((resolve82, reject) => {
         let settled = false;
+        let deadlineTimer = null;
         const finish = (fn) => {
           if (settled) return;
           settled = true;
+          if (deadlineTimer !== null) {
+            clearTimeout(deadlineTimer);
+            deadlineTimer = null;
+          }
           fn();
         };
         const req = http3.request(
@@ -168924,7 +168929,22 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             res.on("data", (chunk) => {
               raw += chunk;
             });
+            res.on("aborted", () => {
+              finish(() => reject(new Error("DevServer response aborted before completion")));
+            });
+            res.on("error", (err2) => {
+              finish(() => reject(err2));
+            });
+            res.on("close", () => {
+              if (!res.complete) {
+                finish(() => reject(new Error("DevServer response closed before completion")));
+              }
+            });
             res.on("end", () => {
+              if (!res.complete) {
+                finish(() => reject(new Error("DevServer response ended before completion")));
+                return;
+              }
               let data;
               try {
                 data = raw ? JSON.parse(raw) : {};
@@ -168944,12 +168964,25 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           }
         );
         if (options.timeoutMs && options.timeoutMs > 0) {
+          const timeoutError = () => new Error("DevServer request timed out");
+          deadlineTimer = setTimeout(() => {
+            const err2 = timeoutError();
+            req.destroy(err2);
+            finish(() => reject(err2));
+          }, options.timeoutMs);
           req.setTimeout(options.timeoutMs, () => {
-            req.destroy(new Error("DevServer request timed out"));
+            const err2 = timeoutError();
+            req.destroy(err2);
+            finish(() => reject(err2));
           });
         }
         req.on("error", (err2) => {
           finish(() => reject(err2));
+        });
+        req.on("close", () => {
+          if (!settled) {
+            finish(() => reject(new Error("DevServer request closed before response completed")));
+          }
         });
         if (payload !== void 0) {
           req.write(payload);
