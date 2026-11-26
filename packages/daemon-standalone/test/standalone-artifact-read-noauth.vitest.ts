@@ -376,6 +376,129 @@ describe('no-auth standalone — artifact read verbs', () => {
       body: cmdBody,
     });
     expect(tailscaleOk.status).toBe(200);
+
+    // 4. INGRESS-03: Default-port scheme mismatch (Host: <host> on direct HTTP vs Origin: https://<host>)
+    // must be rejected across HTTP and WS because effective ports differ (80 vs 443) and scheme is http:,
+    // whereas reverse-proxy HTTPS termination (X-Forwarded-Proto: https) with matching HTTPS Origin succeeds.
+    http.listenHost = '127.0.0.1';
+    const schemeMismatchHttp = await rawHttp(port, {
+      headers: { Host: 'localhost', Origin: 'https://localhost' },
+      body: cmdBody,
+    });
+    expect(schemeMismatchHttp.status).toBe(403);
+    expect(await dialStatus({ Host: 'localhost', Origin: 'https://localhost' })).toBe(403);
+
+    const schemeMismatchExplicitPort = await rawHttp(port, {
+      headers: { Host: `localhost:${port}`, Origin: `https://localhost:${port}` },
+      body: cmdBody,
+    });
+    expect(schemeMismatchExplicitPort.status).toBe(403);
+    expect(await dialStatus({ Host: `localhost:${port}`, Origin: `https://localhost:${port}` })).toBe(403);
+
+    // Reverse proxy with X-Forwarded-Proto: https and matching HTTPS Origin succeeds on HTTP and WS
+    const httpsProxyDefaultPort = await rawHttp(port, {
+      headers: {
+        Host: 'localhost',
+        Origin: 'https://localhost',
+        'X-Forwarded-Proto': 'https',
+      },
+      body: cmdBody,
+    });
+    expect(httpsProxyDefaultPort.status).toBe(200);
+    expect(await dialStatus({
+      Host: 'localhost',
+      Origin: 'https://localhost',
+      'X-Forwarded-Proto': 'https',
+    })).toBe('open');
+
+    // Reverse proxy with X-Forwarded-Proto: https still rejects mismatched port or http:// Origin
+    const httpsProxyCrossPort = await rawHttp(port, {
+      headers: {
+        Host: 'localhost',
+        Origin: 'https://localhost:8443',
+        'X-Forwarded-Proto': 'https',
+      },
+      body: cmdBody,
+    });
+    expect(httpsProxyCrossPort.status).toBe(403);
+    const httpsProxyDowngradeOrigin = await rawHttp(port, {
+      headers: {
+        Host: 'localhost',
+        Origin: 'http://localhost',
+        'X-Forwarded-Proto': 'https',
+      },
+      body: cmdBody,
+    });
+    expect(httpsProxyDowngradeOrigin.status).toBe(403);
+
+    // 5. Real IPv6 [::1] socket listener test (HTTP + WS): same-origin [::1] succeeds, cross-port and scheme mismatch fail
+    const v6Server = createServer((req, res) => http.handle(req, res));
+    const v6Wss = new WebSocketServer({ noServer: true });
+    v6Server.on('upgrade', (req: IncomingMessage, socket, head) => {
+      const route = upgradeMod.routeStandaloneUpgrade(req, http, {
+        seqscribePath: '/ws/seqscribe',
+        seqscribeLaneAvailable: true,
+      });
+      if (route.kind === 'dashboard' || route.kind === 'seqscribe') {
+        v6Wss.handleUpgrade(req, socket, head, (ws) => ws.close());
+        return;
+      }
+      if (route.kind === 'reject') {
+        upgradeMod.rejectStandaloneUpgrade(socket, route.status);
+        return;
+      }
+      socket.destroy();
+    });
+    const v6Bound = await new Promise<boolean>((resolve) => {
+      v6Server.once('error', () => resolve(false));
+      v6Server.listen(0, '::1', () => resolve(true));
+    });
+    if (v6Bound) {
+      servers.push(v6Server);
+      const v6Addr = v6Server.address();
+      if (v6Addr && typeof v6Addr === 'object') {
+        const v6Port = v6Addr.port;
+        http.listenHost = '::1';
+        const rawHttpV6 = (headers: Record<string, string>) =>
+          new Promise<number>((resolve, reject) => {
+            const req = httpRequest(
+              {
+                hostname: '::1',
+                port: v6Port,
+                method: 'POST',
+                path: '/api/v1/command',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Content-Length': String(Buffer.byteLength(cmdBody)),
+                  ...headers,
+                },
+              },
+              (res) => {
+                res.resume();
+                res.on('end', () => resolve(res.statusCode ?? 0));
+              },
+            );
+            req.on('error', reject);
+            req.write(cmdBody);
+            req.end();
+          });
+        expect(await rawHttpV6({ Host: `[::1]:${v6Port}`, Origin: `http://[::1]:${v6Port}` })).toBe(200);
+        expect(await rawHttpV6({ Host: `[::1]:${v6Port}`, Origin: `http://localhost:${v6Port}` })).toBe(200);
+        expect(await rawHttpV6({ Host: `[::1]:${v6Port}`, Origin: 'http://[::1]:3000' })).toBe(403);
+        expect(await rawHttpV6({ Host: '[::1]', Origin: 'https://[::1]' })).toBe(403);
+
+        const dialV6 = (headers: Record<string, string>) =>
+          new Promise<number | 'open'>((resolve) => {
+            const ws = new WebSocket(`ws://[::1]:${v6Port}/ws`, { headers });
+            ws.on('open', () => { resolve('open'); ws.close(); });
+            ws.on('unexpected-response', (_req, res) => { resolve(res.statusCode ?? 0); ws.terminate(); });
+            ws.on('error', () => resolve(0));
+          });
+        expect(await dialV6({ Host: `[::1]:${v6Port}`, Origin: `http://[::1]:${v6Port}` })).toBe('open');
+        expect(await dialV6({ Host: `[::1]:${v6Port}`, Origin: 'http://[::1]:3000' })).toBe(403);
+        expect(await dialV6({ Host: '[::1]', Origin: 'https://[::1]' })).toBe(403);
+      }
+    }
   });
 
   it('Finding 3: a /ws opened while authenticated falls back per message to the read guard after the password is cleared at runtime', async () => {

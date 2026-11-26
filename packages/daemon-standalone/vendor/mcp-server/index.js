@@ -168861,10 +168861,6 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     function writeDevServerAuthFile(filePath2, token) {
       const dir = path130.dirname(filePath2);
       fs132.mkdirSync(dir, { recursive: true, mode: 448 });
-      try {
-        fs132.chmodSync(dir, 448);
-      } catch {
-      }
       const tmp = `${filePath2}.${process.pid}.tmp`;
       fs132.writeFileSync(tmp, token, { encoding: "utf8", mode: 384 });
       try {
@@ -168989,25 +168985,39 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           getAuthToken() {
             return this.authToken;
           }
-          configureAuth(port) {
+          publishBoundAuth(port) {
             if (this.explicitAuthToken !== void 0) {
               this.authToken = this.explicitAuthToken;
               this.authFilePath = null;
               return;
             }
             const token = mintDevServerAuthToken();
+            const filePath2 = devServerAuthFilePath(this.configDir ?? getConfigDir2(), port);
+            writeDevServerAuthFile(filePath2, token);
             this.authToken = token;
+            this.authFilePath = filePath2;
+            process.env[ADHDEV_DEV_SERVER_AUTH_FILE_ENV] = filePath2;
+          }
+          cleanupPublishedAuth() {
+            const ownedFile = this.authFilePath;
+            const ownedToken = this.authToken;
+            this.authFilePath = null;
+            this.authToken = null;
+            if (!ownedFile || !ownedToken) return;
             try {
-              const filePath2 = devServerAuthFilePath(this.configDir ?? getConfigDir2(), port);
-              writeDevServerAuthFile(filePath2, token);
-              this.authFilePath = filePath2;
-              process.env[ADHDEV_DEV_SERVER_AUTH_FILE_ENV] = filePath2;
-            } catch (error) {
-              this.authFilePath = null;
-              this.log(`Could not write DevServer auth file: ${error?.message || error}`);
+              if (fs132.existsSync(ownedFile)) {
+                const current5 = fs132.readFileSync(ownedFile, "utf8").trim();
+                if (devTokensEqual(current5, ownedToken)) {
+                  fs132.unlinkSync(ownedFile);
+                  if (process.env[ADHDEV_DEV_SERVER_AUTH_FILE_ENV] === ownedFile) {
+                    delete process.env[ADHDEV_DEV_SERVER_AUTH_FILE_ENV];
+                  }
+                }
+              }
+            } catch {
             }
           }
-          isRequestAuthenticated(req, parsedUrl) {
+          isRequestAuthenticated(req, _parsedUrl) {
             if (!this.authToken) return true;
             const headerVal = req.headers[ADHDEV_DEV_SERVER_TOKEN_HEADER];
             const headerToken = typeof headerVal === "string" ? headerVal.trim() : "";
@@ -169015,8 +169025,6 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             const authHeader = req.headers["authorization"];
             const bearerToken = typeof authHeader === "string" && authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
             if (bearerToken && devTokensEqual(bearerToken, this.authToken)) return true;
-            const queryToken = (parsedUrl.searchParams.get("token") || "").trim();
-            if (queryToken && devTokensEqual(queryToken, this.authToken)) return true;
             return false;
           }
           log(msg) {
@@ -169094,8 +169102,10 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             });
           }
           async start(port = DEV_SERVER_PORT) {
-            this.configureAuth(port);
-            this.server = http3.createServer(async (req, res) => {
+            if (this.server) {
+              return;
+            }
+            const server = http3.createServer(async (req, res) => {
               const hostAllowed = isDevServerHostAllowed(req);
               const rawOrigin = typeof req.headers.origin === "string" ? req.headers.origin.trim() : "";
               const requestOrigin = rawOrigin || null;
@@ -169144,11 +169154,23 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
               }
             });
             return new Promise((resolve82, reject) => {
-              this.server.listen(port, "127.0.0.1", () => {
-                this.log(`Dev server listening on http://127.0.0.1:${port}`);
+              server.listen(port, "127.0.0.1", () => {
+                const address = server.address();
+                const boundPort = address && typeof address === "object" ? address.port : port;
+                try {
+                  this.publishBoundAuth(boundPort);
+                } catch (err2) {
+                  this.cleanupPublishedAuth();
+                  server.close(() => {
+                    reject(new Error(`Failed to publish DevServer auth credential: ${err2?.message || err2}`));
+                  });
+                  return;
+                }
+                this.server = server;
+                this.log(`Dev server listening on http://127.0.0.1:${boundPort}`);
                 resolve82();
               });
-              this.server.on("error", (e) => {
+              server.on("error", (e) => {
                 if (e.code === "EADDRINUSE") {
                   this.log(`Port ${port} in use, skipping dev server`);
                   resolve82();
@@ -169159,8 +169181,11 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             });
           }
           stop() {
-            this.server?.close();
+            const srv = this.server;
             this.server = null;
+            srv?.closeAllConnections?.();
+            srv?.close();
+            this.cleanupPublishedAuth();
             releaseCliSSEBusListener(this.bus);
           }
           // ─── Handlers ───

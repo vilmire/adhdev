@@ -1,9 +1,17 @@
 import { describe, expect, it, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import http from 'node:http'
-import { ADHDEV_DEV_SERVER_TOKEN_HEADER, DevServer, buildDevServerAuthHeaders } from '../../src/daemon/dev-server.js'
+import { spawn } from 'node:child_process'
+import {
+  ADHDEV_DEV_SERVER_AUTH_FILE_ENV,
+  ADHDEV_DEV_SERVER_TOKEN_HEADER,
+  DevServer,
+  buildDevServerAuthHeaders,
+  devServerAuthFilePath,
+  readDevServerAuthToken,
+} from '../../src/daemon/dev-server.js'
 import { ProviderLoader } from '../../src/providers/provider-loader.js'
 import { validateCliProviderManifest } from '../../src/providers/sdk/v1/index.js'
 import { validateFsmSpec } from '../../src/providers/spec/fsm-loader.js'
@@ -249,7 +257,14 @@ describe('DevServer /api/scaffold', () => {
     }
     expect(readFileSync(path.join(providerDir, 'scripts.js'), 'utf-8')).toBe('module.exports = {};\n')
 
-    // 4. Legitimate local CLI / same-origin requests with valid token succeed
+    // 4. Query-string ?token= is rejected (INGRESS-04: header-only auth)
+    const queryTokenRes = await rawDevRequest(started.port, {
+      method: 'GET',
+      path: `/api/status?token=${encodeURIComponent(started.token)}`,
+    })
+    expect(queryTokenRes.status).toBe(401)
+
+    // 5. Legitimate local CLI / same-origin requests with valid token header succeed
     const authedWrite = await rawDevRequest(started.port, {
       method: 'POST',
       path: '/api/providers/demo-ide/file',
@@ -263,5 +278,140 @@ describe('DevServer /api/scaffold', () => {
     expect(authedWrite.status).toBe(200)
     expect(authedWrite.headers['access-control-allow-origin']).toBe(`http://127.0.0.1:${started.port}`)
     expect(readFileSync(path.join(providerDir, 'scripts.js'), 'utf-8')).toBe('module.exports = { updated: true };\n')
+
+    // 6. INGRESS-01: A second DevServer start on the same occupied port (EADDRINUSE) does not
+    // overwrite the incumbent server's published token file or break its clients; stop() cleans up
+    // only the owned credential, and restart publishes a fresh working credential.
+    const authFile = devServerAuthFilePath(tempRoot, started.port)
+    expect(existsSync(authFile)).toBe(true)
+    expect(readFileSync(authFile, 'utf-8').trim()).toBe(started.token)
+
+    const duplicateLoader = new ProviderLoader({ userDir: tempRoot, disableUpstream: true })
+    duplicateLoader.loadAll()
+    const duplicateServer = new DevServer({
+      providerLoader: duplicateLoader,
+      cdpManagers: new Map(),
+      logFn: () => {},
+      configDir: tempRoot,
+    })
+    await duplicateServer.start(started.port)
+    expect(duplicateServer.getAuthToken()).toBeNull()
+    expect(readFileSync(authFile, 'utf-8').trim()).toBe(started.token)
+    expect(readDevServerAuthToken(started.port, tempRoot)).toBe(started.token)
+
+    // Stopping the non-listening duplicate does not delete the incumbent's auth file
+    duplicateServer.stop()
+    expect(existsSync(authFile)).toBe(true)
+    expect(readFileSync(authFile, 'utf-8').trim()).toBe(started.token)
+
+    const statusAfterDuplicate = await rawDevRequest(started.port, {
+      method: 'GET',
+      path: '/api/status',
+      headers: buildDevServerAuthHeaders({}, started.port, tempRoot) as Record<string, string>,
+    })
+    expect(statusAfterDuplicate.status).toBe(200)
+
+    // Stopping the incumbent cleans up its published auth file and env var
+    server.stop()
+    server = null
+    expect(existsSync(authFile)).toBe(false)
+    expect(process.env[ADHDEV_DEV_SERVER_AUTH_FILE_ENV]).toBeUndefined()
+
+    // Restarting on a fresh port publishes a new working credential
+    const restartedPort = 20000 + Math.floor(Math.random() * 10000)
+    const restartedAuthFile = devServerAuthFilePath(tempRoot, restartedPort)
+    const restarted = new DevServer({
+      providerLoader: duplicateLoader,
+      cdpManagers: new Map(),
+      logFn: () => {},
+      configDir: tempRoot,
+    })
+    await restarted.start(restartedPort)
+    server = restarted
+    const newToken = restarted.getAuthToken() || ''
+    expect(newToken).toMatch(/^add_/)
+    expect(newToken).not.toBe(started.token)
+    expect(readFileSync(restartedAuthFile, 'utf-8').trim()).toBe(newToken)
+
+    const statusWithOldToken = await rawDevRequest(restartedPort, {
+      method: 'GET',
+      path: '/api/status',
+      headers: { [ADHDEV_DEV_SERVER_TOKEN_HEADER]: started.token },
+    })
+    expect(statusWithOldToken.status).toBe(401)
+
+    const statusWithNewToken = await rawDevRequest(restartedPort, {
+      method: 'GET',
+      path: '/api/status',
+      headers: { [ADHDEV_DEV_SERVER_TOKEN_HEADER]: newToken },
+    })
+    expect(statusWithNewToken.status).toBe(200)
+
+    // Fail-closed publication test: if the run directory is not writable when a fresh server starts,
+    // start() rejects and closes the listener rather than running unauthenticated or with an unpublished token.
+    restarted.stop()
+    server = null
+    const runDir = path.join(tempRoot, 'run')
+    chmodSync(runDir, 0o500)
+    try {
+      const failClosedServer = new DevServer({
+        providerLoader: duplicateLoader,
+        cdpManagers: new Map(),
+        logFn: () => {},
+        configDir: tempRoot,
+      })
+      const failPort = 20000 + Math.floor(Math.random() * 10000)
+      await expect(failClosedServer.start(failPort)).rejects.toThrow(/Failed to publish DevServer auth credential/)
+      expect(failClosedServer.getAuthToken()).toBeNull()
+    } finally {
+      chmodSync(runDir, 0o700)
+    }
+  })
+
+  it('INGRESS-02: verify_provider.py and verify_cli_provider.py discover the local DevServer token and authenticate api_call and capture_screenshot against a live DevServer fixture', async () => {
+    tempRoot = mkdtempSync(path.join(os.tmpdir(), 'adhdev-devserver-py-verify-'))
+    const started = await startServer(tempRoot)
+    server = started.server
+
+    const repoRoot = path.resolve(__dirname, '../../../../..')
+    const scriptsDir = path.join(repoRoot, 'scripts')
+    if (!existsSync(path.join(scriptsDir, 'verify_provider.py'))) {
+      return
+    }
+
+    const pySnippet = [
+      'import sys, os, json',
+      `sys.path.insert(0, ${JSON.stringify(scriptsDir)})`,
+      'import verify_provider as vp',
+      'import verify_cli_provider as vcp',
+      's1 = vp.api_call("/api/status", method="GET")',
+      's2 = vcp.api_call("/api/providers", method="GET")',
+      'vp.capture_screenshot("demo-ide", "test")',
+      'print(json.dumps({"vp_devMode": s1.get("devMode"), "vcp_has_providers": isinstance(s2.get("providers"), list), "tok1": vp._read_dev_token(), "tok2": vcp._read_dev_token()}))',
+    ].join('\n')
+
+    const pyRes = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+      const child = spawn('python3', ['-c', pySnippet], {
+        windowsHide: true,
+        env: {
+          ...process.env,
+          ADHDEV_CONFIG_DIR: tempRoot!,
+          ADHDEV_DEV_SERVER_URL: `http://127.0.0.1:${started.port}`,
+          ADHDEV_DEV_SERVER_AUTH_FILE: devServerAuthFilePath(tempRoot!, started.port),
+        },
+      })
+      let stdout = ''
+      let stderr = ''
+      child.stdout.on('data', (d) => { stdout += d.toString() })
+      child.stderr.on('data', (d) => { stderr += d.toString() })
+      child.on('error', reject)
+      child.on('close', (status) => resolve({ status, stdout, stderr }))
+    })
+    expect(pyRes.status, pyRes.stderr).toBe(0)
+    const parsed = JSON.parse(pyRes.stdout.trim().split('\n').pop() || '{}')
+    expect(parsed.vp_devMode).toBe(true)
+    expect(parsed.vcp_has_providers).toBe(true)
+    expect(parsed.tok1).toBe(started.token)
+    expect(parsed.tok2).toBe(started.token)
   })
 })

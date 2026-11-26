@@ -117,7 +117,6 @@ export function mintDevServerAuthToken(): string {
 export function writeDevServerAuthFile(filePath: string, token: string): void {
   const dir = path.dirname(filePath);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  try { fs.chmodSync(dir, 0o700); } catch { /* best-effort */ }
   const tmp = `${filePath}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, token, { encoding: 'utf8', mode: 0o600 });
   try { fs.chmodSync(tmp, 0o600); } catch { /* best-effort */ }
@@ -254,26 +253,42 @@ export class DevServer implements DevServerContext {
     return this.authToken;
   }
 
-  private configureAuth(port: number): void {
+  private publishBoundAuth(port: number): void {
     if (this.explicitAuthToken !== undefined) {
       this.authToken = this.explicitAuthToken;
       this.authFilePath = null;
       return;
     }
     const token = mintDevServerAuthToken();
+    const filePath = devServerAuthFilePath(this.configDir ?? getConfigDir(), port);
+    writeDevServerAuthFile(filePath, token);
     this.authToken = token;
+    this.authFilePath = filePath;
+    process.env[ADHDEV_DEV_SERVER_AUTH_FILE_ENV] = filePath;
+  }
+
+  private cleanupPublishedAuth(): void {
+    const ownedFile = this.authFilePath;
+    const ownedToken = this.authToken;
+    this.authFilePath = null;
+    this.authToken = null;
+    if (!ownedFile || !ownedToken) return;
     try {
-      const filePath = devServerAuthFilePath(this.configDir ?? getConfigDir(), port);
-      writeDevServerAuthFile(filePath, token);
-      this.authFilePath = filePath;
-      process.env[ADHDEV_DEV_SERVER_AUTH_FILE_ENV] = filePath;
-    } catch (error: any) {
-      this.authFilePath = null;
-      this.log(`Could not write DevServer auth file: ${error?.message || error}`);
+      if (fs.existsSync(ownedFile)) {
+        const current = fs.readFileSync(ownedFile, 'utf8').trim();
+        if (devTokensEqual(current, ownedToken)) {
+          fs.unlinkSync(ownedFile);
+          if (process.env[ADHDEV_DEV_SERVER_AUTH_FILE_ENV] === ownedFile) {
+            delete process.env[ADHDEV_DEV_SERVER_AUTH_FILE_ENV];
+          }
+        }
+      }
+    } catch {
+      // best-effort cleanup
     }
   }
 
-  private isRequestAuthenticated(req: http.IncomingMessage, parsedUrl: URL): boolean {
+  private isRequestAuthenticated(req: http.IncomingMessage, _parsedUrl: URL): boolean {
     if (!this.authToken) return true;
     const headerVal = req.headers[ADHDEV_DEV_SERVER_TOKEN_HEADER];
     const headerToken = typeof headerVal === 'string' ? headerVal.trim() : '';
@@ -283,8 +298,6 @@ export class DevServer implements DevServerContext {
       ? authHeader.slice(7).trim()
       : '';
     if (bearerToken && devTokensEqual(bearerToken, this.authToken)) return true;
-    const queryToken = (parsedUrl.searchParams.get('token') || '').trim();
-    if (queryToken && devTokensEqual(queryToken, this.authToken)) return true;
     return false;
   }
 
@@ -373,8 +386,10 @@ export class DevServer implements DevServerContext {
   }
 
   async start(port = DEV_SERVER_PORT): Promise<void> {
-    this.configureAuth(port);
-    this.server = http.createServer(async (req, res) => {
+    if (this.server) {
+      return;
+    }
+    const server = http.createServer(async (req, res) => {
       const hostAllowed = isDevServerHostAllowed(req);
       const rawOrigin = typeof req.headers.origin === 'string' ? req.headers.origin.trim() : '';
       const requestOrigin = rawOrigin || null;
@@ -432,14 +447,26 @@ export class DevServer implements DevServerContext {
     });
 
     return new Promise((resolve, reject) => {
-      this.server!.listen(port, '127.0.0.1', () => {
-        this.log(`Dev server listening on http://127.0.0.1:${port}`);
+      server.listen(port, '127.0.0.1', () => {
+        const address = server.address();
+        const boundPort = address && typeof address === 'object' ? address.port : port;
+        try {
+          this.publishBoundAuth(boundPort);
+        } catch (err: any) {
+          this.cleanupPublishedAuth();
+          server.close(() => {
+            reject(new Error(`Failed to publish DevServer auth credential: ${err?.message || err}`));
+          });
+          return;
+        }
+        this.server = server;
+        this.log(`Dev server listening on http://127.0.0.1:${boundPort}`);
         resolve();
       });
-      this.server!.on('error', (e: any) => {
+      server.on('error', (e: any) => {
         if (e.code === 'EADDRINUSE') {
           this.log(`Port ${port} in use, skipping dev server`);
-          resolve(); // non-fatal
+          resolve(); // non-fatal; do not touch incumbent auth file or token
         } else {
           reject(e);
         }
@@ -448,8 +475,11 @@ export class DevServer implements DevServerContext {
   }
 
   stop(): void {
-    this.server?.close();
+    const srv = this.server;
     this.server = null;
+    srv?.closeAllConnections?.();
+    srv?.close();
+    this.cleanupPublishedAuth();
     releaseCliSSEBusListener(this.bus);
   }
 

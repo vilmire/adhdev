@@ -386,23 +386,35 @@ function isStandaloneOriginAllowed(input: {
       return false;
     }
     const rawHost = typeof req.headers.host === 'string' ? req.headers.host.trim() : '';
-    const parsedHost = rawHost ? new URL(`http://${rawHost}`) : null;
-    if (parsedHost && origin.host.toLowerCase() === parsedHost.host.toLowerCase()) {
+    const requestHostname = rawHost ? parseHostHeaderHostname(rawHost) : null;
+    if (!requestHostname) return false;
+    const forwardedProtoHeader = req.headers['x-forwarded-proto'];
+    const forwardedProtoRaw = Array.isArray(forwardedProtoHeader) ? forwardedProtoHeader[0] : forwardedProtoHeader;
+    const forwardedProto = typeof forwardedProtoRaw === 'string'
+      ? forwardedProtoRaw.split(',')[0]?.trim().toLowerCase() ?? ''
+      : '';
+    const socketEncrypted = Boolean((req.socket as typeof req.socket & { encrypted?: boolean })?.encrypted);
+    const requestProtocol: 'http:' | 'https:' = (socketEncrypted || forwardedProto === 'https') ? 'https:' : 'http:';
+    const parsedHost = new URL(`${requestProtocol}//${rawHost}`);
+    const originEffectivePort = origin.port || (origin.protocol === 'https:' ? '443' : '80');
+    const hostEffectivePort = parsedHost.port || (requestProtocol === 'https:' ? '443' : '80');
+    if (
+      originHostname === requestHostname
+      && originEffectivePort === hostEffectivePort
+      && origin.protocol === requestProtocol
+    ) {
       return true;
     }
-    const requestHostname = rawHost ? parseHostHeaderHostname(rawHost) : null;
     // Allow cross-Loopback-alias same-port requests (e.g. Origin: http://localhost:<port>
     // targeting Host: 127.0.0.1:<port>) when bound to loopback. Cross-port loopback
     // origins (such as another local server on a different port) are rejected unless
     // explicitly configured via ADHDEV_STANDALONE_ALLOWED_ORIGINS.
-    const originEffectivePort = origin.port || (origin.protocol === 'https:' ? '443' : '80');
-    const hostEffectivePort = parsedHost ? (parsedHost.port || '80') : '';
     if (
       isLoopbackOrigin
       && (normalizedListen === '127.0.0.1' || normalizedListen === 'localhost' || normalizedListen === '::1')
-      && requestHostname
       && LOOPBACK_HOSTNAMES.has(requestHostname)
       && origin.protocol === 'http:'
+      && requestProtocol === 'http:'
       && originEffectivePort === hostEffectivePort
     ) {
       return true;
