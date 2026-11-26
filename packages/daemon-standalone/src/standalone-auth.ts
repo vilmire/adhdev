@@ -391,14 +391,40 @@ function isStandaloneOriginAllowed(input: {
       return true;
     }
     const requestHostname = rawHost ? parseHostHeaderHostname(rawHost) : null;
-    // Vite dev server (3000) and our own served dashboard ports we know
-    // about. Only honor when the request is coming TO a loopback bind (never 0.0.0.0 / ::).
+    // Allow cross-Loopback-alias same-port requests (e.g. Origin: http://localhost:<port>
+    // targeting Host: 127.0.0.1:<port>) when bound to loopback. Cross-port loopback
+    // origins (such as another local server on a different port) are rejected unless
+    // explicitly configured via ADHDEV_STANDALONE_ALLOWED_ORIGINS.
+    const originEffectivePort = origin.port || (origin.protocol === 'https:' ? '443' : '80');
+    const hostEffectivePort = parsedHost ? (parsedHost.port || '80') : '';
     if (
       isLoopbackOrigin
       && (normalizedListen === '127.0.0.1' || normalizedListen === 'localhost' || normalizedListen === '::1')
-      && (!requestHostname || LOOPBACK_HOSTNAMES.has(requestHostname))
+      && requestHostname
+      && LOOPBACK_HOSTNAMES.has(requestHostname)
+      && origin.protocol === 'http:'
+      && originEffectivePort === hostEffectivePort
     ) {
       return true;
+    }
+    const envAllowedOrigins = process.env.ADHDEV_STANDALONE_ALLOWED_ORIGINS;
+    if (typeof envAllowedOrigins === 'string' && envAllowedOrigins.trim()) {
+      for (const rawAllowedOrigin of envAllowedOrigins.split(',')) {
+        const trimmedOrigin = rawAllowedOrigin.trim();
+        if (!trimmedOrigin) continue;
+        try {
+          const parsedAllowed = new URL(trimmedOrigin);
+          if (
+            parsedAllowed.protocol === origin.protocol
+            && normalizeHostCandidate(parsedAllowed.hostname) === originHostname
+            && (parsedAllowed.port || (parsedAllowed.protocol === 'https:' ? '443' : '80')) === originEffectivePort
+          ) {
+            return true;
+          }
+        } catch {
+          // ignore malformed entry
+        }
+      }
     }
     return false;
   } catch {

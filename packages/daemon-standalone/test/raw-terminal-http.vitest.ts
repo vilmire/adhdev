@@ -91,12 +91,30 @@ describe('raw terminal HTTP routes', () => {
     expect(service.writeKeys).toHaveBeenCalledWith('session-1', ['down', 'enter']);
   });
 
-  it('rejects non-loopback peers before terminal access', () => {
+  it('rejects non-loopback peers before terminal access', async () => {
     expect(isLoopbackAddress('127.0.0.1')).toBe(true);
     expect(isLoopbackAddress('::1')).toBe(true);
     expect(isLoopbackAddress('::ffff:127.0.0.1')).toBe(true);
     expect(isLoopbackAddress('10.0.0.8')).toBe(false);
     expect(isLoopbackAddress('203.0.113.9')).toBe(false);
+
+    const service = createService();
+    const server = createServer((req, res) => {
+      Object.defineProperty(req.socket, 'remoteAddress', { value: '192.168.1.40', configurable: true });
+      const parsedUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+      void handleRawTerminalHttpRequest({ req, res, parsedUrl, service });
+    });
+    servers.push(server);
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address();
+    if (!addr || typeof addr === 'string') throw new Error('test server did not bind');
+    const res = await fetch(`http://127.0.0.1:${addr.port}/api/v1/sessions/session-1/input`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': '127.0.0.1' },
+      body: JSON.stringify({ text: 'echo nope' }),
+    });
+    expect(res.status).toBe(403);
+    expect(service.writeInput).not.toHaveBeenCalled();
   });
 
   it('rejects deferred formats and malformed input', async () => {

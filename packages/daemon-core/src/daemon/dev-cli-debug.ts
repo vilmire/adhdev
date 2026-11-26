@@ -729,7 +729,6 @@ export function handleCliSSE(ctx: DevServerContext, cliSSEClients: http.ServerRe
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
     'Connection': 'keep-alive',
-    'Access-Control-Allow-Origin': '*',
   });
   res.write('data: {"type":"connected"}\n\n');
   cliSSEClients.push(res);

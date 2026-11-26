@@ -16,13 +16,14 @@ import type { DevServerContext } from './dev-server-types.js';
  */
 
 import * as http from 'http';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { ProviderLoader } from '../providers/provider-loader.js';
 import type { ProviderCategory, ProviderModule, ProviderScripts } from '../providers/contracts.js';
 import type { ProviderSettingDef } from '../providers/provider-control-contracts.js';
 import { validateProviderDefinition } from '../providers/provider-schema.js';
-import { loadConfig, saveConfig } from '../config/config.js';
+import { getConfigDir, loadConfig, saveConfig } from '../config/config.js';
 import { parseProviderSourceConfigUpdate } from '../config/provider-source-config.js';
 import type { DaemonCdpManager } from '../cdp/manager.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
@@ -38,6 +39,126 @@ import { resolveLegacyProviderScript, type LegacyStringScript } from '../command
 import { handleCliStatus, handleCliLaunch, handleCliSend, handleCliStop, handleCliDebug, handleCliTrace, handleCliExercise, handleCliFixtureCapture, handleCliFixtureList, handleCliFixtureReplay, handleCliResolve, handleCliRaw, handleCliSSE, releaseCliSSEBusListener } from './dev-cli-debug.js';
 
 export const DEV_SERVER_PORT = 19280;
+export const ADHDEV_DEV_SERVER_TOKEN_HEADER = 'x-adhdev-dev-token';
+export const ADHDEV_DEV_SERVER_AUTH_FILE_ENV = 'ADHDEV_DEV_SERVER_AUTH_FILE';
+
+const LOOPBACK_DEV_HOSTNAMES: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '::1']);
+
+function normalizeDevHostCandidate(raw: string): string {
+  let host = raw.trim().toLowerCase();
+  if (!host) return '';
+  if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1);
+  const zoneIdx = host.indexOf('%');
+  if (zoneIdx !== -1) host = host.slice(0, zoneIdx);
+  if (host.startsWith('::ffff:')) host = host.slice(7);
+  if (host.endsWith('.')) host = host.slice(0, -1);
+  return host;
+}
+
+function parseDevHostHeader(rawHostHeader: string): { hostname: string; port: string } | null {
+  const trimmed = rawHostHeader.trim();
+  if (!trimmed || /[\s/@\\?#]/.test(trimmed)) return null;
+  try {
+    const parsed = new URL(`http://${trimmed}`);
+    if (
+      parsed.username !== ''
+      || parsed.password !== ''
+      || parsed.pathname !== '/'
+      || parsed.search !== ''
+      || parsed.hash !== ''
+    ) {
+      return null;
+    }
+    const hostname = normalizeDevHostCandidate(parsed.hostname);
+    if (!hostname) return null;
+    return { hostname, port: parsed.port || '80' };
+  } catch {
+    return null;
+  }
+}
+
+export function isDevServerHostAllowed(req: http.IncomingMessage): boolean {
+  const rawHost = req.headers.host;
+  if (rawHost === undefined) {
+    return !req.httpVersion && req.headers.origin === undefined;
+  }
+  if (typeof rawHost !== 'string') return false;
+  const parsed = parseDevHostHeader(rawHost);
+  return parsed !== null && LOOPBACK_DEV_HOSTNAMES.has(parsed.hostname);
+}
+
+export function isDevServerOriginAllowed(req: http.IncomingMessage): boolean {
+  if (!isDevServerHostAllowed(req)) return false;
+  const originHeader = typeof req.headers.origin === 'string' ? req.headers.origin.trim() : '';
+  if (!originHeader) return true;
+  try {
+    const origin = new URL(originHeader);
+    if (origin.protocol !== 'http:') return false;
+    const originHost = normalizeDevHostCandidate(origin.hostname || '');
+    if (!originHost || !LOOPBACK_DEV_HOSTNAMES.has(originHost)) return false;
+    const rawHost = typeof req.headers.host === 'string' ? req.headers.host : '';
+    const parsedHost = rawHost ? parseDevHostHeader(rawHost) : null;
+    if (!parsedHost) return false;
+    const originPort = origin.port || '80';
+    return originPort === parsedHost.port;
+  } catch {
+    return false;
+  }
+}
+
+export function devServerAuthFilePath(configDir = getConfigDir(), port = DEV_SERVER_PORT): string {
+  return path.join(configDir, 'run', `dev-server-auth-${port}`);
+}
+
+export function mintDevServerAuthToken(): string {
+  return `add_${crypto.randomBytes(32).toString('base64url')}`;
+}
+
+export function writeDevServerAuthFile(filePath: string, token: string): void {
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try { fs.chmodSync(dir, 0o700); } catch { /* best-effort */ }
+  const tmp = `${filePath}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, token, { encoding: 'utf8', mode: 0o600 });
+  try { fs.chmodSync(tmp, 0o600); } catch { /* best-effort */ }
+  fs.renameSync(tmp, filePath);
+}
+
+export function readDevServerAuthToken(port = DEV_SERVER_PORT, configDir?: string): string | null {
+  const candidates: string[] = [];
+  const envFile = process.env[ADHDEV_DEV_SERVER_AUTH_FILE_ENV]?.trim();
+  if (envFile) candidates.push(envFile);
+  try {
+    candidates.push(devServerAuthFilePath(configDir ?? getConfigDir(), port));
+  } catch {
+    // ignore configDir resolution errors
+  }
+  for (const filePath of candidates) {
+    try {
+      if (!fs.existsSync(filePath)) continue;
+      const token = fs.readFileSync(filePath, 'utf8').trim();
+      if (token) return token;
+    } catch {
+      // ignore unreadable candidate
+    }
+  }
+  return null;
+}
+
+export function buildDevServerAuthHeaders(
+  extraHeaders: Record<string, string | number> = {},
+  port = DEV_SERVER_PORT,
+  configDir?: string,
+): Record<string, string | number> {
+  const token = readDevServerAuthToken(port, configDir);
+  return token ? { [ADHDEV_DEV_SERVER_TOKEN_HEADER]: token, ...extraHeaders } : { ...extraHeaders };
+}
+
+function devTokensEqual(presented: string, expected: string): boolean {
+  const a = Buffer.from(presented, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
 
 interface ProviderListEntry {
   type: string;
@@ -102,6 +223,10 @@ export class DevServer implements DevServerContext {
 
   // CLI debug SSE
   private cliSSEClients: http.ServerResponse[] = [];
+  public authToken: string | null = null;
+  public authFilePath: string | null = null;
+  private readonly explicitAuthToken?: string | null;
+  private readonly configDir?: string;
 
   constructor(options: {
     providerLoader: ProviderLoader;
@@ -111,6 +236,8 @@ export class DevServer implements DevServerContext {
     bus?: Pick<SessionLifecycleBus, 'on'> | null;
     logFn?: (msg: string) => void;
     onProviderSourceConfigChanged?: () => Promise<void> | void;
+    authToken?: string | null;
+    configDir?: string;
   }) {
     this.providerLoader = options.providerLoader;
     this.cdpManagers = options.cdpManagers;
@@ -119,6 +246,46 @@ export class DevServer implements DevServerContext {
     this.bus = options.bus ?? null;
     this.onProviderSourceConfigChanged = options.onProviderSourceConfigChanged || null;
     this.logFn = options.logFn || LOG.forComponent('DevServer').asLogFn();
+    this.explicitAuthToken = options.authToken;
+    this.configDir = options.configDir;
+  }
+
+  public getAuthToken(): string | null {
+    return this.authToken;
+  }
+
+  private configureAuth(port: number): void {
+    if (this.explicitAuthToken !== undefined) {
+      this.authToken = this.explicitAuthToken;
+      this.authFilePath = null;
+      return;
+    }
+    const token = mintDevServerAuthToken();
+    this.authToken = token;
+    try {
+      const filePath = devServerAuthFilePath(this.configDir ?? getConfigDir(), port);
+      writeDevServerAuthFile(filePath, token);
+      this.authFilePath = filePath;
+      process.env[ADHDEV_DEV_SERVER_AUTH_FILE_ENV] = filePath;
+    } catch (error: any) {
+      this.authFilePath = null;
+      this.log(`Could not write DevServer auth file: ${error?.message || error}`);
+    }
+  }
+
+  private isRequestAuthenticated(req: http.IncomingMessage, parsedUrl: URL): boolean {
+    if (!this.authToken) return true;
+    const headerVal = req.headers[ADHDEV_DEV_SERVER_TOKEN_HEADER];
+    const headerToken = typeof headerVal === 'string' ? headerVal.trim() : '';
+    if (headerToken && devTokensEqual(headerToken, this.authToken)) return true;
+    const authHeader = req.headers['authorization'];
+    const bearerToken = typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
+      ? authHeader.slice(7).trim()
+      : '';
+    if (bearerToken && devTokensEqual(bearerToken, this.authToken)) return true;
+    const queryToken = (parsedUrl.searchParams.get('token') || '').trim();
+    if (queryToken && devTokensEqual(queryToken, this.authToken)) return true;
+    return false;
   }
 
   public log(msg: string): void {
@@ -206,20 +373,49 @@ export class DevServer implements DevServerContext {
   }
 
   async start(port = DEV_SERVER_PORT): Promise<void> {
+    this.configureAuth(port);
     this.server = http.createServer(async (req, res) => {
-      // CORS
-      res.setHeader('Access-Control-Allow-Origin', '*');
+      const hostAllowed = isDevServerHostAllowed(req);
+      const rawOrigin = typeof req.headers.origin === 'string' ? req.headers.origin.trim() : '';
+      const requestOrigin = rawOrigin || null;
+      const originAllowed = hostAllowed && isDevServerOriginAllowed(req);
+
+      if (requestOrigin) {
+        res.setHeader('Vary', 'Origin');
+        if (originAllowed) {
+          res.setHeader('Access-Control-Allow-Origin', requestOrigin);
+        }
+      }
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+      res.setHeader('Access-Control-Allow-Headers', `Content-Type, Authorization, ${ADHDEV_DEV_SERVER_TOKEN_HEADER}`);
+
+      if (!hostAllowed) {
+        this.json(res, 403, { error: 'Untrusted Host header rejected.' });
+        return;
+      }
 
       if (req.method === 'OPTIONS') {
-        res.writeHead(200);
+        if (requestOrigin && !originAllowed) {
+          this.json(res, 403, { error: 'Cross-origin request rejected.' });
+          return;
+        }
+        res.writeHead(204);
         res.end();
+        return;
+      }
+
+      if (requestOrigin && !originAllowed) {
+        this.json(res, 403, { error: 'Cross-origin request rejected.' });
         return;
       }
 
       const url = new URL(req.url || '/', `http://localhost:${port}`);
       const pathname = url.pathname;
+
+      if (!this.isRequestAuthenticated(req, url)) {
+        this.json(res, 401, { error: 'Unauthorized. DevServer token required.' });
+        return;
+      }
 
       try {
         // ─── Route Table ───
@@ -508,11 +704,13 @@ export class DevServer implements DevServerContext {
   // ─── Watch Mode (SSE) ───
 
   private handleSSE(_req: http.IncomingMessage, res: http.ServerResponse): void {
+    const rawOrigin = typeof _req.headers.origin === 'string' ? _req.headers.origin.trim() : '';
+    const originAllowed = rawOrigin && isDevServerOriginAllowed(_req);
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
-      'Access-Control-Allow-Origin': '*',
+      ...(originAllowed ? { 'Access-Control-Allow-Origin': rawOrigin, Vary: 'Origin' } : {}),
     });
     res.write('data: {"type":"connected"}\n\n');
     this.sseClients.push(res);

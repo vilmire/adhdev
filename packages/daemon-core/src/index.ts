@@ -535,7 +535,19 @@ export { VersionArchive, detectAllVersions } from './providers/version-archive.j
 export type { ProviderVersionInfo, VersionHistory } from './providers/version-archive.js';
 
 // ── Dev Server ──
-export { DevServer, DEV_SERVER_PORT } from './daemon/dev-server.js';
+export {
+  DevServer,
+  DEV_SERVER_PORT,
+  ADHDEV_DEV_SERVER_TOKEN_HEADER,
+  ADHDEV_DEV_SERVER_AUTH_FILE_ENV,
+  isDevServerHostAllowed,
+  isDevServerOriginAllowed,
+  devServerAuthFilePath,
+  mintDevServerAuthToken,
+  writeDevServerAuthFile,
+  readDevServerAuthToken,
+  buildDevServerAuthHeaders,
+} from './daemon/dev-server.js';
 
 // ── CLI Adapters ──
 export type { CliAdapter } from './cli-adapter-types.js';

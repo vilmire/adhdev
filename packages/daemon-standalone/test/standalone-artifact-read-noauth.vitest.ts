@@ -288,12 +288,43 @@ describe('no-auth standalone — artifact read verbs', () => {
       expect(okRes.status, allowedHost).toBe(200);
     }
 
-    // Vite dev server origin on loopback bind (127.0.0.1) still works
-    const viteLoopback = await rawHttp(port, {
+    // Same-port loopback alias (e.g. Origin: http://localhost:<port> on Host: 127.0.0.1:<port>) works
+    const samePortLoopbackAlias = await rawHttp(port, {
+      headers: { Host: `127.0.0.1:${port}`, Origin: `http://localhost:${port}` },
+      body: cmdBody,
+    });
+    expect(samePortLoopbackAlias.status).toBe(200);
+
+    // Cross-port loopback Origin (e.g. another local server on :3000 or :8080) is rejected by default
+    const crossPortLoopbackHttp = await rawHttp(port, {
       headers: { Host: `127.0.0.1:${port}`, Origin: 'http://localhost:3000' },
       body: cmdBody,
     });
-    expect(viteLoopback.status).toBe(200);
+    expect(crossPortLoopbackHttp.status).toBe(403);
+    expect(await dialStatus({ Host: `127.0.0.1:${port}`, Origin: 'http://localhost:3000' })).toBe(403);
+
+    // Forwarded headers (X-Forwarded-Host / X-Forwarded-For) cannot bypass Host allow-list or spoof loopback peer
+    const forwardedBypass = await rawHttp(port, {
+      headers: {
+        Host: `rebind.example:${port}`,
+        'X-Forwarded-Host': `127.0.0.1:${port}`,
+        'X-Forwarded-For': '127.0.0.1',
+      },
+      body: cmdBody,
+    });
+    expect(forwardedBypass.status).toBe(403);
+
+    // Explicit ADHDEV_STANDALONE_ALLOWED_ORIGINS opt-in allows the configured dev origin
+    process.env.ADHDEV_STANDALONE_ALLOWED_ORIGINS = 'http://localhost:3000';
+    try {
+      const explicitDevOrigin = await rawHttp(port, {
+        headers: { Host: `127.0.0.1:${port}`, Origin: 'http://localhost:3000' },
+        body: cmdBody,
+      });
+      expect(explicitDevOrigin.status).toBe(200);
+    } finally {
+      delete process.env.ADHDEV_STANDALONE_ALLOWED_ORIGINS;
+    }
 
     // 3. When bound to 0.0.0.0, Origin: http://localhost:* spoofing is refused, while LAN IP and local localhost work
     const lanIfaceIp = Object.values(networkInterfaces())

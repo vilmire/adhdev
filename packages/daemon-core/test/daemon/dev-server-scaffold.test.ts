@@ -1,9 +1,9 @@
 import { describe, expect, it, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import http from 'node:http'
-import { DevServer } from '../../src/daemon/dev-server.js'
+import { ADHDEV_DEV_SERVER_TOKEN_HEADER, DevServer, buildDevServerAuthHeaders } from '../../src/daemon/dev-server.js'
 import { ProviderLoader } from '../../src/providers/provider-loader.js'
 import { validateCliProviderManifest } from '../../src/providers/sdk/v1/index.js'
 import { validateFsmSpec } from '../../src/providers/spec/fsm-loader.js'
@@ -23,13 +23,14 @@ import { validateFsmSpec } from '../../src/providers/spec/fsm-loader.js'
 // with no resolvable FSM spec fails to launch. This test breaks-once against
 // that regression.
 
-async function startServer(userDir: string): Promise<{ server: DevServer; port: number }> {
+async function startServer(userDir: string): Promise<{ server: DevServer; port: number; token: string }> {
   const loader = new ProviderLoader({ userDir, disableUpstream: true })
   loader.loadAll()
   const server = new DevServer({
     providerLoader: loader,
     cdpManagers: new Map(),
     logFn: () => {},
+    configDir: userDir,
   })
   // DevServer.start(port) binds to a fixed port (there is no "pick any free
   // port" mode) and resolves even on EADDRINUSE (treated as non-fatal —
@@ -38,10 +39,14 @@ async function startServer(userDir: string): Promise<{ server: DevServer; port: 
   // real running daemon may already hold.
   const port = 20000 + Math.floor(Math.random() * 10000)
   await server.start(port)
-  return { server, port }
+  return { server, port, token: server.getAuthToken() || '' }
 }
 
-function postScaffold(port: number, body: Record<string, unknown>): Promise<{ status: number; json: any }> {
+function postScaffold(
+  port: number,
+  body: Record<string, unknown>,
+  extraHeaders: Record<string, string> = {},
+): Promise<{ status: number; json: any; headers: http.IncomingHttpHeaders }> {
   const payload = JSON.stringify(body)
   return new Promise((resolve, reject) => {
     const req = http.request(
@@ -50,14 +55,18 @@ function postScaffold(port: number, body: Record<string, unknown>): Promise<{ st
         port,
         path: '/api/scaffold',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+        headers: buildDevServerAuthHeaders({
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+          ...extraHeaders,
+        }, port),
       },
       (res) => {
         let data = ''
         res.on('data', (chunk) => { data += chunk })
         res.on('end', () => {
           try {
-            resolve({ status: res.statusCode || 0, json: JSON.parse(data) })
+            resolve({ status: res.statusCode || 0, json: JSON.parse(data), headers: res.headers })
           } catch (e) {
             reject(e)
           }
@@ -66,6 +75,41 @@ function postScaffold(port: number, body: Record<string, unknown>): Promise<{ st
     )
     req.on('error', reject)
     req.write(payload)
+    req.end()
+  })
+}
+
+function rawDevRequest(
+  port: number,
+  opts: { method?: string; path: string; headers?: Record<string, string>; body?: Record<string, unknown> },
+): Promise<{ status: number; json: any; headers: http.IncomingHttpHeaders }> {
+  const payload = opts.body !== undefined ? JSON.stringify(opts.body) : undefined
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        host: '127.0.0.1',
+        port,
+        path: opts.path,
+        method: opts.method ?? 'GET',
+        headers: {
+          ...(payload !== undefined ? { 'Content-Type': 'application/json', 'Content-Length': String(Buffer.byteLength(payload)) } : {}),
+          ...(opts.headers ?? {}),
+        },
+      },
+      (res) => {
+        let data = ''
+        res.on('data', (chunk) => { data += chunk })
+        res.on('end', () => {
+          try {
+            resolve({ status: res.statusCode || 0, json: data ? JSON.parse(data) : null, headers: res.headers })
+          } catch (e) {
+            reject(e)
+          }
+        })
+      },
+    )
+    req.on('error', reject)
+    if (payload !== undefined) req.write(payload)
     req.end()
   })
 }
@@ -139,5 +183,85 @@ describe('DevServer /api/scaffold', () => {
 
     const second = await postScaffold(started.port, { type: 'dup-cli', name: 'Dup CLI', category: 'cli' })
     expect(second.status).toBe(409)
+  })
+
+  it('enforces Host/Origin allow-list, drops wildcard CORS, and requires per-boot token for provider file writes and reload', async () => {
+    tempRoot = mkdtempSync(path.join(os.tmpdir(), 'adhdev-devserver-ingress-'))
+    const providerDir = path.join(tempRoot, 'ide', 'demo-ide')
+    mkdirSync(providerDir, { recursive: true })
+    writeFileSync(
+      path.join(providerDir, 'provider.json'),
+      JSON.stringify({ type: 'demo-ide', name: 'Demo IDE', category: 'ide', cdpPorts: [9222, 9223] }, null, 2),
+      'utf-8',
+    )
+    writeFileSync(path.join(providerDir, 'scripts.js'), 'module.exports = {};\n', 'utf-8')
+
+    const started = await startServer(tempRoot)
+    server = started.server
+    expect(started.token).toMatch(/^add_/)
+
+    // 1. Untrusted Host (DNS rebinding) is rejected with 403 before auth or route handling
+    const rebindRes = await rawDevRequest(started.port, {
+      method: 'POST',
+      path: '/api/providers/demo-ide/file',
+      headers: {
+        Host: `rebind.example:${started.port}`,
+        Origin: `http://rebind.example:${started.port}`,
+        [ADHDEV_DEV_SERVER_TOKEN_HEADER]: started.token,
+      },
+      body: { path: 'scripts.js', content: 'module.exports = { pwned: true };' },
+    })
+    expect(rebindRes.status).toBe(403)
+    expect(rebindRes.headers['access-control-allow-origin']).toBeUndefined()
+
+    // 2. Cross-origin and cross-port loopback Origin requests are rejected with 403 and no wildcard CORS
+    for (const badOrigin of ['https://evil.example', 'http://localhost:3000', 'http://127.0.0.1:8080']) {
+      const crossOriginRes = await rawDevRequest(started.port, {
+        method: 'POST',
+        path: '/api/providers/demo-ide/file',
+        headers: {
+          Host: `127.0.0.1:${started.port}`,
+          Origin: badOrigin,
+          [ADHDEV_DEV_SERVER_TOKEN_HEADER]: started.token,
+        },
+        body: { path: 'scripts.js', content: 'module.exports = { pwned: true };' },
+      })
+      expect(crossOriginRes.status, badOrigin).toBe(403)
+      expect(crossOriginRes.headers['access-control-allow-origin']).toBeUndefined()
+    }
+
+    // 3. Unauthenticated loopback requests (missing or wrong token) to status, file write, save, and reload are rejected with 401
+    for (const endpoint of [
+      { method: 'GET', path: '/api/status' },
+      { method: 'POST', path: '/api/providers/demo-ide/file', body: { path: 'scripts.js', content: 'x' } },
+      { method: 'POST', path: '/api/providers/demo-ide/save', body: { source: 'x' } },
+      { method: 'POST', path: '/api/providers/reload', body: {} },
+    ]) {
+      const noTokenRes = await rawDevRequest(started.port, endpoint)
+      expect(noTokenRes.status, `${endpoint.method} ${endpoint.path} no token`).toBe(401)
+      expect(noTokenRes.headers['access-control-allow-origin']).toBeUndefined()
+
+      const badTokenRes = await rawDevRequest(started.port, {
+        ...endpoint,
+        headers: { [ADHDEV_DEV_SERVER_TOKEN_HEADER]: 'add_wrong_token' },
+      })
+      expect(badTokenRes.status, `${endpoint.method} ${endpoint.path} bad token`).toBe(401)
+    }
+    expect(readFileSync(path.join(providerDir, 'scripts.js'), 'utf-8')).toBe('module.exports = {};\n')
+
+    // 4. Legitimate local CLI / same-origin requests with valid token succeed
+    const authedWrite = await rawDevRequest(started.port, {
+      method: 'POST',
+      path: '/api/providers/demo-ide/file',
+      headers: {
+        Host: `127.0.0.1:${started.port}`,
+        Origin: `http://127.0.0.1:${started.port}`,
+        [ADHDEV_DEV_SERVER_TOKEN_HEADER]: started.token,
+      },
+      body: { path: 'scripts.js', content: 'module.exports = { updated: true };\n' },
+    })
+    expect(authedWrite.status).toBe(200)
+    expect(authedWrite.headers['access-control-allow-origin']).toBe(`http://127.0.0.1:${started.port}`)
+    expect(readFileSync(path.join(providerDir, 'scripts.js'), 'utf-8')).toBe('module.exports = { updated: true };\n')
   })
 })

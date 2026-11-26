@@ -688,13 +688,14 @@ export class DaemonCommandHandler implements CommandHelpers {
         if (!providerType) return { success: false, error: 'providerType required' };
         try {
             const http = await import('http');
+            const { buildDevServerAuthHeaders, DEV_SERVER_PORT } = await import('../daemon/dev-server.js');
             const postData = JSON.stringify(body);
             const result = await new Promise<any>((resolve, reject) => {
                 const req = http.request({
-                    hostname: '127.0.0.1', port: 19280,
+                    hostname: '127.0.0.1', port: DEV_SERVER_PORT,
                     path: `/api/providers/${providerType}/${endpoint}`,
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) },
+                    headers: buildDevServerAuthHeaders({ 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) }, DEV_SERVER_PORT),
                 }, (res) => {
                     let data = '';
                     res.on('data', (chunk: Buffer) => data += chunk);
@@ -717,8 +718,14 @@ export class DaemonCommandHandler implements CommandHelpers {
         if (!providerType) return { success: false, error: 'providerType required' };
         try {
             const http = await import('http');
+            const { buildDevServerAuthHeaders, DEV_SERVER_PORT } = await import('../daemon/dev-server.js');
             const result = await new Promise<any>((resolve, reject) => {
-                http.get(`http://127.0.0.1:19280/api/providers/${providerType}/${endpoint}`, (res) => {
+                http.get({
+                    hostname: '127.0.0.1',
+                    port: DEV_SERVER_PORT,
+                    path: `/api/providers/${providerType}/${endpoint}`,
+                    headers: buildDevServerAuthHeaders({}, DEV_SERVER_PORT),
+                }, (res) => {
                     let data = '';
                     res.on('data', (chunk: Buffer) => data += chunk);
                     res.on('end', () => {
@@ -735,13 +742,14 @@ export class DaemonCommandHandler implements CommandHelpers {
     async proxyDevServerScaffold(args: any): Promise<CommandResult> {
         try {
             const http = await import('http');
+            const { buildDevServerAuthHeaders, DEV_SERVER_PORT } = await import('../daemon/dev-server.js');
             const postData = JSON.stringify(args || {});
             const result = await new Promise<any>((resolve, reject) => {
                 const req = http.request({
-                    hostname: '127.0.0.1', port: 19280,
+                    hostname: '127.0.0.1', port: DEV_SERVER_PORT,
                     path: '/api/scaffold',
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) },
+                    headers: buildDevServerAuthHeaders({ 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) }, DEV_SERVER_PORT),
                 }, (res) => {
                     let data = '';
                     res.on('data', (chunk: Buffer) => data += chunk);

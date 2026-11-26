@@ -34,9 +34,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-// ../../node_modules/js-yaml/lib/common.js
+// ../../../node_modules/js-yaml/lib/common.js
 var require_common = __commonJS({
-  "../../node_modules/js-yaml/lib/common.js"(exports2, module2) {
+  "../../../node_modules/js-yaml/lib/common.js"(exports2, module2) {
     "use strict";
     function isNothing2(subject) {
       return typeof subject === "undefined" || subject === null;
@@ -79,9 +79,9 @@ var require_common = __commonJS({
   }
 });
 
-// ../../node_modules/js-yaml/lib/exception.js
+// ../../../node_modules/js-yaml/lib/exception.js
 var require_exception = __commonJS({
-  "../../node_modules/js-yaml/lib/exception.js"(exports2, module2) {
+  "../../../node_modules/js-yaml/lib/exception.js"(exports2, module2) {
     "use strict";
     function formatError2(exception2, compact) {
       var where = "", message = exception2.reason || "(unknown reason)";
@@ -116,9 +116,9 @@ var require_exception = __commonJS({
   }
 });
 
-// ../../node_modules/js-yaml/lib/snippet.js
+// ../../../node_modules/js-yaml/lib/snippet.js
 var require_snippet = __commonJS({
-  "../../node_modules/js-yaml/lib/snippet.js"(exports2, module2) {
+  "../../../node_modules/js-yaml/lib/snippet.js"(exports2, module2) {
     "use strict";
     var common2 = require_common();
     function getLine2(buffer, lineStart, lineEnd, position, maxLineLength) {
@@ -196,9 +196,9 @@ var require_snippet = __commonJS({
   }
 });
 
-// ../../node_modules/js-yaml/lib/type.js
+// ../../../node_modules/js-yaml/lib/type.js
 var require_type = __commonJS({
-  "../../node_modules/js-yaml/lib/type.js"(exports2, module2) {
+  "../../../node_modules/js-yaml/lib/type.js"(exports2, module2) {
     "use strict";
     var YAMLException2 = require_exception();
     var TYPE_CONSTRUCTOR_OPTIONS2 = [
@@ -260,9 +260,9 @@ var require_type = __commonJS({
   }
 });
 
-// ../../node_modules/js-yaml/lib/schema.js
+// ../../../node_modules/js-yaml/lib/schema.js
 var require_schema = __commonJS({
-  "../../node_modules/js-yaml/lib/schema.js"(exports2, module2) {
+  "../../../node_modules/js-yaml/lib/schema.js"(exports2, module2) {
     "use strict";
     var YAMLException2 = require_exception();
     var Type2 = require_type();
@@ -349,9 +349,9 @@ var require_schema = __commonJS({
   }
 });
 
-// ../../node_modules/js-yaml/lib/type/str.js
+// ../../../node_modules/js-yaml/lib/type/str.js
 var require_str = __commonJS({
-  "../../node_modules/js-yaml/lib/type/str.js"(exports2, module2) {
+  "../../../node_modules/js-yaml/lib/type/str.js"(exports2, module2) {
     "use strict";
     var Type2 = require_type();
     module2.exports = new Type2("tag:yaml.org,2002:str", {
@@ -363,9 +363,9 @@ var require_str = __commonJS({
   }
 });
 
-// ../../node_modules/js-yaml/lib/type/seq.js
+// ../../../node_modules/js-yaml/lib/type/seq.js
 var require_seq = __commonJS({
-  "../../node_modules/js-yaml/lib/type/seq.js"(exports2, module2) {
+  "../../../node_modules/js-yaml/lib/type/seq.js"(exports2, module2) {
     "use strict";
     var Type2 = require_type();
     module2.exports = new Type2("tag:yaml.org,2002:seq", {
@@ -377,9 +377,9 @@ var require_seq = __commonJS({
   }
 });
 
-// ../../node_modules/js-yaml/lib/type/map.js
+// ../../../node_modules/js-yaml/lib/type/map.js
 var require_map = __commonJS({
-  "../../node_modules/js-yaml/lib/type/map.js"(exports2, module2) {
+  "../../../node_modules/js-yaml/lib/type/map.js"(exports2, module2) {
     "use strict";
     var Type2 = require_type();
     module2.exports = new Type2("tag:yaml.org,2002:map", {
@@ -391,9 +391,9 @@ var require_map = __commonJS({
   }
 });
 
-// ../../node_modules/js-yaml/lib/schema/failsafe.js
+// ../../../node_modules/js-yaml/lib/schema/failsafe.js
 var require_failsafe = __commonJS({
-  "../../node_modules/js-yaml/lib/schema/failsafe.js"(exports2, module2) {
+  "../../../node_modules/js-yaml/lib/schema/failsafe.js"(exports2, module2) {
     "use strict";
     var Schema2 = require_schema();
     module2.exports = new Schema2({
@@ -406,9 +406,9 @@ var require_failsafe = __commonJS({
   }
 });
 
-// ../../node_modules/js-yaml/lib/type/null.js
+// ../../../node_modules/js-yaml/lib/type/null.js
 var require_null = __commonJS({
-  "../../node_modules/js-yaml/lib/type/null.js"(exports2, module2) {
+  "../../../node_modules/js-yaml/lib/type/null.js"(exports2, module2) {
     "use strict";
     var Type2 = require_type();
     function resolveYamlNull2(data) {
@@ -449,9 +449,9 @@ var require_null = __commonJS({
   }
 });
 
-// ../../node_modules/js-yaml/lib/type/bool.js
+// ../../../node_modules/js-yaml/lib/type/bool.js
 var require_bool = __commonJS({
-  "../../node_modules/js-yaml/lib/type/bool.js"(exports2, module2) {
+  "../../../node_modules/js-yaml/lib/type/bool.js"(exports2, module2) {
     "use strict";
     var Type2 = require_type();
     function resolveYamlBoolean2(data) {
@@ -486,9 +486,9 @@ var require_bool = __commonJS({
   }
 });
 
-// ../../node_modules/js-yaml/lib/type/int.js
+// ../../../node_modules/js-yaml/lib/type/int.js
 var require_int = __commonJS({
-  "../../node_modules/js-yaml/lib/type/int.js"(exports2, module2) {
+  "../../../node_modules/js-yaml/lib/type/int.js"(exports2, module2) {
     "use strict";
     var common2 = require_common();
     var Type2 = require_type();
@@ -608,9 +608,9 @@ var require_int = __commonJS({
   }
 });
 
-// ../../node_modules/js-yaml/lib/type/float.js
+// ../../../node_modules/js-yaml/lib/type/float.js
 var require_float = __commonJS({
-  "../../node_modules/js-yaml/lib/type/float.js"(exports2, module2) {
+  "../../../node_modules/js-yaml/lib/type/float.js"(exports2, module2) {
     "use strict";
     var common2 = require_common();
     var Type2 = require_type();
@@ -691,9 +691,9 @@ var require_float = __commonJS({
   }
 });
 
-// ../../node_modules/js-yaml/lib/schema/json.js
+// ../../../node_modules/js-yaml/lib/schema/json.js
 var require_json = __commonJS({
-  "../../node_modules/js-yaml/lib/schema/json.js"(exports2, module2) {
+  "../../../node_modules/js-yaml/lib/schema/json.js"(exports2, module2) {
     "use strict";
     module2.exports = require_failsafe().extend({
       implicit: [
@@ -706,17 +706,17 @@ var require_json = __commonJS({
   }
 });
 
-// ../../node_modules/js-yaml/lib/schema/core.js
+// ../../../node_modules/js-yaml/lib/schema/core.js
 var require_core = __commonJS({
-  "../../node_modules/js-yaml/lib/schema/core.js"(exports2, module2) {
+  "../../../node_modules/js-yaml/lib/schema/core.js"(exports2, module2) {
     "use strict";
     module2.exports = require_json();
   }
 });
 
-// ../../node_modules/js-yaml/lib/type/timestamp.js
+// ../../../node_modules/js-yaml/lib/type/timestamp.js
 var require_timestamp = __commonJS({
-  "../../node_modules/js-yaml/lib/type/timestamp.js"(exports2, module2) {
+  "../../../node_modules/js-yaml/lib/type/timestamp.js"(exports2, module2) {
     "use strict";
     var Type2 = require_type();
     var YAML_DATE_REGEXP2 = new RegExp(
@@ -775,9 +775,9 @@ var require_timestamp = __commonJS({
   }
 });
 
-// ../../node_modules/js-yaml/lib/type/merge.js
+// ../../../node_modules/js-yaml/lib/type/merge.js
 var require_merge = __commonJS({
-  "../../node_modules/js-yaml/lib/type/merge.js"(exports2, module2) {
+  "../../../node_modules/js-yaml/lib/type/merge.js"(exports2, module2) {
     "use strict";
     var Type2 = require_type();
     function resolveYamlMerge2(data) {
@@ -790,9 +790,9 @@ var require_merge = __commonJS({
   }
 });
 
-// ../../node_modules/js-yaml/lib/type/binary.js
+// ../../../node_modules/js-yaml/lib/type/binary.js
 var require_binary = __commonJS({
-  "../../node_modules/js-yaml/lib/type/binary.js"(exports2, module2) {
+  "../../../node_modules/js-yaml/lib/type/binary.js"(exports2, module2) {
     "use strict";
     var Type2 = require_type();
     var BASE64_MAP2 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=\n\r";
@@ -873,9 +873,9 @@ var require_binary = __commonJS({
   }
 });
 
-// ../../node_modules/js-yaml/lib/type/omap.js
+// ../../../node_modules/js-yaml/lib/type/omap.js
 var require_omap = __commonJS({
-  "../../node_modules/js-yaml/lib/type/omap.js"(exports2, module2) {
+  "../../../node_modules/js-yaml/lib/type/omap.js"(exports2, module2) {
     "use strict";
     var Type2 = require_type();
     var _hasOwnProperty2 = Object.prototype.hasOwnProperty;
@@ -910,9 +910,9 @@ var require_omap = __commonJS({
   }
 });
 
-// ../../node_modules/js-yaml/lib/type/pairs.js
+// ../../../node_modules/js-yaml/lib/type/pairs.js
 var require_pairs = __commonJS({
-  "../../node_modules/js-yaml/lib/type/pairs.js"(exports2, module2) {
+  "../../../node_modules/js-yaml/lib/type/pairs.js"(exports2, module2) {
     "use strict";
     var Type2 = require_type();
     var _toString2 = Object.prototype.toString;
@@ -948,9 +948,9 @@ var require_pairs = __commonJS({
   }
 });
 
-// ../../node_modules/js-yaml/lib/type/set.js
+// ../../../node_modules/js-yaml/lib/type/set.js
 var require_set = __commonJS({
-  "../../node_modules/js-yaml/lib/type/set.js"(exports2, module2) {
+  "../../../node_modules/js-yaml/lib/type/set.js"(exports2, module2) {
     "use strict";
     var Type2 = require_type();
     var _hasOwnProperty2 = Object.prototype.hasOwnProperty;
@@ -975,9 +975,9 @@ var require_set = __commonJS({
   }
 });
 
-// ../../node_modules/js-yaml/lib/schema/default.js
+// ../../../node_modules/js-yaml/lib/schema/default.js
 var require_default = __commonJS({
-  "../../node_modules/js-yaml/lib/schema/default.js"(exports2, module2) {
+  "../../../node_modules/js-yaml/lib/schema/default.js"(exports2, module2) {
     "use strict";
     module2.exports = require_core().extend({
       implicit: [
@@ -994,9 +994,9 @@ var require_default = __commonJS({
   }
 });
 
-// ../../node_modules/js-yaml/lib/loader.js
+// ../../../node_modules/js-yaml/lib/loader.js
 var require_loader = __commonJS({
-  "../../node_modules/js-yaml/lib/loader.js"(exports2, module2) {
+  "../../../node_modules/js-yaml/lib/loader.js"(exports2, module2) {
     "use strict";
     var common2 = require_common();
     var YAMLException2 = require_exception();
@@ -2158,9 +2158,9 @@ var require_loader = __commonJS({
   }
 });
 
-// ../../node_modules/js-yaml/lib/dumper.js
+// ../../../node_modules/js-yaml/lib/dumper.js
 var require_dumper = __commonJS({
-  "../../node_modules/js-yaml/lib/dumper.js"(exports2, module2) {
+  "../../../node_modules/js-yaml/lib/dumper.js"(exports2, module2) {
     "use strict";
     var common2 = require_common();
     var YAMLException2 = require_exception();
@@ -2787,9 +2787,9 @@ var require_dumper = __commonJS({
   }
 });
 
-// ../../node_modules/js-yaml/index.js
+// ../../../node_modules/js-yaml/index.js
 var require_js_yaml = __commonJS({
-  "../../node_modules/js-yaml/index.js"(exports2, module2) {
+  "../../../node_modules/js-yaml/index.js"(exports2, module2) {
     "use strict";
     var loader2 = require_loader();
     var dumper2 = require_dumper();
@@ -4388,9 +4388,9 @@ var require_dist = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/compile/codegen/code.js
+// ../../../node_modules/ajv/dist/compile/codegen/code.js
 var require_code = __commonJS({
-  "../../node_modules/ajv/dist/compile/codegen/code.js"(exports2) {
+  "../../../node_modules/ajv/dist/compile/codegen/code.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.regexpCode = exports2.getEsmExportName = exports2.getProperty = exports2.safeStringify = exports2.stringify = exports2.strConcat = exports2.addCodeArg = exports2.str = exports2._ = exports2.nil = exports2._Code = exports2.Name = exports2.IDENTIFIER = exports2._CodeOrName = void 0;
@@ -4542,9 +4542,9 @@ var require_code = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/compile/codegen/scope.js
+// ../../../node_modules/ajv/dist/compile/codegen/scope.js
 var require_scope = __commonJS({
-  "../../node_modules/ajv/dist/compile/codegen/scope.js"(exports2) {
+  "../../../node_modules/ajv/dist/compile/codegen/scope.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.ValueScope = exports2.ValueScopeName = exports2.Scope = exports2.varKinds = exports2.UsedValueState = void 0;
@@ -4687,9 +4687,9 @@ var require_scope = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/compile/codegen/index.js
+// ../../../node_modules/ajv/dist/compile/codegen/index.js
 var require_codegen = __commonJS({
-  "../../node_modules/ajv/dist/compile/codegen/index.js"(exports2) {
+  "../../../node_modules/ajv/dist/compile/codegen/index.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.or = exports2.and = exports2.not = exports2.CodeGen = exports2.operators = exports2.varKinds = exports2.ValueScopeName = exports2.ValueScope = exports2.Scope = exports2.Name = exports2.regexpCode = exports2.stringify = exports2.getProperty = exports2.nil = exports2.strConcat = exports2.str = exports2._ = void 0;
@@ -5407,9 +5407,9 @@ var require_codegen = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/compile/util.js
+// ../../../node_modules/ajv/dist/compile/util.js
 var require_util = __commonJS({
-  "../../node_modules/ajv/dist/compile/util.js"(exports2) {
+  "../../../node_modules/ajv/dist/compile/util.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.checkStrictMode = exports2.getErrorPath = exports2.Type = exports2.useFunc = exports2.setEvaluated = exports2.evaluatedPropsToName = exports2.mergeEvaluated = exports2.eachItem = exports2.unescapeJsonPointer = exports2.escapeJsonPointer = exports2.escapeFragment = exports2.unescapeFragment = exports2.schemaRefOrVal = exports2.schemaHasRulesButRef = exports2.schemaHasRules = exports2.checkUnknownRules = exports2.alwaysValidSchema = exports2.toHash = void 0;
@@ -5574,9 +5574,9 @@ var require_util = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/compile/names.js
+// ../../../node_modules/ajv/dist/compile/names.js
 var require_names = __commonJS({
-  "../../node_modules/ajv/dist/compile/names.js"(exports2) {
+  "../../../node_modules/ajv/dist/compile/names.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5613,9 +5613,9 @@ var require_names = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/compile/errors.js
+// ../../../node_modules/ajv/dist/compile/errors.js
 var require_errors = __commonJS({
-  "../../node_modules/ajv/dist/compile/errors.js"(exports2) {
+  "../../../node_modules/ajv/dist/compile/errors.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.extendErrors = exports2.resetErrorsCount = exports2.reportExtraError = exports2.reportError = exports2.keyword$DataError = exports2.keywordError = void 0;
@@ -5735,9 +5735,9 @@ var require_errors = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/compile/validate/boolSchema.js
+// ../../../node_modules/ajv/dist/compile/validate/boolSchema.js
 var require_boolSchema = __commonJS({
-  "../../node_modules/ajv/dist/compile/validate/boolSchema.js"(exports2) {
+  "../../../node_modules/ajv/dist/compile/validate/boolSchema.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.boolOrEmptySchema = exports2.topBoolOrEmptySchema = void 0;
@@ -5786,9 +5786,9 @@ var require_boolSchema = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/compile/rules.js
+// ../../../node_modules/ajv/dist/compile/rules.js
 var require_rules = __commonJS({
-  "../../node_modules/ajv/dist/compile/rules.js"(exports2) {
+  "../../../node_modules/ajv/dist/compile/rules.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.getRules = exports2.isJSONType = void 0;
@@ -5817,9 +5817,9 @@ var require_rules = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/compile/validate/applicability.js
+// ../../../node_modules/ajv/dist/compile/validate/applicability.js
 var require_applicability = __commonJS({
-  "../../node_modules/ajv/dist/compile/validate/applicability.js"(exports2) {
+  "../../../node_modules/ajv/dist/compile/validate/applicability.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.shouldUseRule = exports2.shouldUseGroup = exports2.schemaHasRulesForType = void 0;
@@ -5840,9 +5840,9 @@ var require_applicability = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/compile/validate/dataType.js
+// ../../../node_modules/ajv/dist/compile/validate/dataType.js
 var require_dataType = __commonJS({
-  "../../node_modules/ajv/dist/compile/validate/dataType.js"(exports2) {
+  "../../../node_modules/ajv/dist/compile/validate/dataType.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.reportTypeError = exports2.checkDataTypes = exports2.checkDataType = exports2.coerceAndCheckDataType = exports2.getJSONTypes = exports2.getSchemaTypes = exports2.DataType = void 0;
@@ -6024,9 +6024,9 @@ var require_dataType = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/compile/validate/defaults.js
+// ../../../node_modules/ajv/dist/compile/validate/defaults.js
 var require_defaults = __commonJS({
-  "../../node_modules/ajv/dist/compile/validate/defaults.js"(exports2) {
+  "../../../node_modules/ajv/dist/compile/validate/defaults.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.assignDefaults = void 0;
@@ -6061,9 +6061,9 @@ var require_defaults = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/code.js
+// ../../../node_modules/ajv/dist/vocabularies/code.js
 var require_code2 = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/code.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/code.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.validateUnion = exports2.validateArray = exports2.usePattern = exports2.callValidateCode = exports2.schemaProperties = exports2.allSchemaProperties = exports2.noPropertyInData = exports2.propertyInData = exports2.isOwnProperty = exports2.hasPropFunc = exports2.reportMissingProp = exports2.checkMissingProp = exports2.checkReportMissingProp = void 0;
@@ -6194,9 +6194,9 @@ var require_code2 = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/compile/validate/keyword.js
+// ../../../node_modules/ajv/dist/compile/validate/keyword.js
 var require_keyword = __commonJS({
-  "../../node_modules/ajv/dist/compile/validate/keyword.js"(exports2) {
+  "../../../node_modules/ajv/dist/compile/validate/keyword.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.validateKeywordUsage = exports2.validSchemaType = exports2.funcKeywordCode = exports2.macroKeywordCode = void 0;
@@ -6312,9 +6312,9 @@ var require_keyword = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/compile/validate/subschema.js
+// ../../../node_modules/ajv/dist/compile/validate/subschema.js
 var require_subschema = __commonJS({
-  "../../node_modules/ajv/dist/compile/validate/subschema.js"(exports2) {
+  "../../../node_modules/ajv/dist/compile/validate/subschema.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.extendSubschemaMode = exports2.extendSubschemaData = exports2.getSubschema = void 0;
@@ -6395,9 +6395,9 @@ var require_subschema = __commonJS({
   }
 });
 
-// ../../node_modules/fast-deep-equal/index.js
+// ../../../node_modules/fast-deep-equal/index.js
 var require_fast_deep_equal = __commonJS({
-  "../../node_modules/fast-deep-equal/index.js"(exports2, module2) {
+  "../../../node_modules/fast-deep-equal/index.js"(exports2, module2) {
     "use strict";
     module2.exports = function equal(a, b) {
       if (a === b) return true;
@@ -6430,9 +6430,9 @@ var require_fast_deep_equal = __commonJS({
   }
 });
 
-// ../../node_modules/json-schema-traverse/index.js
+// ../../../node_modules/json-schema-traverse/index.js
 var require_json_schema_traverse = __commonJS({
-  "../../node_modules/json-schema-traverse/index.js"(exports2, module2) {
+  "../../../node_modules/json-schema-traverse/index.js"(exports2, module2) {
     "use strict";
     var traverse = module2.exports = function(schema2, opts, cb) {
       if (typeof opts == "function") {
@@ -6518,9 +6518,9 @@ var require_json_schema_traverse = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/compile/resolve.js
+// ../../../node_modules/ajv/dist/compile/resolve.js
 var require_resolve = __commonJS({
-  "../../node_modules/ajv/dist/compile/resolve.js"(exports2) {
+  "../../../node_modules/ajv/dist/compile/resolve.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.getSchemaRefs = exports2.resolveUrl = exports2.normalizeId = exports2._getFullPath = exports2.getFullPath = exports2.inlineRef = void 0;
@@ -6674,9 +6674,9 @@ var require_resolve = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/compile/validate/index.js
+// ../../../node_modules/ajv/dist/compile/validate/index.js
 var require_validate = __commonJS({
-  "../../node_modules/ajv/dist/compile/validate/index.js"(exports2) {
+  "../../../node_modules/ajv/dist/compile/validate/index.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.getData = exports2.KeywordCxt = exports2.validateFunctionCode = void 0;
@@ -7182,9 +7182,9 @@ var require_validate = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/runtime/validation_error.js
+// ../../../node_modules/ajv/dist/runtime/validation_error.js
 var require_validation_error = __commonJS({
-  "../../node_modules/ajv/dist/runtime/validation_error.js"(exports2) {
+  "../../../node_modules/ajv/dist/runtime/validation_error.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var ValidationError = class extends Error {
@@ -7198,9 +7198,9 @@ var require_validation_error = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/compile/ref_error.js
+// ../../../node_modules/ajv/dist/compile/ref_error.js
 var require_ref_error = __commonJS({
-  "../../node_modules/ajv/dist/compile/ref_error.js"(exports2) {
+  "../../../node_modules/ajv/dist/compile/ref_error.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var resolve_1 = require_resolve();
@@ -7215,9 +7215,9 @@ var require_ref_error = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/compile/index.js
+// ../../../node_modules/ajv/dist/compile/index.js
 var require_compile = __commonJS({
-  "../../node_modules/ajv/dist/compile/index.js"(exports2) {
+  "../../../node_modules/ajv/dist/compile/index.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.resolveSchema = exports2.getCompilingSchema = exports2.resolveRef = exports2.compileSchema = exports2.SchemaEnv = void 0;
@@ -7439,9 +7439,9 @@ var require_compile = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/refs/data.json
+// ../../../node_modules/ajv/dist/refs/data.json
 var require_data = __commonJS({
-  "../../node_modules/ajv/dist/refs/data.json"(exports2, module2) {
+  "../../../node_modules/ajv/dist/refs/data.json"(exports2, module2) {
     module2.exports = {
       $id: "https://raw.githubusercontent.com/ajv-validator/ajv/master/lib/refs/data.json#",
       description: "Meta-schema for $data reference (JSON AnySchema extension proposal)",
@@ -7458,9 +7458,9 @@ var require_data = __commonJS({
   }
 });
 
-// ../../node_modules/fast-uri/lib/utils.js
+// ../../../node_modules/fast-uri/lib/utils.js
 var require_utils = __commonJS({
-  "../../node_modules/fast-uri/lib/utils.js"(exports2, module2) {
+  "../../../node_modules/fast-uri/lib/utils.js"(exports2, module2) {
     "use strict";
     var isUUID = RegExp.prototype.test.bind(/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/iu);
     var isIPv4 = RegExp.prototype.test.bind(/^(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)$/u);
@@ -7715,9 +7715,9 @@ var require_utils = __commonJS({
   }
 });
 
-// ../../node_modules/fast-uri/lib/schemes.js
+// ../../../node_modules/fast-uri/lib/schemes.js
 var require_schemes = __commonJS({
-  "../../node_modules/fast-uri/lib/schemes.js"(exports2, module2) {
+  "../../../node_modules/fast-uri/lib/schemes.js"(exports2, module2) {
     "use strict";
     var { isUUID } = require_utils();
     var URN_REG = /([\da-z][\d\-a-z]{0,31}):((?:[\w!$'()*+,\-.:;=@]|%[\da-f]{2})+)/iu;
@@ -7925,9 +7925,9 @@ var require_schemes = __commonJS({
   }
 });
 
-// ../../node_modules/fast-uri/index.js
+// ../../../node_modules/fast-uri/index.js
 var require_fast_uri = __commonJS({
-  "../../node_modules/fast-uri/index.js"(exports2, module2) {
+  "../../../node_modules/fast-uri/index.js"(exports2, module2) {
     "use strict";
     var { normalizeIPv6, removeDotSegments, recomposeAuthority, normalizeComponentEncoding, isIPv4, nonSimpleDomain } = require_utils();
     var { SCHEMES, getSchemeHandler } = require_schemes();
@@ -8180,9 +8180,9 @@ var require_fast_uri = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/runtime/uri.js
+// ../../../node_modules/ajv/dist/runtime/uri.js
 var require_uri = __commonJS({
-  "../../node_modules/ajv/dist/runtime/uri.js"(exports2) {
+  "../../../node_modules/ajv/dist/runtime/uri.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var uri = require_fast_uri();
@@ -8191,9 +8191,9 @@ var require_uri = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/core.js
+// ../../../node_modules/ajv/dist/core.js
 var require_core2 = __commonJS({
-  "../../node_modules/ajv/dist/core.js"(exports2) {
+  "../../../node_modules/ajv/dist/core.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.CodeGen = exports2.Name = exports2.nil = exports2.stringify = exports2.str = exports2._ = exports2.KeywordCxt = void 0;
@@ -8802,9 +8802,9 @@ var require_core2 = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/core/id.js
+// ../../../node_modules/ajv/dist/vocabularies/core/id.js
 var require_id = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/core/id.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/core/id.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var def = {
@@ -8817,9 +8817,9 @@ var require_id = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/core/ref.js
+// ../../../node_modules/ajv/dist/vocabularies/core/ref.js
 var require_ref = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/core/ref.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/core/ref.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.callRef = exports2.getValidate = void 0;
@@ -8939,9 +8939,9 @@ var require_ref = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/core/index.js
+// ../../../node_modules/ajv/dist/vocabularies/core/index.js
 var require_core3 = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/core/index.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/core/index.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var id_1 = require_id();
@@ -8960,9 +8960,9 @@ var require_core3 = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/validation/limitNumber.js
+// ../../../node_modules/ajv/dist/vocabularies/validation/limitNumber.js
 var require_limitNumber = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/validation/limitNumber.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/validation/limitNumber.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -8992,9 +8992,9 @@ var require_limitNumber = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/validation/multipleOf.js
+// ../../../node_modules/ajv/dist/vocabularies/validation/multipleOf.js
 var require_multipleOf = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/validation/multipleOf.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/validation/multipleOf.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -9020,9 +9020,9 @@ var require_multipleOf = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/runtime/ucs2length.js
+// ../../../node_modules/ajv/dist/runtime/ucs2length.js
 var require_ucs2length = __commonJS({
-  "../../node_modules/ajv/dist/runtime/ucs2length.js"(exports2) {
+  "../../../node_modules/ajv/dist/runtime/ucs2length.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     function ucs2length(str4) {
@@ -9046,9 +9046,9 @@ var require_ucs2length = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/validation/limitLength.js
+// ../../../node_modules/ajv/dist/vocabularies/validation/limitLength.js
 var require_limitLength = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/validation/limitLength.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/validation/limitLength.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -9078,9 +9078,9 @@ var require_limitLength = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/validation/pattern.js
+// ../../../node_modules/ajv/dist/vocabularies/validation/pattern.js
 var require_pattern = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/validation/pattern.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/validation/pattern.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var code_1 = require_code2();
@@ -9115,9 +9115,9 @@ var require_pattern = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/validation/limitProperties.js
+// ../../../node_modules/ajv/dist/vocabularies/validation/limitProperties.js
 var require_limitProperties = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/validation/limitProperties.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/validation/limitProperties.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -9144,9 +9144,9 @@ var require_limitProperties = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/validation/required.js
+// ../../../node_modules/ajv/dist/vocabularies/validation/required.js
 var require_required = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/validation/required.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/validation/required.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var code_1 = require_code2();
@@ -9226,9 +9226,9 @@ var require_required = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/validation/limitItems.js
+// ../../../node_modules/ajv/dist/vocabularies/validation/limitItems.js
 var require_limitItems = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/validation/limitItems.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/validation/limitItems.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -9255,9 +9255,9 @@ var require_limitItems = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/runtime/equal.js
+// ../../../node_modules/ajv/dist/runtime/equal.js
 var require_equal = __commonJS({
-  "../../node_modules/ajv/dist/runtime/equal.js"(exports2) {
+  "../../../node_modules/ajv/dist/runtime/equal.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var equal = require_fast_deep_equal();
@@ -9266,9 +9266,9 @@ var require_equal = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/validation/uniqueItems.js
+// ../../../node_modules/ajv/dist/vocabularies/validation/uniqueItems.js
 var require_uniqueItems = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/validation/uniqueItems.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/validation/uniqueItems.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var dataType_1 = require_dataType();
@@ -9333,9 +9333,9 @@ var require_uniqueItems = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/validation/const.js
+// ../../../node_modules/ajv/dist/vocabularies/validation/const.js
 var require_const = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/validation/const.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/validation/const.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -9362,9 +9362,9 @@ var require_const = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/validation/enum.js
+// ../../../node_modules/ajv/dist/vocabularies/validation/enum.js
 var require_enum = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/validation/enum.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/validation/enum.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -9411,9 +9411,9 @@ var require_enum = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/validation/index.js
+// ../../../node_modules/ajv/dist/vocabularies/validation/index.js
 var require_validation = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/validation/index.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/validation/index.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var limitNumber_1 = require_limitNumber();
@@ -9449,9 +9449,9 @@ var require_validation = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/applicator/additionalItems.js
+// ../../../node_modules/ajv/dist/vocabularies/applicator/additionalItems.js
 var require_additionalItems = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/applicator/additionalItems.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/applicator/additionalItems.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.validateAdditionalItems = void 0;
@@ -9502,9 +9502,9 @@ var require_additionalItems = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/applicator/items.js
+// ../../../node_modules/ajv/dist/vocabularies/applicator/items.js
 var require_items = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/applicator/items.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/applicator/items.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.validateTuple = void 0;
@@ -9559,9 +9559,9 @@ var require_items = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/applicator/prefixItems.js
+// ../../../node_modules/ajv/dist/vocabularies/applicator/prefixItems.js
 var require_prefixItems = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/applicator/prefixItems.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/applicator/prefixItems.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var items_1 = require_items();
@@ -9576,9 +9576,9 @@ var require_prefixItems = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/applicator/items2020.js
+// ../../../node_modules/ajv/dist/vocabularies/applicator/items2020.js
 var require_items2020 = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/applicator/items2020.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/applicator/items2020.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -9611,9 +9611,9 @@ var require_items2020 = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/applicator/contains.js
+// ../../../node_modules/ajv/dist/vocabularies/applicator/contains.js
 var require_contains = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/applicator/contains.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/applicator/contains.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -9705,9 +9705,9 @@ var require_contains = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/applicator/dependencies.js
+// ../../../node_modules/ajv/dist/vocabularies/applicator/dependencies.js
 var require_dependencies = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/applicator/dependencies.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/applicator/dependencies.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.validateSchemaDeps = exports2.validatePropertyDeps = exports2.error = void 0;
@@ -9799,9 +9799,9 @@ var require_dependencies = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/applicator/propertyNames.js
+// ../../../node_modules/ajv/dist/vocabularies/applicator/propertyNames.js
 var require_propertyNames = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/applicator/propertyNames.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/applicator/propertyNames.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -9842,9 +9842,9 @@ var require_propertyNames = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/applicator/additionalProperties.js
+// ../../../node_modules/ajv/dist/vocabularies/applicator/additionalProperties.js
 var require_additionalProperties = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/applicator/additionalProperties.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/applicator/additionalProperties.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var code_1 = require_code2();
@@ -9948,9 +9948,9 @@ var require_additionalProperties = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/applicator/properties.js
+// ../../../node_modules/ajv/dist/vocabularies/applicator/properties.js
 var require_properties = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/applicator/properties.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/applicator/properties.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var validate_1 = require_validate();
@@ -10006,9 +10006,9 @@ var require_properties = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/applicator/patternProperties.js
+// ../../../node_modules/ajv/dist/vocabularies/applicator/patternProperties.js
 var require_patternProperties = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/applicator/patternProperties.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/applicator/patternProperties.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var code_1 = require_code2();
@@ -10080,9 +10080,9 @@ var require_patternProperties = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/applicator/not.js
+// ../../../node_modules/ajv/dist/vocabularies/applicator/not.js
 var require_not = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/applicator/not.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/applicator/not.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var util_1 = require_util();
@@ -10111,9 +10111,9 @@ var require_not = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/applicator/anyOf.js
+// ../../../node_modules/ajv/dist/vocabularies/applicator/anyOf.js
 var require_anyOf = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/applicator/anyOf.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/applicator/anyOf.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var code_1 = require_code2();
@@ -10128,9 +10128,9 @@ var require_anyOf = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/applicator/oneOf.js
+// ../../../node_modules/ajv/dist/vocabularies/applicator/oneOf.js
 var require_oneOf = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/applicator/oneOf.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/applicator/oneOf.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -10186,9 +10186,9 @@ var require_oneOf = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/applicator/allOf.js
+// ../../../node_modules/ajv/dist/vocabularies/applicator/allOf.js
 var require_allOf = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/applicator/allOf.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/applicator/allOf.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var util_1 = require_util();
@@ -10213,9 +10213,9 @@ var require_allOf = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/applicator/if.js
+// ../../../node_modules/ajv/dist/vocabularies/applicator/if.js
 var require_if = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/applicator/if.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/applicator/if.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -10282,9 +10282,9 @@ var require_if = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/applicator/thenElse.js
+// ../../../node_modules/ajv/dist/vocabularies/applicator/thenElse.js
 var require_thenElse = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/applicator/thenElse.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/applicator/thenElse.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var util_1 = require_util();
@@ -10300,9 +10300,9 @@ var require_thenElse = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/applicator/index.js
+// ../../../node_modules/ajv/dist/vocabularies/applicator/index.js
 var require_applicator = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/applicator/index.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/applicator/index.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var additionalItems_1 = require_additionalItems();
@@ -10348,9 +10348,9 @@ var require_applicator = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/dynamic/dynamicAnchor.js
+// ../../../node_modules/ajv/dist/vocabularies/dynamic/dynamicAnchor.js
 var require_dynamicAnchor = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/dynamic/dynamicAnchor.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/dynamic/dynamicAnchor.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.dynamicAnchor = void 0;
@@ -10383,9 +10383,9 @@ var require_dynamicAnchor = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/dynamic/dynamicRef.js
+// ../../../node_modules/ajv/dist/vocabularies/dynamic/dynamicRef.js
 var require_dynamicRef = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/dynamic/dynamicRef.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/dynamic/dynamicRef.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.dynamicRef = void 0;
@@ -10429,9 +10429,9 @@ var require_dynamicRef = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/dynamic/recursiveAnchor.js
+// ../../../node_modules/ajv/dist/vocabularies/dynamic/recursiveAnchor.js
 var require_recursiveAnchor = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/dynamic/recursiveAnchor.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/dynamic/recursiveAnchor.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var dynamicAnchor_1 = require_dynamicAnchor();
@@ -10450,9 +10450,9 @@ var require_recursiveAnchor = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/dynamic/recursiveRef.js
+// ../../../node_modules/ajv/dist/vocabularies/dynamic/recursiveRef.js
 var require_recursiveRef = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/dynamic/recursiveRef.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/dynamic/recursiveRef.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var dynamicRef_1 = require_dynamicRef();
@@ -10465,9 +10465,9 @@ var require_recursiveRef = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/dynamic/index.js
+// ../../../node_modules/ajv/dist/vocabularies/dynamic/index.js
 var require_dynamic = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/dynamic/index.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/dynamic/index.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var dynamicAnchor_1 = require_dynamicAnchor();
@@ -10479,9 +10479,9 @@ var require_dynamic = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/validation/dependentRequired.js
+// ../../../node_modules/ajv/dist/vocabularies/validation/dependentRequired.js
 var require_dependentRequired = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/validation/dependentRequired.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/validation/dependentRequired.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var dependencies_1 = require_dependencies();
@@ -10496,9 +10496,9 @@ var require_dependentRequired = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/applicator/dependentSchemas.js
+// ../../../node_modules/ajv/dist/vocabularies/applicator/dependentSchemas.js
 var require_dependentSchemas = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/applicator/dependentSchemas.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/applicator/dependentSchemas.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var dependencies_1 = require_dependencies();
@@ -10512,9 +10512,9 @@ var require_dependentSchemas = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/validation/limitContains.js
+// ../../../node_modules/ajv/dist/vocabularies/validation/limitContains.js
 var require_limitContains = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/validation/limitContains.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/validation/limitContains.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var util_1 = require_util();
@@ -10532,9 +10532,9 @@ var require_limitContains = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/next.js
+// ../../../node_modules/ajv/dist/vocabularies/next.js
 var require_next = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/next.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/next.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var dependentRequired_1 = require_dependentRequired();
@@ -10545,9 +10545,9 @@ var require_next = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/unevaluated/unevaluatedProperties.js
+// ../../../node_modules/ajv/dist/vocabularies/unevaluated/unevaluatedProperties.js
 var require_unevaluatedProperties = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/unevaluated/unevaluatedProperties.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/unevaluated/unevaluatedProperties.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -10611,9 +10611,9 @@ var require_unevaluatedProperties = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/unevaluated/unevaluatedItems.js
+// ../../../node_modules/ajv/dist/vocabularies/unevaluated/unevaluatedItems.js
 var require_unevaluatedItems = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/unevaluated/unevaluatedItems.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/unevaluated/unevaluatedItems.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -10655,9 +10655,9 @@ var require_unevaluatedItems = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/unevaluated/index.js
+// ../../../node_modules/ajv/dist/vocabularies/unevaluated/index.js
 var require_unevaluated = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/unevaluated/index.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/unevaluated/index.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var unevaluatedProperties_1 = require_unevaluatedProperties();
@@ -10667,9 +10667,9 @@ var require_unevaluated = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/format/format.js
+// ../../../node_modules/ajv/dist/vocabularies/format/format.js
 var require_format = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/format/format.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/format/format.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -10757,9 +10757,9 @@ var require_format = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/format/index.js
+// ../../../node_modules/ajv/dist/vocabularies/format/index.js
 var require_format2 = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/format/index.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/format/index.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var format_1 = require_format();
@@ -10768,9 +10768,9 @@ var require_format2 = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/metadata.js
+// ../../../node_modules/ajv/dist/vocabularies/metadata.js
 var require_metadata = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/metadata.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/metadata.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.contentVocabulary = exports2.metadataVocabulary = void 0;
@@ -10791,9 +10791,9 @@ var require_metadata = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/draft2020.js
+// ../../../node_modules/ajv/dist/vocabularies/draft2020.js
 var require_draft2020 = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/draft2020.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/draft2020.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var core_1 = require_core3();
@@ -10819,9 +10819,9 @@ var require_draft2020 = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/discriminator/types.js
+// ../../../node_modules/ajv/dist/vocabularies/discriminator/types.js
 var require_types = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/discriminator/types.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/discriminator/types.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.DiscrError = void 0;
@@ -10833,9 +10833,9 @@ var require_types = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/discriminator/index.js
+// ../../../node_modules/ajv/dist/vocabularies/discriminator/index.js
 var require_discriminator = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/discriminator/index.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/discriminator/index.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -10938,9 +10938,9 @@ var require_discriminator = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/refs/json-schema-2020-12/schema.json
+// ../../../node_modules/ajv/dist/refs/json-schema-2020-12/schema.json
 var require_schema2 = __commonJS({
-  "../../node_modules/ajv/dist/refs/json-schema-2020-12/schema.json"(exports2, module2) {
+  "../../../node_modules/ajv/dist/refs/json-schema-2020-12/schema.json"(exports2, module2) {
     module2.exports = {
       $schema: "https://json-schema.org/draft/2020-12/schema",
       $id: "https://json-schema.org/draft/2020-12/schema",
@@ -10998,9 +10998,9 @@ var require_schema2 = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/applicator.json
+// ../../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/applicator.json
 var require_applicator2 = __commonJS({
-  "../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/applicator.json"(exports2, module2) {
+  "../../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/applicator.json"(exports2, module2) {
     module2.exports = {
       $schema: "https://json-schema.org/draft/2020-12/schema",
       $id: "https://json-schema.org/draft/2020-12/meta/applicator",
@@ -11051,9 +11051,9 @@ var require_applicator2 = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/unevaluated.json
+// ../../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/unevaluated.json
 var require_unevaluated2 = __commonJS({
-  "../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/unevaluated.json"(exports2, module2) {
+  "../../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/unevaluated.json"(exports2, module2) {
     module2.exports = {
       $schema: "https://json-schema.org/draft/2020-12/schema",
       $id: "https://json-schema.org/draft/2020-12/meta/unevaluated",
@@ -11071,9 +11071,9 @@ var require_unevaluated2 = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/content.json
+// ../../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/content.json
 var require_content = __commonJS({
-  "../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/content.json"(exports2, module2) {
+  "../../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/content.json"(exports2, module2) {
     module2.exports = {
       $schema: "https://json-schema.org/draft/2020-12/schema",
       $id: "https://json-schema.org/draft/2020-12/meta/content",
@@ -11092,9 +11092,9 @@ var require_content = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/core.json
+// ../../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/core.json
 var require_core4 = __commonJS({
-  "../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/core.json"(exports2, module2) {
+  "../../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/core.json"(exports2, module2) {
     module2.exports = {
       $schema: "https://json-schema.org/draft/2020-12/schema",
       $id: "https://json-schema.org/draft/2020-12/meta/core",
@@ -11148,9 +11148,9 @@ var require_core4 = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/format-annotation.json
+// ../../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/format-annotation.json
 var require_format_annotation = __commonJS({
-  "../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/format-annotation.json"(exports2, module2) {
+  "../../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/format-annotation.json"(exports2, module2) {
     module2.exports = {
       $schema: "https://json-schema.org/draft/2020-12/schema",
       $id: "https://json-schema.org/draft/2020-12/meta/format-annotation",
@@ -11167,9 +11167,9 @@ var require_format_annotation = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/meta-data.json
+// ../../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/meta-data.json
 var require_meta_data = __commonJS({
-  "../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/meta-data.json"(exports2, module2) {
+  "../../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/meta-data.json"(exports2, module2) {
     module2.exports = {
       $schema: "https://json-schema.org/draft/2020-12/schema",
       $id: "https://json-schema.org/draft/2020-12/meta/meta-data",
@@ -11208,9 +11208,9 @@ var require_meta_data = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/validation.json
+// ../../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/validation.json
 var require_validation2 = __commonJS({
-  "../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/validation.json"(exports2, module2) {
+  "../../../node_modules/ajv/dist/refs/json-schema-2020-12/meta/validation.json"(exports2, module2) {
     module2.exports = {
       $schema: "https://json-schema.org/draft/2020-12/schema",
       $id: "https://json-schema.org/draft/2020-12/meta/validation",
@@ -11303,9 +11303,9 @@ var require_validation2 = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/refs/json-schema-2020-12/index.js
+// ../../../node_modules/ajv/dist/refs/json-schema-2020-12/index.js
 var require_json_schema_2020_12 = __commonJS({
-  "../../node_modules/ajv/dist/refs/json-schema-2020-12/index.js"(exports2) {
+  "../../../node_modules/ajv/dist/refs/json-schema-2020-12/index.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var metaSchema = require_schema2();
@@ -11338,9 +11338,9 @@ var require_json_schema_2020_12 = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/2020.js
+// ../../../node_modules/ajv/dist/2020.js
 var require__ = __commonJS({
-  "../../node_modules/ajv/dist/2020.js"(exports2, module2) {
+  "../../../node_modules/ajv/dist/2020.js"(exports2, module2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.MissingRefError = exports2.ValidationError = exports2.CodeGen = exports2.Name = exports2.nil = exports2.stringify = exports2.str = exports2._ = exports2.KeywordCxt = exports2.Ajv2020 = void 0;
@@ -11415,9 +11415,9 @@ var require__ = __commonJS({
   }
 });
 
-// ../../node_modules/ajv-formats/dist/formats.js
+// ../../../node_modules/ajv-formats/dist/formats.js
 var require_formats = __commonJS({
-  "../../node_modules/ajv-formats/dist/formats.js"(exports2) {
+  "../../../node_modules/ajv-formats/dist/formats.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.formatNames = exports2.fastFormats = exports2.fullFormats = void 0;
@@ -11618,9 +11618,9 @@ var require_formats = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/vocabularies/draft7.js
+// ../../../node_modules/ajv/dist/vocabularies/draft7.js
 var require_draft7 = __commonJS({
-  "../../node_modules/ajv/dist/vocabularies/draft7.js"(exports2) {
+  "../../../node_modules/ajv/dist/vocabularies/draft7.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var core_1 = require_core3();
@@ -11640,9 +11640,9 @@ var require_draft7 = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/refs/json-schema-draft-07.json
+// ../../../node_modules/ajv/dist/refs/json-schema-draft-07.json
 var require_json_schema_draft_07 = __commonJS({
-  "../../node_modules/ajv/dist/refs/json-schema-draft-07.json"(exports2, module2) {
+  "../../../node_modules/ajv/dist/refs/json-schema-draft-07.json"(exports2, module2) {
     module2.exports = {
       $schema: "http://json-schema.org/draft-07/schema#",
       $id: "http://json-schema.org/draft-07/schema#",
@@ -11797,9 +11797,9 @@ var require_json_schema_draft_07 = __commonJS({
   }
 });
 
-// ../../node_modules/ajv/dist/ajv.js
+// ../../../node_modules/ajv/dist/ajv.js
 var require_ajv = __commonJS({
-  "../../node_modules/ajv/dist/ajv.js"(exports2, module2) {
+  "../../../node_modules/ajv/dist/ajv.js"(exports2, module2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.MissingRefError = exports2.ValidationError = exports2.CodeGen = exports2.Name = exports2.nil = exports2.stringify = exports2.str = exports2._ = exports2.KeywordCxt = exports2.Ajv = void 0;
@@ -11867,9 +11867,9 @@ var require_ajv = __commonJS({
   }
 });
 
-// ../../node_modules/ajv-formats/dist/limit.js
+// ../../../node_modules/ajv-formats/dist/limit.js
 var require_limit = __commonJS({
-  "../../node_modules/ajv-formats/dist/limit.js"(exports2) {
+  "../../../node_modules/ajv-formats/dist/limit.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.formatLimitDefinition = void 0;
@@ -11939,9 +11939,9 @@ var require_limit = __commonJS({
   }
 });
 
-// ../../node_modules/ajv-formats/dist/index.js
+// ../../../node_modules/ajv-formats/dist/index.js
 var require_dist2 = __commonJS({
-  "../../node_modules/ajv-formats/dist/index.js"(exports2, module2) {
+  "../../../node_modules/ajv-formats/dist/index.js"(exports2, module2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     var formats_1 = require_formats();
@@ -11981,9 +11981,9 @@ var require_dist2 = __commonJS({
   }
 });
 
-// ../../node_modules/ws/lib/constants.js
+// ../../../node_modules/ws/lib/constants.js
 var require_constants = __commonJS({
-  "../../node_modules/ws/lib/constants.js"(exports2, module2) {
+  "../../../node_modules/ws/lib/constants.js"(exports2, module2) {
     "use strict";
     var BINARY_TYPES = ["nodebuffer", "arraybuffer", "fragments"];
     var hasBlob = typeof Blob !== "undefined";
@@ -12004,9 +12004,9 @@ var require_constants = __commonJS({
   }
 });
 
-// ../../node_modules/ws/lib/buffer-util.js
+// ../../../node_modules/ws/lib/buffer-util.js
 var require_buffer_util = __commonJS({
-  "../../node_modules/ws/lib/buffer-util.js"(exports2, module2) {
+  "../../../node_modules/ws/lib/buffer-util.js"(exports2, module2) {
     "use strict";
     var { EMPTY_BUFFER } = require_constants();
     var FastBuffer = Buffer[Symbol.species];
@@ -12079,9 +12079,9 @@ var require_buffer_util = __commonJS({
   }
 });
 
-// ../../node_modules/ws/lib/limiter.js
+// ../../../node_modules/ws/lib/limiter.js
 var require_limiter = __commonJS({
-  "../../node_modules/ws/lib/limiter.js"(exports2, module2) {
+  "../../../node_modules/ws/lib/limiter.js"(exports2, module2) {
     "use strict";
     var kDone = /* @__PURE__ */ Symbol("kDone");
     var kRun = /* @__PURE__ */ Symbol("kRun");
@@ -12129,9 +12129,9 @@ var require_limiter = __commonJS({
   }
 });
 
-// ../../node_modules/ws/lib/permessage-deflate.js
+// ../../../node_modules/ws/lib/permessage-deflate.js
 var require_permessage_deflate = __commonJS({
-  "../../node_modules/ws/lib/permessage-deflate.js"(exports2, module2) {
+  "../../../node_modules/ws/lib/permessage-deflate.js"(exports2, module2) {
     "use strict";
     var zlib = require("zlib");
     var bufferUtil = require_buffer_util();
@@ -12512,9 +12512,9 @@ var require_permessage_deflate = __commonJS({
   }
 });
 
-// ../../node_modules/ws/lib/validation.js
+// ../../../node_modules/ws/lib/validation.js
 var require_validation3 = __commonJS({
-  "../../node_modules/ws/lib/validation.js"(exports2, module2) {
+  "../../../node_modules/ws/lib/validation.js"(exports2, module2) {
     "use strict";
     var { isUtf8 } = require("buffer");
     var { hasBlob } = require_constants();
@@ -12713,9 +12713,9 @@ var require_validation3 = __commonJS({
   }
 });
 
-// ../../node_modules/ws/lib/receiver.js
+// ../../../node_modules/ws/lib/receiver.js
 var require_receiver = __commonJS({
-  "../../node_modules/ws/lib/receiver.js"(exports2, module2) {
+  "../../../node_modules/ws/lib/receiver.js"(exports2, module2) {
     "use strict";
     var { Writable } = require("stream");
     var PerMessageDeflate = require_permessage_deflate();
@@ -13336,9 +13336,9 @@ var require_receiver = __commonJS({
   }
 });
 
-// ../../node_modules/ws/lib/sender.js
+// ../../../node_modules/ws/lib/sender.js
 var require_sender = __commonJS({
-  "../../node_modules/ws/lib/sender.js"(exports2, module2) {
+  "../../../node_modules/ws/lib/sender.js"(exports2, module2) {
     "use strict";
     var { Duplex } = require("stream");
     var { randomFillSync } = require("crypto");
@@ -13829,9 +13829,9 @@ var require_sender = __commonJS({
   }
 });
 
-// ../../node_modules/ws/lib/event-target.js
+// ../../../node_modules/ws/lib/event-target.js
 var require_event_target = __commonJS({
-  "../../node_modules/ws/lib/event-target.js"(exports2, module2) {
+  "../../../node_modules/ws/lib/event-target.js"(exports2, module2) {
     "use strict";
     var { kForOnEventAttribute, kListener } = require_constants();
     var kCode = /* @__PURE__ */ Symbol("kCode");
@@ -14058,9 +14058,9 @@ var require_event_target = __commonJS({
   }
 });
 
-// ../../node_modules/ws/lib/extension.js
+// ../../../node_modules/ws/lib/extension.js
 var require_extension = __commonJS({
-  "../../node_modules/ws/lib/extension.js"(exports2, module2) {
+  "../../../node_modules/ws/lib/extension.js"(exports2, module2) {
     "use strict";
     var { tokenChars } = require_validation3();
     function push(dest, name, elem) {
@@ -14211,9 +14211,9 @@ var require_extension = __commonJS({
   }
 });
 
-// ../../node_modules/ws/lib/websocket.js
+// ../../../node_modules/ws/lib/websocket.js
 var require_websocket = __commonJS({
-  "../../node_modules/ws/lib/websocket.js"(exports2, module2) {
+  "../../../node_modules/ws/lib/websocket.js"(exports2, module2) {
     "use strict";
     var EventEmitter = require("events");
     var https = require("https");
@@ -15107,9 +15107,9 @@ var require_websocket = __commonJS({
   }
 });
 
-// ../../node_modules/ws/lib/stream.js
+// ../../../node_modules/ws/lib/stream.js
 var require_stream = __commonJS({
-  "../../node_modules/ws/lib/stream.js"(exports2, module2) {
+  "../../../node_modules/ws/lib/stream.js"(exports2, module2) {
     "use strict";
     var WebSocket = require_websocket();
     var { Duplex } = require("stream");
@@ -15205,9 +15205,9 @@ var require_stream = __commonJS({
   }
 });
 
-// ../../node_modules/ws/lib/subprotocol.js
+// ../../../node_modules/ws/lib/subprotocol.js
 var require_subprotocol = __commonJS({
-  "../../node_modules/ws/lib/subprotocol.js"(exports2, module2) {
+  "../../../node_modules/ws/lib/subprotocol.js"(exports2, module2) {
     "use strict";
     var { tokenChars } = require_validation3();
     function parse(header) {
@@ -15250,9 +15250,9 @@ var require_subprotocol = __commonJS({
   }
 });
 
-// ../../node_modules/ws/lib/websocket-server.js
+// ../../../node_modules/ws/lib/websocket-server.js
 var require_websocket_server = __commonJS({
-  "../../node_modules/ws/lib/websocket-server.js"(exports2, module2) {
+  "../../../node_modules/ws/lib/websocket-server.js"(exports2, module2) {
     "use strict";
     var EventEmitter = require("events");
     var http = require("http");
@@ -15651,9 +15651,9 @@ var require_websocket_server = __commonJS({
   }
 });
 
-// ../../node_modules/ws/index.js
+// ../../../node_modules/ws/index.js
 var require_ws = __commonJS({
-  "../../node_modules/ws/index.js"(exports2, module2) {
+  "../../../node_modules/ws/index.js"(exports2, module2) {
     "use strict";
     var createWebSocketStream = require_stream();
     var extension = require_extension();
@@ -15676,9 +15676,9 @@ var require_ws = __commonJS({
   }
 });
 
-// ../../node_modules/readdirp/index.js
+// ../../../node_modules/readdirp/index.js
 var require_readdirp = __commonJS({
-  "../../node_modules/readdirp/index.js"(exports2) {
+  "../../../node_modules/readdirp/index.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.ReaddirpStream = exports2.EntryTypes = void 0;
@@ -15912,9 +15912,9 @@ var require_readdirp = __commonJS({
   }
 });
 
-// ../../node_modules/chokidar/handler.js
+// ../../../node_modules/chokidar/handler.js
 var require_handler = __commonJS({
-  "../../node_modules/chokidar/handler.js"(exports2) {
+  "../../../node_modules/chokidar/handler.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.NodeFsHandler = exports2.EVENTS = exports2.isIBMi = exports2.isFreeBSD = exports2.isLinux = exports2.isMacos = exports2.isWindows = exports2.IDENTITY_FN = exports2.EMPTY_FN = exports2.STR_CLOSE = exports2.STR_END = exports2.STR_DATA = void 0;
@@ -16679,9 +16679,9 @@ var require_handler = __commonJS({
   }
 });
 
-// ../../node_modules/chokidar/index.js
+// ../../../node_modules/chokidar/index.js
 var require_chokidar = __commonJS({
-  "../../node_modules/chokidar/index.js"(exports2) {
+  "../../../node_modules/chokidar/index.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.FSWatcher = exports2.WatchHelper = void 0;
@@ -17405,17 +17405,17 @@ var require_chokidar = __commonJS({
   }
 });
 
-// ../../node_modules/events-universal/default.js
+// ../../../node_modules/events-universal/default.js
 var require_default2 = __commonJS({
-  "../../node_modules/events-universal/default.js"(exports2, module2) {
+  "../../../node_modules/events-universal/default.js"(exports2, module2) {
     "use strict";
     module2.exports = require("events");
   }
 });
 
-// ../../node_modules/fast-fifo/fixed-size.js
+// ../../../node_modules/fast-fifo/fixed-size.js
 var require_fixed_size = __commonJS({
-  "../../node_modules/fast-fifo/fixed-size.js"(exports2, module2) {
+  "../../../node_modules/fast-fifo/fixed-size.js"(exports2, module2) {
     "use strict";
     module2.exports = class FixedFIFO {
       constructor(hwm) {
@@ -17454,9 +17454,9 @@ var require_fixed_size = __commonJS({
   }
 });
 
-// ../../node_modules/fast-fifo/index.js
+// ../../../node_modules/fast-fifo/index.js
 var require_fast_fifo = __commonJS({
-  "../../node_modules/fast-fifo/index.js"(exports2, module2) {
+  "../../../node_modules/fast-fifo/index.js"(exports2, module2) {
     "use strict";
     var FixedFIFO = require_fixed_size();
     module2.exports = class FastFIFO {
@@ -17502,9 +17502,9 @@ var require_fast_fifo = __commonJS({
   }
 });
 
-// ../../node_modules/text-decoder/node_modules/b4a/index.js
+// ../../../node_modules/text-decoder/node_modules/b4a/index.js
 var require_b4a = __commonJS({
-  "../../node_modules/text-decoder/node_modules/b4a/index.js"(exports2, module2) {
+  "../../../node_modules/text-decoder/node_modules/b4a/index.js"(exports2, module2) {
     "use strict";
     function isBuffer(value) {
       return Buffer.isBuffer(value) || value instanceof Uint8Array;
@@ -17660,9 +17660,9 @@ var require_b4a = __commonJS({
   }
 });
 
-// ../../node_modules/text-decoder/lib/pass-through-decoder.js
+// ../../../node_modules/text-decoder/lib/pass-through-decoder.js
 var require_pass_through_decoder = __commonJS({
-  "../../node_modules/text-decoder/lib/pass-through-decoder.js"(exports2, module2) {
+  "../../../node_modules/text-decoder/lib/pass-through-decoder.js"(exports2, module2) {
     "use strict";
     var b4a = require_b4a();
     module2.exports = class PassThroughDecoder {
@@ -17682,9 +17682,9 @@ var require_pass_through_decoder = __commonJS({
   }
 });
 
-// ../../node_modules/text-decoder/lib/utf8-decoder.js
+// ../../../node_modules/text-decoder/lib/utf8-decoder.js
 var require_utf8_decoder = __commonJS({
-  "../../node_modules/text-decoder/lib/utf8-decoder.js"(exports2, module2) {
+  "../../../node_modules/text-decoder/lib/utf8-decoder.js"(exports2, module2) {
     "use strict";
     var b4a = require_b4a();
     module2.exports = class UTF8Decoder {
@@ -17830,9 +17830,9 @@ var require_utf8_decoder = __commonJS({
   }
 });
 
-// ../../node_modules/text-decoder/index.js
+// ../../../node_modules/text-decoder/index.js
 var require_text_decoder = __commonJS({
-  "../../node_modules/text-decoder/index.js"(exports2, module2) {
+  "../../../node_modules/text-decoder/index.js"(exports2, module2) {
     "use strict";
     var PassThroughDecoder = require_pass_through_decoder();
     var UTF8Decoder = require_utf8_decoder();
@@ -17893,9 +17893,9 @@ var require_text_decoder = __commonJS({
   }
 });
 
-// ../../node_modules/streamx/lib/errors.js
+// ../../../node_modules/streamx/lib/errors.js
 var require_errors2 = __commonJS({
-  "../../node_modules/streamx/lib/errors.js"(exports2, module2) {
+  "../../../node_modules/streamx/lib/errors.js"(exports2, module2) {
     "use strict";
     module2.exports = class StreamError extends Error {
       constructor(msg, code, fn = StreamError) {
@@ -17936,9 +17936,9 @@ var require_errors2 = __commonJS({
   }
 });
 
-// ../../node_modules/streamx/index.js
+// ../../../node_modules/streamx/index.js
 var require_streamx = __commonJS({
-  "../../node_modules/streamx/index.js"(exports2, module2) {
+  "../../../node_modules/streamx/index.js"(exports2, module2) {
     "use strict";
     var { EventEmitter } = require_default2();
     var FIFO = require_fast_fifo();
@@ -18968,9 +18968,9 @@ var require_streamx = __commonJS({
   }
 });
 
-// ../daemon-core/node_modules/b4a/index.js
+// ../../node_modules/tar-stream/node_modules/b4a/index.js
 var require_b4a2 = __commonJS({
-  "../daemon-core/node_modules/b4a/index.js"(exports2, module2) {
+  "../../node_modules/tar-stream/node_modules/b4a/index.js"(exports2, module2) {
     "use strict";
     function isBuffer(value) {
       return Buffer.isBuffer(value) || value instanceof Uint8Array;
@@ -19126,9 +19126,9 @@ var require_b4a2 = __commonJS({
   }
 });
 
-// ../daemon-core/node_modules/tar-stream/headers.js
+// ../../node_modules/tar-stream/headers.js
 var require_headers = __commonJS({
-  "../daemon-core/node_modules/tar-stream/headers.js"(exports2) {
+  "../../node_modules/tar-stream/headers.js"(exports2) {
     "use strict";
     var b4a = require_b4a2();
     var ZEROS = "0000000000000000000";
@@ -19389,9 +19389,9 @@ var require_headers = __commonJS({
   }
 });
 
-// ../daemon-core/node_modules/tar-stream/extract.js
+// ../../node_modules/tar-stream/extract.js
 var require_extract = __commonJS({
-  "../daemon-core/node_modules/tar-stream/extract.js"(exports2, module2) {
+  "../../node_modules/tar-stream/extract.js"(exports2, module2) {
     "use strict";
     var { Writable, Readable, getStreamError } = require_streamx();
     var FIFO = require_fast_fifo();
@@ -19734,9 +19734,9 @@ var require_extract = __commonJS({
   }
 });
 
-// ../daemon-core/node_modules/tar-stream/constants.js
+// ../../node_modules/tar-stream/constants.js
 var require_constants2 = __commonJS({
-  "../daemon-core/node_modules/tar-stream/constants.js"(exports2, module2) {
+  "../../node_modules/tar-stream/constants.js"(exports2, module2) {
     "use strict";
     var constants = {
       // just for envs without fs
@@ -19755,9 +19755,9 @@ var require_constants2 = __commonJS({
   }
 });
 
-// ../daemon-core/node_modules/tar-stream/pack.js
+// ../../node_modules/tar-stream/pack.js
 var require_pack = __commonJS({
-  "../daemon-core/node_modules/tar-stream/pack.js"(exports2, module2) {
+  "../../node_modules/tar-stream/pack.js"(exports2, module2) {
     "use strict";
     var { Readable, Writable, getStreamError } = require_streamx();
     var b4a = require_b4a2();
@@ -19990,18 +19990,18 @@ var require_pack = __commonJS({
   }
 });
 
-// ../daemon-core/node_modules/tar-stream/index.js
+// ../../node_modules/tar-stream/index.js
 var require_tar_stream = __commonJS({
-  "../daemon-core/node_modules/tar-stream/index.js"(exports2) {
+  "../../node_modules/tar-stream/index.js"(exports2) {
     "use strict";
     exports2.extract = require_extract();
     exports2.pack = require_pack();
   }
 });
 
-// ../../node_modules/wrappy/wrappy.js
+// ../../../node_modules/wrappy/wrappy.js
 var require_wrappy = __commonJS({
-  "../../node_modules/wrappy/wrappy.js"(exports2, module2) {
+  "../../../node_modules/wrappy/wrappy.js"(exports2, module2) {
     "use strict";
     module2.exports = wrappy;
     function wrappy(fn, cb) {
@@ -20030,9 +20030,9 @@ var require_wrappy = __commonJS({
   }
 });
 
-// ../../node_modules/once/once.js
+// ../../../node_modules/once/once.js
 var require_once = __commonJS({
-  "../../node_modules/once/once.js"(exports2, module2) {
+  "../../../node_modules/once/once.js"(exports2, module2) {
     "use strict";
     var wrappy = require_wrappy();
     module2.exports = wrappy(once);
@@ -20075,9 +20075,9 @@ var require_once = __commonJS({
   }
 });
 
-// ../../node_modules/end-of-stream/index.js
+// ../../../node_modules/end-of-stream/index.js
 var require_end_of_stream = __commonJS({
-  "../../node_modules/end-of-stream/index.js"(exports2, module2) {
+  "../../../node_modules/end-of-stream/index.js"(exports2, module2) {
     "use strict";
     var once = require_once();
     var noop = function() {
@@ -20159,9 +20159,9 @@ var require_end_of_stream = __commonJS({
   }
 });
 
-// ../../node_modules/pump/index.js
+// ../../../node_modules/pump/index.js
 var require_pump = __commonJS({
-  "../../node_modules/pump/index.js"(exports2, module2) {
+  "../../../node_modules/pump/index.js"(exports2, module2) {
     "use strict";
     var once = require_once();
     var eos = require_end_of_stream();
@@ -20235,9 +20235,9 @@ var require_pump = __commonJS({
   }
 });
 
-// ../daemon-core/node_modules/tar-fs/index.js
+// ../../node_modules/tar-fs/index.js
 var require_tar_fs = __commonJS({
-  "../daemon-core/node_modules/tar-fs/index.js"(exports2) {
+  "../../node_modules/tar-fs/index.js"(exports2) {
     "use strict";
     var tar = require_tar_stream();
     var pump = require_pump();
@@ -20569,7 +20569,7 @@ var require_tar_fs = __commonJS({
   }
 });
 
-// ../../node_modules/js-yaml/dist/js-yaml.mjs
+// ../../../node_modules/js-yaml/dist/js-yaml.mjs
 var js_yaml_exports = {};
 __export(js_yaml_exports, {
   CORE_SCHEMA: () => CORE_SCHEMA,
@@ -22771,7 +22771,7 @@ function renamed(from, to) {
 }
 var isNothing_1, isObject_1, toArray_1, repeat_1, isNegativeZero_1, extend_1, common, exception, snippet, TYPE_CONSTRUCTOR_OPTIONS, YAML_NODE_KINDS, type, schema, str, seq, map, failsafe, _null, bool, int, YAML_FLOAT_PATTERN, SCIENTIFIC_WITHOUT_DOT, float, json, core, YAML_DATE_REGEXP, YAML_TIMESTAMP_REGEXP, timestamp, merge, BASE64_MAP, binary, _hasOwnProperty$3, _toString$2, omap, _toString$1, pairs, _hasOwnProperty$2, set, _default, _hasOwnProperty$1, CONTEXT_FLOW_IN, CONTEXT_FLOW_OUT, CONTEXT_BLOCK_IN, CONTEXT_BLOCK_OUT, CHOMPING_CLIP, CHOMPING_STRIP, CHOMPING_KEEP, PATTERN_NON_PRINTABLE, PATTERN_NON_ASCII_LINE_BREAKS, PATTERN_FLOW_INDICATORS, PATTERN_TAG_HANDLE, PATTERN_TAG_URI, simpleEscapeCheck, simpleEscapeMap, i, directiveHandlers, loadAll_1, load_1, loader, _toString, _hasOwnProperty, CHAR_BOM, CHAR_TAB, CHAR_LINE_FEED, CHAR_CARRIAGE_RETURN, CHAR_SPACE, CHAR_EXCLAMATION, CHAR_DOUBLE_QUOTE, CHAR_SHARP, CHAR_PERCENT, CHAR_AMPERSAND, CHAR_SINGLE_QUOTE, CHAR_ASTERISK, CHAR_COMMA, CHAR_MINUS, CHAR_COLON, CHAR_EQUALS, CHAR_GREATER_THAN, CHAR_QUESTION, CHAR_COMMERCIAL_AT, CHAR_LEFT_SQUARE_BRACKET, CHAR_RIGHT_SQUARE_BRACKET, CHAR_GRAVE_ACCENT, CHAR_LEFT_CURLY_BRACKET, CHAR_VERTICAL_LINE, CHAR_RIGHT_CURLY_BRACKET, ESCAPE_SEQUENCES, DEPRECATED_BOOLEANS_SYNTAX, DEPRECATED_BASE60_SYNTAX, QUOTING_TYPE_SINGLE, QUOTING_TYPE_DOUBLE, STYLE_PLAIN, STYLE_SINGLE, STYLE_LITERAL, STYLE_FOLDED, STYLE_DOUBLE, dump_1, dumper, Type, Schema, FAILSAFE_SCHEMA, JSON_SCHEMA, CORE_SCHEMA, DEFAULT_SCHEMA, load, loadAll, dump, YAMLException, types, safeLoad, safeLoadAll, safeDump, jsYaml;
 var init_js_yaml = __esm({
-  "../../node_modules/js-yaml/dist/js-yaml.mjs"() {
+  "../../../node_modules/js-yaml/dist/js-yaml.mjs"() {
     "use strict";
     isNothing_1 = isNothing;
     isObject_1 = isObject;
@@ -23216,7 +23216,7 @@ var init_js_yaml = __esm({
   }
 });
 
-// ../../node_modules/chalk/source/vendor/ansi-styles/index.js
+// ../../../node_modules/chalk/source/vendor/ansi-styles/index.js
 function assembleStyles() {
   const codes = /* @__PURE__ */ new Map();
   for (const [groupName, group] of Object.entries(styles)) {
@@ -23333,7 +23333,7 @@ function assembleStyles() {
 }
 var ANSI_BACKGROUND_OFFSET, wrapAnsi16, wrapAnsi256, wrapAnsi16m, styles, modifierNames, foregroundColorNames, backgroundColorNames, colorNames, ansiStyles, ansi_styles_default;
 var init_ansi_styles = __esm({
-  "../../node_modules/chalk/source/vendor/ansi-styles/index.js"() {
+  "../../../node_modules/chalk/source/vendor/ansi-styles/index.js"() {
     "use strict";
     ANSI_BACKGROUND_OFFSET = 10;
     wrapAnsi16 = (offset = 0) => (code) => `\x1B[${code + offset}m`;
@@ -23408,7 +23408,7 @@ var init_ansi_styles = __esm({
   }
 });
 
-// ../../node_modules/chalk/source/vendor/supports-color/index.js
+// ../../../node_modules/chalk/source/vendor/supports-color/index.js
 function hasFlag(flag, argv = globalThis.Deno ? globalThis.Deno.args : import_node_process.default.argv) {
   const prefix = flag.startsWith("-") ? "" : flag.length === 1 ? "-" : "--";
   const position = argv.indexOf(prefix + flag);
@@ -23526,7 +23526,7 @@ function createSupportsColor(stream, options = {}) {
 }
 var import_node_process, import_node_os, import_node_tty, env, flagForceColor, supportsColor, supports_color_default;
 var init_supports_color = __esm({
-  "../../node_modules/chalk/source/vendor/supports-color/index.js"() {
+  "../../../node_modules/chalk/source/vendor/supports-color/index.js"() {
     "use strict";
     import_node_process = __toESM(require("process"), 1);
     import_node_os = __toESM(require("os"), 1);
@@ -23545,7 +23545,7 @@ var init_supports_color = __esm({
   }
 });
 
-// ../../node_modules/chalk/source/utilities.js
+// ../../../node_modules/chalk/source/utilities.js
 function stringReplaceAll(string, substring, replacer) {
   let index = string.indexOf(substring);
   if (index === -1) {
@@ -23575,12 +23575,12 @@ function stringEncaseCRLFWithFirstIndex(string, prefix, postfix, index) {
   return returnValue;
 }
 var init_utilities = __esm({
-  "../../node_modules/chalk/source/utilities.js"() {
+  "../../../node_modules/chalk/source/utilities.js"() {
     "use strict";
   }
 });
 
-// ../../node_modules/chalk/source/index.js
+// ../../../node_modules/chalk/source/index.js
 var source_exports = {};
 __export(source_exports, {
   Chalk: () => Chalk,
@@ -23602,7 +23602,7 @@ function createChalk(options) {
 }
 var stdoutColor, stderrColor, GENERATOR, STYLER, IS_EMPTY, levelMapping, styles2, applyOptions, Chalk, chalkFactory, getModelAnsi, usedModels, proto, createStyler, createBuilder, applyStyle, chalk, chalkStderr, source_default;
 var init_source = __esm({
-  "../../node_modules/chalk/source/index.js"() {
+  "../../../node_modules/chalk/source/index.js"() {
     "use strict";
     init_ansi_styles();
     init_supports_color();
@@ -57875,7 +57875,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       }
     });
     var require_canonicalize = __commonJS2({
-      "../../node_modules/canonicalize/lib/canonicalize.js"(exports22, module22) {
+      "../../../node_modules/canonicalize/lib/canonicalize.js"(exports22, module22) {
         "use strict";
         module22.exports = function serialize2(object) {
           if (typeof object === "number" && isNaN(object)) {
@@ -57912,7 +57912,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var nc;
     var crypto5;
     var init_cryptoNode = __esm2({
-      "../../node_modules/@noble/hashes/esm/cryptoNode.js"() {
+      "../../../node_modules/@noble/hashes/esm/cryptoNode.js"() {
         "use strict";
         nc = __toESM2(require("crypto"));
         crypto5 = nc && typeof nc === "object" && "webcrypto" in nc ? nc.webcrypto : nc && typeof nc === "object" && "randomBytes" in nc ? nc : void 0;
@@ -57994,7 +57994,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var hexes;
     var Hash;
     var init_utils = __esm2({
-      "../../node_modules/@noble/hashes/esm/utils.js"() {
+      "../../../node_modules/@noble/hashes/esm/utils.js"() {
         "use strict";
         init_cryptoNode();
         hasHexBuiltin = /* @__PURE__ */ (() => (
@@ -58027,7 +58027,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var HashMD;
     var SHA256_IV;
     var init_md = __esm2({
-      "../../node_modules/@noble/hashes/esm/_md.js"() {
+      "../../../node_modules/@noble/hashes/esm/_md.js"() {
         "use strict";
         init_utils();
         HashMD = class extends Hash {
@@ -58137,7 +58137,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var SHA256;
     var sha2562;
     var init_sha2 = __esm2({
-      "../../node_modules/@noble/hashes/esm/sha2.js"() {
+      "../../../node_modules/@noble/hashes/esm/sha2.js"() {
         "use strict";
         init_md();
         init_utils();
@@ -58283,7 +58283,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     });
     var sha2563;
     var init_sha256 = __esm2({
-      "../../node_modules/@noble/hashes/esm/sha256.js"() {
+      "../../../node_modules/@noble/hashes/esm/sha256.js"() {
         "use strict";
         init_sha2();
         sha2563 = sha2562;
@@ -59179,7 +59179,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var HMAC;
     var hmac;
     var init_hmac = __esm2({
-      "../../node_modules/@noble/hashes/esm/hmac.js"() {
+      "../../../node_modules/@noble/hashes/esm/hmac.js"() {
         "use strict";
         init_utils();
         HMAC = class extends Hash {
@@ -115828,6 +115828,597 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         NATIVE_CAP_PLACEHOLDERS = ["{{maxTurns}}", "{{maxOutputTokens}}"];
       }
     });
+    function validateProviderDefinition(raw) {
+      const errors = [];
+      const warnings = [];
+      if (!raw || typeof raw !== "object") {
+        return { errors: ["Provider definition must be an object"], warnings };
+      }
+      const provider = raw;
+      if (!provider.type) errors.push("Missing required field: type");
+      if (!provider.name) errors.push("Missing required field: name");
+      if (!provider.category) {
+        errors.push("Missing required field: category");
+      } else if (!["ide", "extension", "cli", "driver"].includes(String(provider.category))) {
+        errors.push(`Invalid category: ${String(provider.category)}`);
+      }
+      for (const key7 of Object.keys(provider)) {
+        if (!KNOWN_PROVIDER_FIELDS.has(key7)) {
+          warnings.push(`Unknown provider field: ${key7}`);
+        }
+      }
+      if (provider.disableUpstream !== void 0) {
+        warnings.push("disableUpstream is deprecated in provider definitions; use machine-level provider source policy instead");
+      }
+      if (provider.category === "driver") {
+        const validation = validateDriverProviderManifest(provider);
+        errors.push(...validation.issues.map((issue) => `driver${issue.path}: ${issue.message}`));
+        return { errors, warnings };
+      }
+      const category = provider.category;
+      const typedProvider = provider;
+      const controls = Array.isArray(provider.controls) ? provider.controls : [];
+      if (category === "cli") {
+        const spawn14 = provider.spawn;
+        const command = spawn14 && typeof spawn14 === "object" ? spawn14.command : void 0;
+        if (!spawn14 || typeof spawn14 !== "object") {
+          errors.push(`${String(category).toUpperCase()}/CLI providers must have spawn config`);
+        } else if (typeof command !== "string" || !command.trim()) {
+          errors.push("spawn.command is required");
+        }
+      }
+      if ((category === "ide" || category === "extension") && provider.cdpPorts !== void 0) {
+        if (!Array.isArray(provider.cdpPorts) || provider.cdpPorts.length === 0) {
+          warnings.push("IDE/Extension providers should have cdpPorts");
+        }
+      }
+      if (category === "extension" && !provider.extensionId) {
+        warnings.push("Extension providers should have extensionId");
+      }
+      validateCapabilities(provider, controls, errors);
+      validateHostHandoffCanary(provider, errors);
+      validateNativeHistory(provider.nativeHistory, errors);
+      validateMeshCoordinator(provider.meshCoordinator, errors);
+      validateAutoApproveModes(provider.autoApproveModes, errors);
+      for (const control of controls) {
+        validateControl(control, errors);
+      }
+      if ((category === "ide" || category === "extension") && typeof typedProvider.scripts?.focusEditor === "function" && !providerHasOpenPanelSupport(typedProvider)) {
+        warnings.push("scripts.focusEditor is present without scripts.openPanel/webviewOpenPanel; open_panel capability will remain disabled");
+      }
+      return { errors, warnings };
+    }
+    function validateAutoApproveModes(raw, errors) {
+      if (raw === void 0) return;
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        errors.push("autoApproveModes must be an object");
+        return;
+      }
+      const config = raw;
+      const defaultModeId = typeof config.default === "string" ? config.default.trim() : "";
+      if (!defaultModeId) {
+        errors.push("autoApproveModes.default must be a non-empty string");
+      } else {
+        config.default = defaultModeId;
+      }
+      if (!Array.isArray(config.modes) || config.modes.length === 0) {
+        errors.push("autoApproveModes.modes must be a non-empty array");
+        return;
+      }
+      const ids = /* @__PURE__ */ new Set();
+      for (const [index, rawMode] of config.modes.entries()) {
+        const prefix = `autoApproveModes.modes[${index}]`;
+        if (!rawMode || typeof rawMode !== "object" || Array.isArray(rawMode)) {
+          errors.push(`${prefix} must be an object`);
+          continue;
+        }
+        const mode = rawMode;
+        const id4 = typeof mode.id === "string" ? mode.id.trim() : "";
+        if (!id4) {
+          errors.push(`${prefix}.id must be a non-empty string`);
+        } else if (ids.has(id4)) {
+          errors.push(`${prefix}.id must be unique (duplicate: ${id4})`);
+        } else {
+          ids.add(id4);
+          mode.id = id4;
+        }
+        if (typeof mode.label !== "string" || !mode.label.trim()) {
+          errors.push(`${prefix}.label must be a non-empty string`);
+        }
+        const strategy = mode.strategy;
+        if (!["pty-parse-default", "launch-args", "post-boot-command"].includes(String(strategy))) {
+          errors.push(`${prefix}.strategy must be one of: pty-parse-default, launch-args, post-boot-command`);
+        } else if (strategy === "post-boot-command") {
+          errors.push(`${prefix}.strategy post-boot-command is reserved and unsupported in v1`);
+        }
+        const risk = mode.risk;
+        if (!["safe", "caution", "dangerous"].includes(String(risk))) {
+          errors.push(`${prefix}.risk must be one of: safe, caution, dangerous`);
+        }
+        if (mode.ptyFallback !== void 0 && typeof mode.ptyFallback !== "boolean") {
+          errors.push(`${prefix}.ptyFallback must be a boolean when provided`);
+        }
+        for (const field3 of ["launchArgs", "removeArgs"]) {
+          const value = mode[field3];
+          if (value !== void 0 && (!Array.isArray(value) || value.some((arg) => typeof arg !== "string" || !arg.trim()))) {
+            errors.push(`${prefix}.${field3} must be an array of non-empty strings when provided`);
+          }
+        }
+        if (strategy === "launch-args" && (!Array.isArray(mode.launchArgs) || mode.launchArgs.length === 0)) {
+          errors.push(`${prefix}.launchArgs must be a non-empty array for launch-args strategy`);
+        }
+        if (["safe", "caution", "dangerous"].includes(String(risk)) && deriveAutoApproveModeRisk(mode) === "dangerous") {
+          mode.risk = "dangerous";
+        }
+        if (mode.risk === "dangerous" && (typeof mode.warning !== "string" || !mode.warning.trim())) {
+          errors.push(`${prefix}.warning is required for dangerous modes`);
+        } else if (mode.warning !== void 0 && (typeof mode.warning !== "string" || !mode.warning.trim())) {
+          errors.push(`${prefix}.warning must be a non-empty string when provided`);
+        }
+      }
+      if (defaultModeId && !ids.has(defaultModeId)) {
+        errors.push(`autoApproveModes.default must reference an existing mode id: ${defaultModeId}`);
+      }
+    }
+    function validateHostHandoffCanary(provider, errors) {
+      if (provider.hostHandoffCanary === void 0) return;
+      const spec = provider.hostHandoffCanary;
+      if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
+        errors.push("hostHandoffCanary must be an object");
+        return;
+      }
+      const spawn14 = provider.spawn && typeof provider.spawn === "object" ? provider.spawn : {};
+      const declared = {
+        type: typeof provider.type === "string" ? provider.type : "",
+        spawn: { command: typeof spawn14.command === "string" ? spawn14.command : "" },
+        hostHandoffCanary: spec
+      };
+      const selection = { provider: declared.type };
+      if (Array.isArray(provider.modelLaunchArgs) && provider.modelLaunchArgs.length > 0) selection.model = "selected";
+      if (Array.isArray(provider.thinkingLaunchArgs) && provider.thinkingLaunchArgs.length > 0) selection.thinkingLevel = "selected";
+      const refusal2 = describeCanaryContract(declared, selection);
+      if (refusal2) errors.push(`hostHandoffCanary: ${refusal2}`);
+    }
+    function validateCapabilities(provider, controls, errors) {
+      const capabilities2 = provider.capabilities;
+      if (provider.contractVersion === 2) {
+        if (!capabilities2 || typeof capabilities2 !== "object") {
+          errors.push("contractVersion 2 providers must declare capabilities");
+          return;
+        }
+      }
+      if (!capabilities2 || typeof capabilities2 !== "object") {
+        return;
+      }
+      const input = capabilities2.input;
+      if (input !== void 0) {
+        if (!input || typeof input !== "object") {
+          errors.push("capabilities.input must be an object when provided");
+        } else if (typeof input.multipart !== "boolean") {
+          errors.push("capabilities.input.multipart must be boolean");
+        }
+        if (input && typeof input === "object") {
+          const mediaTypes = Array.isArray(input.mediaTypes) ? input.mediaTypes : void 0;
+          if (!mediaTypes || mediaTypes.length === 0) {
+            errors.push("capabilities.input.mediaTypes must be a non-empty array");
+          } else if (mediaTypes.some((type2) => typeof type2 !== "string" || !VALID_CAPABILITY_MEDIA_TYPES.has(type2))) {
+            errors.push(`capabilities.input.mediaTypes must only include: ${Array.from(VALID_CAPABILITY_MEDIA_TYPES).join(", ")}`);
+          }
+        }
+        if (input && typeof input === "object" && input.strategies !== void 0) {
+          if (!Array.isArray(input.strategies)) {
+            errors.push("capabilities.input.strategies must be an array when provided");
+          } else {
+            for (const strategy of input.strategies) {
+              if (!strategy || typeof strategy !== "object" || Array.isArray(strategy)) {
+                errors.push("capabilities.input.strategies entries must be objects");
+                continue;
+              }
+              const entry = strategy;
+              if (typeof entry.mediaType !== "string" || !VALID_CAPABILITY_MEDIA_TYPES.has(entry.mediaType)) {
+                errors.push(`capabilities.input.strategies.mediaType must only include: ${Array.from(VALID_CAPABILITY_MEDIA_TYPES).join(", ")}`);
+              }
+              for (const field3 of ["strategies", "degradation"]) {
+                const values = entry[field3];
+                if (values === void 0) continue;
+                if (!Array.isArray(values) || values.some((value) => typeof value !== "string" || !VALID_INPUT_STRATEGIES2.has(value))) {
+                  errors.push(`capabilities.input.strategies.${field3} must only include: ${Array.from(VALID_INPUT_STRATEGIES2).join(", ")}`);
+                }
+              }
+              if (entry.native !== void 0 && typeof entry.native !== "boolean") {
+                errors.push("capabilities.input.strategies.native must be boolean when provided");
+              }
+            }
+          }
+        }
+      }
+      const output = capabilities2.output;
+      if (!output || typeof output !== "object") {
+        errors.push("capabilities.output is required");
+      } else {
+        if (typeof output.richContent !== "boolean") {
+          errors.push("capabilities.output.richContent must be boolean");
+        }
+        if (!Array.isArray(output.mediaTypes) || output.mediaTypes.length === 0) {
+          errors.push("capabilities.output.mediaTypes must be a non-empty array");
+        } else if (output.mediaTypes.some((type2) => typeof type2 !== "string" || !VALID_CAPABILITY_MEDIA_TYPES.has(type2))) {
+          errors.push(`capabilities.output.mediaTypes must only include: ${Array.from(VALID_CAPABILITY_MEDIA_TYPES).join(", ")}`);
+        }
+      }
+      const controlCapabilities = capabilities2.controls;
+      if (!controlCapabilities || typeof controlCapabilities !== "object") {
+        errors.push("capabilities.controls is required");
+        return;
+      }
+      if (typeof controlCapabilities.typedResults !== "boolean") {
+        errors.push("capabilities.controls.typedResults must be boolean");
+      }
+      if (controls.length > 0 && controlCapabilities.typedResults !== true) {
+        errors.push("providers declaring controls must set capabilities.controls.typedResults=true");
+      }
+    }
+    function validateNativeHistory(raw, errors) {
+      if (raw === void 0) return;
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        errors.push("nativeHistory must be an object");
+        return;
+      }
+      const nativeHistory = raw;
+      const format = nativeHistory.format;
+      if (format !== void 0 && (typeof format !== "string" || !format.trim())) {
+        errors.push("nativeHistory.format must be a non-empty string when provided");
+      }
+      const watchPath = nativeHistory.watchPath;
+      if (watchPath !== void 0 && (typeof watchPath !== "string" || !watchPath.trim())) {
+        errors.push("nativeHistory.watchPath must be a non-empty string when provided");
+      }
+      const mode = nativeHistory.mode;
+      if (mode !== void 0 && !["native-source", "materialized-mirror", "disabled"].includes(String(mode))) {
+        errors.push("nativeHistory.mode must be one of: native-source, materialized-mirror, disabled");
+      }
+      const chatContractVersion = nativeHistory.contractVersion;
+      if (chatContractVersion !== void 0 && chatContractVersion !== "1.0" && chatContractVersion !== "2.0") {
+        errors.push(`nativeHistory.contractVersion must be '1.0' or '2.0' when provided (got ${JSON.stringify(chatContractVersion)})`);
+      }
+      const scripts = nativeHistory.scripts;
+      if (scripts === void 0) return;
+      if (!scripts || typeof scripts !== "object" || Array.isArray(scripts)) {
+        errors.push("nativeHistory.scripts must be an object");
+        return;
+      }
+      const scriptConfig = scripts;
+      for (const key7 of ["readSession", "listSessions"]) {
+        const value = scriptConfig[key7];
+        if (typeof value !== "string" || !value.trim()) {
+          errors.push(`nativeHistory.scripts.${key7} must be a non-empty string`);
+        }
+      }
+    }
+    function validateMeshCoordinator(raw, errors) {
+      if (raw === void 0) return;
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        errors.push("meshCoordinator must be an object");
+        return;
+      }
+      const meshCoordinator = raw;
+      if (typeof meshCoordinator.supported !== "boolean") {
+        errors.push("meshCoordinator.supported must be boolean");
+      }
+      if (meshCoordinator.reason !== void 0 && (typeof meshCoordinator.reason !== "string" || !meshCoordinator.reason.trim())) {
+        errors.push("meshCoordinator.reason must be a non-empty string when provided");
+      }
+      validateMeshCoordinatorMcpConfig(meshCoordinator.mcpConfig, errors);
+      if (meshCoordinator.mcpToolAllow !== void 0) {
+        const allow = meshCoordinator.mcpToolAllow;
+        if (!allow || typeof allow !== "object" || Array.isArray(allow) || allow.format !== "cursor_cli_permissions") {
+          errors.push("meshCoordinator.mcpToolAllow.format must be cursor_cli_permissions");
+        }
+      }
+      validateMeshCoordinatorDelegatedWorkerIsolation(
+        meshCoordinator.delegatedWorkerIsolation,
+        errors,
+        meshCoordinator.mcpConfig
+      );
+    }
+    function validateMeshCoordinatorMcpConfig(mcpConfig, errors) {
+      if (mcpConfig === void 0) return;
+      if (!mcpConfig || typeof mcpConfig !== "object" || Array.isArray(mcpConfig)) {
+        errors.push("meshCoordinator.mcpConfig must be an object");
+        return;
+      }
+      const config = mcpConfig;
+      const mode = config.mode;
+      if (!["auto_import", "manual", "none"].includes(String(mode))) {
+        errors.push("meshCoordinator.mcpConfig.mode must be one of: auto_import, manual, none");
+      }
+      const format = config.format;
+      if (format !== void 0 && !["claude_mcp_json", "opencode_json"].includes(String(format))) {
+        errors.push("meshCoordinator.mcpConfig.format must be one of: claude_mcp_json, opencode_json");
+      }
+      for (const key7 of ["path", "serverName", "configPathCommand", "instructions", "template"]) {
+        const value = config[key7];
+        if (value !== void 0 && (typeof value !== "string" || !value.trim())) {
+          errors.push(`meshCoordinator.mcpConfig.${key7} must be a non-empty string when provided`);
+        }
+      }
+      if (config.requiresRestart !== void 0 && typeof config.requiresRestart !== "boolean") {
+        errors.push("meshCoordinator.mcpConfig.requiresRestart must be boolean when provided");
+      }
+      if (mode === "auto_import") {
+        if (format === void 0) {
+          errors.push("meshCoordinator.mcpConfig.format is required for auto_import MCP setup");
+        }
+        if (typeof config.path !== "string" || !config.path.trim()) {
+          errors.push("meshCoordinator.mcpConfig.path is required for auto_import MCP setup");
+        }
+      }
+      if (mode === "manual") {
+        if (typeof config.instructions !== "string" || !config.instructions.trim()) {
+          errors.push("meshCoordinator.mcpConfig.instructions is required for manual MCP setup");
+        }
+        if (typeof config.template !== "string" || !config.template.trim()) {
+          errors.push("meshCoordinator.mcpConfig.template is required for manual MCP setup");
+        }
+      }
+    }
+    function validateMeshCoordinatorDelegatedWorkerIsolation(raw, errors, rawMcpConfig) {
+      if (raw === void 0) return;
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        errors.push("meshCoordinator.delegatedWorkerIsolation must be an object");
+        return;
+      }
+      const isolation = raw;
+      const env2 = isolation.env;
+      if (env2 !== void 0) {
+        if (!env2 || typeof env2 !== "object" || Array.isArray(env2)) {
+          errors.push("meshCoordinator.delegatedWorkerIsolation.env must be an object");
+        } else {
+          const unset = env2.unset;
+          if (unset !== void 0 && (!Array.isArray(unset) || unset.some((key7) => typeof key7 !== "string" || !key7.trim()))) {
+            errors.push("meshCoordinator.delegatedWorkerIsolation.env.unset must be an array of non-empty strings");
+          }
+          const set2 = env2.set;
+          if (set2 !== void 0) {
+            if (!set2 || typeof set2 !== "object" || Array.isArray(set2)) {
+              errors.push("meshCoordinator.delegatedWorkerIsolation.env.set must be an object");
+            } else {
+              for (const [key7, value] of Object.entries(set2)) {
+                if (!key7.trim()) {
+                  errors.push("meshCoordinator.delegatedWorkerIsolation.env.set keys must be non-empty strings");
+                  continue;
+                }
+                if (typeof value !== "string" || !value.trim()) {
+                  errors.push(`meshCoordinator.delegatedWorkerIsolation.env.set.${key7} must be a non-empty string (use env.unset to clear a variable)`);
+                }
+              }
+            }
+          }
+        }
+      }
+      const args = isolation.args;
+      if (args !== void 0) {
+        if (!Array.isArray(args)) {
+          errors.push("meshCoordinator.delegatedWorkerIsolation.args must be an array");
+        } else {
+          for (const [index, rule] of args.entries()) {
+            const prefix = `meshCoordinator.delegatedWorkerIsolation.args[${index}]`;
+            if (!rule || typeof rule !== "object" || Array.isArray(rule)) {
+              errors.push(`${prefix} must be an object`);
+              continue;
+            }
+            const item = rule;
+            const mode = item.mode;
+            if (mode !== "empty_mcp_config" && mode !== "config_override" && mode !== "approve_mcp_servers") {
+              errors.push(`${prefix}.mode must be one of: empty_mcp_config, config_override, approve_mcp_servers`);
+              continue;
+            }
+            for (const key7 of mode === "config_override" ? ["flag", "key", "value"] : ["flag"]) {
+              const value = item[key7];
+              if (typeof value !== "string" || !value.trim()) {
+                errors.push(`${prefix}.${key7} must be a non-empty string`);
+              }
+            }
+            for (const key7 of ["strictFlag", "dedupeKey"]) {
+              const value = item[key7];
+              if (value !== void 0 && (typeof value !== "string" || !value.trim())) {
+                errors.push(`${prefix}.${key7} must be a non-empty string when provided`);
+              }
+            }
+            for (const key7 of ["requiresPrivateHome", "withholdWithPrivateHome"]) {
+              const value = item[key7];
+              if (value !== void 0 && typeof value !== "boolean") {
+                errors.push(`${prefix}.${key7} must be a boolean when provided`);
+              }
+            }
+          }
+        }
+      }
+      const delivery = isolation.workerMcpDelivery;
+      if (delivery !== void 0) {
+        const prefix = "meshCoordinator.delegatedWorkerIsolation.workerMcpDelivery";
+        if (!delivery || typeof delivery !== "object" || Array.isArray(delivery)) {
+          errors.push(`${prefix} must be an object`);
+        } else {
+          const item = delivery;
+          if (item.mode !== "config_override") {
+            errors.push(`${prefix}.mode must be config_override`);
+          }
+          for (const key7 of ["flag", "serverName", "commandTemplate", "argsTemplate", "envVarsTemplate", "enabledTemplate"]) {
+            const value = item[key7];
+            if (typeof value !== "string" || !value.trim()) {
+              errors.push(`${prefix}.${key7} must be a non-empty string`);
+            }
+          }
+          const coordinatorServerName = rawMcpConfig && typeof rawMcpConfig === "object" && !Array.isArray(rawMcpConfig) ? rawMcpConfig.serverName : void 0;
+          if (typeof item.serverName === "string" && item.serverName.trim() && typeof coordinatorServerName === "string" && item.serverName.trim() === coordinatorServerName.trim()) {
+            errors.push(`${prefix}.serverName must differ from meshCoordinator.mcpConfig.serverName`);
+          }
+          const shellEnvExcludeTemplate = item.shellEnvExcludeTemplate;
+          if (shellEnvExcludeTemplate !== void 0 && (typeof shellEnvExcludeTemplate !== "string" || !shellEnvExcludeTemplate.trim())) {
+            errors.push(`${prefix}.shellEnvExcludeTemplate must be a non-empty string when provided`);
+          }
+          const approvalModeTemplate = item.approvalModeTemplate;
+          if (approvalModeTemplate !== void 0 && (typeof approvalModeTemplate !== "string" || !approvalModeTemplate.trim())) {
+            errors.push(`${prefix}.approvalModeTemplate must be a non-empty string when provided`);
+          }
+        }
+      }
+    }
+    function validateControl(control, errors) {
+      if (!control || typeof control !== "object") {
+        errors.push("controls: each control must be an object");
+        return;
+      }
+      const id4 = typeof control.id === "string" && control.id.trim() ? control.id.trim() : "unknown";
+      const prefix = `controls.${id4}`;
+      if (!control.id || !String(control.id).trim()) errors.push(`${prefix}: id is required`);
+      if (!control.type) errors.push(`${prefix}: type is required`);
+      if (!control.label || !String(control.label).trim()) errors.push(`${prefix}: label is required`);
+      if (!control.placement) errors.push(`${prefix}: placement is required`);
+      if (control.dynamic && !control.listScript) {
+        errors.push(`${prefix}: dynamic controls require listScript`);
+      }
+      if (VALUE_CONTROL_TYPES.has(control.type) && !control.setScript) {
+        errors.push(`${prefix}: ${control.type} controls require setScript`);
+      }
+      if (control.type === "action" && !control.invokeScript) {
+        errors.push(`${prefix}: action controls require invokeScript`);
+      }
+      if (control.type === "slider") {
+        if (typeof control.min !== "number" || typeof control.max !== "number") {
+          errors.push(`${prefix}: slider controls require numeric min and max`);
+        } else if (control.min > control.max) {
+          errors.push(`${prefix}: slider min cannot exceed max`);
+        }
+      }
+      if (control.readFrom !== void 0 && (typeof control.readFrom !== "string" || !control.readFrom.trim())) {
+        errors.push(`${prefix}: readFrom must be a non-empty string when provided`);
+      }
+    }
+    var VALID_CAPABILITY_MEDIA_TYPES;
+    var VALID_INPUT_STRATEGIES2;
+    var KNOWN_PROVIDER_FIELDS;
+    var VALUE_CONTROL_TYPES;
+    var init_provider_schema3 = __esm2({
+      "src/providers/provider-schema.ts"() {
+        "use strict";
+        init_manifest();
+        init_host_handoff_canary_contract();
+        init_auto_approve_modes();
+        init_open_panel_support();
+        VALID_CAPABILITY_MEDIA_TYPES = /* @__PURE__ */ new Set(["text", "image", "audio", "video", "resource"]);
+        VALID_INPUT_STRATEGIES2 = /* @__PURE__ */ new Set(["native", "resource_link", "text_fallback", "paste", "upload"]);
+        KNOWN_PROVIDER_FIELDS = /* @__PURE__ */ new Set([
+          // File-level editor hint carried by published manifests; the daemon ignores
+          // it, but it must not trip the unknown-key warning (live: 9 warnings/boot).
+          "$schema",
+          // Driver owner-permission checkboxes (computer-use driver).
+          "grants",
+          "type",
+          "name",
+          "category",
+          "transcriptAuthority",
+          "transcriptContext",
+          "aliases",
+          "cdpPorts",
+          "targetFilter",
+          "cli",
+          "icon",
+          "displayName",
+          "install",
+          "versionCommand",
+          "testedVersions",
+          "processNames",
+          "launch",
+          "paths",
+          "extensionId",
+          "extensionIdPattern",
+          "extensionIdPattern_flags",
+          "compatibility",
+          "defaultScriptDir",
+          "binary",
+          "spawn",
+          "approvalKeys",
+          "patterns",
+          "cleanOutput",
+          "resume",
+          "sessionProbe",
+          "approvalPositiveHints",
+          "sessionIdPattern",
+          "historyBehavior",
+          // v1 canonical field name. The loader fills this in for legacy v0
+          // manifests that ship the old `canonicalHistory` spelling.
+          "nativeHistory",
+          // Deprecated v0 alias for `nativeHistory`. Kept in the allowed-keys
+          // list so legacy provider.json manifests don't trip the unknown-key
+          // warning during the one-release deprecation window.
+          "canonicalHistory",
+          "autoFixProfile",
+          "ideLevelScripts",
+          "scripts",
+          "vscodeCommands",
+          "inputMethod",
+          "inputSelector",
+          "webviewMatchText",
+          "os",
+          "versions",
+          "overrides",
+          "settings",
+          "controls",
+          "staticConfigOptions",
+          "spawnArgBuilder",
+          "auth",
+          "meshCoordinator",
+          "contractVersion",
+          "capabilities",
+          "providerVersion",
+          // Auto-update daemon-compatibility floor (docs/design/2026-10-10-provider-auto-update.md).
+          "minDaemonVersion",
+          "status",
+          "details",
+          "autoApproveModes",
+          "modelLaunchArgs",
+          "modelLaunchValueMap",
+          "modelOptions",
+          // How to ask the installed binary for its own model list, so modelOptions
+          // stops drifting in both directions. Read-only; the result is a runtime
+          // overlay and is never written back into this manifest (digest-verified).
+          "modelDiscovery",
+          "modelFallbackWarning",
+          "thinkingLaunchArgs",
+          "thinkingLevelMap",
+          "thinkingLevelOptions",
+          "thinkingControlId",
+          // Bounded host-handoff probe. Absence is an explicit unsupported provider.
+          // A present object must name real prompt, turn, token, and selection bindings.
+          "hostHandoffCanary",
+          "sendDelayMs",
+          "sendKey",
+          "submitStrategy",
+          "requirePromptEchoBeforeSubmit",
+          "requiresFinalAssistantBeforeIdle",
+          "holdCompletionForTranscript",
+          "augmentStaleSnapshot",
+          "timeouts",
+          "disableUpstream",
+          // Marketplace/registry metadata blocks from the v1 CLI schema. UI-only —
+          // the daemon never executes anything from these, but they are valid
+          // manifest fields and must not trip the unknown-key warning.
+          "links",
+          "engines",
+          "source",
+          "tui",
+          "scriptCallBudgetMs",
+          "publisher",
+          "runtime",
+          "actions",
+          "resources",
+          "guidance",
+          "declaredAccess"
+        ]);
+        VALUE_CONTROL_TYPES = /* @__PURE__ */ new Set(["select", "toggle", "cycle", "slider"]);
+      }
+    });
     var native_history_jsonpath_exports = {};
     __export2(native_history_jsonpath_exports, {
       jsonPathGet: () => jsonPathGet,
@@ -135687,6 +136278,30 @@ ${note2}` : note2 }]
         TERMINAL_SUBMITS_PER_WRITE_CAP = 1;
         BRACKETED_PASTE_START = "\x1B[200~";
         BRACKETED_PASTE_END = "\x1B[201~";
+      }
+    });
+    function normalizeProviderDir(value) {
+      if (typeof value !== "string") return void 0;
+      const trimmed3 = value.trim();
+      return trimmed3 ? trimmed3 : void 0;
+    }
+    function parseProviderSourceConfigUpdate(input) {
+      const updates = {};
+      if (Object.prototype.hasOwnProperty.call(input, "providerSourceMode")) {
+        const { providerSourceMode } = input;
+        if (providerSourceMode !== "normal" && providerSourceMode !== "no-upstream") {
+          return { ok: false, error: "providerSourceMode must be 'normal' or 'no-upstream'" };
+        }
+        updates.providerSourceMode = providerSourceMode;
+      }
+      if (Object.prototype.hasOwnProperty.call(input, "providerDir")) {
+        updates.providerDir = normalizeProviderDir(input.providerDir);
+      }
+      return { ok: true, updates };
+    }
+    var init_provider_source_config = __esm2({
+      "src/config/provider-source-config.ts"() {
+        "use strict";
       }
     });
     function stateOf(mesh) {
@@ -165773,6 +166388,3481 @@ ${defangRelayBody(text11)}`;
         current3 = null;
       }
     });
+    function resolveLegacyProviderScript(fn, scriptName, params) {
+      if (typeof fn !== "function") return null;
+      if (params && typeof params === "object" && !Array.isArray(params) && Object.keys(params).length > 0) {
+        const firstVal = Object.values(params)[0];
+        if (scriptName === "sendMessage" && typeof firstVal === "string") {
+          const legacyScript = fn(firstVal);
+          if (legacyScript) return legacyScript;
+        }
+        const script = fn(params);
+        const likelyLegacyObjectLeak = typeof script === "string" && script.includes("[object Object]") && typeof firstVal === "string";
+        if (!likelyLegacyObjectLeak && script) return script;
+        if (firstVal !== void 0) {
+          const legacyScript = fn(firstVal);
+          if (legacyScript) return legacyScript;
+        }
+        if (script) return script;
+        return null;
+      }
+      if (params !== void 0) {
+        const script = fn(params);
+        if (script) return script;
+      }
+      return fn() || null;
+    }
+    var init_provider_script_resolver = __esm2({
+      "src/commands/provider-script-resolver.ts"() {
+        "use strict";
+      }
+    });
+    function generateFiles(type2, name, category, opts = {}) {
+      const { cdpPorts, cli, processName, installPath, binary: binary2, extensionId, version: version2 = "0.1" } = opts;
+      if (category === "cli") {
+        const bin = binary2 || type2;
+        const meta3 = {
+          type: type2,
+          name,
+          category,
+          icon: "\u{1F4BB}",
+          binary: bin,
+          spawn: {
+            command: bin,
+            args: [],
+            shell: true
+          },
+          patterns: {
+            prompt: ["^[>$#] "],
+            generating: ["\\.{3}$", "thinking"],
+            approval: ["\\(y\\/n\\)", "approve", "allow"],
+            ready: ["ready"]
+          }
+        };
+        return { "provider.json": JSON.stringify(meta3, null, 2) + "\n" };
+      }
+      const isExtension = category === "extension";
+      const scriptDir = `scripts/${version2}`;
+      const meta2 = {
+        type: type2,
+        name,
+        category,
+        displayName: name,
+        icon: isExtension ? "\u{1F9E9}" : "\u{1F4BB}"
+      };
+      if (cli) meta2.cli = cli;
+      if (cdpPorts) meta2.cdpPorts = cdpPorts;
+      else if (!isExtension) meta2.cdpPorts = [9222, 9223];
+      if (opts.processNames) meta2.processNames = opts.processNames;
+      else if (processName) meta2.processNames = { darwin: processName };
+      if (opts.osPaths) meta2.paths = opts.osPaths;
+      else if (installPath) meta2.paths = { darwin: [installPath] };
+      if (isExtension) {
+        meta2.extensionId = extensionId || `publisher.${type2}`;
+        meta2.extensionIdPattern = `${extensionId || type2}`;
+      } else {
+        meta2.inputMethod = "cdp-type-and-send";
+        meta2.inputSelector = '[contenteditable="true"][role="textbox"]';
+        if (cli) meta2.versionCommand = `${cli} --version`;
+        meta2.providerVersion = "1.0.0";
+        meta2.compatibility = [
+          { ideVersion: `>=${version2}.0`, scriptDir }
+        ];
+        meta2.defaultScriptDir = scriptDir;
+      }
+      const files = {};
+      files[`${scriptDir}/scripts.js`] = `/**
+ * ${name} CDP Scripts \u2014 Router
+ *
+ * Loads individual .js files and invokes with params.
+ * Pattern:
+ *   - No-params scripts: loaded as-is (IIFE)
+ *   - With-params scripts: \`(\${script})(\${JSON.stringify(params)})\`
+ */
+
+'use strict';
+
+const fs   = require('fs');
+const path = require('path');
+
+function load(name) {
+    try { return fs.readFileSync(path.join(__dirname, name), 'utf-8'); }
+    catch { return null; }
+}
+
+function withParams(name, params) {
+    const script = load(name);
+    if (!script) return null;
+    return \`(\${script})(\${JSON.stringify(params)})\`;
+}
+
+// \u2500\u2500\u2500 Core (no params \u2014 IIFE) \u2500\u2500\u2500
+
+module.exports.readChat       = () => load('read_chat.js');
+module.exports.sendMessage    = () => load('send_message.js');
+module.exports.listSessions   = () => load('list_sessions.js');
+module.exports.newSession     = () => load('new_session.js');
+module.exports.focusEditor    = () => load('focus_editor.js');
+module.exports.openPanel      = () => load('open_panel.js');
+module.exports.listModels     = () => load('list_models.js');
+module.exports.listModes      = () => load('list_modes.js');
+
+// \u2500\u2500\u2500 With params (function expression) \u2500\u2500\u2500
+
+module.exports.switchSession = (params) => {
+    const index = typeof params === 'number' ? params : params?.index ?? 0;
+    const title = typeof params === 'string' ? params : params?.title || null;
+    return withParams('switch_session.js', { index, title });
+};
+
+module.exports.resolveAction = (params) => {
+    const action = typeof params === 'string' ? params : params?.action || 'approve';
+    const buttonText = params?.button || params?.buttonText
+        || (action === 'approve' ? 'Accept' : action === 'reject' ? 'Reject' : action);
+    return withParams('resolve_action.js', { buttonText });
+};
+
+module.exports.setModel = (params) => {
+    const model = typeof params === 'string' ? params : params?.model;
+    return withParams('set_model.js', { model });
+};
+
+module.exports.setMode = (params) => {
+    const mode = typeof params === 'string' ? params : params?.mode;
+    return withParams('set_mode.js', { mode });
+};
+`;
+      files[`${scriptDir}/read_chat.js`] = `/**
+ * ${name} \u2014 read_chat
+ *
+ * Extract chat messages, status, and approval state from DOM.
+ *
+ * TODO: Identify via CDP/DevConsole:
+ *   1. Chat container selector
+ *   2. User message selector + class pattern
+ *   3. Assistant message selector + class pattern
+ *   4. Status detection (generating/idle/waiting_approval)
+ *   5. Approval dialog detection (buttons, modal)
+ *   6. Input field selector
+ *
+ * Preferred live-state surface:
+ *   - controlValues: explicit current control selections (model/mode/etc.)
+ *   - summaryMetadata: compact always-visible metadata for dashboard/recent views
+ * Legacy top-level model/mode output is no longer the preferred shape.
+ * \u2192 { id, status, title, messages[], inputContent, activeModal, controlValues?, summaryMetadata? }
+ */
+(() => {
+  try {
+    const messages = [];
+    let status = 'idle';
+    let activeModal = null;
+
+    // TODO: Query chat container and extract messages
+    // Example:
+    //   document.querySelectorAll('.chat-message').forEach(el => {
+    //     const role = el.classList.contains('user') ? 'user' : 'assistant';
+    //     messages.push({ role, content: el.innerText.trim(), index: messages.length });
+    //   });
+
+    // TODO: Detect generating state
+    // TODO: Detect approval dialogs -> status = 'waiting_approval'
+
+    const inputEl = document.querySelector('[contenteditable="true"]');
+    const inputContent = inputEl?.innerText?.trim() || '';
+
+    return JSON.stringify({
+      id: 'active',
+      status,
+      title: document.title,
+      messages,
+      inputContent,
+      activeModal,
+      // TODO: Return explicit selections when available, e.g.
+      // controlValues: { model: selectedModel, mode: selectedMode },
+      // summaryMetadata: { items: [{ id: 'model', value: selectedModelLabel || selectedModel, shortValue: selectedModel, order: 10 }] },
+    });
+  } catch(e) {
+    return JSON.stringify({ id: '', status: 'error', messages: [], error: e.message });
+  }
+})()
+`;
+      files[`${scriptDir}/send_message.js`] = `/**
+ * ${name} \u2014 send_message
+ *
+ * For cdp-type-and-send IDEs: returns selector for daemon to type into.
+ * \u2192 { sent: false, needsTypeAndSend: true, selector }
+ */
+(() => {
+  try {
+    const input = document.querySelector('${meta2.inputSelector || '[contenteditable="true"]'}');
+    if (!input) return JSON.stringify({ sent: false, error: 'Input not found' });
+    return JSON.stringify({
+      sent: false,
+      needsTypeAndSend: true,
+      selector: '${meta2.inputSelector || '[contenteditable="true"]'}',
+    });
+  } catch(e) {
+    return JSON.stringify({ sent: false, error: e.message });
+  }
+})()
+`;
+      files[`${scriptDir}/list_sessions.js`] = `/**
+ * ${name} \u2014 list_sessions
+ *
+ * TODO: Query session/chat list from sidebar.
+ * \u2192 { sessions: [{ id, title, active, index }] }
+ */
+(() => {
+  try {
+    const sessions = [];
+    // TODO: Find session list container and parse items
+    return JSON.stringify({ sessions });
+  } catch(e) {
+    return JSON.stringify({ sessions: [], error: e.message });
+  }
+})()
+`;
+      files[`${scriptDir}/switch_session.js`] = `/**
+ * ${name} \u2014 switch_session
+ *
+ * params.index: number, params.title: string|null
+ * TODO: Click on session in sidebar by title or index.
+ * \u2192 { switched: true/false }
+ */
+(params) => {
+  try {
+    // TODO: Find session list and click target
+    return JSON.stringify({ switched: false, error: 'Not implemented' });
+  } catch(e) {
+    return JSON.stringify({ switched: false, error: e.message });
+  }
+}
+`;
+      files[`${scriptDir}/new_session.js`] = `/**
+ * ${name} \u2014 new_session
+ *
+ * TODO: Click "New Chat" button.
+ * \u2192 { created: true/false }
+ */
+(() => {
+  try {
+    const btn = document.querySelector('[aria-label*="New Chat"], [aria-label*="New Composer"]');
+    if (btn) { btn.click(); return JSON.stringify({ created: true }); }
+    return JSON.stringify({ created: false, error: 'New Chat button not found' });
+  } catch(e) {
+    return JSON.stringify({ created: false, error: e.message });
+  }
+})()
+`;
+      files[`${scriptDir}/focus_editor.js`] = `/**
+ * ${name} \u2014 focus_editor
+ */
+(() => {
+  try {
+    const input = document.querySelector('${meta2.inputSelector || '[contenteditable="true"]'}');
+    if (input) {
+      input.focus();
+      return JSON.stringify({ focused: true });
+    }
+    return JSON.stringify({ focused: false, error: 'not_found' });
+  } catch(e) {
+    return JSON.stringify({ focused: false, error: e.message });
+  }
+})()
+`;
+      files[`${scriptDir}/open_panel.js`] = `/**
+ * ${name} \u2014 open_panel
+ *
+ * TODO: Open chat/AI panel if not visible.
+ */
+(() => {
+  try {
+    // TODO: Check if panel visible, if not find toggle button
+    return JSON.stringify({ opened: false, visible: false, error: 'not_found' });
+  } catch(e) {
+    return JSON.stringify({ opened: false, visible: false, error: e.message });
+  }
+})()
+`;
+      files[`${scriptDir}/resolve_action.js`] = `/**
+ * ${name} \u2014 resolve_action
+ *
+ * params.buttonText: string \u2014 button text to find and click.
+ * \u2192 { resolved: true/false, clicked? }
+ */
+(params) => {
+  try {
+    const btns = [...document.querySelectorAll('button, [role="button"]')].filter(b => b.offsetWidth > 0);
+    const searchText = (params.buttonText || '').toLowerCase();
+    const target = btns.find(b => (b.textContent||'').trim().toLowerCase().includes(searchText));
+    if (target) {
+      target.click();
+      return JSON.stringify({ resolved: true, clicked: target.textContent.trim() });
+    }
+    return JSON.stringify({ resolved: false, available: btns.map(b => b.textContent.trim()).filter(Boolean).slice(0, 10) });
+  } catch(e) { return JSON.stringify({ resolved: false, error: e.message }); }
+}
+`;
+      files[`${scriptDir}/list_models.js`] = `/**
+ * ${name} \u2014 list_models
+ *
+ * TODO: Open model dropdown and extract model list.
+ * \u2192 { models[], current }
+ */
+(() => {
+  try {
+    return JSON.stringify({ models: [], current: '' });
+  } catch(e) { return JSON.stringify({ models: [], current: '', error: e.message }); }
+})()
+`;
+      files[`${scriptDir}/list_modes.js`] = `/**
+ * ${name} \u2014 list_modes
+ *
+ * TODO: Open mode dropdown and extract mode list.
+ * \u2192 { modes[], current }
+ */
+(() => {
+  try {
+    return JSON.stringify({ modes: [], current: '' });
+  } catch(e) { return JSON.stringify({ modes: [], current: '', error: e.message }); }
+})()
+`;
+      files[`${scriptDir}/set_model.js`] = `/**
+ * ${name} \u2014 set_model
+ *
+ * params.model: string
+ * TODO: Open model dropdown and select target model.
+ * \u2192 { success: true/false }
+ */
+async (params) => {
+  try {
+    return JSON.stringify({ success: false, error: 'Not implemented' });
+  } catch(e) { return JSON.stringify({ success: false, error: e.message }); }
+}
+`;
+      files[`${scriptDir}/set_mode.js`] = `/**
+ * ${name} \u2014 set_mode
+ *
+ * params.mode: string
+ * TODO: Open mode dropdown and select target mode.
+ * \u2192 { success: true/false }
+ */
+async (params) => {
+  try {
+    return JSON.stringify({ success: false, error: 'Not implemented' });
+  } catch(e) { return JSON.stringify({ success: false, error: e.message }); }
+}
+`;
+      return {
+        "provider.json": JSON.stringify(meta2, null, 2) + "\n",
+        files
+      };
+    }
+    var init_scaffold_template = __esm2({
+      "src/daemon/scaffold-template.ts"() {
+        "use strict";
+      }
+    });
+    function defaultDisplayName(type2) {
+      return type2.split("-").map((s2) => s2[0]?.toUpperCase() + s2.slice(1)).join(" ");
+    }
+    function defaultBinaryName(type2, explicit) {
+      return explicit || type2.replace(/-cli$/, "");
+    }
+    function buildCliProviderV1Scaffold(options) {
+      const { type: type2 } = options;
+      const name = options.name || defaultDisplayName(type2);
+      const binary2 = defaultBinaryName(type2, options.binary);
+      const manifest = {
+        $schema: "https://registry.adhf.dev/schemas/v1/cli/provider.schema.json",
+        type: type2,
+        name,
+        category: "cli",
+        binary: binary2,
+        spawn: {
+          command: binary2,
+          args: [],
+          shell: false
+        },
+        compatibility: [
+          { ideVersion: ">=0.0.0", spec: "specs/1.0.json" }
+        ]
+      };
+      const spec = {
+        $schema: "adhdev:cli/spec@4",
+        id: type2,
+        name,
+        binary: binary2,
+        send_message: { submit_key: "\r" },
+        states: [
+          { id: "starting", label: "Starting", initial: true, status: "idle" },
+          { id: "idle", label: "Ready", status: "idle" },
+          { id: "busy", label: "Working", status: "generating" }
+        ],
+        transitions: [
+          {
+            label: "startup \u2192 idle",
+            from: "starting",
+            to: "idle",
+            when: { matches: "READY_MARKER_REPLACE_ME" }
+          },
+          {
+            label: "idle \u2192 busy",
+            from: "idle",
+            to: "busy",
+            min_hold_ms: 200,
+            when: { not: { matches: "READY_MARKER_REPLACE_ME" } }
+          },
+          {
+            label: "busy \u2192 idle",
+            from: "busy",
+            to: "idle",
+            min_hold_ms: 300,
+            when: {
+              all: [
+                { matches: "READY_MARKER_REPLACE_ME" },
+                { stable_ms: 500 }
+              ]
+            }
+          }
+        ]
+      };
+      const readme = `# ${name}
+
+ADHDev CLI provider for \`${binary2}\`.
+
+Generated by \`adhdev provider init\` against the v1 contract (provider.v1.json + FSM spec).
+
+**Before this runs for real**, replace every \`READY_MARKER_REPLACE_ME\` in \`specs/1.0.json\` with a regex that actually matches ${binary2}'s idle-prompt output \u2014 the placeholder will never match, so the provider will report "generating" forever until you do.
+
+## Validate
+
+\`\`\`bash
+adhdev provider validate ./
+\`\`\`
+
+## Learn more
+
+${CUSTOM_PROVIDERS_DOCS_URL}
+`;
+      return {
+        manifest,
+        spec,
+        manifestPath: "provider.v1.json",
+        specPath: path127.join("specs", "1.0.json"),
+        readme,
+        binary: binary2,
+        name
+      };
+    }
+    function resolveCliSpecPath(manifestDir, manifest) {
+      const candidates = [];
+      if (Array.isArray(manifest.compatibility)) {
+        for (const entry of manifest.compatibility) {
+          if (typeof entry?.spec === "string") candidates.push(path127.join(manifestDir, entry.spec));
+        }
+      }
+      candidates.push(path127.join(manifestDir, "specs", "default.json"));
+      candidates.push(path127.join(manifestDir, "spec.json"));
+      return candidates.find((p) => fs129.existsSync(p)) || null;
+    }
+    var fs129;
+    var path127;
+    var CUSTOM_PROVIDERS_DOCS_URL;
+    var INIT_SCAFFOLDABLE_CATEGORIES;
+    var init_scaffold_v1 = __esm2({
+      "src/providers/scaffold-v1.ts"() {
+        "use strict";
+        fs129 = __toESM2(require("fs"));
+        path127 = __toESM2(require("path"));
+        CUSTOM_PROVIDERS_DOCS_URL = "https://docs.adhf.dev/guide/custom-providers";
+        INIT_SCAFFOLDABLE_CATEGORIES = /* @__PURE__ */ new Set(["cli"]);
+      }
+    });
+    async function handleCdpEvaluate(ctx, req, res) {
+      const body = await ctx.readBody(req);
+      const { expression, timeout, ideType } = body;
+      if (!expression) {
+        ctx.json(res, 400, { error: "expression required" });
+        return;
+      }
+      const cdp = ctx.getCdp(ideType);
+      if (!cdp && !ideType) {
+        LOG.warn("DevServer", "CDP evaluate without ideType \u2014 picked first connected manager");
+      }
+      if (!cdp?.isConnected) {
+        ctx.json(res, 503, { error: "No CDP connection available" });
+        return;
+      }
+      try {
+        const raw = await cdp.evaluate(expression, timeout || 3e4);
+        let result = raw;
+        if (typeof raw === "string") {
+          try {
+            result = JSON.parse(raw);
+          } catch {
+          }
+        }
+        ctx.json(res, 200, { result });
+      } catch (e) {
+        ctx.json(res, 500, { error: e.message });
+      }
+    }
+    async function handleCdpClick(ctx, req, res) {
+      const body = await ctx.readBody(req);
+      const { ideType, x, y } = body;
+      if (x == null || y == null) {
+        ctx.json(res, 400, { error: "x and y coordinates required" });
+        return;
+      }
+      const cdp = ctx.getCdp(ideType);
+      if (!cdp?.isConnected) {
+        ctx.json(res, 503, { error: "No CDP connection available" });
+        return;
+      }
+      try {
+        await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
+        await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+        ctx.json(res, 200, { success: true, clicked: true, x, y });
+      } catch (e) {
+        ctx.json(res, 500, { error: e.message });
+      }
+    }
+    async function handleCdpDomQuery(ctx, req, res) {
+      const body = await ctx.readBody(req);
+      const { selector, limit = 10, ideType } = body;
+      if (!selector) {
+        ctx.json(res, 400, { error: "selector required" });
+        return;
+      }
+      const cdp = ctx.getCdp(ideType);
+      if (!cdp) {
+        ctx.json(res, 503, { error: "No CDP connection available" });
+        return;
+      }
+      const expr = `(() => {
+    try {
+      const els = document.querySelectorAll('${selector.replace(/'/g, "\\'")}');
+      const results = [];
+      for (let i = 0; i < Math.min(els.length, ${limit}); i++) {
+        const el = els[i];
+        results.push({
+          index: i,
+          tag: el.tagName?.toLowerCase(),
+          id: el.id || null,
+          class: el.className && typeof el.className === 'string' ? el.className.trim().slice(0, 200) : null,
+          role: el.getAttribute?.('role') || null,
+          text: (el.textContent || '').trim().slice(0, 100),
+          visible: el.offsetParent !== null || el.offsetWidth > 0,
+          rect: (() => { try { const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; } catch { return null; } })()
+        });
+      }
+      return JSON.stringify({ total: els.length, results });
+    } catch (e) { return JSON.stringify({ error: e.message }); }
+  })()`;
+      try {
+        const raw = await cdp.evaluate(expr, 1e4);
+        const result = typeof raw === "string" ? JSON.parse(raw) : raw;
+        ctx.json(res, 200, result);
+      } catch (e) {
+        ctx.json(res, 500, { error: e.message });
+      }
+    }
+    async function handleScreenshot2(ctx, req, res) {
+      const url = new URL(req.url || "/", "http://localhost");
+      const ideType = url.searchParams.get("ideType") || void 0;
+      const cdp = ctx.getCdp(ideType);
+      if (!cdp) {
+        ctx.json(res, 503, { error: "No CDP connection available" });
+        return;
+      }
+      try {
+        let vpW = 0, vpH = 0;
+        try {
+          const metrics2 = await cdp.send("Page.getLayoutMetrics", {}, 3e3);
+          const vp = metrics2?.cssVisualViewport || metrics2?.visualViewport;
+          if (vp) {
+            vpW = Math.round(vp.clientWidth || vp.width || 0);
+            vpH = Math.round(vp.clientHeight || vp.height || 0);
+          }
+        } catch {
+        }
+        const buf = await cdp.captureScreenshot();
+        if (buf) {
+          res.writeHead(200, {
+            "Content-Type": "image/webp",
+            "X-Viewport-Width": String(vpW),
+            "X-Viewport-Height": String(vpH)
+          });
+          res.end(buf);
+        } else {
+          ctx.json(res, 500, { error: "Screenshot failed" });
+        }
+      } catch (e) {
+        ctx.json(res, 500, { error: e.message });
+      }
+    }
+    async function handleScriptsRun(ctx, req, res) {
+      const body = await ctx.readBody(req);
+      const { type: type2, script: scriptName } = body;
+      if (!type2 || !scriptName) {
+        ctx.json(res, 400, { error: "type and script required" });
+        return;
+      }
+      await ctx.handleRunScript(type2, req, res, body);
+    }
+    async function handleTypeAndSend(ctx, type2, req, res) {
+      const body = await ctx.readBody(req);
+      const { selector, text: text11 } = body;
+      if (!selector || typeof selector !== "string" || !text11 || typeof text11 !== "string") {
+        ctx.json(res, 400, { error: "selector and text strings required" });
+        return;
+      }
+      const cdp = ctx.getCdp(type2);
+      if (!cdp) {
+        ctx.json(res, 503, { error: `CDP not connected for '${type2}'` });
+        return;
+      }
+      try {
+        const sent = await cdp.typeAndSend(selector, text11);
+        ctx.json(res, 200, { sent });
+      } catch (e) {
+        ctx.json(res, 500, { error: e.message });
+      }
+    }
+    async function handleTypeAndSendAt(ctx, type2, req, res) {
+      const body = await ctx.readBody(req);
+      const { x, y, text: text11 } = body;
+      if (typeof x !== "number" || typeof y !== "number" || !text11 || typeof text11 !== "string") {
+        ctx.json(res, 400, { error: "x, y numbers and text string required" });
+        return;
+      }
+      const cdp = ctx.getCdp(type2);
+      if (!cdp) {
+        ctx.json(res, 503, { error: `CDP not connected for '${type2}'` });
+        return;
+      }
+      try {
+        const sent = await cdp.typeAndSendAt(x, y, text11);
+        ctx.json(res, 200, { sent });
+      } catch (e) {
+        ctx.json(res, 500, { error: e.message });
+      }
+    }
+    async function handleScriptHints(ctx, type2, _req, res) {
+      const dir = ctx.findProviderDir(type2);
+      if (!dir) {
+        ctx.json(res, 404, { error: `Provider not found: ${type2}` });
+        return;
+      }
+      let scriptsPath = "";
+      const directScripts = path128.join(dir, "scripts.js");
+      if (fs130.existsSync(directScripts)) {
+        scriptsPath = directScripts;
+      } else {
+        const scriptsDir = path128.join(dir, "scripts");
+        if (fs130.existsSync(scriptsDir)) {
+          const versions = fs130.readdirSync(scriptsDir).filter((d) => {
+            return fs130.statSync(path128.join(scriptsDir, d)).isDirectory();
+          }).sort().reverse();
+          for (const ver of versions) {
+            const p = path128.join(scriptsDir, ver, "scripts.js");
+            if (fs130.existsSync(p)) {
+              scriptsPath = p;
+              break;
+            }
+          }
+        }
+      }
+      if (!scriptsPath) {
+        ctx.json(res, 200, { hints: {} });
+        return;
+      }
+      try {
+        const source2 = fs130.readFileSync(scriptsPath, "utf-8");
+        const hints = {};
+        const funcRegex = /module\.exports\.(\w+)\s*=\s*function\s+\w+\s*\(params\)/g;
+        let match;
+        while ((match = funcRegex.exec(source2)) !== null) {
+          const name = match[1];
+          const startIdx = match.index;
+          const nextFunc = source2.indexOf("module.exports.", startIdx + 1);
+          const funcBody = source2.substring(startIdx, nextFunc > 0 ? nextFunc : source2.length);
+          const paramFields = {};
+          const dotRegex = /params\?\.([a-zA-Z_]+)|params\.([a-zA-Z_]+)/g;
+          let dm;
+          while ((dm = dotRegex.exec(funcBody)) !== null) {
+            const field3 = dm[1] || dm[2];
+            if (field3 === "length") continue;
+            if (!(field3 in paramFields)) {
+              if (/index|count|port|timeout/i.test(field3)) paramFields[field3] = 0;
+              else if (/action|text|title|message|model|mode|button|name|filter/i.test(field3)) paramFields[field3] = "";
+              else paramFields[field3] = "";
+            }
+          }
+          const typeofRegex = /typeof params === 'string' \? params : params\?\.([a-zA-Z_]+)/g;
+          let tm;
+          while ((tm = typeofRegex.exec(funcBody)) !== null) {
+            const field3 = tm[1];
+            if (!(field3 in paramFields)) paramFields[field3] = "";
+          }
+          const numRegex = /typeof params === 'number' \? params : params\?\.([a-zA-Z_]+)/g;
+          let nm;
+          while ((nm = numRegex.exec(funcBody)) !== null) {
+            const field3 = nm[1];
+            if (!(field3 in paramFields)) paramFields[field3] = 0;
+          }
+          const descriptions = {
+            readChat: "No params required",
+            sendMessage: "Text to send to the chat",
+            listSessions: "No params required",
+            switchSession: "Switch by index or title",
+            newSession: "No params required",
+            focusEditor: "No params required",
+            openPanel: "No params required",
+            resolveAction: "Approve/reject action buttons",
+            listNotifications: "Optional message filter",
+            dismissNotification: "Dismiss by index, message, or button",
+            listModels: "No params required",
+            setModel: "Model name to select",
+            listModes: "No params required",
+            setMode: "Mode name to select"
+          };
+          hints[name] = {
+            template: Object.keys(paramFields).length > 0 ? paramFields : {},
+            description: descriptions[name] || (Object.keys(paramFields).length > 0 ? "Params: " + Object.keys(paramFields).join(", ") : "No params")
+          };
+        }
+        ctx.json(res, 200, { hints });
+      } catch (e) {
+        ctx.json(res, 500, { error: e.message });
+      }
+    }
+    async function handleCdpTargets(ctx, _req, res) {
+      const targets = [];
+      for (const [managerKey, cdp] of ctx.cdpManagers.entries()) {
+        const underscore = managerKey.indexOf("_");
+        const ideBase = underscore === -1 ? managerKey : managerKey.slice(0, underscore);
+        targets.push({
+          managerKey,
+          ide: managerKey,
+          ideBase,
+          pageTitle: cdp.pageTitle,
+          targetId: cdp.targetId,
+          connected: cdp.isConnected,
+          port: cdp.getPort()
+        });
+      }
+      ctx.json(res, 200, { targets });
+    }
+    async function handleDomInspect(ctx, req, res) {
+      const body = await ctx.readBody(req);
+      const { x, y, selector, ideType } = body;
+      const cdp = ctx.getCdp(ideType);
+      if (!cdp) {
+        ctx.json(res, 503, { error: "No CDP connection" });
+        return;
+      }
+      const selectorArg = selector ? JSON.stringify(selector) : "null";
+      const inspectScript = `(() => {
+    function gs(el) {
+      if (!el || el === document.body) return 'body';
+      if (el.id) return '#' + CSS.escape(el.id);
+      let s = el.tagName.toLowerCase();
+      if (el.className && typeof el.className === 'string') {
+        const cls = el.className.trim().split(/\\s+/).filter(c => c && !c.startsWith('_')).slice(0, 3);
+        if (cls.length) s += '.' + cls.map(c => CSS.escape(c)).join('.');
+      }
+      const p = el.parentElement;
+      if (p) {
+        const sibs = [...p.children].filter(c => c.tagName === el.tagName);
+        if (sibs.length > 1) s += ':nth-child(' + ([...p.children].indexOf(el) + 1) + ')';
+      }
+      return s;
+    }
+    function gp(el) {
+      const parts = [];
+      let c = el;
+      while (c && c !== document.documentElement) { parts.unshift(gs(c)); c = c.parentElement; }
+      return parts;
+    }
+    function ni(el) {
+      if (!el) return null;
+      const tag = el.tagName?.toLowerCase() || '#text';
+      const attrs = {};
+      if (el.attributes) for (const a of el.attributes) if (a.name !== 'class' && a.name !== 'style') attrs[a.name] = a.value?.substring(0, 200);
+      const cls = (el.className && typeof el.className === 'string') ? el.className.trim().split(/\\s+/).filter(Boolean).slice(0, 10) : [];
+      const text = el.textContent?.trim().substring(0, 150) || '';
+      const dt = [...(el.childNodes||[])].filter(n=>n.nodeType===3).map(n=>n.textContent.trim()).filter(Boolean).join(' ').substring(0,100);
+      const cc = el.children?.length || 0;
+      const r = el.getBoundingClientRect?.();
+      return { tag, cls, attrs, text, directText: dt, childCount: cc, selector: gs(el), fullSelector: gp(el).join(' > '), rect: r ? {x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)} : null };
+    }
+    const sel = ${selectorArg};
+    let el = sel ? document.querySelector(sel) : document.elementFromPoint(${x || 0}, ${y || 0});
+    if (!el) return JSON.stringify({ error: 'No element found' });
+    const info = ni(el);
+    const ancestors = [];
+    let pp = el.parentElement;
+    while (pp && pp !== document.documentElement) {
+      ancestors.push({ tag: pp.tagName.toLowerCase(), selector: gs(pp), cls: (pp.className && typeof pp.className === 'string') ? pp.className.trim().split(/\\s+/).slice(0,3) : [] });
+      pp = pp.parentElement;
+    }
+    const children = [...(el.children||[])].slice(0,50).map(c => ni(c));
+    return JSON.stringify({ element: info, ancestors: ancestors.reverse(), children });
+  })()`;
+      try {
+        const raw = await cdp.evaluate(inspectScript, 1e4);
+        let result = raw;
+        if (typeof raw === "string") {
+          try {
+            result = JSON.parse(raw);
+          } catch {
+          }
+        }
+        ctx.json(res, 200, result);
+      } catch (e) {
+        ctx.json(res, 500, { error: e.message });
+      }
+    }
+    async function handleDomChildren(ctx, req, res) {
+      const body = await ctx.readBody(req);
+      const { selector, ideType } = body;
+      const cdp = ctx.getCdp(ideType);
+      if (!cdp) {
+        ctx.json(res, 503, { error: "No CDP connection" });
+        return;
+      }
+      if (!selector) {
+        ctx.json(res, 400, { error: "selector required" });
+        return;
+      }
+      const script = `(() => {
+    function gs(el) {
+      if (!el || el === document.body) return 'body';
+      if (el.id) return '#' + CSS.escape(el.id);
+      let s = el.tagName.toLowerCase();
+      if (el.className && typeof el.className === 'string') {
+        const cls = el.className.trim().split(/\\s+/).filter(c => c && !c.startsWith('_')).slice(0, 3);
+        if (cls.length) s += '.' + cls.map(c => CSS.escape(c)).join('.');
+      }
+      const p = el.parentElement;
+      if (p) {
+        const sibs = [...p.children].filter(c => c.tagName === el.tagName);
+        if (sibs.length > 1) s += ':nth-child(' + ([...p.children].indexOf(el) + 1) + ')';
+      }
+      return s;
+    }
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) return JSON.stringify({ error: 'Element not found' });
+    const children = [...(el.children||[])].slice(0,100).map(c => {
+      const tag = c.tagName?.toLowerCase();
+      const cls = (c.className && typeof c.className === 'string') ? c.className.trim().split(/\\s+/).filter(Boolean).slice(0,10) : [];
+      const attrs = {};
+      for (const a of c.attributes) if (a.name!=='class'&&a.name!=='style') attrs[a.name] = a.value?.substring(0,200);
+      const text = c.textContent?.trim().substring(0,150)||'';
+      const dt = [...c.childNodes].filter(n=>n.nodeType===3).map(n=>n.textContent.trim()).filter(Boolean).join(' ').substring(0,100);
+      return { tag, cls, attrs, text, directText: dt, childCount: c.children?.length||0, selector: gs(c) };
+    });
+    return JSON.stringify({ selector: ${JSON.stringify(selector)}, childCount: el.children?.length||0, children });
+  })()`;
+      try {
+        const raw = await cdp.evaluate(script, 1e4);
+        let result = raw;
+        if (typeof raw === "string") {
+          try {
+            result = JSON.parse(raw);
+          } catch {
+          }
+        }
+        ctx.json(res, 200, result);
+      } catch (e) {
+        ctx.json(res, 500, { error: e.message });
+      }
+    }
+    async function handleDomAnalyze(ctx, req, res) {
+      const body = await ctx.readBody(req);
+      const { ideType, selector, x, y } = body;
+      const cdp = ctx.getCdp(ideType);
+      if (!cdp) {
+        ctx.json(res, 503, { error: "No CDP connection" });
+        return;
+      }
+      const selectorArg = selector ? JSON.stringify(selector) : "null";
+      const analyzeScript = `(() => {
+    function gs(el) {
+      if (!el || el === document.body) return 'body';
+      if (el.id) return '#' + CSS.escape(el.id);
+      let s = el.tagName.toLowerCase();
+      if (el.className && typeof el.className === 'string') {
+        const cls = el.className.trim().split(/\\s+/).filter(c => c && !c.startsWith('_')).slice(0, 3);
+        if (cls.length) s += '.' + cls.map(c => CSS.escape(c)).join('.');
+      }
+      return s;
+    }
+    function fp(el) {
+      const parts = [];
+      let c = el;
+      while (c && c !== document.documentElement) { parts.unshift(gs(c)); c = c.parentElement; }
+      return parts.join(' > ');
+    }
+    function sigOf(el) {
+      return el.tagName + '|' + ((el.className && typeof el.className === 'string') ? el.className.trim().split(/\\s+/).filter(c => c && !c.startsWith('_')).sort().join('.') : '');
+    }
+
+    // Find target element
+    const sel = ${selectorArg};
+    let target = sel ? document.querySelector(sel) : document.elementFromPoint(${x || 0}, ${y || 0});
+    if (!target) return JSON.stringify({ error: 'Element not found' });
+
+    const result = {
+      target: { tag: target.tagName.toLowerCase(), selector: fp(target), text: (target.textContent||'').trim().substring(0, 200) },
+      siblingPattern: null,
+      ancestorAnalysis: [],
+      subtreeTexts: [],
+    };
+
+    // 1. Walk UP parents \u2014 at each level, find sibling patterns
+    let el = target;
+    let depth = 0;
+    while (el && el !== document.body && depth < 15) {
+      const parent = el.parentElement;
+      if (!parent) break;
+
+      const mySig = sigOf(el);
+      const siblings = [...parent.children].filter(c => sigOf(c) === mySig);
+      const totalChildren = parent.children.length;
+      const childSel = gs(el).replace(/:nth-child\\(\\d+\\)/, '');
+      const parentSel = fp(parent);
+
+      result.ancestorAnalysis.push({
+        depth,
+        parentTag: parent.tagName.toLowerCase(),
+        parentSelector: parentSel,
+        totalChildren,
+        matchingSiblings: siblings.length,
+        childSelector: childSel,
+        fullSelector: parentSel + ' > ' + childSel,
+      });
+
+      // Best sibling pattern: 3+ matching siblings with text
+      if (!result.siblingPattern && siblings.length >= 3) {
+        const siblingData = siblings.map((s, i) => {
+          const directText = [...s.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent.trim()).filter(Boolean).join(' ').substring(0, 120);
+          const allText = (s.textContent || '').trim().substring(0, 200);
+          const childCount = s.children?.length || 0;
+          const cls = (s.className && typeof s.className === 'string') ? s.className.trim().split(/\\s+/).filter(Boolean) : [];
+          const attrs = {};
+          if (s.attributes) for (const a of s.attributes) {
+            if (a.name !== 'class' && a.name !== 'style' && a.value) attrs[a.name] = a.value.substring(0, 100);
+          }
+          return { index: i, directText, allText, childCount, cls, attrs, tag: s.tagName.toLowerCase() };
+        });
+
+        // Find common attributes across siblings
+        const allAttrs = siblingData.map(s => Object.keys(s.attrs));
+        const commonAttrs = allAttrs[0]?.filter(attr => allAttrs.every(a => a.includes(attr))) || [];
+        // Find varying attributes (data-*, role, etc)
+        const varyingAttrs = {};
+        for (const attr of commonAttrs) {
+          const values = siblingData.map(s => s.attrs[attr]);
+          const unique = [...new Set(values)];
+          if (unique.length > 1) varyingAttrs[attr] = unique.slice(0, 5);
+        }
+
+        result.siblingPattern = {
+          count: siblings.length,
+          selector: parentSel + ' > ' + childSel,
+          parentSelector: parentSel,
+          depthFromTarget: depth,
+          siblings: siblingData.slice(0, 30),
+          commonAttrs,
+          varyingAttrs,
+        };
+      }
+
+      el = parent;
+      depth++;
+    }
+
+    // 2. Collect subtree text nodes from target
+    const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT, null);
+    let node;
+    while ((node = walker.nextNode()) && result.subtreeTexts.length < 30) {
+      const text = node.textContent.trim();
+      if (text.length > 2) {
+        const parentTag = node.parentElement?.tagName?.toLowerCase() || '';
+        const parentCls = (node.parentElement?.className && typeof node.parentElement.className === 'string')
+          ? node.parentElement.className.trim().split(/\\s+/).filter(Boolean).slice(0,3).join('.') : '';
+        result.subtreeTexts.push({
+          text: text.substring(0, 150),
+          parentTag,
+          parentCls,
+          parentSelector: gs(node.parentElement),
+        });
+      }
+    }
+
+    return JSON.stringify(result);
+  })()`;
+      try {
+        const raw = await cdp.evaluate(analyzeScript, 15e3);
+        let result = raw;
+        if (typeof raw === "string") {
+          try {
+            result = JSON.parse(raw);
+          } catch {
+          }
+        }
+        ctx.json(res, 200, result);
+      } catch (e) {
+        ctx.json(res, 500, { error: e.message });
+      }
+    }
+    async function handleFindCommon(ctx, req, res) {
+      const body = await ctx.readBody(req);
+      const { include, exclude, ideType } = body;
+      if (!Array.isArray(include) || include.length === 0) {
+        ctx.json(res, 400, { error: "include[] is required" });
+        return;
+      }
+      const cdp = ctx.getCdp(ideType);
+      if (!cdp) {
+        ctx.json(res, 503, { error: "No CDP connection" });
+        return;
+      }
+      const script = `(() => {
+    const includes = ${JSON.stringify(include)};
+    const excludes = ${JSON.stringify(exclude || [])};
+
+    function gs(el) {
+      if (!el || el === document.body) return 'body';
+      if (el.id) return '#' + CSS.escape(el.id);
+      let s = el.tagName.toLowerCase();
+      if (el.className && typeof el.className === 'string') {
+        const cls = el.className.trim().split(/\\s+/).filter(c => c && !c.startsWith('_')).slice(0, 3);
+        if (cls.length) s += '.' + cls.map(c => CSS.escape(c)).join('.');
+      }
+      return s;
+    }
+    function fp(el) {
+      const parts = [];
+      let c = el;
+      while (c && c !== document.documentElement) { parts.unshift(gs(c)); c = c.parentElement; }
+      return parts.join(' > ');
+    }
+    function sig(el) {
+      return el.tagName + '|' + ((el.className && typeof el.className === 'string') ? el.className.trim() : '');
+    }
+
+    // Step 1: For each include, find all matching leaf elements
+    const includeMatches = includes.map(text => {
+      const lower = text.toLowerCase();
+      const found = [];
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+        acceptNode: n => n.textContent.toLowerCase().includes(lower) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
+      });
+      let node;
+      while ((node = walker.nextNode()) && found.length < 5) {
+        if (node.parentElement) found.push(node.parentElement);
+      }
+      return found;
+    });
+
+    if (includeMatches.some(m => m.length === 0)) {
+      const missing = includes.filter((_, i) => includeMatches[i].length === 0);
+      return JSON.stringify({ results: [], message: 'Text not found: ' + missing.join(', ') });
+    }
+
+    // Step 2: Find LCA for each combination of include elements
+    // For each pair of include[0] element and include[1] element, find their LCA
+    // Then within the LCA, find the direct-child subtree branch for each
+    const containers = [];
+    const seen = new Set();
+
+    function findLCA(el1, el2) {
+      const ancestors1 = new Set();
+      let c = el1;
+      while (c) { ancestors1.add(c); c = c.parentElement; }
+      c = el2;
+      while (c) { if (ancestors1.has(c)) return c; c = c.parentElement; }
+      return document.body;
+    }
+
+    function findDirectChildContaining(parent, descendant) {
+      let c = descendant;
+      while (c && c.parentElement !== parent) c = c.parentElement;
+      return c;
+    }
+
+    // Try all combinations (first 3 matches per include)
+    for (const el1 of includeMatches[0].slice(0, 3)) {
+      for (let ii = 1; ii < includeMatches.length; ii++) {
+        for (const el2 of includeMatches[ii].slice(0, 3)) {
+          if (el1 === el2) continue;
+          const lca = findLCA(el1, el2);
+          if (!lca || lca === document.body || lca === document.documentElement) continue;
+
+          // Find which direct child of LCA contains each include element
+          const child1 = findDirectChildContaining(lca, el1);
+          const child2 = findDirectChildContaining(lca, el2);
+          if (!child1 || !child2 || child1 === child2) continue;
+
+          const lcaSel = fp(lca);
+          if (seen.has(lcaSel)) continue;
+          seen.add(lcaSel);
+
+          // Check exclude
+          if (excludes.length > 0) {
+            const lcaText = (lca.textContent || '').toLowerCase();
+            if (excludes.some(ex => lcaText.includes(ex.toLowerCase()))) continue;
+          }
+
+          // Are child1 and child2 same tag? (relaxed \u2014 ignore classes)
+          const tag1 = child1.tagName;
+          const tag2 = child2.tagName;
+
+          // Bubble up: walk up from LCA, find the best list container
+          // (the one with most repeating same-tag children)
+          let container = lca;
+          let bestContainer = lca;
+          let bestListCount = 0;
+          for (let up = 0; up < 10; up++) {
+            const p = container.parentElement;
+            if (!p || p === document.body || p === document.documentElement) break;
+            // Check how many same-tag siblings 'container' has in parent
+            const myTag = container.tagName;
+            const sibCount = [...p.children].filter(c => c.tagName === myTag).length;
+            if (sibCount > bestListCount) {
+              bestListCount = sibCount;
+              bestContainer = p;
+            }
+            container = p;
+          }
+          container = bestListCount >= 3 ? bestContainer : lca;
+
+          const allChildren = [...container.children];
+          const childTag = tag1 === tag2 ? tag1 : (allChildren.length > 0 ? allChildren[0].tagName : '');
+          const sameTagCount = allChildren.filter(c => c.tagName === childTag).length;
+          const isList = sameTagCount >= 3 && sameTagCount >= allChildren.length * 0.4;
+
+          // Gather all same-tag children as list items
+          const listItems = isList
+            ? allChildren.filter(c => c.tagName === childTag)
+            : allChildren;
+
+          // Filter rendered items (skip virtual scroll placeholders)
+          const rendered = listItems.filter(c => (c.innerText || '').trim().length > 0);
+          const placeholderCount = listItems.length - rendered.length;
+
+          const containerSel = fp(container);
+          if (seen.has(containerSel)) continue;
+          seen.add(containerSel);
+
+          const r = container.getBoundingClientRect();
+          containers.push({
+            selector: containerSel,
+            tag: container.tagName.toLowerCase(),
+            childCount: allChildren.length,
+            listItemCount: listItems.length,
+            renderedCount: rendered.length,
+            placeholderCount,
+            isList,
+            rect: { w: Math.round(r.width), h: Math.round(r.height) },
+            depth: containerSel.split(' > ').length,
+            items: rendered.slice(0, 30).map((el, i) => {
+              const fullText = (el.innerText || el.textContent || '').trim();
+              // Find snippet around first matched include text
+              let text = fullText.substring(0, 200);
+              const matched = [];
+              for (const inc of includes) {
+                const idx = fullText.toLowerCase().indexOf(inc.toLowerCase());
+                if (idx >= 0) {
+                  matched.push(inc);
+                  if (matched.length === 1) {
+                    // Show snippet around first match
+                    const start = Math.max(0, idx - 30);
+                    const end = Math.min(fullText.length, idx + inc.length + 80);
+                    text = (start > 0 ? '...' : '') + fullText.substring(start, end) + (end < fullText.length ? '...' : '');
+                  }
+                }
+              }
+              return {
+                index: i,
+                tag: el.tagName.toLowerCase(),
+                cls: (el.className && typeof el.className === 'string') ? el.className.trim().split(/\\s+/).slice(0, 2).join(' ') : '',
+                text,
+                matchedIncludes: matched,
+                childCount: el.children.length,
+                h: Math.round(el.getBoundingClientRect().height),
+              };
+            }),
+          });
+        }
+      }
+    }
+
+    // Sort: list containers first (more items = better), then by depth
+    containers.sort((a, b) => {
+      if (a.isList !== b.isList) return a.isList ? -1 : 1;
+      return b.listItemCount - a.listItemCount || b.depth - a.depth;
+    });
+
+    return JSON.stringify({
+      results: containers.slice(0, 10),
+      includeCount: includes.length,
+      excludeCount: excludes.length,
+    });
+  })()`;
+      try {
+        const raw = await cdp.evaluate(script, 1e4);
+        let result = raw;
+        if (typeof raw === "string") {
+          try {
+            result = JSON.parse(raw);
+          } catch {
+          }
+        }
+        ctx.json(res, 200, result);
+      } catch (e) {
+        ctx.json(res, 500, { error: e.message });
+      }
+    }
+    async function handleFindByText(ctx, req, res) {
+      const body = await ctx.readBody(req);
+      const { text: text11, ideType, containerSelector } = body;
+      if (!text11 || typeof text11 !== "string") {
+        ctx.json(res, 400, { error: "text is required" });
+        return;
+      }
+      const cdp = ctx.getCdp(ideType);
+      if (!cdp) {
+        ctx.json(res, 503, { error: "No CDP connection" });
+        return;
+      }
+      const containerArg = containerSelector ? JSON.stringify(containerSelector) : "null";
+      const script = `(() => {
+    function gs(el) {
+      if (!el || el === document.body) return 'body';
+      if (el.id) return '#' + CSS.escape(el.id);
+      let s = el.tagName.toLowerCase();
+      if (el.className && typeof el.className === 'string') {
+        const cls = el.className.trim().split(/\\s+/).filter(c => c && !c.startsWith('_')).slice(0, 3);
+        if (cls.length) s += '.' + cls.map(c => CSS.escape(c)).join('.');
+      }
+      return s;
+    }
+    function fp(el) {
+      const parts = [];
+      let c = el;
+      while (c && c !== document.documentElement) { parts.unshift(gs(c)); c = c.parentElement; }
+      return parts.join(' > ');
+    }
+    function parentSig(el) {
+      // Signature: tag+class chain up 3 levels
+      const parts = [];
+      let c = el;
+      for (let i = 0; i < 3 && c; i++) { parts.push(gs(c)); c = c.parentElement; }
+      return parts.join(' < ');
+    }
+
+    const searchText = ${JSON.stringify(text11)}.toLowerCase();
+    const container = ${containerArg} ? document.querySelector(${containerArg}) : document.body;
+    if (!container) return JSON.stringify({ error: 'Container not found' });
+
+    const matches = [];
+    const seen = new Set();
+
+    // Find all text nodes containing the search text
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+      acceptNode: n => n.textContent.toLowerCase().includes(searchText) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
+    });
+    let node;
+    while ((node = walker.nextNode()) && matches.length < 50) {
+      // Walk up to find the most specific visible element
+      let el = node.parentElement;
+      if (!el) continue;
+
+      // Skip hidden elements
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) continue;
+
+      const selector = fp(el);
+      if (seen.has(selector)) continue;
+      seen.add(selector);
+
+      // Walk up parent chain \u2014 record each level's selector + sibling count
+      const ancestors = [];
+      let cur = el;
+      let pLvl = cur.parentElement;
+      for (let lvl = 0; lvl < 10 && pLvl && pLvl !== document.body; lvl++) {
+        const mySig = cur.tagName + '|' + ((cur.className && typeof cur.className === 'string') ? cur.className.trim().split(/\\s+/).sort().join('.') : '');
+        const sibs = [...pLvl.children].filter(c => {
+          const sig = c.tagName + '|' + ((c.className && typeof c.className === 'string') ? c.className.trim().split(/\\s+/).sort().join('.') : '');
+          return sig === mySig;
+        });
+        const childSel = gs(cur).replace(/:nth-child\\(\\d+\\)/, '');
+        ancestors.push({
+          parentSelector: fp(pLvl),
+          childSelector: childSel,
+          fullSelector: fp(pLvl) + ' > ' + childSel,
+          siblingCount: sibs.length,
+          parentTag: pLvl.tagName.toLowerCase(),
+        });
+        cur = pLvl;
+        pLvl = pLvl.parentElement;
+      }
+
+      const directText = (node.textContent || '').trim().substring(0, 200);
+      const allText = (node.parentElement.textContent || '').trim().substring(0, 300);
+      const tag = node.parentElement.tagName.toLowerCase();
+      const cls = (node.parentElement.className && typeof node.parentElement.className === 'string')
+        ? node.parentElement.className.trim().split(/\\s+/).filter(Boolean) : [];
+
+      matches.push({
+        selector,
+        tag,
+        cls,
+        directText,
+        allText,
+        ancestors,
+        rect: { w: Math.round(r.width), h: Math.round(r.height) },
+        depth: selector.split(' > ').length,
+      });
+    }
+
+    // Sort: prefer elements with more siblings in ancestry, then fewer depth
+    matches.sort((a, b) => {
+      const aMax = Math.max(1, ...a.ancestors.map(x => x.siblingCount));
+      const bMax = Math.max(1, ...b.ancestors.map(x => x.siblingCount));
+      return (bMax - aMax) || (a.depth - b.depth);
+    });
+
+    return JSON.stringify({ query: ${JSON.stringify(text11)}, matches, total: matches.length });
+  })()`;
+      try {
+        const raw = await cdp.evaluate(script, 1e4);
+        let result = raw;
+        if (typeof raw === "string") {
+          try {
+            result = JSON.parse(raw);
+          } catch {
+          }
+        }
+        ctx.json(res, 200, result);
+      } catch (e) {
+        ctx.json(res, 500, { error: e.message });
+      }
+    }
+    async function handleDomContext(ctx, type2, req, res) {
+      const body = await ctx.readBody(req);
+      const { ideType } = body;
+      const provider = ctx.providerLoader.resolve(type2);
+      if (!provider) {
+        ctx.json(res, 404, { error: `Provider not found: ${type2}` });
+        return;
+      }
+      const cdp = ctx.getCdp(ideType || type2);
+      if (!cdp) {
+        ctx.json(res, 503, { error: "No CDP connection available. Target IDE must be running with CDP enabled." });
+        return;
+      }
+      try {
+        let screenshot2 = null;
+        try {
+          const buf = await cdp.captureScreenshot();
+          if (buf) screenshot2 = buf.toString("base64");
+        } catch {
+        }
+        const domScript = `(() => {
+      function gs(el) {
+        if (!el || el === document.body) return 'body';
+        if (el.id) return '#' + CSS.escape(el.id);
+        let s = el.tagName.toLowerCase();
+        if (el.className && typeof el.className === 'string') {
+          const cls = el.className.trim().split(/\\s+/).filter(c => c && !c.startsWith('_')).slice(0, 3);
+          if (cls.length) s += '.' + cls.map(c => CSS.escape(c)).join('.');
+        }
+        return s;
+      }
+      function fp(el) {
+        const parts = [];
+        let c = el;
+        while (c && c !== document.documentElement) { parts.unshift(gs(c)); c = c.parentElement; }
+        return parts.join(' > ');
+      }
+      function rect(el) {
+        try { const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; }
+        catch { return null; }
+      }
+
+      const result = { contentEditables: [], chatContainers: [], buttons: [], sidebars: [], dropdowns: [], inputs: [] };
+
+      // Content editables + textareas + inputs
+      document.querySelectorAll('[contenteditable], textarea, input[type="text"], input:not([type])').forEach(el => {
+        if (el.offsetWidth === 0 && el.offsetHeight === 0) return;
+        result.contentEditables.push({
+          selector: fp(el),
+          tag: el.tagName.toLowerCase(),
+          contenteditable: el.getAttribute('contenteditable'),
+          role: el.getAttribute('role'),
+          ariaLabel: el.getAttribute('aria-label'),
+          placeholder: el.getAttribute('placeholder'),
+          rect: rect(el),
+          visible: el.offsetParent !== null || el.offsetWidth > 0,
+        });
+      });
+
+      // Chat containers \u2014 large divs with scroll
+      document.querySelectorAll('div, section, main').forEach(el => {
+        const style = getComputedStyle(el);
+        const isScrollable = style.overflowY === 'auto' || style.overflowY === 'scroll';
+        const r = el.getBoundingClientRect();
+        if (!isScrollable || r.height < 200 || r.width < 200) return;
+        const childCount = el.children.length;
+        if (childCount < 2) return;
+        result.chatContainers.push({
+          selector: fp(el),
+          childCount,
+          rect: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
+          hasScrollable: true,
+          scrollTop: Math.round(el.scrollTop),
+          scrollHeight: Math.round(el.scrollHeight),
+        });
+      });
+
+      // Buttons
+      document.querySelectorAll('button, [role="button"]').forEach(el => {
+        if (el.offsetWidth === 0 && el.offsetHeight === 0) return;
+        const text = (el.textContent || '').trim().substring(0, 80);
+        if (!text && !el.getAttribute('aria-label')) return;
+        result.buttons.push({
+          text,
+          ariaLabel: el.getAttribute('aria-label'),
+          selector: fp(el),
+          rect: rect(el),
+          disabled: el.disabled || el.getAttribute('aria-disabled') === 'true',
+        });
+      });
+
+      // Sidebars \u2014 panels on left/right edges
+      document.querySelectorAll('[class*="sidebar"], [class*="side-bar"], [class*="panel"], [role="complementary"], [role="navigation"], aside').forEach(el => {
+        if (el.offsetWidth === 0 && el.offsetHeight === 0) return;
+        const r = el.getBoundingClientRect();
+        if (r.width < 50 || r.height < 200) return;
+        result.sidebars.push({
+          selector: fp(el),
+          position: r.x < window.innerWidth / 3 ? 'left' : r.x > window.innerWidth * 2 / 3 ? 'right' : 'center',
+          rect: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
+          childCount: el.children.length,
+        });
+      });
+
+      // Dropdowns \u2014 select, popover, menu patterns
+      document.querySelectorAll('select, [role="listbox"], [role="menu"], [role="combobox"], [class*="dropdown"], [class*="popover"]').forEach(el => {
+        result.dropdowns.push({
+          selector: fp(el),
+          tag: el.tagName.toLowerCase(),
+          role: el.getAttribute('role'),
+          visible: el.offsetParent !== null || el.offsetWidth > 0,
+          rect: rect(el),
+        });
+      });
+
+      return JSON.stringify(result);
+    })()`;
+        const raw = await cdp.evaluate(domScript, 15e3);
+        let domSnapshot = {};
+        if (typeof raw === "string") {
+          try {
+            domSnapshot = JSON.parse(raw);
+          } catch {
+            domSnapshot = { raw };
+          }
+        } else domSnapshot = raw;
+        ctx.json(res, 200, {
+          screenshot: screenshot2 ? `base64:${screenshot2}` : null,
+          domSnapshot,
+          pageTitle: await cdp.evaluate("document.title", 3e3).catch(() => ""),
+          pageUrl: await cdp.evaluate("window.location.href", 3e3).catch(() => ""),
+          providerType: type2,
+          timestamp: (/* @__PURE__ */ new Date()).toISOString()
+        });
+      } catch (e) {
+        ctx.json(res, 500, { error: `DOM context collection failed: ${e.message}` });
+      }
+    }
+    var fs130;
+    var path128;
+    var init_dev_cdp_handlers = __esm2({
+      "src/daemon/dev-cdp-handlers.ts"() {
+        "use strict";
+        fs130 = __toESM2(require("fs"));
+        path128 = __toESM2(require("path"));
+        init_logger();
+      }
+    });
+    function slugifyFixtureName(value) {
+      const normalized = String(value || "").trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+      return normalized || `fixture-${Date.now()}`;
+    }
+    function getCliFixtureDir(ctx, type2) {
+      const providerDir = ctx.providerLoader.findProviderDir(type2);
+      if (!providerDir) {
+        throw new Error(`Provider directory not found for '${type2}'`);
+      }
+      return path129.join(providerDir, "fixtures");
+    }
+    function readCliFixture(ctx, type2, name) {
+      const fixtureDir = getCliFixtureDir(ctx, type2);
+      const filePath2 = path129.join(fixtureDir, `${name}.json`);
+      if (!fs131.existsSync(filePath2)) {
+        throw new Error(`Fixture not found: ${filePath2}`);
+      }
+      return JSON.parse(fs131.readFileSync(filePath2, "utf-8"));
+    }
+    function getExerciseTranscriptText(result) {
+      const parts = [];
+      const debugMessages = Array.isArray(result?.debug?.messages) ? result.debug.messages : [];
+      const traceMessages = Array.isArray(result?.trace?.messages) ? result.trace.messages : [];
+      for (const message of [...debugMessages, ...traceMessages]) {
+        if (!message || typeof message.content !== "string") continue;
+        parts.push(message.content);
+      }
+      if (typeof result?.debug?.partialResponse === "string") parts.push(result.debug.partialResponse);
+      if (typeof result?.trace?.responseBuffer === "string") parts.push(result.trace.responseBuffer);
+      return parts.join("\n");
+    }
+    function getExerciseLastAssistant(result) {
+      const debugMessages = Array.isArray(result?.debug?.messages) ? result.debug.messages : [];
+      const traceMessages = Array.isArray(result?.trace?.messages) ? result.trace.messages : [];
+      for (const messages of [debugMessages, traceMessages]) {
+        for (let i = messages.length - 1; i >= 0; i -= 1) {
+          const message = messages[i];
+          if (message?.role === "assistant" && typeof message.content === "string" && message.content.trim()) {
+            return message.content;
+          }
+        }
+      }
+      return "";
+    }
+    function getExerciseMessageCount(result) {
+      const debugMessages = Array.isArray(result?.debug?.messages) ? result.debug.messages : [];
+      const traceMessages = Array.isArray(result?.trace?.messages) ? result.trace.messages : [];
+      return Math.max(debugMessages.length, traceMessages.length);
+    }
+    function compileFixtureRegex(source2) {
+      const value = String(source2 || "").trim();
+      if (!value) return null;
+      const delimited = value.match(/^\/([\s\S]+)\/([dgimsuvy]*)$/);
+      try {
+        if (delimited) {
+          return new RegExp(delimited[1], delimited[2]);
+        }
+        return new RegExp(value, "m");
+      } catch {
+        return null;
+      }
+    }
+    function statusesContainSequence(actual, expected) {
+      if (!expected.length) return true;
+      let index = 0;
+      for (const status of actual) {
+        if (status === expected[index]) index += 1;
+        if (index >= expected.length) return true;
+      }
+      return false;
+    }
+    function validateCliFixtureResult(result, assertions) {
+      const failures = [];
+      const transcriptText = getExerciseTranscriptText(result);
+      const lastAssistant = getExerciseLastAssistant(result);
+      const mustContainAny = assertions.mustContainAny || [];
+      const mustNotContainAny = assertions.mustNotContainAny || [];
+      const mustMatchAny = assertions.mustMatchAny || [];
+      const mustNotMatchAny = assertions.mustNotMatchAny || [];
+      const lastAssistantMustContainAny = assertions.lastAssistantMustContainAny || [];
+      const lastAssistantMustNotContainAny = assertions.lastAssistantMustNotContainAny || [];
+      const lastAssistantMustMatchAny = assertions.lastAssistantMustMatchAny || [];
+      const lastAssistantMustNotMatchAny = assertions.lastAssistantMustNotMatchAny || [];
+      const statusesSeen = Array.isArray(result?.statusesSeen) ? result.statusesSeen.map((value) => String(value)) : [];
+      if (assertions.requireNotTimedOut !== false && result?.timedOut) {
+        failures.push("Exercise timed out");
+      }
+      const missingRequired = mustContainAny.filter((value) => !transcriptText.includes(value));
+      if (missingRequired.length > 0) {
+        failures.push(`Missing required substrings: ${missingRequired.join(", ")}`);
+      }
+      const presentBanned = mustNotContainAny.filter((value) => transcriptText.includes(value));
+      if (presentBanned.length > 0) {
+        failures.push(`Found banned substrings: ${presentBanned.join(", ")}`);
+      }
+      const missingRegex = mustMatchAny.filter((value) => {
+        const regex = compileFixtureRegex(value);
+        return !regex || !regex.test(transcriptText);
+      });
+      if (missingRegex.length > 0) {
+        failures.push(`Missing required regex matches: ${missingRegex.join(", ")}`);
+      }
+      const presentBannedRegex = mustNotMatchAny.filter((value) => {
+        const regex = compileFixtureRegex(value);
+        return !!regex && regex.test(transcriptText);
+      });
+      if (presentBannedRegex.length > 0) {
+        failures.push(`Found banned regex matches: ${presentBannedRegex.join(", ")}`);
+      }
+      const missingLastAssistant = lastAssistantMustContainAny.filter((value) => !lastAssistant.includes(value));
+      if (missingLastAssistant.length > 0) {
+        failures.push(`Missing required lastAssistant substrings: ${missingLastAssistant.join(", ")}`);
+      }
+      const presentBannedLastAssistant = lastAssistantMustNotContainAny.filter((value) => lastAssistant.includes(value));
+      if (presentBannedLastAssistant.length > 0) {
+        failures.push(`Found banned lastAssistant substrings: ${presentBannedLastAssistant.join(", ")}`);
+      }
+      const missingLastAssistantRegex = lastAssistantMustMatchAny.filter((value) => {
+        const regex = compileFixtureRegex(value);
+        return !regex || !regex.test(lastAssistant);
+      });
+      if (missingLastAssistantRegex.length > 0) {
+        failures.push(`Missing required lastAssistant regex matches: ${missingLastAssistantRegex.join(", ")}`);
+      }
+      const presentBannedLastAssistantRegex = lastAssistantMustNotMatchAny.filter((value) => {
+        const regex = compileFixtureRegex(value);
+        return !!regex && regex.test(lastAssistant);
+      });
+      if (presentBannedLastAssistantRegex.length > 0) {
+        failures.push(`Found banned lastAssistant regex matches: ${presentBannedLastAssistantRegex.join(", ")}`);
+      }
+      if (assertions.statusesSeen?.length && !statusesContainSequence(statusesSeen, assertions.statusesSeen)) {
+        failures.push(`Expected statuses sequence not observed: ${assertions.statusesSeen.join(" -> ")}`);
+      }
+      if (result && typeof result === "object") {
+        result.lastAssistant = lastAssistant;
+      }
+      return failures;
+    }
+    function isCliTargetState(state2) {
+      return state2.category === "cli";
+    }
+    function getCliAdapterFromInstance(instance) {
+      if (!instance) return null;
+      const candidate = instance;
+      if (typeof candidate.getAdapter === "function") return candidate.getAdapter();
+      return candidate.adapter || null;
+    }
+    function getCliProviderResolutionMeta(ctx, type2, adapter) {
+      const adapterMeta = typeof adapter?.getProviderResolutionMeta === "function" ? adapter.getProviderResolutionMeta() : adapter?.getDebugSnapshot?.()?.providerResolution || null;
+      const resolvedProvider = ctx.providerLoader.resolve(type2);
+      if (!adapterMeta && !resolvedProvider) return null;
+      return {
+        type: type2,
+        providerDir: adapterMeta?.providerDir || resolvedProvider?._resolvedProviderDir || ctx.providerLoader.findProviderDir(type2),
+        scriptDir: adapterMeta?.scriptDir || resolvedProvider?._resolvedScriptDir || null,
+        scriptsPath: adapterMeta?.scriptsPath || resolvedProvider?._resolvedScriptsPath || null,
+        scriptsSource: adapterMeta?.scriptsSource || resolvedProvider?._resolvedScriptsSource || null,
+        resolvedVersion: adapterMeta?.resolvedVersion || resolvedProvider?._resolvedVersion || null,
+        resolvedOs: adapterMeta?.resolvedOs || resolvedProvider?._resolvedOs || null,
+        versionWarning: adapterMeta?.versionWarning || resolvedProvider?._versionWarning || null
+      };
+    }
+    function findCliTarget(ctx, type2, instanceId) {
+      if (!ctx.instanceManager) return null;
+      const cliStates = ctx.instanceManager.collectAllStates().filter(isCliTargetState);
+      if (instanceId) return cliStates.find((s2) => s2.instanceId === instanceId) || null;
+      if (!type2) return cliStates[cliStates.length - 1] || null;
+      const matches = cliStates.filter((s2) => s2.type === type2);
+      return matches[matches.length - 1] || null;
+    }
+    function getCliTargetBundle(ctx, type2, instanceId) {
+      if (!ctx.instanceManager) return null;
+      const target2 = findCliTarget(ctx, type2, instanceId);
+      if (!target2) return null;
+      const instance = ctx.instanceManager.getInstance(target2.instanceId);
+      if (!instance) return null;
+      const adapter = getCliAdapterFromInstance(instance);
+      if (!adapter) return null;
+      return { target: target2, instance, adapter };
+    }
+    function sleep2(ms3) {
+      return new Promise((resolve82) => setTimeout(resolve82, ms3));
+    }
+    async function waitForCliReady(ctx, type2, instanceId, timeoutMs) {
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < timeoutMs) {
+        const bundle = getCliTargetBundle(ctx, type2, instanceId);
+        if (bundle) {
+          const debug = typeof bundle.adapter.getDebugSnapshot === "function" ? bundle.adapter.getDebugSnapshot() : null;
+          const adapterReady = !!debug?.ready;
+          const visibleStatusReady = bundle.target.status === "generating" || bundle.target.status === "waiting_approval";
+          const idleReady = bundle.target.status === "idle";
+          if (adapterReady || visibleStatusReady || idleReady) {
+            return bundle;
+          }
+        }
+        await sleep2(100);
+      }
+      return getCliTargetBundle(ctx, type2, instanceId);
+    }
+    async function runCliExerciseInternal(ctx, body) {
+      if (!ctx.cliManager) {
+        throw new Error("CliManager not available");
+      }
+      if (!ctx.instanceManager) {
+        throw new Error("InstanceManager not available");
+      }
+      const {
+        type: type2,
+        text: text11,
+        instanceId: requestedInstanceId,
+        workingDir,
+        args,
+        autoLaunch = true,
+        freshSession = true,
+        autoResolveApprovals = true,
+        approvalButtonIndex = 0,
+        timeoutMs = 45e3,
+        readyTimeoutMs = 15e3,
+        idleSettledMs = 1200,
+        traceLimit = 160,
+        stopWhenDone = false
+      } = body || {};
+      if (!type2) {
+        throw new Error("type required (e.g. claude-cli, codex-cli)");
+      }
+      if (!text11 || typeof text11 !== "string") {
+        throw new Error("text required (prompt to send to the CLI)");
+      }
+      let resolvedInstanceId = requestedInstanceId;
+      if (freshSession) {
+        const staleTargets = ctx.instanceManager.collectAllStates().filter((state2) => state2.category === "cli" && state2.type === type2).map((state2) => state2.instanceId);
+        for (const staleId of staleTargets) {
+          ctx.instanceManager.removeInstance(staleId);
+        }
+        resolvedInstanceId = void 0;
+      }
+      let bundle = getCliTargetBundle(ctx, type2, resolvedInstanceId);
+      if (!bundle && autoLaunch) {
+        const launchArgs = [type2, workingDir || process.cwd(), Array.isArray(args) ? args : []];
+        let launched = null;
+        let lastLaunchError = null;
+        for (let attempt = 1; attempt <= 2; attempt += 1) {
+          try {
+            launched = await ctx.cliManager.startSession(...launchArgs);
+            lastLaunchError = null;
+            break;
+          } catch (error) {
+            lastLaunchError = error instanceof Error ? error : new Error(String(error?.message || error));
+            const message = String(lastLaunchError.message || "");
+            const retryable = /ECONNREFUSED|session-host|Session host/i.test(message);
+            if (!retryable || attempt === 2) break;
+            await sleep2(1e3);
+          }
+        }
+        if (!launched) {
+          throw lastLaunchError || new Error(`Failed to start ${type2}`);
+        }
+        resolvedInstanceId = launched.runtimeSessionId;
+        bundle = await waitForCliReady(ctx, type2, resolvedInstanceId, Math.max(1e3, readyTimeoutMs));
+      }
+      if (!bundle) {
+        throw new Error(`No running instance found for: ${resolvedInstanceId || type2}`);
+      }
+      const initialDebug = typeof bundle.adapter.getDebugSnapshot === "function" ? bundle.adapter.getDebugSnapshot() : null;
+      const initialTrace = typeof bundle.adapter.getTraceState === "function" ? bundle.adapter.getTraceState(traceLimit) : null;
+      const providerResolution = getCliProviderResolutionMeta(ctx, bundle.target.type, bundle.adapter);
+      const preTraceCount = Number(initialTrace?.entryCount || 0);
+      const startAt = Date.now();
+      const statusesSeen = [];
+      const approvalsResolved = [];
+      let lastStatus = "";
+      let lastModalKey = "";
+      let idleSince = 0;
+      let sawBusy = false;
+      const noteStatus = (status) => {
+        if (status !== lastStatus) {
+          statusesSeen.push(status);
+          lastStatus = status;
+        }
+      };
+      const resolveActiveModalIfNeeded = (status, modal) => {
+        if (!autoResolveApprovals || status !== "waiting_approval" || !modal || !Array.isArray(modal.buttons) || modal.buttons.length === 0) {
+          return false;
+        }
+        const clampedIndex = Math.max(0, Math.min(Number(approvalButtonIndex) || 0, modal.buttons.length - 1));
+        const modalKey = JSON.stringify({
+          message: modal.message || "",
+          buttons: modal.buttons,
+          index: clampedIndex
+        });
+        if (modalKey === lastModalKey || typeof bundle?.adapter?.resolveModal !== "function") {
+          return false;
+        }
+        lastModalKey = modalKey;
+        approvalsResolved.push({
+          at: Date.now(),
+          buttonIndex: clampedIndex,
+          label: modal.buttons[clampedIndex] || null
+        });
+        bundle.adapter.resolveModal(clampedIndex);
+        return true;
+      };
+      const preflightStartedAt = Date.now();
+      while (Date.now() - preflightStartedAt < Math.max(1e3, readyTimeoutMs)) {
+        bundle = getCliTargetBundle(ctx, type2, bundle.target.instanceId);
+        if (!bundle) {
+          throw new Error("CLI instance disappeared before exercise send");
+        }
+        const debug = typeof bundle.adapter.getDebugSnapshot === "function" ? bundle.adapter.getDebugSnapshot() : null;
+        const trace = typeof bundle.adapter.getTraceState === "function" ? bundle.adapter.getTraceState(traceLimit) : null;
+        const status = String(debug?.status || bundle.target.status || "unknown");
+        const modal = debug?.activeModal || trace?.activeModal || null;
+        noteStatus(status);
+        if (resolveActiveModalIfNeeded(status, modal)) {
+          await sleep2(150);
+          continue;
+        }
+        if (status === "idle") break;
+        await sleep2(150);
+      }
+      ctx.instanceManager.sendEvent(bundle.target.instanceId, "send_message", { text: text11 });
+      while (Date.now() - startAt < Math.max(1e3, timeoutMs)) {
+        await sleep2(150);
+        bundle = getCliTargetBundle(ctx, type2, bundle.target.instanceId);
+        if (!bundle) {
+          throw new Error("CLI instance disappeared during exercise");
+        }
+        const debug = typeof bundle.adapter.getDebugSnapshot === "function" ? bundle.adapter.getDebugSnapshot() : null;
+        const trace = typeof bundle.adapter.getTraceState === "function" ? bundle.adapter.getTraceState(traceLimit) : null;
+        const status = String(debug?.status || bundle.target.status || "unknown");
+        const traceEntries = Array.isArray(trace?.entries) ? trace.entries : [];
+        const sawSendMessage = traceEntries.some((entry) => entry?.type === "send_message");
+        const sawSubmitWrite = traceEntries.some((entry) => entry?.type === "submit_write");
+        const hasTurnStarted = sawSendMessage || sawSubmitWrite;
+        noteStatus(status);
+        if (status === "generating" || status === "waiting_approval") {
+          sawBusy = true;
+          idleSince = 0;
+        }
+        const modal = debug?.activeModal || trace?.activeModal || null;
+        if (resolveActiveModalIfNeeded(status, modal)) {
+          continue;
+        }
+        const traceCount = Number(trace?.entryCount || 0);
+        const hasProgress = hasTurnStarted && (traceCount > preTraceCount || statusesSeen.length > 1 || approvalsResolved.length > 0);
+        if (status === "idle" && hasProgress && sawBusy) {
+          if (!idleSince) idleSince = Date.now();
+          if (Date.now() - idleSince >= Math.max(200, idleSettledMs)) {
+            const payload2 = {
+              exercised: true,
+              instanceId: bundle.target.instanceId,
+              providerState: {
+                type: bundle.target.type,
+                name: bundle.target.name,
+                status: bundle.target.status,
+                mode: "mode" in bundle.target ? bundle.target.mode : void 0
+              },
+              providerResolution,
+              initialDebug,
+              initialTrace,
+              debug,
+              trace,
+              statusesSeen,
+              approvalsResolved,
+              elapsedMs: Date.now() - startAt,
+              timedOut: false
+            };
+            payload2.lastAssistant = getExerciseLastAssistant(payload2);
+            payload2.messageCount = getExerciseMessageCount(payload2);
+            if (stopWhenDone) {
+              ctx.instanceManager.removeInstance(bundle.target.instanceId);
+            }
+            return payload2;
+          }
+        } else if (status === "idle" && hasProgress) {
+          if (!idleSince) idleSince = Date.now();
+          if (Date.now() - idleSince >= Math.max(500, idleSettledMs) && Date.now() - startAt >= 750) {
+            const payload2 = {
+              exercised: true,
+              instanceId: bundle.target.instanceId,
+              providerState: {
+                type: bundle.target.type,
+                name: bundle.target.name,
+                status: bundle.target.status,
+                mode: "mode" in bundle.target ? bundle.target.mode : void 0
+              },
+              providerResolution,
+              initialDebug,
+              initialTrace,
+              debug,
+              trace,
+              statusesSeen,
+              approvalsResolved,
+              elapsedMs: Date.now() - startAt,
+              timedOut: false
+            };
+            payload2.lastAssistant = getExerciseLastAssistant(payload2);
+            payload2.messageCount = getExerciseMessageCount(payload2);
+            if (stopWhenDone) {
+              ctx.instanceManager.removeInstance(bundle.target.instanceId);
+            }
+            return payload2;
+          }
+        } else {
+          idleSince = 0;
+        }
+      }
+      const finalBundle = getCliTargetBundle(ctx, type2, bundle.target.instanceId) || bundle;
+      const finalDebug = typeof finalBundle.adapter.getDebugSnapshot === "function" ? finalBundle.adapter.getDebugSnapshot() : null;
+      const finalTrace = typeof finalBundle.adapter.getTraceState === "function" ? finalBundle.adapter.getTraceState(traceLimit) : null;
+      if (stopWhenDone) {
+        ctx.instanceManager.removeInstance(finalBundle.target.instanceId);
+      }
+      const payload = {
+        exercised: true,
+        instanceId: finalBundle.target.instanceId,
+        providerState: {
+          type: finalBundle.target.type,
+          name: finalBundle.target.name,
+          status: finalBundle.target.status,
+          mode: "mode" in finalBundle.target ? finalBundle.target.mode : void 0
+        },
+        providerResolution: getCliProviderResolutionMeta(ctx, finalBundle.target.type, finalBundle.adapter),
+        initialDebug,
+        initialTrace,
+        debug: finalDebug,
+        trace: finalTrace,
+        statusesSeen,
+        approvalsResolved,
+        elapsedMs: Date.now() - startAt,
+        timedOut: true
+      };
+      payload.lastAssistant = getExerciseLastAssistant(payload);
+      payload.messageCount = getExerciseMessageCount(payload);
+      return payload;
+    }
+    async function handleCliStatus(ctx, _req, res) {
+      if (!ctx.instanceManager) {
+        ctx.json(res, 503, { error: "InstanceManager not available (daemon not fully initialized)" });
+        return;
+      }
+      const allStates = ctx.instanceManager.collectAllStates();
+      const cliStates = allStates.filter((s2) => s2.category === "cli");
+      const result = cliStates.map((s2) => ({
+        instanceId: s2.instanceId,
+        type: s2.type,
+        name: s2.name,
+        category: s2.category,
+        status: s2.status,
+        mode: s2.mode,
+        workspace: s2.workspace,
+        messageCount: s2.activeChat?.messages?.length || 0,
+        lastMessage: s2.activeChat?.messages?.slice(-1)[0] || null,
+        activeModal: s2.activeChat?.activeModal || null,
+        settings: s2.settings
+      }));
+      ctx.json(res, 200, { instances: result, count: result.length });
+    }
+    async function handleCliLaunch(ctx, req, res) {
+      if (!ctx.cliManager) {
+        ctx.json(res, 503, { error: "CliManager not available" });
+        return;
+      }
+      const body = await ctx.readBody(req);
+      const { type: type2, workingDir, args } = body;
+      if (!type2) {
+        ctx.json(res, 400, { error: "type required (e.g. claude-cli, antigravity-cli)" });
+        return;
+      }
+      try {
+        await ctx.cliManager.startSession(type2, workingDir || process.cwd(), args || []);
+        ctx.json(res, 200, { launched: true, type: type2, workspace: workingDir || process.cwd() });
+      } catch (e) {
+        ctx.json(res, 500, { error: `Launch failed: ${e.message}` });
+      }
+    }
+    async function handleCliSend(ctx, req, res) {
+      if (!ctx.instanceManager) {
+        ctx.json(res, 503, { error: "InstanceManager not available" });
+        return;
+      }
+      const body = await ctx.readBody(req);
+      const { type: type2, text: text11, instanceId } = body;
+      if (!text11) {
+        ctx.json(res, 400, { error: "text required" });
+        return;
+      }
+      const target2 = findCliTarget(ctx, type2, instanceId);
+      if (!target2) {
+        ctx.json(res, 404, { error: `No running instance found for: ${type2 || instanceId}` });
+        return;
+      }
+      try {
+        if (target2.category === "cli") {
+          const bundle = getCliTargetBundle(ctx, type2, instanceId);
+          if (!bundle) {
+            ctx.json(res, 404, { error: `No running CLI adapter found for: ${type2 || instanceId}` });
+            return;
+          }
+          await bundle.adapter.sendMessage(text11);
+        } else {
+          ctx.instanceManager.sendEvent(target2.instanceId, "send_message", { text: text11 });
+        }
+        ctx.json(res, 200, { sent: true, type: target2.type, instanceId: target2.instanceId });
+      } catch (e) {
+        ctx.json(res, 500, { error: `Send failed: ${e.message}` });
+      }
+    }
+    async function handleCliStop(ctx, req, res) {
+      if (!ctx.instanceManager) {
+        ctx.json(res, 503, { error: "InstanceManager not available" });
+        return;
+      }
+      const body = await ctx.readBody(req);
+      const { type: type2, instanceId } = body;
+      const target2 = findCliTarget(ctx, type2, instanceId);
+      if (!target2) {
+        ctx.json(res, 404, { error: `No running instance found for: ${type2 || instanceId}` });
+        return;
+      }
+      try {
+        ctx.instanceManager.removeInstance(target2.instanceId);
+        ctx.json(res, 200, { stopped: true, type: target2.type, instanceId: target2.instanceId });
+      } catch (e) {
+        ctx.json(res, 500, { error: `Stop failed: ${e.message}` });
+      }
+    }
+    function releaseCliSSEBusListener(bus) {
+      if (!bus) return;
+      const off = cliSSEBusListeners.get(bus);
+      if (!off) return;
+      cliSSEBusListeners.delete(bus);
+      try {
+        off();
+      } catch {
+      }
+    }
+    function handleCliSSE(ctx, cliSSEClients, _req, res) {
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive"
+      });
+      res.write('data: {"type":"connected"}\n\n');
+      cliSSEClients.push(res);
+      const bus = ctx.bus;
+      if (bus && !cliSSEBusListeners.has(bus)) {
+        cliSSEBusListeners.set(bus, bus.on("provider_event", (e) => {
+          ctx.sendCliSSE(e.event);
+        }, { name: "dev.cli-sse" }));
+      }
+      if (ctx.instanceManager) {
+        const allStates = ctx.instanceManager.collectAllStates();
+        const cliStates = allStates.filter((s2) => s2.category === "cli");
+        for (const s2 of cliStates) {
+          ctx.sendCliSSE({ event: "snapshot", providerType: s2.type, status: s2.status, instanceId: s2.instanceId });
+        }
+      }
+      _req.on("close", () => {
+        const idx = cliSSEClients.indexOf(res);
+        if (idx >= 0) cliSSEClients.splice(idx, 1);
+      });
+    }
+    async function handleCliDebug(ctx, type2, _req, res) {
+      if (!ctx.instanceManager) {
+        ctx.json(res, 503, { error: "InstanceManager not available" });
+        return;
+      }
+      let instanceId;
+      try {
+        instanceId = new URL(_req.url || "", "http://localhost").searchParams.get("instanceId") || void 0;
+      } catch {
+      }
+      const target2 = findCliTarget(ctx, type2, instanceId);
+      if (!target2) {
+        const allStates = ctx.instanceManager.collectAllStates();
+        ctx.json(res, 404, { error: `No running instance for: ${type2}`, available: allStates.filter((s2) => s2.category === "cli").map((s2) => s2.type) });
+        return;
+      }
+      const instance = ctx.instanceManager.getInstance(target2.instanceId);
+      if (!instance) {
+        ctx.json(res, 404, { error: `Instance not found: ${target2.instanceId}` });
+        return;
+      }
+      try {
+        const adapter = getCliAdapterFromInstance(instance);
+        if (adapter && typeof adapter.getDebugSnapshot === "function") {
+          const debugState = adapter.getDebugSnapshot();
+          ctx.json(res, 200, {
+            instanceId: target2.instanceId,
+            providerState: {
+              type: target2.type,
+              name: target2.name,
+              status: target2.status,
+              mode: "mode" in target2 ? target2.mode : void 0
+            },
+            providerResolution: getCliProviderResolutionMeta(ctx, target2.type, adapter),
+            debug: debugState
+          });
+        } else {
+          ctx.json(res, 200, {
+            instanceId: target2.instanceId,
+            providerState: target2,
+            providerResolution: getCliProviderResolutionMeta(ctx, target2.type, adapter),
+            debug: null,
+            message: "No debug state available (adapter.getDebugSnapshot not found)"
+          });
+        }
+      } catch (e) {
+        ctx.json(res, 500, { error: `Debug state failed: ${e.message}` });
+      }
+    }
+    async function handleCliTrace(ctx, type2, req, res) {
+      if (!ctx.instanceManager) {
+        ctx.json(res, 503, { error: "InstanceManager not available" });
+        return;
+      }
+      const target2 = findCliTarget(ctx, type2);
+      if (!target2) {
+        const allStates = ctx.instanceManager.collectAllStates();
+        ctx.json(res, 404, {
+          error: `No running instance for: ${type2}`,
+          available: allStates.filter((s2) => s2.category === "cli").map((s2) => s2.type)
+        });
+        return;
+      }
+      const instance = ctx.instanceManager.getInstance(target2.instanceId);
+      if (!instance) {
+        ctx.json(res, 404, { error: `Instance not found: ${target2.instanceId}` });
+        return;
+      }
+      try {
+        const adapter = getCliAdapterFromInstance(instance);
+        const url = new URL(req.url || "/", "http://127.0.0.1");
+        const limit = parseInt(url.searchParams.get("limit") || "120", 10);
+        if (adapter && typeof adapter.getTraceState === "function") {
+          const trace = adapter.getTraceState(limit);
+          const debug = typeof adapter.getDebugSnapshot === "function" ? adapter.getDebugSnapshot() : null;
+          ctx.json(res, 200, {
+            instanceId: target2.instanceId,
+            providerState: {
+              type: target2.type,
+              name: target2.name,
+              status: target2.status,
+              mode: "mode" in target2 ? target2.mode : void 0
+            },
+            providerResolution: getCliProviderResolutionMeta(ctx, target2.type, adapter),
+            debug,
+            trace
+          });
+        } else {
+          ctx.json(res, 200, {
+            instanceId: target2.instanceId,
+            providerState: target2,
+            providerResolution: getCliProviderResolutionMeta(ctx, target2.type, adapter),
+            debug: typeof adapter?.getDebugSnapshot === "function" ? adapter.getDebugSnapshot() : null,
+            trace: null,
+            message: "No trace state available (adapter.getTraceState not found)"
+          });
+        }
+      } catch (e) {
+        ctx.json(res, 500, { error: `Trace state failed: ${e.message}` });
+      }
+    }
+    async function handleCliExercise(ctx, req, res) {
+      try {
+        const body = await ctx.readBody(req);
+        const result = await runCliExerciseInternal(ctx, body || {});
+        ctx.json(res, 200, result);
+      } catch (e) {
+        ctx.json(res, 500, { error: `Exercise failed: ${e.message}` });
+      }
+    }
+    async function handleCliFixtureCapture(ctx, req, res) {
+      try {
+        const body = await ctx.readBody(req);
+        const type2 = String(body?.type || "");
+        const request = body?.request || {};
+        if (!type2) {
+          ctx.json(res, 400, { error: "type required" });
+          return;
+        }
+        if (!request?.text) {
+          ctx.json(res, 400, { error: "request.text required" });
+          return;
+        }
+        const fixtureDir = getCliFixtureDir(ctx, type2);
+        fs131.mkdirSync(fixtureDir, { recursive: true });
+        const name = slugifyFixtureName(String(body?.name || `${type2}-${Date.now()}`));
+        const result = await runCliExerciseInternal(ctx, { ...request, type: type2 });
+        const fixture = {
+          version: 1,
+          kind: "cli-exercise-fixture",
+          name,
+          type: type2,
+          createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+          providerDir: ctx.providerLoader.findProviderDir(type2),
+          providerResolution: result?.providerResolution || null,
+          request: { ...request, type: type2 },
+          result,
+          assertions: {
+            mustContainAny: Array.isArray(body?.assertions?.mustContainAny) ? body.assertions.mustContainAny : [],
+            mustNotContainAny: Array.isArray(body?.assertions?.mustNotContainAny) ? body.assertions.mustNotContainAny : [],
+            mustMatchAny: Array.isArray(body?.assertions?.mustMatchAny) ? body.assertions.mustMatchAny : [],
+            mustNotMatchAny: Array.isArray(body?.assertions?.mustNotMatchAny) ? body.assertions.mustNotMatchAny : [],
+            lastAssistantMustContainAny: Array.isArray(body?.assertions?.lastAssistantMustContainAny) ? body.assertions.lastAssistantMustContainAny : [],
+            lastAssistantMustNotContainAny: Array.isArray(body?.assertions?.lastAssistantMustNotContainAny) ? body.assertions.lastAssistantMustNotContainAny : [],
+            lastAssistantMustMatchAny: Array.isArray(body?.assertions?.lastAssistantMustMatchAny) ? body.assertions.lastAssistantMustMatchAny : [],
+            lastAssistantMustNotMatchAny: Array.isArray(body?.assertions?.lastAssistantMustNotMatchAny) ? body.assertions.lastAssistantMustNotMatchAny : [],
+            statusesSeen: Array.isArray(body?.assertions?.statusesSeen) ? body.assertions.statusesSeen : void 0,
+            requireNotTimedOut: body?.assertions?.requireNotTimedOut !== false
+          },
+          notes: typeof body?.notes === "string" ? body.notes : void 0
+        };
+        const filePath2 = path129.join(fixtureDir, `${name}.json`);
+        fs131.writeFileSync(filePath2, JSON.stringify(fixture, null, 2));
+        ctx.json(res, 200, {
+          saved: true,
+          name,
+          path: filePath2,
+          fixture,
+          verification: {
+            pass: validateCliFixtureResult(result, fixture.assertions).length === 0,
+            failures: validateCliFixtureResult(result, fixture.assertions)
+          }
+        });
+      } catch (e) {
+        ctx.json(res, 500, { error: `Fixture capture failed: ${e.message}` });
+      }
+    }
+    async function handleCliFixtureList(ctx, type2, _req, res) {
+      try {
+        const fixtureDir = getCliFixtureDir(ctx, type2);
+        if (!fs131.existsSync(fixtureDir)) {
+          ctx.json(res, 200, { fixtures: [], count: 0 });
+          return;
+        }
+        const fixtures = fs131.readdirSync(fixtureDir).filter((file) => file.endsWith(".json")).sort((a, b) => b.localeCompare(a, void 0, { numeric: true, sensitivity: "base" })).map((file) => {
+          const fullPath = path129.join(fixtureDir, file);
+          try {
+            const raw = JSON.parse(fs131.readFileSync(fullPath, "utf-8"));
+            return {
+              name: raw.name || file.replace(/\.json$/i, ""),
+              path: fullPath,
+              createdAt: raw.createdAt || null,
+              notes: raw.notes || null,
+              requestText: raw.request?.text || "",
+              assertions: raw.assertions || {}
+            };
+          } catch {
+            return {
+              name: file.replace(/\.json$/i, ""),
+              path: fullPath,
+              createdAt: null,
+              notes: "Unreadable fixture",
+              requestText: "",
+              assertions: {}
+            };
+          }
+        });
+        ctx.json(res, 200, { fixtures, count: fixtures.length });
+      } catch (e) {
+        ctx.json(res, 500, { error: `Fixture list failed: ${e.message}` });
+      }
+    }
+    async function handleCliFixtureReplay(ctx, req, res) {
+      try {
+        const body = await ctx.readBody(req);
+        const type2 = String(body?.type || "");
+        const rawName = String(body?.name || "").trim();
+        if (!type2 || !rawName) {
+          ctx.json(res, 400, { error: "type and name required" });
+          return;
+        }
+        const name = slugifyFixtureName(rawName);
+        const fixture = readCliFixture(ctx, type2, name);
+        const result = await runCliExerciseInternal(ctx, {
+          ...fixture.request,
+          type: type2
+        });
+        const assertions = {
+          ...fixture.assertions,
+          ...body?.assertions || {}
+        };
+        const failures = validateCliFixtureResult(result, assertions);
+        ctx.json(res, 200, {
+          replayed: true,
+          pass: failures.length === 0,
+          failures,
+          fixture,
+          result,
+          assertions
+        });
+      } catch (e) {
+        ctx.json(res, 500, { error: `Fixture replay failed: ${e.message}` });
+      }
+    }
+    async function handleCliResolve(ctx, req, res) {
+      const body = await ctx.readBody(req);
+      const { type: type2, buttonIndex, instanceId } = body;
+      if (buttonIndex === void 0 || buttonIndex === null) {
+        ctx.json(res, 400, { error: "buttonIndex required (0=Yes, 1=Always, 2=Deny)" });
+        return;
+      }
+      if (!ctx.cliManager) {
+        ctx.json(res, 503, { error: "CliManager not available" });
+        return;
+      }
+      if (!ctx.instanceManager) {
+        ctx.json(res, 503, { error: "InstanceManager not available" });
+        return;
+      }
+      const target2 = findCliTarget(ctx, type2, instanceId);
+      if (!target2) {
+        ctx.json(res, 404, { error: `No running adapter for: ${type2 || instanceId}` });
+        return;
+      }
+      const instance = ctx.instanceManager.getInstance(target2.instanceId);
+      const adapter = getCliAdapterFromInstance(instance);
+      if (!adapter) {
+        ctx.json(res, 404, { error: `Adapter not found for instance: ${target2.instanceId}` });
+        return;
+      }
+      try {
+        if (typeof adapter.resolveModal === "function") {
+          adapter.resolveModal(buttonIndex);
+          ctx.json(res, 200, { resolved: true, type: target2.type, instanceId: target2.instanceId, buttonIndex });
+        } else {
+          ctx.json(res, 400, { error: "resolveModal not available on this adapter" });
+        }
+      } catch (e) {
+        ctx.json(res, 500, { error: `Resolve failed: ${e.message}` });
+      }
+    }
+    async function handleCliRaw(ctx, req, res) {
+      const body = await ctx.readBody(req);
+      const { type: type2, keys: keys2, instanceId } = body;
+      if (!keys2) {
+        ctx.json(res, 400, { error: "keys required (raw string to send to PTY)" });
+        return;
+      }
+      if (!ctx.cliManager) {
+        ctx.json(res, 503, { error: "CliManager not available" });
+        return;
+      }
+      if (!ctx.instanceManager) {
+        ctx.json(res, 503, { error: "InstanceManager not available" });
+        return;
+      }
+      const target2 = findCliTarget(ctx, type2, instanceId);
+      if (!target2) {
+        ctx.json(res, 404, { error: `No running adapter for: ${type2 || instanceId}` });
+        return;
+      }
+      const instance = ctx.instanceManager.getInstance(target2.instanceId);
+      const adapter = getCliAdapterFromInstance(instance);
+      if (!adapter) {
+        ctx.json(res, 404, { error: `Adapter not found for instance: ${target2.instanceId}` });
+        return;
+      }
+      try {
+        if (typeof adapter.writeRaw === "function") {
+          await adapter.writeRaw(keys2);
+          ctx.json(res, 200, { sent: true, type: target2.type, instanceId: target2.instanceId, keysLength: keys2.length });
+        } else {
+          ctx.json(res, 400, { error: "writeRaw not available on this adapter" });
+        }
+      } catch (e) {
+        ctx.json(res, 500, { error: `Raw send failed: ${e.message}` });
+      }
+    }
+    var fs131;
+    var path129;
+    var cliSSEBusListeners;
+    var init_dev_cli_debug = __esm2({
+      "src/daemon/dev-cli-debug.ts"() {
+        "use strict";
+        fs131 = __toESM2(require("fs"));
+        path129 = __toESM2(require("path"));
+        cliSSEBusListeners = /* @__PURE__ */ new WeakMap();
+      }
+    });
+    var dev_server_exports = {};
+    __export2(dev_server_exports, {
+      ADHDEV_DEV_SERVER_AUTH_FILE_ENV: () => ADHDEV_DEV_SERVER_AUTH_FILE_ENV,
+      ADHDEV_DEV_SERVER_TOKEN_HEADER: () => ADHDEV_DEV_SERVER_TOKEN_HEADER,
+      DEV_SERVER_PORT: () => DEV_SERVER_PORT,
+      DevServer: () => DevServer,
+      buildDevServerAuthHeaders: () => buildDevServerAuthHeaders,
+      devServerAuthFilePath: () => devServerAuthFilePath,
+      isDevServerHostAllowed: () => isDevServerHostAllowed,
+      isDevServerOriginAllowed: () => isDevServerOriginAllowed,
+      mintDevServerAuthToken: () => mintDevServerAuthToken,
+      readDevServerAuthToken: () => readDevServerAuthToken,
+      writeDevServerAuthFile: () => writeDevServerAuthFile
+    });
+    function normalizeDevHostCandidate(raw) {
+      let host = raw.trim().toLowerCase();
+      if (!host) return "";
+      if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1);
+      const zoneIdx = host.indexOf("%");
+      if (zoneIdx !== -1) host = host.slice(0, zoneIdx);
+      if (host.startsWith("::ffff:")) host = host.slice(7);
+      if (host.endsWith(".")) host = host.slice(0, -1);
+      return host;
+    }
+    function parseDevHostHeader(rawHostHeader) {
+      const trimmed3 = rawHostHeader.trim();
+      if (!trimmed3 || /[\s/@\\?#]/.test(trimmed3)) return null;
+      try {
+        const parsed = new URL(`http://${trimmed3}`);
+        if (parsed.username !== "" || parsed.password !== "" || parsed.pathname !== "/" || parsed.search !== "" || parsed.hash !== "") {
+          return null;
+        }
+        const hostname6 = normalizeDevHostCandidate(parsed.hostname);
+        if (!hostname6) return null;
+        return { hostname: hostname6, port: parsed.port || "80" };
+      } catch {
+        return null;
+      }
+    }
+    function isDevServerHostAllowed(req) {
+      const rawHost = req.headers.host;
+      if (rawHost === void 0) {
+        return !req.httpVersion && req.headers.origin === void 0;
+      }
+      if (typeof rawHost !== "string") return false;
+      const parsed = parseDevHostHeader(rawHost);
+      return parsed !== null && LOOPBACK_DEV_HOSTNAMES.has(parsed.hostname);
+    }
+    function isDevServerOriginAllowed(req) {
+      if (!isDevServerHostAllowed(req)) return false;
+      const originHeader = typeof req.headers.origin === "string" ? req.headers.origin.trim() : "";
+      if (!originHeader) return true;
+      try {
+        const origin = new URL(originHeader);
+        if (origin.protocol !== "http:") return false;
+        const originHost = normalizeDevHostCandidate(origin.hostname || "");
+        if (!originHost || !LOOPBACK_DEV_HOSTNAMES.has(originHost)) return false;
+        const rawHost = typeof req.headers.host === "string" ? req.headers.host : "";
+        const parsedHost = rawHost ? parseDevHostHeader(rawHost) : null;
+        if (!parsedHost) return false;
+        const originPort = origin.port || "80";
+        return originPort === parsedHost.port;
+      } catch {
+        return false;
+      }
+    }
+    function devServerAuthFilePath(configDir = getConfigDir2(), port = DEV_SERVER_PORT) {
+      return path130.join(configDir, "run", `dev-server-auth-${port}`);
+    }
+    function mintDevServerAuthToken() {
+      return `add_${crypto19.randomBytes(32).toString("base64url")}`;
+    }
+    function writeDevServerAuthFile(filePath2, token) {
+      const dir = path130.dirname(filePath2);
+      fs132.mkdirSync(dir, { recursive: true, mode: 448 });
+      try {
+        fs132.chmodSync(dir, 448);
+      } catch {
+      }
+      const tmp = `${filePath2}.${process.pid}.tmp`;
+      fs132.writeFileSync(tmp, token, { encoding: "utf8", mode: 384 });
+      try {
+        fs132.chmodSync(tmp, 384);
+      } catch {
+      }
+      fs132.renameSync(tmp, filePath2);
+    }
+    function readDevServerAuthToken(port = DEV_SERVER_PORT, configDir) {
+      const candidates = [];
+      const envFile = process.env[ADHDEV_DEV_SERVER_AUTH_FILE_ENV]?.trim();
+      if (envFile) candidates.push(envFile);
+      try {
+        candidates.push(devServerAuthFilePath(configDir ?? getConfigDir2(), port));
+      } catch {
+      }
+      for (const filePath2 of candidates) {
+        try {
+          if (!fs132.existsSync(filePath2)) continue;
+          const token = fs132.readFileSync(filePath2, "utf8").trim();
+          if (token) return token;
+        } catch {
+        }
+      }
+      return null;
+    }
+    function buildDevServerAuthHeaders(extraHeaders = {}, port = DEV_SERVER_PORT, configDir) {
+      const token = readDevServerAuthToken(port, configDir);
+      return token ? { [ADHDEV_DEV_SERVER_TOKEN_HEADER]: token, ...extraHeaders } : { ...extraHeaders };
+    }
+    function devTokensEqual(presented, expected) {
+      const a = Buffer.from(presented, "utf8");
+      const b = Buffer.from(expected, "utf8");
+      return a.length === b.length && crypto19.timingSafeEqual(a, b);
+    }
+    function getScriptNames(scripts) {
+      if (!scripts) return [];
+      return Object.entries(scripts).filter(([, value]) => typeof value === "function").map(([name]) => name);
+    }
+    function toProviderListEntry(provider) {
+      const base = {
+        type: provider.type,
+        name: provider.name,
+        category: provider.category,
+        icon: provider.icon || null,
+        displayName: provider.displayName || provider.name
+      };
+      if (provider.category === "ide" || provider.category === "extension") {
+        base.scripts = getScriptNames(provider.scripts);
+        base.inputMethod = provider.inputMethod || null;
+        base.inputSelector = provider.inputSelector || null;
+        base.extensionId = provider.extensionId || null;
+        base.cdpPorts = provider.cdpPorts || [];
+      }
+      if (provider.category === "cli") {
+        base.spawn = provider.spawn || null;
+        base.install = provider.install || null;
+      }
+      return base;
+    }
+    var http3;
+    var crypto19;
+    var fs132;
+    var path130;
+    var DEV_SERVER_PORT;
+    var ADHDEV_DEV_SERVER_TOKEN_HEADER;
+    var ADHDEV_DEV_SERVER_AUTH_FILE_ENV;
+    var LOOPBACK_DEV_HOSTNAMES;
+    var DevServer;
+    var init_dev_server = __esm2({
+      "src/daemon/dev-server.ts"() {
+        "use strict";
+        http3 = __toESM2(require("http"));
+        crypto19 = __toESM2(require("crypto"));
+        fs132 = __toESM2(require("fs"));
+        path130 = __toESM2(require("path"));
+        init_provider_schema3();
+        init_config();
+        init_provider_source_config();
+        init_scaffold_template();
+        init_scaffold_v1();
+        init_version_archive();
+        init_logger();
+        init_builders();
+        init_dev_cdp_handlers();
+        init_provider_script_resolver();
+        init_dev_cli_debug();
+        DEV_SERVER_PORT = 19280;
+        ADHDEV_DEV_SERVER_TOKEN_HEADER = "x-adhdev-dev-token";
+        ADHDEV_DEV_SERVER_AUTH_FILE_ENV = "ADHDEV_DEV_SERVER_AUTH_FILE";
+        LOOPBACK_DEV_HOSTNAMES = /* @__PURE__ */ new Set(["localhost", "127.0.0.1", "::1"]);
+        DevServer = class {
+          server = null;
+          providerLoader;
+          cdpManagers;
+          instanceManager;
+          cliManager;
+          bus;
+          onProviderSourceConfigChanged;
+          logFn;
+          sseClients = [];
+          watchScriptPath = null;
+          watchScriptName = null;
+          watchTimer = null;
+          // CLI debug SSE
+          cliSSEClients = [];
+          authToken = null;
+          authFilePath = null;
+          explicitAuthToken;
+          configDir;
+          constructor(options) {
+            this.providerLoader = options.providerLoader;
+            this.cdpManagers = options.cdpManagers;
+            this.instanceManager = options.instanceManager || null;
+            this.cliManager = options.cliManager || null;
+            this.bus = options.bus ?? null;
+            this.onProviderSourceConfigChanged = options.onProviderSourceConfigChanged || null;
+            this.logFn = options.logFn || LOG.forComponent("DevServer").asLogFn();
+            this.explicitAuthToken = options.authToken;
+            this.configDir = options.configDir;
+          }
+          getAuthToken() {
+            return this.authToken;
+          }
+          configureAuth(port) {
+            if (this.explicitAuthToken !== void 0) {
+              this.authToken = this.explicitAuthToken;
+              this.authFilePath = null;
+              return;
+            }
+            const token = mintDevServerAuthToken();
+            this.authToken = token;
+            try {
+              const filePath2 = devServerAuthFilePath(this.configDir ?? getConfigDir2(), port);
+              writeDevServerAuthFile(filePath2, token);
+              this.authFilePath = filePath2;
+              process.env[ADHDEV_DEV_SERVER_AUTH_FILE_ENV] = filePath2;
+            } catch (error) {
+              this.authFilePath = null;
+              this.log(`Could not write DevServer auth file: ${error?.message || error}`);
+            }
+          }
+          isRequestAuthenticated(req, parsedUrl) {
+            if (!this.authToken) return true;
+            const headerVal = req.headers[ADHDEV_DEV_SERVER_TOKEN_HEADER];
+            const headerToken = typeof headerVal === "string" ? headerVal.trim() : "";
+            if (headerToken && devTokensEqual(headerToken, this.authToken)) return true;
+            const authHeader = req.headers["authorization"];
+            const bearerToken = typeof authHeader === "string" && authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+            if (bearerToken && devTokensEqual(bearerToken, this.authToken)) return true;
+            const queryToken = (parsedUrl.searchParams.get("token") || "").trim();
+            if (queryToken && devTokensEqual(queryToken, this.authToken)) return true;
+            return false;
+          }
+          log(msg) {
+            this.logFn(`[DevServer] ${msg}`);
+          }
+          // ─── Route Table ─────────────────────────────────────
+          routes = [
+            // Static routes
+            { method: "GET", pattern: "/api/providers", handler: (q2, s2) => this.handleListProviders(q2, s2) },
+            { method: "GET", pattern: "/api/providers/source-config", handler: (q2, s2) => this.handleGetProviderSourceConfig(q2, s2) },
+            { method: "POST", pattern: "/api/providers/source-config", handler: (q2, s2) => this.handleSetProviderSourceConfig(q2, s2) },
+            { method: "GET", pattern: "/api/providers/versions", handler: (q2, s2) => this.handleDetectVersions(q2, s2) },
+            { method: "POST", pattern: "/api/providers/reload", handler: (q2, s2) => this.handleReload(q2, s2) },
+            { method: "POST", pattern: "/api/cdp/evaluate", handler: (q2, s2) => this.handleCdpEvaluate(q2, s2) },
+            { method: "POST", pattern: "/api/cdp/click", handler: (q2, s2) => this.handleCdpClick(q2, s2) },
+            { method: "POST", pattern: "/api/cdp/dom/query", handler: (q2, s2) => this.handleCdpDomQuery(q2, s2) },
+            { method: "POST", pattern: "/api/cdp/dom/inspect", handler: (q2, s2) => this.handleDomInspect(q2, s2) },
+            { method: "POST", pattern: "/api/cdp/dom/children", handler: (q2, s2) => this.handleDomChildren(q2, s2) },
+            { method: "POST", pattern: "/api/cdp/dom/analyze", handler: (q2, s2) => this.handleDomAnalyze(q2, s2) },
+            { method: "POST", pattern: "/api/cdp/dom/find-text", handler: (q2, s2) => this.handleFindByText(q2, s2) },
+            { method: "POST", pattern: "/api/cdp/dom/find-common", handler: (q2, s2) => this.handleFindCommon(q2, s2) },
+            { method: "GET", pattern: "/api/cdp/screenshot", handler: (q2, s2) => this.handleScreenshot(q2, s2) },
+            { method: "GET", pattern: "/api/cdp/targets", handler: (q2, s2) => this.handleCdpTargets(q2, s2) },
+            { method: "POST", pattern: "/api/scripts/run", handler: (q2, s2) => this.handleScriptsRun(q2, s2) },
+            { method: "GET", pattern: "/api/status", handler: (q2, s2) => this.handleStatus(q2, s2) },
+            { method: "POST", pattern: "/api/watch/start", handler: (q2, s2) => this.handleWatchStart(q2, s2) },
+            { method: "POST", pattern: "/api/watch/stop", handler: (q2, s2) => this.handleWatchStop(q2, s2) },
+            { method: "GET", pattern: "/api/watch/events", handler: (q2, s2) => this.handleSSE(q2, s2) },
+            { method: "POST", pattern: "/api/scaffold", handler: (q2, s2) => this.handleScaffold(q2, s2) },
+            // CLI Debug routes
+            { method: "GET", pattern: "/api/cli/status", handler: (q2, s2) => this.handleCliStatus(q2, s2) },
+            { method: "POST", pattern: "/api/cli/launch", handler: (q2, s2) => this.handleCliLaunch(q2, s2) },
+            { method: "POST", pattern: "/api/cli/send", handler: (q2, s2) => this.handleCliSend(q2, s2) },
+            { method: "POST", pattern: "/api/cli/exercise", handler: (q2, s2) => this.handleCliExercise(q2, s2) },
+            { method: "POST", pattern: "/api/cli/fixture/capture", handler: (q2, s2) => this.handleCliFixtureCapture(q2, s2) },
+            { method: "POST", pattern: "/api/cli/fixture/replay", handler: (q2, s2) => this.handleCliFixtureReplay(q2, s2) },
+            { method: "POST", pattern: "/api/cli/resolve", handler: (q2, s2) => this.handleCliResolve(q2, s2) },
+            { method: "POST", pattern: "/api/cli/raw", handler: (q2, s2) => this.handleCliRaw(q2, s2) },
+            { method: "POST", pattern: "/api/cli/stop", handler: (q2, s2) => this.handleCliStop(q2, s2) },
+            { method: "GET", pattern: "/api/cli/events", handler: (q2, s2) => this.handleCliSSE(q2, s2) },
+            { method: "GET", pattern: /^\/api\/cli\/debug\/([^/]+)$/, handler: (q2, s2, p) => this.handleCliDebug(p[0], q2, s2) },
+            { method: "GET", pattern: /^\/api\/cli\/trace\/([^/]+)$/, handler: (q2, s2, p) => this.handleCliTrace(p[0], q2, s2) },
+            { method: "GET", pattern: /^\/api\/cli\/fixtures\/([^/]+)$/, handler: (q2, s2, p) => this.handleCliFixtureList(p[0], q2, s2) },
+            // Dynamic routes (provider :type param)
+            { method: "POST", pattern: /^\/api\/providers\/([^/]+)\/script$/, handler: (q2, s2, p) => this.handleRunScript(p[0], q2, s2) },
+            { method: "GET", pattern: /^\/api\/providers\/([^/]+)\/files$/, handler: (q2, s2, p) => this.handleListFiles(p[0], q2, s2) },
+            { method: "GET", pattern: /^\/api\/providers\/([^/]+)\/file$/, handler: (q2, s2, p) => this.handleReadFile(p[0], q2, s2) },
+            { method: "POST", pattern: /^\/api\/providers\/([^/]+)\/file$/, handler: (q2, s2, p) => this.handleWriteFile(p[0], q2, s2) },
+            { method: "GET", pattern: /^\/api\/providers\/([^/]+)\/source$/, handler: (q2, s2, p) => this.handleSource(p[0], q2, s2) },
+            { method: "POST", pattern: /^\/api\/providers\/([^/]+)\/save$/, handler: (q2, s2, p) => this.handleSave(p[0], q2, s2) },
+            { method: "POST", pattern: /^\/api\/providers\/([^/]+)\/typeAndSend$/, handler: (q2, s2, p) => this.handleTypeAndSend(p[0], q2, s2) },
+            { method: "POST", pattern: /^\/api\/providers\/([^/]+)\/typeAndSendAt$/, handler: (q2, s2, p) => this.handleTypeAndSendAt(p[0], q2, s2) },
+            { method: "GET", pattern: /^\/api\/providers\/([^/]+)\/config$/, handler: (q2, s2, p) => this.handleProviderConfig(p[0], q2, s2) },
+            { method: "POST", pattern: /^\/api\/providers\/([^/]+)\/dom-context$/, handler: (q2, s2, p) => this.handleDomContext(p[0], q2, s2) },
+            { method: "POST", pattern: /^\/api\/providers\/([^/]+)\/spawn-test$/, handler: (q2, s2, p) => this.handleSpawnTest(p[0], q2, s2) },
+            { method: "POST", pattern: /^\/api\/providers\/([^/]+)\/validate$/, handler: (q2, s2, p) => this.handleValidate(p[0], q2, s2) },
+            { method: "GET", pattern: /^\/api\/providers\/([^/]+)\/script-hints$/, handler: (q2, s2, p) => this.handleScriptHints(p[0], q2, s2) }
+          ];
+          matchRoute(method, pathname) {
+            for (const route of this.routes) {
+              if (route.method !== method) continue;
+              if (typeof route.pattern === "string") {
+                if (pathname === route.pattern) return { handler: route.handler };
+              } else {
+                const m = pathname.match(route.pattern);
+                if (m) return { handler: route.handler, params: m.slice(1) };
+              }
+            }
+            return null;
+          }
+          getEndpointList() {
+            return this.routes.map((r) => {
+              const path147 = typeof r.pattern === "string" ? r.pattern : r.pattern.source.replace(/\\\//g, "/").replace(/\(\[.*?\]\+\)/g, ":type").replace(/[\^$]/g, "");
+              return `${r.method.padEnd(5)} ${path147}`;
+            });
+          }
+          async start(port = DEV_SERVER_PORT) {
+            this.configureAuth(port);
+            this.server = http3.createServer(async (req, res) => {
+              const hostAllowed = isDevServerHostAllowed(req);
+              const rawOrigin = typeof req.headers.origin === "string" ? req.headers.origin.trim() : "";
+              const requestOrigin = rawOrigin || null;
+              const originAllowed = hostAllowed && isDevServerOriginAllowed(req);
+              if (requestOrigin) {
+                res.setHeader("Vary", "Origin");
+                if (originAllowed) {
+                  res.setHeader("Access-Control-Allow-Origin", requestOrigin);
+                }
+              }
+              res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+              res.setHeader("Access-Control-Allow-Headers", `Content-Type, Authorization, ${ADHDEV_DEV_SERVER_TOKEN_HEADER}`);
+              if (!hostAllowed) {
+                this.json(res, 403, { error: "Untrusted Host header rejected." });
+                return;
+              }
+              if (req.method === "OPTIONS") {
+                if (requestOrigin && !originAllowed) {
+                  this.json(res, 403, { error: "Cross-origin request rejected." });
+                  return;
+                }
+                res.writeHead(204);
+                res.end();
+                return;
+              }
+              if (requestOrigin && !originAllowed) {
+                this.json(res, 403, { error: "Cross-origin request rejected." });
+                return;
+              }
+              const url = new URL(req.url || "/", `http://localhost:${port}`);
+              const pathname = url.pathname;
+              if (!this.isRequestAuthenticated(req, url)) {
+                this.json(res, 401, { error: "Unauthorized. DevServer token required." });
+                return;
+              }
+              try {
+                const route = this.matchRoute(req.method || "GET", pathname);
+                if (route) {
+                  await route.handler(req, res, route.params);
+                } else {
+                  this.json(res, 404, { error: "Not found", endpoints: this.getEndpointList() });
+                }
+              } catch (e) {
+                this.log(`Error: ${e.message}`);
+                this.json(res, 500, { error: e.message });
+              }
+            });
+            return new Promise((resolve82, reject) => {
+              this.server.listen(port, "127.0.0.1", () => {
+                this.log(`Dev server listening on http://127.0.0.1:${port}`);
+                resolve82();
+              });
+              this.server.on("error", (e) => {
+                if (e.code === "EADDRINUSE") {
+                  this.log(`Port ${port} in use, skipping dev server`);
+                  resolve82();
+                } else {
+                  reject(e);
+                }
+              });
+            });
+          }
+          stop() {
+            this.server?.close();
+            this.server = null;
+            releaseCliSSEBusListener(this.bus);
+          }
+          // ─── Handlers ───
+          async handleListProviders(_req, res) {
+            const providers = this.providerLoader.getAll().map(toProviderListEntry);
+            this.json(res, 200, { providers, count: providers.length, sourceConfig: this.providerLoader.getSourceConfig() });
+          }
+          async handleGetProviderSourceConfig(_req, res) {
+            this.json(res, 200, { success: true, sourceConfig: this.providerLoader.getSourceConfig() });
+          }
+          async handleSetProviderSourceConfig(req, res) {
+            const body = await this.readBody(req);
+            const parsed = parseProviderSourceConfigUpdate(body || {});
+            if (!parsed.ok) {
+              this.json(res, 400, { success: false, error: parsed.error });
+              return;
+            }
+            const currentConfig2 = loadConfig();
+            const nextConfig = {
+              ...currentConfig2,
+              ...parsed.updates.providerSourceMode ? { providerSourceMode: parsed.updates.providerSourceMode } : {},
+              ...Object.prototype.hasOwnProperty.call(parsed.updates, "providerDir") ? { providerDir: parsed.updates.providerDir } : {}
+            };
+            saveConfig(nextConfig);
+            const sourceConfig = this.providerLoader.applySourceConfig({
+              sourceMode: nextConfig.providerSourceMode,
+              userDir: Object.prototype.hasOwnProperty.call(parsed.updates, "providerDir") ? parsed.updates.providerDir : this.providerLoader.getSourceConfig().explicitProviderDir || void 0
+            });
+            this.providerLoader.reload();
+            this.providerLoader.registerToDetector();
+            await this.onProviderSourceConfigChanged?.();
+            this.json(res, 200, { success: true, reloaded: true, sourceConfig });
+          }
+          async handleProviderConfig(type2, _req, res) {
+            const provider = this.providerLoader.resolve(type2);
+            if (!provider) {
+              this.json(res, 404, { error: `Provider not found: ${type2}` });
+              return;
+            }
+            const config = { ...provider };
+            if (config.scripts) {
+              config.scriptNames = Object.keys(config.scripts).filter((k) => typeof config.scripts[k] === "function");
+              delete config.scripts;
+            }
+            this.json(res, 200, { type: type2, config });
+          }
+          async handleSpawnTest(type2, req, res) {
+            const provider = this.providerLoader.resolve(type2);
+            if (!provider) {
+              this.json(res, 404, { error: `Provider not found: ${type2}` });
+              return;
+            }
+            const spawn14 = provider.spawn;
+            if (!spawn14) {
+              this.json(res, 400, { error: `Provider ${type2} has no spawn config` });
+              return;
+            }
+            const { spawn: spawnFn } = await import("child_process");
+            const start = Date.now();
+            try {
+              const child = spawnFn(spawn14.command, [...spawn14.args || []], {
+                shell: spawn14.shell ?? false,
+                windowsHide: true,
+                timeout: 5e3,
+                stdio: ["pipe", "pipe", "pipe"]
+              });
+              let stdout = "";
+              let stderr = "";
+              child.stdout?.on("data", (d) => {
+                stdout += d.toString().slice(0, 2e3);
+              });
+              child.stderr?.on("data", (d) => {
+                stderr += d.toString().slice(0, 2e3);
+              });
+              await new Promise((resolve82) => {
+                const timer = setTimeout(() => {
+                  child.kill();
+                  resolve82();
+                }, 3e3);
+                child.on("exit", () => {
+                  clearTimeout(timer);
+                  resolve82();
+                });
+                child.stdout?.once("data", () => {
+                  setTimeout(() => {
+                    child.kill();
+                    clearTimeout(timer);
+                    resolve82();
+                  }, 500);
+                });
+              });
+              const elapsed = Date.now() - start;
+              this.json(res, 200, {
+                success: true,
+                command: `${spawn14.command} ${(spawn14.args || []).join(" ")}`,
+                elapsed,
+                stdout: stdout.trim(),
+                stderr: stderr.trim(),
+                exitCode: child.exitCode
+              });
+            } catch (e) {
+              const elapsed = Date.now() - start;
+              this.json(res, 200, {
+                success: false,
+                command: `${spawn14.command} ${(spawn14.args || []).join(" ")}`,
+                elapsed,
+                error: e.message
+              });
+            }
+          }
+          async handleRunScript(type2, req, res, parsedBody) {
+            const body = parsedBody || await this.readBody(req);
+            const { script: scriptName, params, args, ideType: scriptIdeType } = body;
+            const rawParams = args !== void 0 ? args : params;
+            const provider = this.providerLoader.resolve(type2);
+            if (!provider) {
+              this.json(res, 404, { error: `Provider '${type2}' not found` });
+              return;
+            }
+            const fn = provider.scripts?.[scriptName];
+            if (typeof fn !== "function") {
+              this.json(res, 400, { error: `Script '${scriptName}' not found in provider '${type2}'`, available: provider.scripts ? Object.keys(provider.scripts) : [] });
+              return;
+            }
+            const cdp = this.getCdp(scriptIdeType || type2);
+            if (!cdp) {
+              this.json(res, 503, { error: "No CDP connection available" });
+              return;
+            }
+            try {
+              const scriptCode = resolveLegacyProviderScript(fn, scriptName, rawParams);
+              if (!scriptCode) {
+                this.json(res, 500, { error: "Script function returned null" });
+                return;
+              }
+              this.log(`Exec script length: ${scriptCode.length}, first 50 chars: ${scriptCode.slice(0, 50)}...`);
+              const isWebviewScript = scriptName.toLowerCase().includes("webview");
+              let raw;
+              if (provider.category === "extension" && !isWebviewScript) {
+                const sessions = cdp.getAgentSessions();
+                let sessionId = null;
+                for (const [sid, target2] of sessions) {
+                  if (target2.agentType === type2) {
+                    sessionId = sid;
+                    break;
+                  }
+                }
+                if (!sessionId) {
+                  try {
+                    const discovered = await cdp.discoverAgentWebviews();
+                    const target2 = discovered.find((entry) => entry.agentType === type2);
+                    if (target2) {
+                      sessionId = await cdp.attachToAgent(target2);
+                    }
+                  } catch (error) {
+                    this.log(`Extension attach fallback failed for ${type2}: ${error?.message || String(error)}`);
+                  }
+                }
+                if (sessionId) {
+                  raw = await cdp.evaluateInSessionFrame(sessionId, scriptCode);
+                } else if (cdp.evaluateInWebviewFrame) {
+                  const matchText = provider.webviewMatchText;
+                  const matchFn = matchText ? (body2) => body2.includes(matchText) : void 0;
+                  raw = await cdp.evaluateInWebviewFrame(scriptCode, matchFn);
+                } else {
+                  raw = await cdp.evaluate(scriptCode, 3e4);
+                }
+              } else if (isWebviewScript && cdp.evaluateInWebviewFrame) {
+                const matchText = provider.webviewMatchText;
+                const matchFn = matchText ? (body2) => body2.includes(matchText) : void 0;
+                raw = await cdp.evaluateInWebviewFrame(scriptCode, matchFn);
+              } else {
+                raw = await cdp.evaluate(scriptCode, 3e4);
+              }
+              let result = raw;
+              if (typeof raw === "string") {
+                try {
+                  result = JSON.parse(raw);
+                } catch {
+                }
+              }
+              this.log(`Script raw debug: typeof=${typeof raw}, raw=${JSON.stringify(raw)}, parsed=${JSON.stringify(result)}`);
+              this.json(res, 200, { type: type2, script: scriptName, result });
+            } catch (e) {
+              this.json(res, 500, { error: `Script execution failed: ${e.message}` });
+            }
+          }
+          async handleCdpEvaluate(req, res) {
+            return handleCdpEvaluate(this, req, res);
+          }
+          async handleCdpClick(req, res) {
+            return handleCdpClick(this, req, res);
+          }
+          async handleCdpDomQuery(req, res) {
+            return handleCdpDomQuery(this, req, res);
+          }
+          async handleScreenshot(req, res) {
+            return handleScreenshot2(this, req, res);
+          }
+          async handleScriptsRun(req, res) {
+            return handleScriptsRun(this, req, res);
+          }
+          async handleStatus(_req, res) {
+            const providers = this.providerLoader.getAll().map((p) => ({
+              type: p.type,
+              name: p.name,
+              category: p.category
+            }));
+            const cdpStatus = {};
+            for (const [key7, cdp] of this.cdpManagers.entries()) {
+              cdpStatus[key7] = { connected: cdp.isConnected };
+            }
+            this.json(res, 200, {
+              devMode: true,
+              providers,
+              cdp: cdpStatus,
+              uptime: process.uptime()
+            });
+          }
+          async handleReload(_req, res) {
+            try {
+              this.providerLoader.reload();
+              const refreshedInstances = this.instanceManager ? this.instanceManager.refreshProviderDefinitions((providerType) => this.providerLoader.resolve(providerType)) : 0;
+              const providers = this.providerLoader.getAll().map((p) => ({
+                type: p.type,
+                name: p.name,
+                category: p.category
+              }));
+              for (const cdp of this.cdpManagers.values()) {
+                if (!cdp.isConnected) {
+                  cdp.clearTargetId();
+                }
+              }
+              this.json(res, 200, { reloaded: true, refreshedInstances, providers });
+            } catch (e) {
+              this.json(res, 500, { error: e.message });
+            }
+          }
+          // ─── Watch Mode (SSE) ───
+          handleSSE(_req, res) {
+            const rawOrigin = typeof _req.headers.origin === "string" ? _req.headers.origin.trim() : "";
+            const originAllowed = rawOrigin && isDevServerOriginAllowed(_req);
+            res.writeHead(200, {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              "Connection": "keep-alive",
+              ...originAllowed ? { "Access-Control-Allow-Origin": rawOrigin, Vary: "Origin" } : {}
+            });
+            res.write('data: {"type":"connected"}\n\n');
+            this.sseClients.push(res);
+            _req.on("close", () => {
+              this.sseClients = this.sseClients.filter((c) => c !== res);
+            });
+          }
+          sendSSE(data) {
+            const msg = `data: ${JSON.stringify(data)}
+
+`;
+            for (const client of this.sseClients) {
+              try {
+                client.write(msg);
+              } catch {
+              }
+            }
+          }
+          async handleWatchStart(req, res) {
+            const body = await this.readBody(req);
+            const { type: type2, script: scriptName, interval = 2e3 } = body;
+            if (!type2) {
+              this.json(res, 400, { error: "type required" });
+              return;
+            }
+            this.watchScriptPath = type2;
+            this.watchScriptName = scriptName || "readChat";
+            if (this.watchTimer) clearInterval(this.watchTimer);
+            this.log(`Watch started: ${type2} \u2192 ${this.watchScriptName} (every ${interval}ms)`);
+            this.sendSSE({ type: "watch_started", provider: type2, script: this.watchScriptName });
+            const runWatch = async () => {
+              if (!this.watchScriptPath) return;
+              const provider = this.providerLoader.resolve(this.watchScriptPath);
+              if (!provider) {
+                this.sendSSE({ type: "watch_error", error: `Provider '${this.watchScriptPath}' not found` });
+                return;
+              }
+              const fn = provider.scripts?.[this.watchScriptName];
+              if (typeof fn !== "function") {
+                this.sendSSE({ type: "watch_error", error: `Script '${this.watchScriptName}' not found` });
+                return;
+              }
+              const cdp = this.getCdp();
+              if (!cdp) {
+                this.sendSSE({ type: "watch_error", error: "No CDP connection" });
+                return;
+              }
+              try {
+                const script = fn();
+                const start = Date.now();
+                const raw = await cdp.evaluate(script, 15e3);
+                const elapsed = Date.now() - start;
+                let result = raw;
+                if (typeof raw === "string") {
+                  try {
+                    result = JSON.parse(raw);
+                  } catch {
+                  }
+                }
+                this.sendSSE({ type: "watch_result", provider: type2, script: this.watchScriptName, result, elapsed });
+              } catch (e) {
+                this.sendSSE({ type: "watch_error", error: e.message });
+              }
+            };
+            runWatch();
+            this.watchTimer = setInterval(runWatch, Math.max(interval, 500));
+            this.json(res, 200, { watching: true, type: type2, script: this.watchScriptName, interval });
+          }
+          async handleWatchStop(_req, res) {
+            if (this.watchTimer) {
+              clearInterval(this.watchTimer);
+              this.watchTimer = null;
+            }
+            this.watchScriptPath = null;
+            this.watchScriptName = null;
+            this.sendSSE({ type: "watch_stopped" });
+            this.json(res, 200, { watching: false });
+          }
+          // ─── Provider File Explorer ───
+          /** Find the provider directory on disk */
+          findProviderDir(type2) {
+            return this.providerLoader.findProviderDir(type2);
+          }
+          /** GET /api/providers/:type/files — list all files in provider directory */
+          async handleListFiles(type2, _req, res) {
+            const dir = this.findProviderDir(type2);
+            if (!dir) {
+              this.json(res, 404, { error: `Provider directory not found: ${type2}` });
+              return;
+            }
+            const files = [];
+            const scan2 = (d, prefix) => {
+              try {
+                for (const entry of fs132.readdirSync(d, { withFileTypes: true })) {
+                  if (entry.name.startsWith(".") || entry.name.endsWith(".bak")) continue;
+                  const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+                  if (entry.isDirectory()) {
+                    files.push({ path: rel, size: 0, type: "dir" });
+                    scan2(path130.join(d, entry.name), rel);
+                  } else {
+                    const stat2 = fs132.statSync(path130.join(d, entry.name));
+                    files.push({ path: rel, size: stat2.size, type: "file" });
+                  }
+                }
+              } catch {
+              }
+            };
+            scan2(dir, "");
+            this.json(res, 200, { type: type2, dir, files });
+          }
+          /** GET /api/providers/:type/file?path=scripts.js — read a file */
+          async handleReadFile(type2, req, res) {
+            const url = new URL(req.url || "/", "http://localhost");
+            const filePath2 = url.searchParams.get("path");
+            if (!filePath2) {
+              this.json(res, 400, { error: "path query param required" });
+              return;
+            }
+            const dir = this.findProviderDir(type2);
+            if (!dir) {
+              this.json(res, 404, { error: `Provider directory not found: ${type2}` });
+              return;
+            }
+            const fullPath = path130.resolve(dir, path130.normalize(filePath2));
+            if (!fullPath.startsWith(dir)) {
+              this.json(res, 403, { error: "Forbidden" });
+              return;
+            }
+            if (!fs132.existsSync(fullPath) || fs132.statSync(fullPath).isDirectory()) {
+              this.json(res, 404, { error: `File not found: ${filePath2}` });
+              return;
+            }
+            const content = fs132.readFileSync(fullPath, "utf-8");
+            this.json(res, 200, { type: type2, path: filePath2, content, lines: content.split("\n").length });
+          }
+          /** POST /api/providers/:type/file — write a file { path, content } */
+          async handleWriteFile(type2, req, res) {
+            const body = await this.readBody(req);
+            const { path: filePath2, content } = body;
+            if (!filePath2 || typeof content !== "string") {
+              this.json(res, 400, { error: "path and content required" });
+              return;
+            }
+            const dir = this.findProviderDir(type2);
+            if (!dir) {
+              this.json(res, 404, { error: `Provider directory not found: ${type2}` });
+              return;
+            }
+            const fullPath = path130.resolve(dir, path130.normalize(filePath2));
+            if (!fullPath.startsWith(dir)) {
+              this.json(res, 403, { error: "Forbidden" });
+              return;
+            }
+            try {
+              if (fs132.existsSync(fullPath)) fs132.copyFileSync(fullPath, fullPath + ".bak");
+              fs132.mkdirSync(path130.dirname(fullPath), { recursive: true });
+              fs132.writeFileSync(fullPath, content, "utf-8");
+              this.log(`File saved: ${fullPath} (${content.length} chars)`);
+              this.providerLoader.reload();
+              this.json(res, 200, { saved: true, path: filePath2, chars: content.length });
+            } catch (e) {
+              this.json(res, 500, { error: `Save failed: ${e.message}` });
+            }
+          }
+          // ─── Legacy Source/Save compat ───
+          async handleSource(type2, _req, res) {
+            const dir = this.findProviderDir(type2);
+            if (!dir) {
+              this.json(res, 404, { error: `Provider not found: ${type2}` });
+              return;
+            }
+            for (const name of ["scripts.js", "provider.json"]) {
+              const p = path130.join(dir, name);
+              if (fs132.existsSync(p)) {
+                const source2 = fs132.readFileSync(p, "utf-8");
+                this.json(res, 200, { type: type2, path: p, source: source2, lines: source2.split("\n").length });
+                return;
+              }
+            }
+            this.json(res, 404, { error: `Source file not found for '${type2}'` });
+          }
+          async handleSave(type2, req, res) {
+            const body = await this.readBody(req);
+            const { source: source2 } = body;
+            if (!source2 || typeof source2 !== "string") {
+              this.json(res, 400, { error: "source (string) required" });
+              return;
+            }
+            const dir = this.findProviderDir(type2);
+            if (!dir) {
+              this.json(res, 404, { error: `Provider not found: ${type2}` });
+              return;
+            }
+            const target2 = fs132.existsSync(path130.join(dir, "scripts.js")) ? "scripts.js" : "provider.json";
+            const targetPath = path130.join(dir, target2);
+            try {
+              if (fs132.existsSync(targetPath)) fs132.copyFileSync(targetPath, targetPath + ".bak");
+              fs132.writeFileSync(targetPath, source2, "utf-8");
+              this.log(`Saved provider: ${targetPath} (${source2.length} chars)`);
+              this.providerLoader.reload();
+              this.json(res, 200, { saved: true, path: targetPath, chars: source2.length });
+            } catch (e) {
+              this.json(res, 500, { error: `Save failed: ${e.message}` });
+            }
+          }
+          async handleTypeAndSend(type2, req, res) {
+            return handleTypeAndSend(this, type2, req, res);
+          }
+          async handleTypeAndSendAt(type2, req, res) {
+            return handleTypeAndSendAt(this, type2, req, res);
+          }
+          async handleScriptHints(type2, _req, res) {
+            return handleScriptHints(this, type2, _req, res);
+          }
+          // ─── Validate provider.json ───
+          async handleValidate(type2, req, res) {
+            const body = await this.readBody(req);
+            const { content } = body;
+            const errors = [];
+            const warnings = [];
+            try {
+              const config = typeof content === "string" ? JSON.parse(content) : content;
+              const validation = validateProviderDefinition(config);
+              errors.push(...validation.errors);
+              warnings.push(...validation.warnings);
+              if (config.settings) {
+                for (const [key7, val] of Object.entries(config.settings)) {
+                  const s2 = val;
+                  if (!s2.type) errors.push(`settings.${key7}: missing type`);
+                  else if (!["boolean", "number", "string", "select"].includes(s2.type))
+                    errors.push(`settings.${key7}: invalid type '${s2.type}'`);
+                  if (s2.default === void 0) warnings.push(`settings.${key7}: no default value`);
+                  if (s2.type === "number" && s2.min !== void 0 && s2.max !== void 0 && s2.min > s2.max)
+                    errors.push(`settings.${key7}: min (${s2.min}) > max (${s2.max})`);
+                  if (s2.type === "select" && (!s2.options || !Array.isArray(s2.options) || s2.options.length === 0))
+                    errors.push(`settings.${key7}: select type requires options[]`);
+                }
+              }
+              if (config.cdpPorts && Array.isArray(config.cdpPorts)) {
+                const allProviders = this.providerLoader.getAll();
+                for (const port of config.cdpPorts) {
+                  const conflict = allProviders.find((p) => p.type !== type2 && p.cdpPorts?.includes(port));
+                  if (conflict) warnings.push(`CDP port ${port} conflicts with provider '${conflict.type}'`);
+                }
+              }
+              this.json(res, 200, { valid: errors.length === 0, errors, warnings });
+            } catch (e) {
+              this.json(res, 200, { valid: false, errors: [`Invalid JSON: ${e.message}`], warnings: [] });
+            }
+          }
+          async handleCdpTargets(_req, res) {
+            return handleCdpTargets(this, _req, res);
+          }
+          // ─── Scaffold ───
+          async handleScaffold(req, res) {
+            const body = await this.readBody(req);
+            const {
+              type: type2,
+              name,
+              category = "ide",
+              cdpPorts,
+              cli,
+              processName,
+              installPath,
+              binary: binary2,
+              extensionId,
+              version: version2,
+              osPaths,
+              processNames
+            } = body;
+            if (!type2 || !name) {
+              this.json(res, 400, { error: "type and name required" });
+              return;
+            }
+            let targetDir;
+            targetDir = this.providerLoader.getUserProviderDir(category, type2);
+            const isV1Category = category === "cli";
+            const manifestFileName = isV1Category ? "provider.v1.json" : "provider.json";
+            const jsonPath = path130.join(targetDir, manifestFileName);
+            if (fs132.existsSync(jsonPath)) {
+              this.json(res, 409, { error: `Provider already exists at ${targetDir}`, path: targetDir });
+              return;
+            }
+            try {
+              const createdFiles = [];
+              fs132.mkdirSync(targetDir, { recursive: true });
+              if (category === "cli") {
+                const scaffold = buildCliProviderV1Scaffold({ type: type2, name, binary: binary2 });
+                fs132.writeFileSync(jsonPath, JSON.stringify(scaffold.manifest, null, 2) + "\n", "utf-8");
+                createdFiles.push(scaffold.manifestPath);
+                const specFullPath = path130.join(targetDir, scaffold.specPath);
+                fs132.mkdirSync(path130.dirname(specFullPath), { recursive: true });
+                fs132.writeFileSync(specFullPath, JSON.stringify(scaffold.spec, null, 2) + "\n", "utf-8");
+                createdFiles.push(scaffold.specPath);
+              } else {
+                const result = generateFiles(type2, name, category, { cdpPorts, cli, processName, installPath, binary: binary2, extensionId, version: version2, osPaths, processNames });
+                fs132.writeFileSync(jsonPath, result["provider.json"], "utf-8");
+                createdFiles.push("provider.json");
+                if (result.files) {
+                  for (const [relPath, content] of Object.entries(result.files)) {
+                    const fullPath = path130.join(targetDir, relPath);
+                    fs132.mkdirSync(path130.dirname(fullPath), { recursive: true });
+                    fs132.writeFileSync(fullPath, content, "utf-8");
+                    createdFiles.push(relPath);
+                  }
+                }
+              }
+              this.log(`Scaffolded provider: ${targetDir} (${createdFiles.length} files)`);
+              this.json(res, 201, { created: true, path: targetDir, files: createdFiles, type: type2, name, category });
+            } catch (e) {
+              this.json(res, 500, { error: e.message });
+            }
+          }
+          // ─── Version Detection ───
+          async handleDetectVersions(req, res) {
+            try {
+              const archive = new VersionArchive();
+              const results = await detectAllVersions(this.providerLoader, archive);
+              const installed2 = results.filter((r) => r.installed);
+              this.json(res, 200, {
+                total: results.length,
+                installed: installed2.length,
+                providers: results,
+                history: archive.getAll()
+              });
+            } catch (e) {
+              this.json(res, 500, { error: e.message });
+            }
+          }
+          // ─── DOM Inspector ───
+          async handleDomInspect(req, res) {
+            return handleDomInspect(this, req, res);
+          }
+          async handleDomChildren(req, res) {
+            return handleDomChildren(this, req, res);
+          }
+          async handleDomAnalyze(req, res) {
+            return handleDomAnalyze(this, req, res);
+          }
+          async handleFindCommon(req, res) {
+            return handleFindCommon(this, req, res);
+          }
+          async handleFindByText(req, res) {
+            return handleFindByText(this, req, res);
+          }
+          // ─── Phase 1: DOM Context API ───
+          async handleDomContext(type2, req, res) {
+            return handleDomContext(this, type2, req, res);
+          }
+          /**
+           * Resolve a CDP manager for DevServer APIs.
+           * - Pass full **managerKey** from `GET /api/cdp/targets` when multiple Cursor/VS Code windows are open
+           *   (e.g. `cursor_0006DE34…`); short `cursor` only works when it maps to exactly one connected manager.
+           * - With `ideType` omitted: only succeeds when exactly one connected manager exists.
+           */
+          getCdp(ideType) {
+            if (ideType) {
+              const cdp = findCdpManager(this.cdpManagers, ideType);
+              if (cdp) return cdp;
+              LOG.warn(
+                "DevServer",
+                `getCdp: no unique match for '${ideType}', available: [${[...this.cdpManagers.keys()].join(", ")}] \u2014 use managerKey from GET /api/cdp/targets`
+              );
+              return null;
+            }
+            const connected = [...this.cdpManagers.entries()].filter(([, m]) => m.isConnected);
+            if (connected.length === 1) return connected[0][1];
+            if (connected.length === 0) return null;
+            LOG.warn(
+              "DevServer",
+              `getCdp: ideType omitted but ${connected.length} CDP windows \u2014 pass managerKey from GET /api/cdp/targets`
+            );
+            return null;
+          }
+          json(res, status, data) {
+            res.writeHead(status, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(data, null, 2));
+          }
+          async readBody(req) {
+            return new Promise((resolve82) => {
+              let body = "";
+              req.on("data", (chunk) => body += chunk);
+              req.on("end", () => {
+                try {
+                  resolve82(JSON.parse(body));
+                } catch {
+                  resolve82({});
+                }
+              });
+            });
+          }
+          // ─── CLI Debug Handlers ──────────────────────────────
+          /** GET /api/cli/status — list all running CLI instances with state */
+          async handleCliStatus(_req, res) {
+            return handleCliStatus(this, _req, res);
+          }
+          /** POST /api/cli/launch — launch a CLI agent { type, workingDir?, args? } */
+          async handleCliLaunch(req, res) {
+            return handleCliLaunch(this, req, res);
+          }
+          /** POST /api/cli/send — send message to a running CLI { type, text } */
+          async handleCliSend(req, res) {
+            return handleCliSend(this, req, res);
+          }
+          /** POST /api/cli/exercise — launch/send/approve/wait helper for provider-fix loops */
+          async handleCliExercise(req, res) {
+            return handleCliExercise(this, req, res);
+          }
+          async handleCliFixtureCapture(req, res) {
+            return handleCliFixtureCapture(this, req, res);
+          }
+          async handleCliFixtureReplay(req, res) {
+            return handleCliFixtureReplay(this, req, res);
+          }
+          /** POST /api/cli/stop — stop a running CLI { type } */
+          async handleCliStop(req, res) {
+            return handleCliStop(this, req, res);
+          }
+          /** GET /api/cli/events — SSE stream of CLI status events */
+          handleCliSSE(_req, res) {
+            handleCliSSE(this, this.cliSSEClients, _req, res);
+          }
+          sendCliSSE(data) {
+            const msg = `data: ${JSON.stringify({ ...data, timestamp: Date.now() })}
+
+`;
+            for (const client of this.cliSSEClients) {
+              try {
+                client.write(msg);
+              } catch {
+              }
+            }
+          }
+          /** GET /api/cli/debug/:type — full internal debug state of a CLI adapter */
+          async handleCliDebug(type2, _req, res) {
+            return handleCliDebug(this, type2, _req, res);
+          }
+          /** GET /api/cli/trace/:type — recent CLI trace timeline plus current debug snapshot */
+          async handleCliTrace(type2, _req, res) {
+            return handleCliTrace(this, type2, _req, res);
+          }
+          async handleCliFixtureList(type2, _req, res) {
+            return handleCliFixtureList(this, type2, _req, res);
+          }
+          /** POST /api/cli/resolve — resolve an approval modal { type, buttonIndex } */
+          async handleCliResolve(req, res) {
+            return handleCliResolve(this, req, res);
+          }
+          /** POST /api/cli/raw — send raw keystrokes to PTY { type, keys } */
+          async handleCliRaw(req, res) {
+            return handleCliRaw(this, req, res);
+          }
+        };
+      }
+    });
     var pty_transport_exports = {};
     __export2(pty_transport_exports, {
       NodePtyTransportFactory: () => NodePtyTransportFactory,
@@ -169920,6 +174010,8 @@ ${defangRelayBody(text11)}`;
       ADHDEV_COORDINATOR_MCP_AUTH_FILE_ENV: () => ADHDEV_COORDINATOR_MCP_AUTH_FILE_ENV,
       ADHDEV_DAEMON_AUTH_FILE_ENV: () => ADHDEV_DAEMON_AUTH_FILE_ENV2,
       ADHDEV_DAEMON_AUTH_FILE_FLAG: () => ADHDEV_DAEMON_AUTH_FILE_FLAG2,
+      ADHDEV_DEV_SERVER_AUTH_FILE_ENV: () => ADHDEV_DEV_SERVER_AUTH_FILE_ENV,
+      ADHDEV_DEV_SERVER_TOKEN_HEADER: () => ADHDEV_DEV_SERVER_TOKEN_HEADER,
       ADHDEV_INTERNAL_AUTH_HEADER: () => ADHDEV_INTERNAL_AUTH_HEADER2,
       ADHDEV_MCP_SESSION_CREDENTIAL_ENV: () => ADHDEV_MCP_SESSION_CREDENTIAL_ENV3,
       ADHDEV_MCP_SESSION_CREDENTIAL_HEADER: () => ADHDEV_MCP_SESSION_CREDENTIAL_HEADER2,
@@ -170234,6 +174326,7 @@ ${defangRelayBody(text11)}`;
       buildCompactStaleDirectWorkSummary: () => buildCompactStaleDirectWorkSummary3,
       buildCoordinatorSystemPrompt: () => buildCoordinatorSystemPrompt,
       buildDaemonHealthSummary: () => buildDaemonHealthSummary,
+      buildDevServerAuthHeaders: () => buildDevServerAuthHeaders,
       buildIdleReminderMessage: () => buildIdleReminderMessage,
       buildIpcStatusHttpResponse: () => buildIpcStatusHttpResponse,
       buildLocalSeqscribeStats: () => buildLocalSeqscribeStats,
@@ -170371,6 +174464,7 @@ ${defangRelayBody(text11)}`;
       detectCLIs: () => detectCLIs,
       detectClaudeAskUserQuestionPromptFromJson: () => detectClaudeAskUserQuestionPromptFromJson,
       detectIDEs: () => detectIDEs,
+      devServerAuthFilePath: () => devServerAuthFilePath,
       dirtyWriteVerdict: () => dirtyWriteVerdict2,
       draftReleaseChangelog: () => draftReleaseChangelog,
       effectiveModelSelectionValue: () => effectiveModelSelectionValue,
@@ -170514,6 +174608,8 @@ ${defangRelayBody(text11)}`;
       isCommandSource: () => isCommandSource,
       isCoordinatorSpawnedHiddenWorker: () => isCoordinatorSpawnedHiddenWorker,
       isCrossTrackConfigDirOverride: () => isCrossTrackConfigDirOverride,
+      isDevServerHostAllowed: () => isDevServerHostAllowed,
+      isDevServerOriginAllowed: () => isDevServerOriginAllowed,
       isDirtyNode: () => isDirtyNode,
       isEmptyUsage: () => isEmptyUsage,
       isExistingSocketPathPresent: () => isExistingSocketPathPresent,
@@ -170623,6 +174719,7 @@ ${defangRelayBody(text11)}`;
       migrateTurnLedgerV1: () => migrateTurnLedgerV1,
       migrateTurnLedgerV2: () => migrateTurnLedgerV2,
       migrateTurnLedgerV3: () => migrateTurnLedgerV3,
+      mintDevServerAuthToken: () => mintDevServerAuthToken,
       mintMcpSessionCredential: () => mintMcpSessionCredential,
       mintPeerSecret: () => mintPeerSecret,
       minutesUntilQuotaCheck: () => minutesUntilQuotaCheck2,
@@ -170726,6 +174823,7 @@ ${defangRelayBody(text11)}`;
       readCodexCliSession: () => readSession2,
       readCooperativeMaintenance: () => readCooperativeMaintenance2,
       readCoordinatorNotices: () => readCoordinatorNotices,
+      readDevServerAuthToken: () => readDevServerAuthToken,
       readDirtyWriteGate: () => readDirtyWriteGate2,
       readDiskSpace: () => readDiskSpace,
       readFleetTaskActivity: () => readFleetTaskActivity,
@@ -170936,6 +175034,7 @@ ${defangRelayBody(text11)}`;
       withMeshDirectDispatch: () => withMeshDirectDispatch,
       withRawTerminalAttachment: () => withRawTerminalAttachment,
       writeCooperativeMaintenance: () => writeCooperativeMaintenance,
+      writeDevServerAuthFile: () => writeDevServerAuthFile,
       writeMeshHostRecord: () => writeMeshHostRecord
     });
     module2.exports = __toCommonJS2(index_exports2);
@@ -178558,588 +182657,7 @@ ${defangRelayBody(text11)}`;
     var fs45 = __toESM2(require("fs"));
     var path58 = __toESM2(require("path"));
     init_config();
-    init_manifest();
-    init_host_handoff_canary_contract();
-    init_auto_approve_modes();
-    init_open_panel_support();
-    var VALID_CAPABILITY_MEDIA_TYPES = /* @__PURE__ */ new Set(["text", "image", "audio", "video", "resource"]);
-    var VALID_INPUT_STRATEGIES2 = /* @__PURE__ */ new Set(["native", "resource_link", "text_fallback", "paste", "upload"]);
-    var KNOWN_PROVIDER_FIELDS = /* @__PURE__ */ new Set([
-      // File-level editor hint carried by published manifests; the daemon ignores
-      // it, but it must not trip the unknown-key warning (live: 9 warnings/boot).
-      "$schema",
-      // Driver owner-permission checkboxes (computer-use driver).
-      "grants",
-      "type",
-      "name",
-      "category",
-      "transcriptAuthority",
-      "transcriptContext",
-      "aliases",
-      "cdpPorts",
-      "targetFilter",
-      "cli",
-      "icon",
-      "displayName",
-      "install",
-      "versionCommand",
-      "testedVersions",
-      "processNames",
-      "launch",
-      "paths",
-      "extensionId",
-      "extensionIdPattern",
-      "extensionIdPattern_flags",
-      "compatibility",
-      "defaultScriptDir",
-      "binary",
-      "spawn",
-      "approvalKeys",
-      "patterns",
-      "cleanOutput",
-      "resume",
-      "sessionProbe",
-      "approvalPositiveHints",
-      "sessionIdPattern",
-      "historyBehavior",
-      // v1 canonical field name. The loader fills this in for legacy v0
-      // manifests that ship the old `canonicalHistory` spelling.
-      "nativeHistory",
-      // Deprecated v0 alias for `nativeHistory`. Kept in the allowed-keys
-      // list so legacy provider.json manifests don't trip the unknown-key
-      // warning during the one-release deprecation window.
-      "canonicalHistory",
-      "autoFixProfile",
-      "ideLevelScripts",
-      "scripts",
-      "vscodeCommands",
-      "inputMethod",
-      "inputSelector",
-      "webviewMatchText",
-      "os",
-      "versions",
-      "overrides",
-      "settings",
-      "controls",
-      "staticConfigOptions",
-      "spawnArgBuilder",
-      "auth",
-      "meshCoordinator",
-      "contractVersion",
-      "capabilities",
-      "providerVersion",
-      // Auto-update daemon-compatibility floor (docs/design/2026-10-10-provider-auto-update.md).
-      "minDaemonVersion",
-      "status",
-      "details",
-      "autoApproveModes",
-      "modelLaunchArgs",
-      "modelLaunchValueMap",
-      "modelOptions",
-      // How to ask the installed binary for its own model list, so modelOptions
-      // stops drifting in both directions. Read-only; the result is a runtime
-      // overlay and is never written back into this manifest (digest-verified).
-      "modelDiscovery",
-      "modelFallbackWarning",
-      "thinkingLaunchArgs",
-      "thinkingLevelMap",
-      "thinkingLevelOptions",
-      "thinkingControlId",
-      // Bounded host-handoff probe. Absence is an explicit unsupported provider.
-      // A present object must name real prompt, turn, token, and selection bindings.
-      "hostHandoffCanary",
-      "sendDelayMs",
-      "sendKey",
-      "submitStrategy",
-      "requirePromptEchoBeforeSubmit",
-      "requiresFinalAssistantBeforeIdle",
-      "holdCompletionForTranscript",
-      "augmentStaleSnapshot",
-      "timeouts",
-      "disableUpstream",
-      // Marketplace/registry metadata blocks from the v1 CLI schema. UI-only —
-      // the daemon never executes anything from these, but they are valid
-      // manifest fields and must not trip the unknown-key warning.
-      "links",
-      "engines",
-      "source",
-      "tui",
-      "scriptCallBudgetMs",
-      "publisher",
-      "runtime",
-      "actions",
-      "resources",
-      "guidance",
-      "declaredAccess"
-    ]);
-    var VALUE_CONTROL_TYPES = /* @__PURE__ */ new Set(["select", "toggle", "cycle", "slider"]);
-    function validateProviderDefinition(raw) {
-      const errors = [];
-      const warnings = [];
-      if (!raw || typeof raw !== "object") {
-        return { errors: ["Provider definition must be an object"], warnings };
-      }
-      const provider = raw;
-      if (!provider.type) errors.push("Missing required field: type");
-      if (!provider.name) errors.push("Missing required field: name");
-      if (!provider.category) {
-        errors.push("Missing required field: category");
-      } else if (!["ide", "extension", "cli", "driver"].includes(String(provider.category))) {
-        errors.push(`Invalid category: ${String(provider.category)}`);
-      }
-      for (const key7 of Object.keys(provider)) {
-        if (!KNOWN_PROVIDER_FIELDS.has(key7)) {
-          warnings.push(`Unknown provider field: ${key7}`);
-        }
-      }
-      if (provider.disableUpstream !== void 0) {
-        warnings.push("disableUpstream is deprecated in provider definitions; use machine-level provider source policy instead");
-      }
-      if (provider.category === "driver") {
-        const validation = validateDriverProviderManifest(provider);
-        errors.push(...validation.issues.map((issue) => `driver${issue.path}: ${issue.message}`));
-        return { errors, warnings };
-      }
-      const category = provider.category;
-      const typedProvider = provider;
-      const controls = Array.isArray(provider.controls) ? provider.controls : [];
-      if (category === "cli") {
-        const spawn14 = provider.spawn;
-        const command = spawn14 && typeof spawn14 === "object" ? spawn14.command : void 0;
-        if (!spawn14 || typeof spawn14 !== "object") {
-          errors.push(`${String(category).toUpperCase()}/CLI providers must have spawn config`);
-        } else if (typeof command !== "string" || !command.trim()) {
-          errors.push("spawn.command is required");
-        }
-      }
-      if ((category === "ide" || category === "extension") && provider.cdpPorts !== void 0) {
-        if (!Array.isArray(provider.cdpPorts) || provider.cdpPorts.length === 0) {
-          warnings.push("IDE/Extension providers should have cdpPorts");
-        }
-      }
-      if (category === "extension" && !provider.extensionId) {
-        warnings.push("Extension providers should have extensionId");
-      }
-      validateCapabilities(provider, controls, errors);
-      validateHostHandoffCanary(provider, errors);
-      validateNativeHistory(provider.nativeHistory, errors);
-      validateMeshCoordinator(provider.meshCoordinator, errors);
-      validateAutoApproveModes(provider.autoApproveModes, errors);
-      for (const control of controls) {
-        validateControl(control, errors);
-      }
-      if ((category === "ide" || category === "extension") && typeof typedProvider.scripts?.focusEditor === "function" && !providerHasOpenPanelSupport(typedProvider)) {
-        warnings.push("scripts.focusEditor is present without scripts.openPanel/webviewOpenPanel; open_panel capability will remain disabled");
-      }
-      return { errors, warnings };
-    }
-    function validateAutoApproveModes(raw, errors) {
-      if (raw === void 0) return;
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-        errors.push("autoApproveModes must be an object");
-        return;
-      }
-      const config = raw;
-      const defaultModeId = typeof config.default === "string" ? config.default.trim() : "";
-      if (!defaultModeId) {
-        errors.push("autoApproveModes.default must be a non-empty string");
-      } else {
-        config.default = defaultModeId;
-      }
-      if (!Array.isArray(config.modes) || config.modes.length === 0) {
-        errors.push("autoApproveModes.modes must be a non-empty array");
-        return;
-      }
-      const ids = /* @__PURE__ */ new Set();
-      for (const [index, rawMode] of config.modes.entries()) {
-        const prefix = `autoApproveModes.modes[${index}]`;
-        if (!rawMode || typeof rawMode !== "object" || Array.isArray(rawMode)) {
-          errors.push(`${prefix} must be an object`);
-          continue;
-        }
-        const mode = rawMode;
-        const id4 = typeof mode.id === "string" ? mode.id.trim() : "";
-        if (!id4) {
-          errors.push(`${prefix}.id must be a non-empty string`);
-        } else if (ids.has(id4)) {
-          errors.push(`${prefix}.id must be unique (duplicate: ${id4})`);
-        } else {
-          ids.add(id4);
-          mode.id = id4;
-        }
-        if (typeof mode.label !== "string" || !mode.label.trim()) {
-          errors.push(`${prefix}.label must be a non-empty string`);
-        }
-        const strategy = mode.strategy;
-        if (!["pty-parse-default", "launch-args", "post-boot-command"].includes(String(strategy))) {
-          errors.push(`${prefix}.strategy must be one of: pty-parse-default, launch-args, post-boot-command`);
-        } else if (strategy === "post-boot-command") {
-          errors.push(`${prefix}.strategy post-boot-command is reserved and unsupported in v1`);
-        }
-        const risk = mode.risk;
-        if (!["safe", "caution", "dangerous"].includes(String(risk))) {
-          errors.push(`${prefix}.risk must be one of: safe, caution, dangerous`);
-        }
-        if (mode.ptyFallback !== void 0 && typeof mode.ptyFallback !== "boolean") {
-          errors.push(`${prefix}.ptyFallback must be a boolean when provided`);
-        }
-        for (const field3 of ["launchArgs", "removeArgs"]) {
-          const value = mode[field3];
-          if (value !== void 0 && (!Array.isArray(value) || value.some((arg) => typeof arg !== "string" || !arg.trim()))) {
-            errors.push(`${prefix}.${field3} must be an array of non-empty strings when provided`);
-          }
-        }
-        if (strategy === "launch-args" && (!Array.isArray(mode.launchArgs) || mode.launchArgs.length === 0)) {
-          errors.push(`${prefix}.launchArgs must be a non-empty array for launch-args strategy`);
-        }
-        if (["safe", "caution", "dangerous"].includes(String(risk)) && deriveAutoApproveModeRisk(mode) === "dangerous") {
-          mode.risk = "dangerous";
-        }
-        if (mode.risk === "dangerous" && (typeof mode.warning !== "string" || !mode.warning.trim())) {
-          errors.push(`${prefix}.warning is required for dangerous modes`);
-        } else if (mode.warning !== void 0 && (typeof mode.warning !== "string" || !mode.warning.trim())) {
-          errors.push(`${prefix}.warning must be a non-empty string when provided`);
-        }
-      }
-      if (defaultModeId && !ids.has(defaultModeId)) {
-        errors.push(`autoApproveModes.default must reference an existing mode id: ${defaultModeId}`);
-      }
-    }
-    function validateHostHandoffCanary(provider, errors) {
-      if (provider.hostHandoffCanary === void 0) return;
-      const spec = provider.hostHandoffCanary;
-      if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
-        errors.push("hostHandoffCanary must be an object");
-        return;
-      }
-      const spawn14 = provider.spawn && typeof provider.spawn === "object" ? provider.spawn : {};
-      const declared = {
-        type: typeof provider.type === "string" ? provider.type : "",
-        spawn: { command: typeof spawn14.command === "string" ? spawn14.command : "" },
-        hostHandoffCanary: spec
-      };
-      const selection = { provider: declared.type };
-      if (Array.isArray(provider.modelLaunchArgs) && provider.modelLaunchArgs.length > 0) selection.model = "selected";
-      if (Array.isArray(provider.thinkingLaunchArgs) && provider.thinkingLaunchArgs.length > 0) selection.thinkingLevel = "selected";
-      const refusal2 = describeCanaryContract(declared, selection);
-      if (refusal2) errors.push(`hostHandoffCanary: ${refusal2}`);
-    }
-    function validateCapabilities(provider, controls, errors) {
-      const capabilities2 = provider.capabilities;
-      if (provider.contractVersion === 2) {
-        if (!capabilities2 || typeof capabilities2 !== "object") {
-          errors.push("contractVersion 2 providers must declare capabilities");
-          return;
-        }
-      }
-      if (!capabilities2 || typeof capabilities2 !== "object") {
-        return;
-      }
-      const input = capabilities2.input;
-      if (input !== void 0) {
-        if (!input || typeof input !== "object") {
-          errors.push("capabilities.input must be an object when provided");
-        } else if (typeof input.multipart !== "boolean") {
-          errors.push("capabilities.input.multipart must be boolean");
-        }
-        if (input && typeof input === "object") {
-          const mediaTypes = Array.isArray(input.mediaTypes) ? input.mediaTypes : void 0;
-          if (!mediaTypes || mediaTypes.length === 0) {
-            errors.push("capabilities.input.mediaTypes must be a non-empty array");
-          } else if (mediaTypes.some((type2) => typeof type2 !== "string" || !VALID_CAPABILITY_MEDIA_TYPES.has(type2))) {
-            errors.push(`capabilities.input.mediaTypes must only include: ${Array.from(VALID_CAPABILITY_MEDIA_TYPES).join(", ")}`);
-          }
-        }
-        if (input && typeof input === "object" && input.strategies !== void 0) {
-          if (!Array.isArray(input.strategies)) {
-            errors.push("capabilities.input.strategies must be an array when provided");
-          } else {
-            for (const strategy of input.strategies) {
-              if (!strategy || typeof strategy !== "object" || Array.isArray(strategy)) {
-                errors.push("capabilities.input.strategies entries must be objects");
-                continue;
-              }
-              const entry = strategy;
-              if (typeof entry.mediaType !== "string" || !VALID_CAPABILITY_MEDIA_TYPES.has(entry.mediaType)) {
-                errors.push(`capabilities.input.strategies.mediaType must only include: ${Array.from(VALID_CAPABILITY_MEDIA_TYPES).join(", ")}`);
-              }
-              for (const field3 of ["strategies", "degradation"]) {
-                const values = entry[field3];
-                if (values === void 0) continue;
-                if (!Array.isArray(values) || values.some((value) => typeof value !== "string" || !VALID_INPUT_STRATEGIES2.has(value))) {
-                  errors.push(`capabilities.input.strategies.${field3} must only include: ${Array.from(VALID_INPUT_STRATEGIES2).join(", ")}`);
-                }
-              }
-              if (entry.native !== void 0 && typeof entry.native !== "boolean") {
-                errors.push("capabilities.input.strategies.native must be boolean when provided");
-              }
-            }
-          }
-        }
-      }
-      const output = capabilities2.output;
-      if (!output || typeof output !== "object") {
-        errors.push("capabilities.output is required");
-      } else {
-        if (typeof output.richContent !== "boolean") {
-          errors.push("capabilities.output.richContent must be boolean");
-        }
-        if (!Array.isArray(output.mediaTypes) || output.mediaTypes.length === 0) {
-          errors.push("capabilities.output.mediaTypes must be a non-empty array");
-        } else if (output.mediaTypes.some((type2) => typeof type2 !== "string" || !VALID_CAPABILITY_MEDIA_TYPES.has(type2))) {
-          errors.push(`capabilities.output.mediaTypes must only include: ${Array.from(VALID_CAPABILITY_MEDIA_TYPES).join(", ")}`);
-        }
-      }
-      const controlCapabilities = capabilities2.controls;
-      if (!controlCapabilities || typeof controlCapabilities !== "object") {
-        errors.push("capabilities.controls is required");
-        return;
-      }
-      if (typeof controlCapabilities.typedResults !== "boolean") {
-        errors.push("capabilities.controls.typedResults must be boolean");
-      }
-      if (controls.length > 0 && controlCapabilities.typedResults !== true) {
-        errors.push("providers declaring controls must set capabilities.controls.typedResults=true");
-      }
-    }
-    function validateNativeHistory(raw, errors) {
-      if (raw === void 0) return;
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-        errors.push("nativeHistory must be an object");
-        return;
-      }
-      const nativeHistory = raw;
-      const format = nativeHistory.format;
-      if (format !== void 0 && (typeof format !== "string" || !format.trim())) {
-        errors.push("nativeHistory.format must be a non-empty string when provided");
-      }
-      const watchPath = nativeHistory.watchPath;
-      if (watchPath !== void 0 && (typeof watchPath !== "string" || !watchPath.trim())) {
-        errors.push("nativeHistory.watchPath must be a non-empty string when provided");
-      }
-      const mode = nativeHistory.mode;
-      if (mode !== void 0 && !["native-source", "materialized-mirror", "disabled"].includes(String(mode))) {
-        errors.push("nativeHistory.mode must be one of: native-source, materialized-mirror, disabled");
-      }
-      const chatContractVersion = nativeHistory.contractVersion;
-      if (chatContractVersion !== void 0 && chatContractVersion !== "1.0" && chatContractVersion !== "2.0") {
-        errors.push(`nativeHistory.contractVersion must be '1.0' or '2.0' when provided (got ${JSON.stringify(chatContractVersion)})`);
-      }
-      const scripts = nativeHistory.scripts;
-      if (scripts === void 0) return;
-      if (!scripts || typeof scripts !== "object" || Array.isArray(scripts)) {
-        errors.push("nativeHistory.scripts must be an object");
-        return;
-      }
-      const scriptConfig = scripts;
-      for (const key7 of ["readSession", "listSessions"]) {
-        const value = scriptConfig[key7];
-        if (typeof value !== "string" || !value.trim()) {
-          errors.push(`nativeHistory.scripts.${key7} must be a non-empty string`);
-        }
-      }
-    }
-    function validateMeshCoordinator(raw, errors) {
-      if (raw === void 0) return;
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-        errors.push("meshCoordinator must be an object");
-        return;
-      }
-      const meshCoordinator = raw;
-      if (typeof meshCoordinator.supported !== "boolean") {
-        errors.push("meshCoordinator.supported must be boolean");
-      }
-      if (meshCoordinator.reason !== void 0 && (typeof meshCoordinator.reason !== "string" || !meshCoordinator.reason.trim())) {
-        errors.push("meshCoordinator.reason must be a non-empty string when provided");
-      }
-      validateMeshCoordinatorMcpConfig(meshCoordinator.mcpConfig, errors);
-      if (meshCoordinator.mcpToolAllow !== void 0) {
-        const allow = meshCoordinator.mcpToolAllow;
-        if (!allow || typeof allow !== "object" || Array.isArray(allow) || allow.format !== "cursor_cli_permissions") {
-          errors.push("meshCoordinator.mcpToolAllow.format must be cursor_cli_permissions");
-        }
-      }
-      validateMeshCoordinatorDelegatedWorkerIsolation(
-        meshCoordinator.delegatedWorkerIsolation,
-        errors,
-        meshCoordinator.mcpConfig
-      );
-    }
-    function validateMeshCoordinatorMcpConfig(mcpConfig, errors) {
-      if (mcpConfig === void 0) return;
-      if (!mcpConfig || typeof mcpConfig !== "object" || Array.isArray(mcpConfig)) {
-        errors.push("meshCoordinator.mcpConfig must be an object");
-        return;
-      }
-      const config = mcpConfig;
-      const mode = config.mode;
-      if (!["auto_import", "manual", "none"].includes(String(mode))) {
-        errors.push("meshCoordinator.mcpConfig.mode must be one of: auto_import, manual, none");
-      }
-      const format = config.format;
-      if (format !== void 0 && !["claude_mcp_json", "opencode_json"].includes(String(format))) {
-        errors.push("meshCoordinator.mcpConfig.format must be one of: claude_mcp_json, opencode_json");
-      }
-      for (const key7 of ["path", "serverName", "configPathCommand", "instructions", "template"]) {
-        const value = config[key7];
-        if (value !== void 0 && (typeof value !== "string" || !value.trim())) {
-          errors.push(`meshCoordinator.mcpConfig.${key7} must be a non-empty string when provided`);
-        }
-      }
-      if (config.requiresRestart !== void 0 && typeof config.requiresRestart !== "boolean") {
-        errors.push("meshCoordinator.mcpConfig.requiresRestart must be boolean when provided");
-      }
-      if (mode === "auto_import") {
-        if (format === void 0) {
-          errors.push("meshCoordinator.mcpConfig.format is required for auto_import MCP setup");
-        }
-        if (typeof config.path !== "string" || !config.path.trim()) {
-          errors.push("meshCoordinator.mcpConfig.path is required for auto_import MCP setup");
-        }
-      }
-      if (mode === "manual") {
-        if (typeof config.instructions !== "string" || !config.instructions.trim()) {
-          errors.push("meshCoordinator.mcpConfig.instructions is required for manual MCP setup");
-        }
-        if (typeof config.template !== "string" || !config.template.trim()) {
-          errors.push("meshCoordinator.mcpConfig.template is required for manual MCP setup");
-        }
-      }
-    }
-    function validateMeshCoordinatorDelegatedWorkerIsolation(raw, errors, rawMcpConfig) {
-      if (raw === void 0) return;
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-        errors.push("meshCoordinator.delegatedWorkerIsolation must be an object");
-        return;
-      }
-      const isolation = raw;
-      const env2 = isolation.env;
-      if (env2 !== void 0) {
-        if (!env2 || typeof env2 !== "object" || Array.isArray(env2)) {
-          errors.push("meshCoordinator.delegatedWorkerIsolation.env must be an object");
-        } else {
-          const unset = env2.unset;
-          if (unset !== void 0 && (!Array.isArray(unset) || unset.some((key7) => typeof key7 !== "string" || !key7.trim()))) {
-            errors.push("meshCoordinator.delegatedWorkerIsolation.env.unset must be an array of non-empty strings");
-          }
-          const set2 = env2.set;
-          if (set2 !== void 0) {
-            if (!set2 || typeof set2 !== "object" || Array.isArray(set2)) {
-              errors.push("meshCoordinator.delegatedWorkerIsolation.env.set must be an object");
-            } else {
-              for (const [key7, value] of Object.entries(set2)) {
-                if (!key7.trim()) {
-                  errors.push("meshCoordinator.delegatedWorkerIsolation.env.set keys must be non-empty strings");
-                  continue;
-                }
-                if (typeof value !== "string" || !value.trim()) {
-                  errors.push(`meshCoordinator.delegatedWorkerIsolation.env.set.${key7} must be a non-empty string (use env.unset to clear a variable)`);
-                }
-              }
-            }
-          }
-        }
-      }
-      const args = isolation.args;
-      if (args !== void 0) {
-        if (!Array.isArray(args)) {
-          errors.push("meshCoordinator.delegatedWorkerIsolation.args must be an array");
-        } else {
-          for (const [index, rule] of args.entries()) {
-            const prefix = `meshCoordinator.delegatedWorkerIsolation.args[${index}]`;
-            if (!rule || typeof rule !== "object" || Array.isArray(rule)) {
-              errors.push(`${prefix} must be an object`);
-              continue;
-            }
-            const item = rule;
-            const mode = item.mode;
-            if (mode !== "empty_mcp_config" && mode !== "config_override" && mode !== "approve_mcp_servers") {
-              errors.push(`${prefix}.mode must be one of: empty_mcp_config, config_override, approve_mcp_servers`);
-              continue;
-            }
-            for (const key7 of mode === "config_override" ? ["flag", "key", "value"] : ["flag"]) {
-              const value = item[key7];
-              if (typeof value !== "string" || !value.trim()) {
-                errors.push(`${prefix}.${key7} must be a non-empty string`);
-              }
-            }
-            for (const key7 of ["strictFlag", "dedupeKey"]) {
-              const value = item[key7];
-              if (value !== void 0 && (typeof value !== "string" || !value.trim())) {
-                errors.push(`${prefix}.${key7} must be a non-empty string when provided`);
-              }
-            }
-            for (const key7 of ["requiresPrivateHome", "withholdWithPrivateHome"]) {
-              const value = item[key7];
-              if (value !== void 0 && typeof value !== "boolean") {
-                errors.push(`${prefix}.${key7} must be a boolean when provided`);
-              }
-            }
-          }
-        }
-      }
-      const delivery = isolation.workerMcpDelivery;
-      if (delivery !== void 0) {
-        const prefix = "meshCoordinator.delegatedWorkerIsolation.workerMcpDelivery";
-        if (!delivery || typeof delivery !== "object" || Array.isArray(delivery)) {
-          errors.push(`${prefix} must be an object`);
-        } else {
-          const item = delivery;
-          if (item.mode !== "config_override") {
-            errors.push(`${prefix}.mode must be config_override`);
-          }
-          for (const key7 of ["flag", "serverName", "commandTemplate", "argsTemplate", "envVarsTemplate", "enabledTemplate"]) {
-            const value = item[key7];
-            if (typeof value !== "string" || !value.trim()) {
-              errors.push(`${prefix}.${key7} must be a non-empty string`);
-            }
-          }
-          const coordinatorServerName = rawMcpConfig && typeof rawMcpConfig === "object" && !Array.isArray(rawMcpConfig) ? rawMcpConfig.serverName : void 0;
-          if (typeof item.serverName === "string" && item.serverName.trim() && typeof coordinatorServerName === "string" && item.serverName.trim() === coordinatorServerName.trim()) {
-            errors.push(`${prefix}.serverName must differ from meshCoordinator.mcpConfig.serverName`);
-          }
-          const shellEnvExcludeTemplate = item.shellEnvExcludeTemplate;
-          if (shellEnvExcludeTemplate !== void 0 && (typeof shellEnvExcludeTemplate !== "string" || !shellEnvExcludeTemplate.trim())) {
-            errors.push(`${prefix}.shellEnvExcludeTemplate must be a non-empty string when provided`);
-          }
-          const approvalModeTemplate = item.approvalModeTemplate;
-          if (approvalModeTemplate !== void 0 && (typeof approvalModeTemplate !== "string" || !approvalModeTemplate.trim())) {
-            errors.push(`${prefix}.approvalModeTemplate must be a non-empty string when provided`);
-          }
-        }
-      }
-    }
-    function validateControl(control, errors) {
-      if (!control || typeof control !== "object") {
-        errors.push("controls: each control must be an object");
-        return;
-      }
-      const id4 = typeof control.id === "string" && control.id.trim() ? control.id.trim() : "unknown";
-      const prefix = `controls.${id4}`;
-      if (!control.id || !String(control.id).trim()) errors.push(`${prefix}: id is required`);
-      if (!control.type) errors.push(`${prefix}: type is required`);
-      if (!control.label || !String(control.label).trim()) errors.push(`${prefix}: label is required`);
-      if (!control.placement) errors.push(`${prefix}: placement is required`);
-      if (control.dynamic && !control.listScript) {
-        errors.push(`${prefix}: dynamic controls require listScript`);
-      }
-      if (VALUE_CONTROL_TYPES.has(control.type) && !control.setScript) {
-        errors.push(`${prefix}: ${control.type} controls require setScript`);
-      }
-      if (control.type === "action" && !control.invokeScript) {
-        errors.push(`${prefix}: action controls require invokeScript`);
-      }
-      if (control.type === "slider") {
-        if (typeof control.min !== "number" || typeof control.max !== "number") {
-          errors.push(`${prefix}: slider controls require numeric min and max`);
-        } else if (control.min > control.max) {
-          errors.push(`${prefix}: slider min cannot exceed max`);
-        }
-      }
-      if (control.readFrom !== void 0 && (typeof control.readFrom !== "string" || !control.readFrom.trim())) {
-        errors.push(`${prefix}: readFrom must be a non-empty string when provided`);
-      }
-    }
+    init_provider_schema3();
     init_provider_loader_support();
     function findProviderDirInternal(ctx, type2) {
       const provider = ctx.providers.get(type2);
@@ -196677,25 +200195,7 @@ ${marker2}`,
       }
     }
     init_config();
-    function normalizeProviderDir(value) {
-      if (typeof value !== "string") return void 0;
-      const trimmed3 = value.trim();
-      return trimmed3 ? trimmed3 : void 0;
-    }
-    function parseProviderSourceConfigUpdate(input) {
-      const updates = {};
-      if (Object.prototype.hasOwnProperty.call(input, "providerSourceMode")) {
-        const { providerSourceMode } = input;
-        if (providerSourceMode !== "normal" && providerSourceMode !== "no-upstream") {
-          return { ok: false, error: "providerSourceMode must be 'normal' or 'no-upstream'" };
-        }
-        updates.providerSourceMode = providerSourceMode;
-      }
-      if (Object.prototype.hasOwnProperty.call(input, "providerDir")) {
-        updates.providerDir = normalizeProviderDir(input.providerDir);
-      }
-      return { ok: true, updates };
-    }
+    init_provider_source_config();
     function parseCliScriptResult(result) {
       if (typeof result === "string") {
         try {
@@ -206018,8 +209518,8 @@ ${marker2}`,
         ...hostTags
       };
       if (meshRecord2.inline) {
-        const crypto25 = await import("crypto");
-        const randomUUID60 = crypto25.randomUUID || crypto25.default && crypto25.default.randomUUID;
+        const crypto26 = await import("crypto");
+        const randomUUID60 = crypto26.randomUUID || crypto26.default && crypto26.default.randomUUID;
         const node2 = {
           id: `node_${randomUUID60().replace(/-/g, "")}`,
           workspace: fields.workspace,
@@ -217720,30 +221220,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       }
     }
     init_logger();
-    function resolveLegacyProviderScript(fn, scriptName, params) {
-      if (typeof fn !== "function") return null;
-      if (params && typeof params === "object" && !Array.isArray(params) && Object.keys(params).length > 0) {
-        const firstVal = Object.values(params)[0];
-        if (scriptName === "sendMessage" && typeof firstVal === "string") {
-          const legacyScript = fn(firstVal);
-          if (legacyScript) return legacyScript;
-        }
-        const script = fn(params);
-        const likelyLegacyObjectLeak = typeof script === "string" && script.includes("[object Object]") && typeof firstVal === "string";
-        if (!likelyLegacyObjectLeak && script) return script;
-        if (firstVal !== void 0) {
-          const legacyScript = fn(firstVal);
-          if (legacyScript) return legacyScript;
-        }
-        if (script) return script;
-        return null;
-      }
-      if (params !== void 0) {
-        const script = fn(params);
-        if (script) return script;
-      }
-      return fn() || null;
-    }
+    init_provider_script_resolver();
     var AUTO_APPROVE_MANUAL_ATTENDANCE_SUPPRESS_MS = 6e4;
     var ManualAttendanceTracker = class {
       constructor(suppressMs = AUTO_APPROVE_MANUAL_ATTENDANCE_SUPPRESS_MS) {
@@ -218790,14 +222267,15 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (!providerType) return { success: false, error: "providerType required" };
         try {
           const http4 = await import("http");
+          const { buildDevServerAuthHeaders: buildDevServerAuthHeaders2, DEV_SERVER_PORT: DEV_SERVER_PORT2 } = await Promise.resolve().then(() => (init_dev_server(), dev_server_exports));
           const postData = JSON.stringify(body);
           const result = await new Promise((resolve82, reject) => {
             const req = http4.request({
               hostname: "127.0.0.1",
-              port: 19280,
+              port: DEV_SERVER_PORT2,
               path: `/api/providers/${providerType}/${endpoint}`,
               method: "POST",
-              headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(postData) }
+              headers: buildDevServerAuthHeaders2({ "Content-Type": "application/json", "Content-Length": Buffer.byteLength(postData) }, DEV_SERVER_PORT2)
             }, (res) => {
               let data = "";
               res.on("data", (chunk) => data += chunk);
@@ -218823,8 +222301,14 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (!providerType) return { success: false, error: "providerType required" };
         try {
           const http4 = await import("http");
+          const { buildDevServerAuthHeaders: buildDevServerAuthHeaders2, DEV_SERVER_PORT: DEV_SERVER_PORT2 } = await Promise.resolve().then(() => (init_dev_server(), dev_server_exports));
           const result = await new Promise((resolve82, reject) => {
-            http4.get(`http://127.0.0.1:19280/api/providers/${providerType}/${endpoint}`, (res) => {
+            http4.get({
+              hostname: "127.0.0.1",
+              port: DEV_SERVER_PORT2,
+              path: `/api/providers/${providerType}/${endpoint}`,
+              headers: buildDevServerAuthHeaders2({}, DEV_SERVER_PORT2)
+            }, (res) => {
               let data = "";
               res.on("data", (chunk) => data += chunk);
               res.on("end", () => {
@@ -218844,14 +222328,15 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       async proxyDevServerScaffold(args) {
         try {
           const http4 = await import("http");
+          const { buildDevServerAuthHeaders: buildDevServerAuthHeaders2, DEV_SERVER_PORT: DEV_SERVER_PORT2 } = await Promise.resolve().then(() => (init_dev_server(), dev_server_exports));
           const postData = JSON.stringify(args || {});
           const result = await new Promise((resolve82, reject) => {
             const req = http4.request({
               hostname: "127.0.0.1",
-              port: 19280,
+              port: DEV_SERVER_PORT2,
               path: "/api/scaffold",
               method: "POST",
-              headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(postData) }
+              headers: buildDevServerAuthHeaders2({ "Content-Type": "application/json", "Content-Length": Buffer.byteLength(postData) }, DEV_SERVER_PORT2)
             }, (res) => {
               let data = "";
               res.on("data", (chunk) => data += chunk);
@@ -220010,8 +223495,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     init_cooperative_gate();
     init_new_work_hold();
     init_config_dir();
-    var fs140 = __toESM2(require("fs"));
-    var path135 = __toESM2(require("path"));
+    var fs144 = __toESM2(require("fs"));
+    var path139 = __toESM2(require("path"));
     init_dist();
     var import_node_crypto79 = require("crypto");
     var ProviderApprovalLifecycle = class {
@@ -220106,9 +223591,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       if (changed) return { ...approval, actionable: false, evidence: "unavailable" };
       return { ...approval, ...identity5, actionable: approval.actionable && (!identity5.taskId || !!identity5.attemptId && identity5.generation !== null) };
     }
-    var fs137 = __toESM2(require("fs"));
+    var fs141 = __toESM2(require("fs"));
     var os47 = __toESM2(require("os"));
-    var path133 = __toESM2(require("path"));
+    var path137 = __toESM2(require("path"));
     init_terminal_screen();
     var import_session_host_core17 = require_dist();
     init_logger();
@@ -220767,9 +224252,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     init_fsm_types();
     init_fsm_loader();
     init_send_submit_engine();
-    var fs130 = __toESM2(require("fs"));
+    var fs134 = __toESM2(require("fs"));
     init_logger();
-    var fs129 = __toESM2(require("fs"));
+    var fs133 = __toESM2(require("fs"));
     init_logger();
     function backgroundTaskSnapshot(state2, detection) {
       if (state2 === "ready" && detection) return detection;
@@ -221075,7 +224560,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     function readTailJsonlLines(filePath2, maxBytes) {
       let stat2;
       try {
-        stat2 = fs129.statSync(filePath2);
+        stat2 = fs133.statSync(filePath2);
       } catch {
         return [];
       }
@@ -221097,14 +224582,14 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         return out2;
       }
       let text11;
-      const fd = fs129.openSync(filePath2, "r");
+      const fd = fs133.openSync(filePath2, "r");
       try {
         const buf = Buffer.alloc(length);
-        const bytes = fs129.readSync(fd, buf, 0, length, start);
+        const bytes = fs133.readSync(fd, buf, 0, length, start);
         text11 = buf.subarray(0, bytes).toString("utf8");
         tailJsonlCacheStats.fileReads++;
       } finally {
-        fs129.closeSync(fd);
+        fs133.closeSync(fd);
       }
       tailJsonlCacheStats.parsePasses++;
       const rawLines = text11.split("\n");
@@ -221140,14 +224625,14 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     async function readTailJsonlLinesAsyncOnce(filePath2, maxBytes, isCurrent) {
       let fd;
       try {
-        fd = await fs129.promises.open(filePath2, "r");
+        fd = await fs133.promises.open(filePath2, "r");
         const before = await fd.stat();
         const signature = tailJsonlSignature(before);
         if (!isCurrent()) return null;
         const cacheKey = `${maxBytes}:${filePath2}`;
         const cached5 = asyncTailJsonlCache.get(cacheKey);
         if (cached5?.snapshot?.signature === signature) {
-          const pathStat = await fs129.promises.stat(filePath2);
+          const pathStat = await fs133.promises.stat(filePath2);
           return isCurrent() && tailJsonlSignature(pathStat) === signature ? cached5.snapshot : null;
         }
         const token = {};
@@ -221165,7 +224650,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           } catch {
           }
         }
-        const after = await fs129.promises.stat(filePath2);
+        const after = await fs133.promises.stat(filePath2);
         if (!isCurrent() || read2.bytesRead !== bytes.length || tailJsonlSignature(after) !== signature || tailJsonlSignature(await fd.stat()) !== signature || asyncTailJsonlCache.get(cacheKey)?.token !== token) return null;
         const snapshot = { signature, records };
         asyncTailJsonlCache.set(cacheKey, { token, snapshot });
@@ -221201,14 +224686,14 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const read2 = (now) => {
         const src = opts.getConfig()?.source;
         if (!src || src.kind !== "jsonl") return { state: "unknown", reason: "no_jsonl_source" };
-        if (!cachedPath || !fs130.existsSync(cachedPath)) {
+        if (!cachedPath || !fs134.existsSync(cachedPath)) {
           const res = resolveJsonlSourcePathDetailed(src, opts.getInput());
           cachedPath = res.path && res.outcome?.ownerConfirmed === true ? res.path : null;
           if (!cachedPath) return { state: "unknown", reason: "rollout_unmapped" };
         }
         let mtime = 0;
         try {
-          mtime = fs130.statSync(cachedPath).mtimeMs;
+          mtime = fs134.statSync(cachedPath).mtimeMs;
         } catch {
           cachedPath = null;
           return { state: "unknown", reason: "rollout_unreadable" };
@@ -221439,17 +224924,17 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     }
     init_logger();
     var import_session_host_core18 = require_dist();
+    var fs139 = __toESM2(require("fs"));
+    var path135 = __toESM2(require("path"));
     var fs135 = __toESM2(require("fs"));
-    var path131 = __toESM2(require("path"));
-    var fs131 = __toESM2(require("fs"));
     var os42 = __toESM2(require("os"));
-    var path127 = __toESM2(require("path"));
-    var crypto19 = __toESM2(require("crypto"));
+    var path131 = __toESM2(require("path"));
+    var crypto20 = __toESM2(require("crypto"));
     init_logger();
     var MAX_SLUG_LENGTH = 40;
     function kimiHome2(env2 = process.env) {
       const override2 = env2.KIMI_CODE_HOME?.trim();
-      return override2 ? override2 : path127.join(os42.homedir(), ".kimi-code");
+      return override2 ? override2 : path131.join(os42.homedir(), ".kimi-code");
     }
     function slugify(input) {
       const lower = input.toLowerCase();
@@ -221459,8 +224944,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     }
     function workspaceTrustKey(realPath) {
       const normalized = realPath.replace(/\\/g, "/").replace(/\/+$/, "");
-      const slug = slugify(path127.basename(normalized));
-      const hash3 = crypto19.createHash("sha256").update(normalized).digest("hex").slice(0, 12);
+      const slug = slugify(path131.basename(normalized));
+      const hash3 = crypto20.createHash("sha256").update(normalized).digest("hex").slice(0, 12);
       return `wd_${slug}_${hash3}`;
     }
     function serializeKimiWorkspaceTrust(realPath, trustedAt = Date.now()) {
@@ -221469,15 +224954,15 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     function applyKimiWorkspaceTrust(workingDir, env2 = process.env) {
       const real3 = realWorkspacePath(workingDir);
       const key7 = workspaceTrustKey(real3);
-      const trustDir = path127.join(kimiHome2(env2), "workspace-trust");
-      const trustFile = path127.join(trustDir, key7);
+      const trustDir = path131.join(kimiHome2(env2), "workspace-trust");
+      const trustFile = path131.join(trustDir, key7);
       try {
-        if (fs131.existsSync(trustFile)) {
+        if (fs135.existsSync(trustFile)) {
           LOG.debug("kimi-workspace-trust", `${real3} already trusted (${key7}) \u2014 no change`);
           return null;
         }
-        fs131.mkdirSync(trustDir, { recursive: true });
-        fs131.writeFileSync(trustFile, serializeKimiWorkspaceTrust(real3), "utf8");
+        fs135.mkdirSync(trustDir, { recursive: true });
+        fs135.writeFileSync(trustFile, serializeKimiWorkspaceTrust(real3), "utf8");
         LOG.info("kimi-workspace-trust", `pre-trusted workspace ${real3} (${key7})`);
         return real3;
       } catch (err2) {
@@ -221485,15 +224970,15 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         return null;
       }
     }
-    var fs132 = __toESM2(require("fs"));
+    var fs136 = __toESM2(require("fs"));
     var os43 = __toESM2(require("os"));
-    var path128 = __toESM2(require("path"));
+    var path132 = __toESM2(require("path"));
     init_logger();
     function grokHome2(env2 = process.env) {
       const override2 = env2.GROK_HOME?.trim();
       if (override2) return override2;
       const home = env2.HOME?.trim();
-      return path128.join(home || os43.homedir(), ".grok");
+      return path132.join(home || os43.homedir(), ".grok");
     }
     function isOverBroadRoot(real3, env2 = process.env) {
       return isOverBroadTrustRoot(real3, grokHome2(env2));
@@ -221532,11 +225017,11 @@ decided_at = ${decidedAt}
         LOG.warn("grok-workspace-trust", `refusing to pre-trust over-broad root ${real3}`);
         return null;
       }
-      const storePath = path128.join(grokHome2(env2), "trusted_folders.toml");
+      const storePath = path132.join(grokHome2(env2), "trusted_folders.toml");
       try {
         let existing = "";
         try {
-          existing = fs132.readFileSync(storePath, "utf8");
+          existing = fs136.readFileSync(storePath, "utf8");
         } catch (err2) {
           if (err2?.code !== "ENOENT") throw err2;
         }
@@ -221544,8 +225029,8 @@ decided_at = ${decidedAt}
         const roots = [.../* @__PURE__ */ new Set([real3, ...repoRoot && !isOverBroadRoot(repoRoot, env2) ? [repoRoot] : []])];
         const decision = planGrokTrustAppend(existing, roots);
         if (decision.refused || !decision.append) return null;
-        fs132.mkdirSync(path128.dirname(storePath), { recursive: true });
-        fs132.appendFileSync(storePath, decision.append, { encoding: "utf8", mode: 384 });
+        fs136.mkdirSync(path132.dirname(storePath), { recursive: true });
+        fs136.appendFileSync(storePath, decision.append, { encoding: "utf8", mode: 384 });
         LOG.info("grok-workspace-trust", `pre-trusted workspace ${real3}`);
         return real3;
       } catch (err2) {
@@ -221553,15 +225038,15 @@ decided_at = ${decidedAt}
         return null;
       }
     }
-    var fs133 = __toESM2(require("fs"));
+    var fs137 = __toESM2(require("fs"));
     var os44 = __toESM2(require("os"));
-    var path129 = __toESM2(require("path"));
+    var path133 = __toESM2(require("path"));
     init_logger();
     function codexHome2(env2 = process.env) {
       const override2 = env2.CODEX_HOME?.trim();
       if (override2) return override2;
       const home = env2.HOME?.trim();
-      return path129.join(home || os44.homedir(), ".codex");
+      return path133.join(home || os44.homedir(), ".codex");
     }
     function isOverBroadRoot2(real3, env2 = process.env) {
       return isOverBroadTrustRoot(real3, codexHome2(env2));
@@ -221575,7 +225060,7 @@ trust_level = "trusted"
 `;
     }
     function codexTrustStorePath(env2 = process.env) {
-      return path129.join(codexHome2(env2), "config.toml");
+      return path133.join(codexHome2(env2), "config.toml");
     }
     function applyCodexWorkspaceTrust(workingDir, env2 = process.env) {
       const real3 = realWorkspacePath(workingDir);
@@ -221587,7 +225072,7 @@ trust_level = "trusted"
       try {
         let existing = "";
         try {
-          existing = fs133.readFileSync(storePath, "utf8");
+          existing = fs137.readFileSync(storePath, "utf8");
         } catch (err2) {
           if (err2?.code !== "ENOENT") throw err2;
         }
@@ -221597,8 +225082,8 @@ trust_level = "trusted"
         }
         const entry = serializeCodexWorkspaceTrust(real3);
         const separator = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
-        fs133.mkdirSync(path129.dirname(storePath), { recursive: true });
-        fs133.appendFileSync(storePath, `${separator}${entry}`, { encoding: "utf8", mode: 384 });
+        fs137.mkdirSync(path133.dirname(storePath), { recursive: true });
+        fs137.appendFileSync(storePath, `${separator}${entry}`, { encoding: "utf8", mode: 384 });
         LOG.info("codex-workspace-trust", `pre-trusted workspace ${real3}`);
         return real3;
       } catch (err2) {
@@ -221606,27 +225091,27 @@ trust_level = "trusted"
         return null;
       }
     }
-    var fs134 = __toESM2(require("fs"));
+    var fs138 = __toESM2(require("fs"));
     var os45 = __toESM2(require("os"));
-    var path130 = __toESM2(require("path"));
-    var crypto20 = __toESM2(require("crypto"));
+    var path134 = __toESM2(require("path"));
+    var crypto21 = __toESM2(require("crypto"));
     init_logger();
     function claudeConfigDir2(env2 = process.env, platform10 = process.platform) {
       const override2 = env2.CLAUDE_CONFIG_DIR?.trim();
       if (override2) return override2;
       const home = platform10 === "win32" ? env2.USERPROFILE?.trim() || env2.HOME?.trim() : env2.HOME?.trim();
-      return path130.join(home || os45.homedir(), ".claude");
+      return path134.join(home || os45.homedir(), ".claude");
     }
     function claudeProjectKey(real3, platform10 = process.platform) {
       if (platform10 !== "win32") return real3;
-      return path130.win32.normalize(real3).replace(/\\/g, "/");
+      return path134.win32.normalize(real3).replace(/\\/g, "/");
     }
     function claudeTrustStorePath(env2 = process.env, platform10 = process.platform) {
-      return path130.join(path130.dirname(claudeConfigDir2(env2, platform10)), ".claude.json");
+      return path134.join(path134.dirname(claudeConfigDir2(env2, platform10)), ".claude.json");
     }
     function readJsonObject(storePath) {
       try {
-        const text11 = fs134.readFileSync(storePath, "utf8");
+        const text11 = fs138.readFileSync(storePath, "utf8");
         if (!text11.trim()) return {};
         const parsed = JSON.parse(text11);
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
@@ -221639,11 +225124,11 @@ trust_level = "trusted"
       }
     }
     function writeJsonObjectAtomic(storePath, data) {
-      fs134.mkdirSync(path130.dirname(storePath), { recursive: true });
-      const tmp = `${storePath}.${process.pid}.${crypto20.randomUUID()}.tmp`;
-      fs134.writeFileSync(tmp, `${JSON.stringify(data, null, 2)}
+      fs138.mkdirSync(path134.dirname(storePath), { recursive: true });
+      const tmp = `${storePath}.${process.pid}.${crypto21.randomUUID()}.tmp`;
+      fs138.writeFileSync(tmp, `${JSON.stringify(data, null, 2)}
 `, "utf8");
-      fs134.renameSync(tmp, storePath);
+      fs138.renameSync(tmp, storePath);
     }
     function applyClaudeWorkspaceTrust(workingDir, env2 = process.env, platform10 = process.platform) {
       const real3 = realWorkspacePath(workingDir);
@@ -221680,28 +225165,28 @@ trust_level = "trusted"
     function applyPreLaunchTrust(trust, plan) {
       const settingsPath = plan.storePath;
       const real3 = plan.workspaceRealpath;
-      if (!path131.isAbsolute(settingsPath) || !path131.isAbsolute(real3)) {
+      if (!path135.isAbsolute(settingsPath) || !path135.isAbsolute(real3)) {
         LOG.warn("pre-launch-trust", "refusing unresolved trust plan with non-absolute paths");
         return null;
       }
       try {
         if ("scheme" in trust) {
           if (trust.scheme === "kimi_workspace_file") {
-            if (fs135.existsSync(settingsPath)) return null;
-            fs135.mkdirSync(path131.dirname(settingsPath), { recursive: true });
-            fs135.writeFileSync(settingsPath, serializeKimiWorkspaceTrust(real3), "utf8");
+            if (fs139.existsSync(settingsPath)) return null;
+            fs139.mkdirSync(path135.dirname(settingsPath), { recursive: true });
+            fs139.writeFileSync(settingsPath, serializeKimiWorkspaceTrust(real3), "utf8");
             return real3;
           }
           if (trust.scheme === "grok_toml_file") {
-            const configRoot = path131.dirname(settingsPath);
+            const configRoot = path135.dirname(settingsPath);
             const root = plan.authorizedRepoRoot?.realpath;
             const roots = [real3, ...root && root !== real3 ? [root] : []];
-            if (roots.some((candidate) => !path131.isAbsolute(candidate) || isOverBroadTrustRoot(candidate, configRoot))) {
+            if (roots.some((candidate) => !path135.isAbsolute(candidate) || isOverBroadTrustRoot(candidate, configRoot))) {
               LOG.warn("pre-launch-trust", `refusing grok trust plan with an over-broad root in ${settingsPath}`);
               return null;
             }
             try {
-              if (fs135.lstatSync(settingsPath).isSymbolicLink()) {
+              if (fs139.lstatSync(settingsPath).isSymbolicLink()) {
                 LOG.warn("pre-launch-trust", `refusing to write grok trust through symlinked store ${settingsPath}`);
                 return null;
               }
@@ -221710,7 +225195,7 @@ trust_level = "trusted"
             }
             let existing2 = "";
             try {
-              existing2 = fs135.readFileSync(settingsPath, "utf8");
+              existing2 = fs139.readFileSync(settingsPath, "utf8");
             } catch (err2) {
               if (err2?.code !== "ENOENT") throw err2;
             }
@@ -221723,15 +225208,15 @@ trust_level = "trusted"
               LOG.debug("pre-launch-trust", `[${settingsPath}] ${real3} already trusted \u2014 no change`);
               return null;
             }
-            fs135.mkdirSync(configRoot, { recursive: true });
-            fs135.appendFileSync(settingsPath, decision.append, { encoding: "utf8", mode: 384 });
+            fs139.mkdirSync(configRoot, { recursive: true });
+            fs139.appendFileSync(settingsPath, decision.append, { encoding: "utf8", mode: 384 });
             LOG.info("pre-launch-trust", `materialized ${plan.origin} grok folder trust in ${settingsPath}` + (root && root !== real3 ? " (with owner-registered repository root)" : ""));
             return real3;
           }
           if (trust.scheme === "codex_toml_file") {
             let existing2 = "";
             try {
-              existing2 = fs135.readFileSync(settingsPath, "utf8");
+              existing2 = fs139.readFileSync(settingsPath, "utf8");
             } catch (err2) {
               if (err2?.code !== "ENOENT") throw err2;
             }
@@ -221741,8 +225226,8 @@ trust_level = "trusted"
               return null;
             }
             const separator = existing2.length === 0 || existing2.endsWith("\n") ? "" : "\n";
-            fs135.mkdirSync(path131.dirname(settingsPath), { recursive: true });
-            fs135.appendFileSync(
+            fs139.mkdirSync(path135.dirname(settingsPath), { recursive: true });
+            fs139.appendFileSync(
               settingsPath,
               `${separator}${serializeCodexWorkspaceTrust(real3)}`,
               { encoding: "utf8", mode: 384 }
@@ -221753,7 +225238,7 @@ trust_level = "trusted"
           if (trust.scheme === "claude_json_projects") {
             let root = {};
             try {
-              const text11 = fs135.readFileSync(settingsPath, "utf8");
+              const text11 = fs139.readFileSync(settingsPath, "utf8");
               if (text11.trim().length > 0) {
                 const parsed2 = JSON.parse(text11);
                 if (parsed2 && typeof parsed2 === "object" && !Array.isArray(parsed2)) {
@@ -221774,11 +225259,11 @@ trust_level = "trusted"
             }
             projects2[projectKey] = { ...existing2, hasTrustDialogAccepted: true };
             root.projects = projects2;
-            fs135.mkdirSync(path131.dirname(settingsPath), { recursive: true });
+            fs139.mkdirSync(path135.dirname(settingsPath), { recursive: true });
             const tmp = `${settingsPath}.${process.pid}.${Date.now()}.tmp`;
-            fs135.writeFileSync(tmp, `${JSON.stringify(root, null, 2)}
+            fs139.writeFileSync(tmp, `${JSON.stringify(root, null, 2)}
 `, "utf8");
-            fs135.renameSync(tmp, settingsPath);
+            fs139.renameSync(tmp, settingsPath);
             LOG.info("pre-launch-trust", `materialized ${plan.origin} claude project trust in ${settingsPath}`);
             return real3;
           }
@@ -221786,8 +225271,8 @@ trust_level = "trusted"
         }
         const key7 = trust.key;
         let parsed = {};
-        if (fs135.existsSync(settingsPath)) {
-          const text11 = fs135.readFileSync(settingsPath, "utf8");
+        if (fs139.existsSync(settingsPath)) {
+          const text11 = fs139.readFileSync(settingsPath, "utf8");
           if (text11.trim().length > 0) {
             const json2 = JSON.parse(text11);
             if (json2 && typeof json2 === "object" && !Array.isArray(json2)) {
@@ -221803,8 +225288,8 @@ trust_level = "trusted"
         }
         list5.push(real3);
         parsed[key7] = list5;
-        fs135.mkdirSync(path131.dirname(settingsPath), { recursive: true });
-        fs135.writeFileSync(settingsPath, `${JSON.stringify(parsed, null, 2)}
+        fs139.mkdirSync(path135.dirname(settingsPath), { recursive: true });
+        fs139.writeFileSync(settingsPath, `${JSON.stringify(parsed, null, 2)}
 `, "utf8");
         LOG.info("pre-launch-trust", `materialized ${plan.origin} workspace trust in ${settingsPath} (key="${key7}")`);
         return real3;
@@ -222228,9 +225713,9 @@ trust_level = "trusted"
         LOG.info("FsmDriver", `[${this.host.specTag()}] stall refocus log summary: ${suppressed} later reinjection(s) suppressed after first ${STALL_REFOCUS_INFO_LIMIT}`);
       }
     };
-    var fs136 = __toESM2(require("fs"));
+    var fs140 = __toESM2(require("fs"));
     var os46 = __toESM2(require("os"));
-    var path132 = __toESM2(require("path"));
+    var path136 = __toESM2(require("path"));
     init_evaluator();
     init_logger();
     init_submit_policy();
@@ -222313,9 +225798,9 @@ trust_level = "trusted"
       const ctl = (spec.control_bar ?? []).find((c) => c.action.type === "attach_image");
       if (!ctl || ctl.action.type !== "attach_image") return;
       const ext = guessExt(mime);
-      const tmp = path132.join(os46.tmpdir(), `adhdev-attach-${Date.now()}${ext}`);
+      const tmp = path136.join(os46.tmpdir(), `adhdev-attach-${Date.now()}${ext}`);
       try {
-        fs136.writeFileSync(tmp, Buffer.from(blob, "base64"));
+        fs140.writeFileSync(tmp, Buffer.from(blob, "base64"));
       } catch {
         return;
       }
@@ -222867,9 +226352,9 @@ trust_level = "trusted"
       }
       armSpecWatcher() {
         try {
-          const dir = path133.dirname(this.opts.specPath);
-          const base = path133.basename(this.opts.specPath);
-          this.specWatcher = fs137.watch(dir, { persistent: false }, (_event, filename) => {
+          const dir = path137.dirname(this.opts.specPath);
+          const base = path137.basename(this.opts.specPath);
+          this.specWatcher = fs141.watch(dir, { persistent: false }, (_event, filename) => {
             if (filename && filename !== base) return;
             const res = loadFsmSpec(this.opts.specPath);
             if (!res.ok) {
@@ -223951,7 +227436,7 @@ ${text11}` : text11;
         return { active: false, count: 0, ids: [], support: "unknown" };
       }
     }
-    var fs139 = __toESM2(require("fs"));
+    var fs143 = __toESM2(require("fs"));
     var import_node_crypto80 = require("crypto");
     init_provider_cli_shared();
     init_logger();
@@ -224043,8 +227528,8 @@ ${text11}` : text11;
     init_logger();
     init_interactive_prompt();
     init_interactive_prompt();
-    var fs138 = __toESM2(require("fs"));
-    var path134 = __toESM2(require("path"));
+    var fs142 = __toESM2(require("fs"));
+    var path138 = __toESM2(require("path"));
     init_logger();
     init_interactive_prompt();
     var TAIL_BYTES3 = 512 * 1024;
@@ -224329,8 +227814,8 @@ ${text11}` : text11;
         const work = (async () => {
           if (!this.configWatcher) {
             try {
-              this.configWatcher = fs138.watch(path134.dirname(specPath), { persistent: false }, (_event, filename) => {
-                if (!filename || String(filename) === path134.basename(specPath)) void this.reloadConfig(this.specPath, false);
+              this.configWatcher = fs142.watch(path138.dirname(specPath), { persistent: false }, (_event, filename) => {
+                if (!filename || String(filename) === path138.basename(specPath)) void this.reloadConfig(this.specPath, false);
               });
               this.configWatcher.on("error", () => {
                 this.configWatcher?.close();
@@ -224342,7 +227827,7 @@ ${text11}` : text11;
           const before = await sourceRevisionAsync(specPath);
           let header;
           try {
-            const raw = JSON.parse(await fs138.promises.readFile(specPath, "utf8"));
+            const raw = JSON.parse(await fs142.promises.readFile(specPath, "utf8"));
             if (!raw || typeof raw !== "object" || raw.id && raw.id !== this.input.agentType) throw new Error("provider mismatch");
             if (raw.native_history?.source && (raw.native_history.source.kind !== "jsonl" || typeof raw.native_history.source.path !== "string")) throw new Error("unsupported source");
             header = { native_history: raw.native_history, interactive_prompts: raw.interactive_prompts };
@@ -224423,9 +227908,9 @@ ${text11}` : text11;
         for (const [p, revision] of revisions) {
           if (revision === "missing") continue;
           try {
-            const watched2 = bound ? path134.dirname(p) : p;
-            const watcher = fs138.watch(watched2, { persistent: false }, (_event, name) => {
-              if (!bound || !name || String(name) === path134.basename(p)) {
+            const watched2 = bound ? path138.dirname(p) : p;
+            const watcher = fs142.watch(watched2, { persistent: false }, (_event, name) => {
+              if (!bound || !name || String(name) === path138.basename(p)) {
                 this.sourceEpoch++;
                 this.markBackgroundPending();
                 this.request();
@@ -224477,7 +227962,7 @@ ${text11}` : text11;
           const p = this.binding.path;
           const before = this.revisions.get(p);
           const now = await sourceRevisionAsync(p);
-          const sidecar2 = cfg.source.workspace_from_sidecar ? path134.resolve(path134.dirname(p), cfg.source.workspace_from_sidecar.rel_path) : void 0;
+          const sidecar2 = cfg.source.workspace_from_sidecar ? path138.resolve(path138.dirname(p), cfg.source.workspace_from_sidecar.rel_path) : void 0;
           const sameIdentity = now.split(":").slice(0, 2).join(":") === before.split(":").slice(0, 2).join(":");
           const sourceChanged = now !== before && (!sameIdentity || Number(now.split(":")[2]) <= Number(before.split(":")[2]));
           if (sourceChanged || sidecar2 && await sourceRevisionAsync(sidecar2) !== this.revisions.get(sidecar2)) {
@@ -224509,7 +227994,7 @@ ${text11}` : text11;
           this.revisions = /* @__PURE__ */ new Map([[result.path, this.evidence.revisions.get(result.path)]]);
           const sidecar2 = cfg.source.workspace_from_sidecar;
           if (sidecar2) {
-            const p = path134.resolve(path134.dirname(result.path), sidecar2.rel_path);
+            const p = path138.resolve(path138.dirname(result.path), sidecar2.rel_path);
             this.revisions.set(p, this.evidence.revisions.get(p));
           }
           this.evidence = { ...this.evidence, candidates: this.evidence.candidates.filter((c) => c.p === result.path), revisions: this.revisions };
@@ -224530,7 +228015,7 @@ ${text11}` : text11;
         }
         const sidecar = cfg.source.workspace_from_sidecar;
         if (sidecar) {
-          const p = path134.resolve(path134.dirname(source2), sidecar.rel_path);
+          const p = path138.resolve(path138.dirname(source2), sidecar.rel_path);
           if (await sourceRevisionAsync(p) !== this.revisions.get(p)) {
             if (valid()) {
               this.invalidate();
@@ -226097,7 +229582,7 @@ ${text11}` : text11;
       attachedExistingRuntime = false;
       constructor(specPath, workingDir, cliArgs, extraEnv, transportFactory, sessionId, manifestTuning, resolvedTrustPlan) {
         this.specPath = specPath;
-        const raw = JSON.parse(fs139.readFileSync(specPath, "utf8"));
+        const raw = JSON.parse(fs143.readFileSync(specPath, "utf8"));
         this.spec = {
           id: raw.id,
           name: raw.name,
@@ -227797,10 +231282,10 @@ ${JSON.stringify(replies)}
     function createCliAdapter(provider, workingDir, cliArgs, extraEnv, transportFactory, sessionId, removeArgs, resolvedTrustPlan, structuredCodex = false) {
       const resolvedSpecPath = provider._resolvedSpecPath;
       const dir = provider._resolvedProviderDir;
-      let specPath = resolvedSpecPath && fs140.existsSync(resolvedSpecPath) ? resolvedSpecPath : void 0;
+      let specPath = resolvedSpecPath && fs144.existsSync(resolvedSpecPath) ? resolvedSpecPath : void 0;
       if (!specPath && dir) {
-        const legacy = path135.join(dir, "spec.json");
-        if (fs140.existsSync(legacy)) specPath = legacy;
+        const legacy = path139.join(dir, "spec.json");
+        if (fs144.existsSync(legacy)) specPath = legacy;
       }
       if (!specPath) {
         throw new Error(formatNoResolvableSpecError(provider.type, dir));
@@ -227816,7 +231301,7 @@ ${JSON.stringify(replies)}
         }
         return new CodexAppServerAdapter(workingDir, sessionId, provider.spawn.command || "codex", cliArgs, { ...process.env, ...extraEnv }, void 0, extraEnv);
       }
-      LOG.info("spec-route", `[${provider.type}] routing through SpecCliAdapter (${path135.relative(dir || "", specPath) || specPath})`);
+      LOG.info("spec-route", `[${provider.type}] routing through SpecCliAdapter (${path139.relative(dir || "", specPath) || specPath})`);
       return new SpecCliAdapter(specPath, workingDir, cliArgs, extraEnv, transportFactory, sessionId, {
         sendDelayMs: provider.sendDelayMs,
         removeArgs,
@@ -228029,7 +231514,7 @@ ${JSON.stringify(replies)}
       if (!boundCompletionMarker(host, watch6.pending)) return;
       host.cancelledCompletionRecheckTimer = setTimeout(() => runCancelledCompletionRecheck(host), 0);
     }
-    var crypto21 = __toESM2(require("crypto"));
+    var crypto22 = __toESM2(require("crypto"));
     init_contracts();
     init_interactive_prompt();
     init_logger();
@@ -228132,7 +231617,7 @@ ${JSON.stringify(replies)}
     init_debug_config();
     init_chat_message_normalization();
     var NATIVE_HISTORY_PENDING_MAX_WAIT_MS = 45e3;
-    var path136 = __toESM2(require("path"));
+    var path140 = __toESM2(require("path"));
     var import_node_module3 = require("module");
     init_dist();
     function isIdleStatus(value) {
@@ -228155,7 +231640,7 @@ ${JSON.stringify(replies)}
     var CachedDatabaseSync = null;
     function getDatabaseSync() {
       if (CachedDatabaseSync) return CachedDatabaseSync;
-      const requireFn = typeof require === "function" ? require : (0, import_node_module3.createRequire)(path136.join(process.cwd(), "__adhdev_sqlite_loader__.js"));
+      const requireFn = typeof require === "function" ? require : (0, import_node_module3.createRequire)(path140.join(process.cwd(), "__adhdev_sqlite_loader__.js"));
       const sqliteModule = requireFn(`node:${"sqlite"}`);
       CachedDatabaseSync = sqliteModule.DatabaseSync;
       if (!CachedDatabaseSync) {
@@ -228476,7 +231961,7 @@ ${JSON.stringify(replies)}
       return { action: "inline_fire", missingEvidence: false };
     }
     var os48 = __toESM2(require("os"));
-    var fs141 = __toESM2(require("fs"));
+    var fs145 = __toESM2(require("fs"));
     function createSqliteProbeCache() {
       return { db: null, dbPath: null, missingUntil: 0 };
     }
@@ -228496,7 +231981,7 @@ ${JSON.stringify(replies)}
       };
       addDir(workingDir);
       try {
-        addDir(fs141.realpathSync.native(workingDir));
+        addDir(fs145.realpathSync.native(workingDir));
       } catch {
       }
       return Array.from(dirs);
@@ -228524,7 +232009,7 @@ ${JSON.stringify(replies)}
       const resolvedDbPath = probe.dbPath.replace(/^~/, os48.homedir());
       const now = Date.now();
       if (host.sqliteProbeCache.missingUntil > now) return null;
-      if (!fs141.existsSync(resolvedDbPath)) {
+      if (!fs145.existsSync(resolvedDbPath)) {
         host.sqliteProbeCache.missingUntil = now + 1e4;
         return null;
       }
@@ -228945,7 +232430,7 @@ ${buttons.join("\n")}`;
       }
       return adapterStatus;
     }
-    var fs142 = __toESM2(require("fs"));
+    var fs146 = __toESM2(require("fs"));
     init_contracts();
     init_chat_message_normalization();
     init_provider_native_history();
@@ -229030,7 +232515,7 @@ ${buttons.join("\n")}`;
       }
       if (host.lastExternalCompletionProbe?.sourcePath) {
         try {
-          fs142.statSync(host.lastExternalCompletionProbe.sourcePath);
+          fs146.statSync(host.lastExternalCompletionProbe.sourcePath);
         } catch {
         }
       }
@@ -231780,7 +235265,7 @@ ${buttons.join("\n")}`;
         this.provider = provider;
         this.workingDir = workingDir;
         this.type = provider.type;
-        this.instanceId = instanceId || crypto21.randomUUID();
+        this.instanceId = instanceId || crypto22.randomUUID();
         this.presentationMode = "chat";
         this.providerSessionId = options?.providerSessionId;
         this.launchMode = options?.launchMode || "new";
@@ -232793,7 +236278,7 @@ ${buttons.join("\n")}`;
     init_input_consume_ack();
     init_mesh_runtime_store();
     var os49 = __toESM2(require("os"));
-    var path138 = __toESM2(require("path"));
+    var path142 = __toESM2(require("path"));
     var import_fs51 = require("fs");
     init_hash();
     init_worker_mcp_isolation();
@@ -232801,23 +236286,23 @@ ${buttons.join("\n")}`;
     init_logger();
     init_git_locale();
     init_mesh_config_store();
-    var crypto22 = __toESM2(require("crypto"));
-    var fs143 = __toESM2(require("fs"));
-    var path137 = __toESM2(require("path"));
+    var crypto23 = __toESM2(require("crypto"));
+    var fs147 = __toESM2(require("fs"));
+    var path141 = __toESM2(require("path"));
     init_config_dir();
     function resolveWorkspaceRealpath(workspace) {
       try {
-        return fs143.realpathSync(workspace);
+        return fs147.realpathSync(workspace);
       } catch {
-        return path137.resolve(workspace);
+        return path141.resolve(workspace);
       }
     }
     function resolveSettingsStorePath(declaredPath, storeHome, workspaceRealpath) {
       const trimmed3 = declaredPath.trim();
-      if (trimmed3 === "~") return path137.resolve(storeHome);
-      if (trimmed3.startsWith("~/")) return path137.resolve(storeHome, trimmed3.slice(2));
-      if (path137.isAbsolute(trimmed3)) return path137.resolve(trimmed3);
-      return path137.resolve(workspaceRealpath, trimmed3);
+      if (trimmed3 === "~") return path141.resolve(storeHome);
+      if (trimmed3.startsWith("~/")) return path141.resolve(storeHome, trimmed3.slice(2));
+      if (path141.isAbsolute(trimmed3)) return path141.resolve(trimmed3);
+      return path141.resolve(workspaceRealpath, trimmed3);
     }
     function resolveLaunchTrustPlan(input) {
       if ("scheme" in input.trust) {
@@ -232826,7 +236311,7 @@ ${buttons.join("\n")}`;
       }
       const workspaceRealpath = resolveWorkspaceRealpath(input.workspace);
       const storePath = resolveSettingsStorePath(input.trust.settings_path, input.storeHome, workspaceRealpath);
-      if (!path137.isAbsolute(storePath)) throw new Error("resolved trust store path must be absolute");
+      if (!path141.isAbsolute(storePath)) throw new Error("resolved trust store path must be absolute");
       return {
         provider: input.provider,
         workspaceRealpath,
@@ -232839,9 +236324,9 @@ ${buttons.join("\n")}`;
     }
     function resolveGrokWorkerTrustPlan(input) {
       const workspaceRealpath = resolveWorkspaceRealpath(input.workspace);
-      const configRoot = path137.resolve(input.storeHome, ".grok");
-      const storePath = path137.join(configRoot, "trusted_folders.toml");
-      if (!path137.isAbsolute(storePath)) throw new Error("resolved trust store path must be absolute");
+      const configRoot = path141.resolve(input.storeHome, ".grok");
+      const storePath = path141.join(configRoot, "trusted_folders.toml");
+      if (!path141.isAbsolute(storePath)) throw new Error("resolved trust store path must be absolute");
       const repoRoot = registeredGrokRepoRoot(input.workspace, input.registeredRepoRoots || []);
       const authorizedRepoRoot = repoRoot && repoRoot !== workspaceRealpath && !isOverBroadTrustRoot(repoRoot, configRoot) ? {
         realpath: repoRoot,
@@ -232862,7 +236347,7 @@ ${buttons.join("\n")}`;
     function loadPreLaunchTrustFromSpecPath(specPath) {
       if (typeof specPath !== "string" || !specPath.trim()) return null;
       try {
-        const parsed = JSON.parse(fs143.readFileSync(specPath, "utf8"));
+        const parsed = JSON.parse(fs147.readFileSync(specPath, "utf8"));
         const trust = parsed?.pre_launch_trust;
         if (!trust || typeof trust !== "object" || Array.isArray(trust)) return null;
         const candidate = trust;
@@ -232879,11 +236364,11 @@ ${buttons.join("\n")}`;
       }
     }
     function resolveWorkerTrustLedgerPath(env2 = process.env, homeDir2) {
-      return path137.join(resolveConfigDir(env2, homeDir2), "trust", "worker-auto-grants.json");
+      return path141.join(resolveConfigDir(env2, homeDir2), "trust", "worker-auto-grants.json");
     }
     function readLedger(ledgerPath) {
       try {
-        const parsed = JSON.parse(fs143.readFileSync(ledgerPath, "utf8"));
+        const parsed = JSON.parse(fs147.readFileSync(ledgerPath, "utf8"));
         if (parsed?.version !== 1 || !Array.isArray(parsed.grants)) {
           throw new Error("unsupported trust ledger format");
         }
@@ -232902,16 +236387,16 @@ ${buttons.join("\n")}`;
       return ledger.grants.find((grant) => grant.provider === plan.provider && grant.workspaceRealpath === plan.workspaceRealpath && grant.scope === "worker" && grant.origin === "worker_auto" && !lifecycleExpired(grant.lifecycle, nowMs2)) || null;
     }
     function writeLedger(ledgerPath, ledger) {
-      fs143.mkdirSync(path137.dirname(ledgerPath), { recursive: true, mode: 448 });
-      const temporaryPath = `${ledgerPath}.${process.pid}.${crypto22.randomUUID()}.tmp`;
+      fs147.mkdirSync(path141.dirname(ledgerPath), { recursive: true, mode: 448 });
+      const temporaryPath = `${ledgerPath}.${process.pid}.${crypto23.randomUUID()}.tmp`;
       try {
-        fs143.writeFileSync(temporaryPath, `${JSON.stringify(ledger, null, 2)}
+        fs147.writeFileSync(temporaryPath, `${JSON.stringify(ledger, null, 2)}
 `, { encoding: "utf8", mode: 384 });
-        fs143.renameSync(temporaryPath, ledgerPath);
-        if (process.platform !== "win32") fs143.chmodSync(ledgerPath, 384);
+        fs147.renameSync(temporaryPath, ledgerPath);
+        if (process.platform !== "win32") fs147.chmodSync(ledgerPath, 384);
       } catch (err2) {
         try {
-          fs143.rmSync(temporaryPath, { force: true });
+          fs147.rmSync(temporaryPath, { force: true });
         } catch {
         }
         throw err2;
@@ -232921,7 +236406,7 @@ ${buttons.join("\n")}`;
       if (plan.scope !== "worker" || plan.origin !== "worker_auto") {
         throw new Error("worker trust ledger accepts only worker_auto/worker plans");
       }
-      if (!path137.isAbsolute(plan.storePath) || !path137.isAbsolute(plan.workspaceRealpath)) {
+      if (!path141.isAbsolute(plan.storePath) || !path141.isAbsolute(plan.workspaceRealpath)) {
         throw new Error("worker trust ledger requires absolute resolved paths");
       }
       const nowMs2 = opts.nowMs ?? Date.now();
@@ -232933,7 +236418,7 @@ ${buttons.join("\n")}`;
       const usage = grant?.usages.find((candidate) => candidate.sessionKey === plan.sessionKey);
       if (!grant) {
         grant = {
-          grantId: crypto22.randomUUID(),
+          grantId: crypto23.randomUUID(),
           provider: plan.provider,
           workspaceRealpath: plan.workspaceRealpath,
           scope: "worker",
@@ -232999,10 +236484,10 @@ ${buttons.join("\n")}`;
       return false;
     }
     function ensureEmptyDelegatedMcpConfig(workspace) {
-      const baseDir = path138.join(os49.tmpdir(), "adhdev-delegated-agent-empty-mcp");
+      const baseDir = path142.join(os49.tmpdir(), "adhdev-delegated-agent-empty-mcp");
       (0, import_fs51.mkdirSync)(baseDir, { recursive: true });
-      const workspaceHash = shortHash(path138.resolve(workspace || os49.tmpdir()));
-      const filePath2 = path138.join(baseDir, `${workspaceHash}.json`);
+      const workspaceHash = shortHash(path142.resolve(workspace || os49.tmpdir()));
+      const filePath2 = path142.join(baseDir, `${workspaceHash}.json`);
       (0, import_fs51.writeFileSync)(filePath2, JSON.stringify({ mcpServers: {} }, null, 2), "utf-8");
       return filePath2;
     }
@@ -233051,15 +236536,15 @@ ${buttons.join("\n")}`;
       }
       const mesh = config?.meshes?.find((entry) => entry?.id === meshId);
       if (!mesh || !Array.isArray(mesh.nodes)) return [];
-      const roots = mesh.nodes.filter((node) => !!node && node.isLocalWorktree !== true && !node.clonedFromNodeId).map((node) => typeof node.workspace === "string" ? node.workspace.trim() : "").filter((workspace) => workspace && path138.isAbsolute(workspace));
+      const roots = mesh.nodes.filter((node) => !!node && node.isLocalWorktree !== true && !node.clonedFromNodeId).map((node) => typeof node.workspace === "string" ? node.workspace.trim() : "").filter((workspace) => workspace && path142.isAbsolute(workspace));
       return [...new Set(roots)];
     }
     function applyGrokPrivateHomeEnv(env2, envUnsets, privateHome, realHome, notes) {
-      if (!envUnsets.has("GROK_HOME")) env2.GROK_HOME = path138.join(privateHome, ".grok");
+      if (!envUnsets.has("GROK_HOME")) env2.GROK_HOME = path142.join(privateHome, ".grok");
       if (!envUnsets.has("GROK_AUTH_PATH") && !env2.GROK_AUTH_PATH) {
-        env2.GROK_AUTH_PATH = path138.join(realHome || os49.homedir(), ".grok", "auth.json");
+        env2.GROK_AUTH_PATH = path142.join(realHome || os49.homedir(), ".grok", "auth.json");
       }
-      notes.push(`grok config root pinned to private ${path138.join(privateHome, ".grok")}; auth via real auth.json`);
+      notes.push(`grok config root pinned to private ${path142.join(privateHome, ".grok")}; auth via real auth.json`);
     }
     function buildCoordinatorDelegatedCliLaunchOptions(input) {
       const cliArgs = Array.isArray(input.cliArgs) ? [...input.cliArgs] : [];
@@ -233120,7 +236605,7 @@ ${buttons.join("\n")}`;
         if (storeHome) {
           const lifecycle = input.trustLifecycle || {
             kind: "worktree",
-            worktreePath: path138.resolve(input.workspace),
+            worktreePath: path142.resolve(input.workspace),
             ...input.trustContext?.meshId ? { meshId: input.trustContext.meshId } : {},
             ...input.trustContext?.nodeId ? { nodeId: input.trustContext.nodeId } : {},
             ...input.trustContext?.taskId ? { taskId: input.trustContext.taskId } : {},
@@ -233272,8 +236757,8 @@ ${buttons.join("\n")}`;
     init_cooperative_gate();
     init_new_work_hold();
     var os51 = __toESM2(require("os"));
-    var path139 = __toESM2(require("path"));
-    var crypto23 = __toESM2(require("crypto"));
+    var path143 = __toESM2(require("path"));
+    var crypto24 = __toESM2(require("crypto"));
     var import_chalk = __toESM2((init_source(), __toCommonJS(source_exports)));
     init_dist();
     init_cli_detector();
@@ -233377,7 +236862,7 @@ ${buttons.join("\n")}`;
     }
     init_track_identity();
     init_standalone_mcp_auth();
-    var fs144 = __toESM2(require("fs"));
+    var fs148 = __toESM2(require("fs"));
     var os50 = __toESM2(require("os"));
     function describeLaunchIdentity(extraEnv, env2 = process.env, userInfo2 = () => os50.userInfo()) {
       let passwd = "ok";
@@ -233390,7 +236875,7 @@ ${buttons.join("\n")}`;
       let homeState = "unset";
       if (home) {
         try {
-          homeState = fs144.statSync(home).isDirectory() ? "dir" : "not_dir";
+          homeState = fs148.statSync(home).isDirectory() ? "dir" : "not_dir";
         } catch {
           homeState = "missing";
         }
@@ -233411,7 +236896,7 @@ ${buttons.join("\n")}`;
     function planSessionStart(host, cliType, workingDir, options) {
       const trimmed3 = (workingDir || "").trim();
       if (!trimmed3) throw new Error("working directory required");
-      const resolvedDir = trimmed3.startsWith("~") ? trimmed3.replace(/^~/, os51.homedir()) : path139.resolve(trimmed3);
+      const resolvedDir = trimmed3.startsWith("~") ? trimmed3.replace(/^~/, os51.homedir()) : path143.resolve(trimmed3);
       const normalizedType = host.providerLoader.resolveAlias(cliType);
       const rawProvider = host.providerLoader.getByAlias(cliType);
       const provider = rawProvider ? host.providerLoader.resolve(normalizedType) || rawProvider : void 0;
@@ -233422,7 +236907,7 @@ ${buttons.join("\n")}`;
 Enable and detect this provider from the Machine Providers page before starting a runtime.`
         );
       }
-      const key7 = options?.presetSessionKey?.trim() || crypto23.randomUUID();
+      const key7 = options?.presetSessionKey?.trim() || crypto24.randomUUID();
       if (provider && provider.category === "cli" && options?.resolvedTrustPlan === void 0) {
         const declaredTrust = loadPreLaunchTrustFromSpecPath(
           provider._resolvedSpecPath
@@ -233830,7 +237315,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           };
         }
       }
-      const delegatedSessionKey = settingsOverride?.launchedByCoordinator === true ? crypto23.randomUUID() : void 0;
+      const delegatedSessionKey = settingsOverride?.launchedByCoordinator === true ? crypto24.randomUUID() : void 0;
       const delegatedMeshId = typeof settingsOverride?.meshNodeFor === "string" ? settingsOverride.meshNodeFor.trim() : "";
       const delegatedLaunch = settingsOverride?.launchedByCoordinator === true ? buildCoordinatorDelegatedCliLaunchOptions({
         cliType,
@@ -236762,3221 +240247,11 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         if (set2.size === 0) index.delete(key7);
       }
     };
+    init_provider_source_config();
     init_io_contracts();
     init_chat_message_normalization();
     init_version_archive();
-    var http3 = __toESM2(require("http"));
-    var fs148 = __toESM2(require("fs"));
-    var path143 = __toESM2(require("path"));
-    init_config();
-    function generateFiles(type2, name, category, opts = {}) {
-      const { cdpPorts, cli, processName, installPath, binary: binary2, extensionId, version: version2 = "0.1" } = opts;
-      if (category === "cli") {
-        const bin = binary2 || type2;
-        const meta3 = {
-          type: type2,
-          name,
-          category,
-          icon: "\u{1F4BB}",
-          binary: bin,
-          spawn: {
-            command: bin,
-            args: [],
-            shell: true
-          },
-          patterns: {
-            prompt: ["^[>$#] "],
-            generating: ["\\.{3}$", "thinking"],
-            approval: ["\\(y\\/n\\)", "approve", "allow"],
-            ready: ["ready"]
-          }
-        };
-        return { "provider.json": JSON.stringify(meta3, null, 2) + "\n" };
-      }
-      const isExtension = category === "extension";
-      const scriptDir = `scripts/${version2}`;
-      const meta2 = {
-        type: type2,
-        name,
-        category,
-        displayName: name,
-        icon: isExtension ? "\u{1F9E9}" : "\u{1F4BB}"
-      };
-      if (cli) meta2.cli = cli;
-      if (cdpPorts) meta2.cdpPorts = cdpPorts;
-      else if (!isExtension) meta2.cdpPorts = [9222, 9223];
-      if (opts.processNames) meta2.processNames = opts.processNames;
-      else if (processName) meta2.processNames = { darwin: processName };
-      if (opts.osPaths) meta2.paths = opts.osPaths;
-      else if (installPath) meta2.paths = { darwin: [installPath] };
-      if (isExtension) {
-        meta2.extensionId = extensionId || `publisher.${type2}`;
-        meta2.extensionIdPattern = `${extensionId || type2}`;
-      } else {
-        meta2.inputMethod = "cdp-type-and-send";
-        meta2.inputSelector = '[contenteditable="true"][role="textbox"]';
-        if (cli) meta2.versionCommand = `${cli} --version`;
-        meta2.providerVersion = "1.0.0";
-        meta2.compatibility = [
-          { ideVersion: `>=${version2}.0`, scriptDir }
-        ];
-        meta2.defaultScriptDir = scriptDir;
-      }
-      const files = {};
-      files[`${scriptDir}/scripts.js`] = `/**
- * ${name} CDP Scripts \u2014 Router
- *
- * Loads individual .js files and invokes with params.
- * Pattern:
- *   - No-params scripts: loaded as-is (IIFE)
- *   - With-params scripts: \`(\${script})(\${JSON.stringify(params)})\`
- */
-
-'use strict';
-
-const fs   = require('fs');
-const path = require('path');
-
-function load(name) {
-    try { return fs.readFileSync(path.join(__dirname, name), 'utf-8'); }
-    catch { return null; }
-}
-
-function withParams(name, params) {
-    const script = load(name);
-    if (!script) return null;
-    return \`(\${script})(\${JSON.stringify(params)})\`;
-}
-
-// \u2500\u2500\u2500 Core (no params \u2014 IIFE) \u2500\u2500\u2500
-
-module.exports.readChat       = () => load('read_chat.js');
-module.exports.sendMessage    = () => load('send_message.js');
-module.exports.listSessions   = () => load('list_sessions.js');
-module.exports.newSession     = () => load('new_session.js');
-module.exports.focusEditor    = () => load('focus_editor.js');
-module.exports.openPanel      = () => load('open_panel.js');
-module.exports.listModels     = () => load('list_models.js');
-module.exports.listModes      = () => load('list_modes.js');
-
-// \u2500\u2500\u2500 With params (function expression) \u2500\u2500\u2500
-
-module.exports.switchSession = (params) => {
-    const index = typeof params === 'number' ? params : params?.index ?? 0;
-    const title = typeof params === 'string' ? params : params?.title || null;
-    return withParams('switch_session.js', { index, title });
-};
-
-module.exports.resolveAction = (params) => {
-    const action = typeof params === 'string' ? params : params?.action || 'approve';
-    const buttonText = params?.button || params?.buttonText
-        || (action === 'approve' ? 'Accept' : action === 'reject' ? 'Reject' : action);
-    return withParams('resolve_action.js', { buttonText });
-};
-
-module.exports.setModel = (params) => {
-    const model = typeof params === 'string' ? params : params?.model;
-    return withParams('set_model.js', { model });
-};
-
-module.exports.setMode = (params) => {
-    const mode = typeof params === 'string' ? params : params?.mode;
-    return withParams('set_mode.js', { mode });
-};
-`;
-      files[`${scriptDir}/read_chat.js`] = `/**
- * ${name} \u2014 read_chat
- *
- * Extract chat messages, status, and approval state from DOM.
- *
- * TODO: Identify via CDP/DevConsole:
- *   1. Chat container selector
- *   2. User message selector + class pattern
- *   3. Assistant message selector + class pattern
- *   4. Status detection (generating/idle/waiting_approval)
- *   5. Approval dialog detection (buttons, modal)
- *   6. Input field selector
- *
- * Preferred live-state surface:
- *   - controlValues: explicit current control selections (model/mode/etc.)
- *   - summaryMetadata: compact always-visible metadata for dashboard/recent views
- * Legacy top-level model/mode output is no longer the preferred shape.
- * \u2192 { id, status, title, messages[], inputContent, activeModal, controlValues?, summaryMetadata? }
- */
-(() => {
-  try {
-    const messages = [];
-    let status = 'idle';
-    let activeModal = null;
-
-    // TODO: Query chat container and extract messages
-    // Example:
-    //   document.querySelectorAll('.chat-message').forEach(el => {
-    //     const role = el.classList.contains('user') ? 'user' : 'assistant';
-    //     messages.push({ role, content: el.innerText.trim(), index: messages.length });
-    //   });
-
-    // TODO: Detect generating state
-    // TODO: Detect approval dialogs -> status = 'waiting_approval'
-
-    const inputEl = document.querySelector('[contenteditable="true"]');
-    const inputContent = inputEl?.innerText?.trim() || '';
-
-    return JSON.stringify({
-      id: 'active',
-      status,
-      title: document.title,
-      messages,
-      inputContent,
-      activeModal,
-      // TODO: Return explicit selections when available, e.g.
-      // controlValues: { model: selectedModel, mode: selectedMode },
-      // summaryMetadata: { items: [{ id: 'model', value: selectedModelLabel || selectedModel, shortValue: selectedModel, order: 10 }] },
-    });
-  } catch(e) {
-    return JSON.stringify({ id: '', status: 'error', messages: [], error: e.message });
-  }
-})()
-`;
-      files[`${scriptDir}/send_message.js`] = `/**
- * ${name} \u2014 send_message
- *
- * For cdp-type-and-send IDEs: returns selector for daemon to type into.
- * \u2192 { sent: false, needsTypeAndSend: true, selector }
- */
-(() => {
-  try {
-    const input = document.querySelector('${meta2.inputSelector || '[contenteditable="true"]'}');
-    if (!input) return JSON.stringify({ sent: false, error: 'Input not found' });
-    return JSON.stringify({
-      sent: false,
-      needsTypeAndSend: true,
-      selector: '${meta2.inputSelector || '[contenteditable="true"]'}',
-    });
-  } catch(e) {
-    return JSON.stringify({ sent: false, error: e.message });
-  }
-})()
-`;
-      files[`${scriptDir}/list_sessions.js`] = `/**
- * ${name} \u2014 list_sessions
- *
- * TODO: Query session/chat list from sidebar.
- * \u2192 { sessions: [{ id, title, active, index }] }
- */
-(() => {
-  try {
-    const sessions = [];
-    // TODO: Find session list container and parse items
-    return JSON.stringify({ sessions });
-  } catch(e) {
-    return JSON.stringify({ sessions: [], error: e.message });
-  }
-})()
-`;
-      files[`${scriptDir}/switch_session.js`] = `/**
- * ${name} \u2014 switch_session
- *
- * params.index: number, params.title: string|null
- * TODO: Click on session in sidebar by title or index.
- * \u2192 { switched: true/false }
- */
-(params) => {
-  try {
-    // TODO: Find session list and click target
-    return JSON.stringify({ switched: false, error: 'Not implemented' });
-  } catch(e) {
-    return JSON.stringify({ switched: false, error: e.message });
-  }
-}
-`;
-      files[`${scriptDir}/new_session.js`] = `/**
- * ${name} \u2014 new_session
- *
- * TODO: Click "New Chat" button.
- * \u2192 { created: true/false }
- */
-(() => {
-  try {
-    const btn = document.querySelector('[aria-label*="New Chat"], [aria-label*="New Composer"]');
-    if (btn) { btn.click(); return JSON.stringify({ created: true }); }
-    return JSON.stringify({ created: false, error: 'New Chat button not found' });
-  } catch(e) {
-    return JSON.stringify({ created: false, error: e.message });
-  }
-})()
-`;
-      files[`${scriptDir}/focus_editor.js`] = `/**
- * ${name} \u2014 focus_editor
- */
-(() => {
-  try {
-    const input = document.querySelector('${meta2.inputSelector || '[contenteditable="true"]'}');
-    if (input) {
-      input.focus();
-      return JSON.stringify({ focused: true });
-    }
-    return JSON.stringify({ focused: false, error: 'not_found' });
-  } catch(e) {
-    return JSON.stringify({ focused: false, error: e.message });
-  }
-})()
-`;
-      files[`${scriptDir}/open_panel.js`] = `/**
- * ${name} \u2014 open_panel
- *
- * TODO: Open chat/AI panel if not visible.
- */
-(() => {
-  try {
-    // TODO: Check if panel visible, if not find toggle button
-    return JSON.stringify({ opened: false, visible: false, error: 'not_found' });
-  } catch(e) {
-    return JSON.stringify({ opened: false, visible: false, error: e.message });
-  }
-})()
-`;
-      files[`${scriptDir}/resolve_action.js`] = `/**
- * ${name} \u2014 resolve_action
- *
- * params.buttonText: string \u2014 button text to find and click.
- * \u2192 { resolved: true/false, clicked? }
- */
-(params) => {
-  try {
-    const btns = [...document.querySelectorAll('button, [role="button"]')].filter(b => b.offsetWidth > 0);
-    const searchText = (params.buttonText || '').toLowerCase();
-    const target = btns.find(b => (b.textContent||'').trim().toLowerCase().includes(searchText));
-    if (target) {
-      target.click();
-      return JSON.stringify({ resolved: true, clicked: target.textContent.trim() });
-    }
-    return JSON.stringify({ resolved: false, available: btns.map(b => b.textContent.trim()).filter(Boolean).slice(0, 10) });
-  } catch(e) { return JSON.stringify({ resolved: false, error: e.message }); }
-}
-`;
-      files[`${scriptDir}/list_models.js`] = `/**
- * ${name} \u2014 list_models
- *
- * TODO: Open model dropdown and extract model list.
- * \u2192 { models[], current }
- */
-(() => {
-  try {
-    return JSON.stringify({ models: [], current: '' });
-  } catch(e) { return JSON.stringify({ models: [], current: '', error: e.message }); }
-})()
-`;
-      files[`${scriptDir}/list_modes.js`] = `/**
- * ${name} \u2014 list_modes
- *
- * TODO: Open mode dropdown and extract mode list.
- * \u2192 { modes[], current }
- */
-(() => {
-  try {
-    return JSON.stringify({ modes: [], current: '' });
-  } catch(e) { return JSON.stringify({ modes: [], current: '', error: e.message }); }
-})()
-`;
-      files[`${scriptDir}/set_model.js`] = `/**
- * ${name} \u2014 set_model
- *
- * params.model: string
- * TODO: Open model dropdown and select target model.
- * \u2192 { success: true/false }
- */
-async (params) => {
-  try {
-    return JSON.stringify({ success: false, error: 'Not implemented' });
-  } catch(e) { return JSON.stringify({ success: false, error: e.message }); }
-}
-`;
-      files[`${scriptDir}/set_mode.js`] = `/**
- * ${name} \u2014 set_mode
- *
- * params.mode: string
- * TODO: Open mode dropdown and select target mode.
- * \u2192 { success: true/false }
- */
-async (params) => {
-  try {
-    return JSON.stringify({ success: false, error: 'Not implemented' });
-  } catch(e) { return JSON.stringify({ success: false, error: e.message }); }
-}
-`;
-      return {
-        "provider.json": JSON.stringify(meta2, null, 2) + "\n",
-        files
-      };
-    }
-    var fs145 = __toESM2(require("fs"));
-    var path140 = __toESM2(require("path"));
-    var CUSTOM_PROVIDERS_DOCS_URL = "https://docs.adhf.dev/guide/custom-providers";
-    var INIT_SCAFFOLDABLE_CATEGORIES = /* @__PURE__ */ new Set(["cli"]);
-    function defaultDisplayName(type2) {
-      return type2.split("-").map((s2) => s2[0]?.toUpperCase() + s2.slice(1)).join(" ");
-    }
-    function defaultBinaryName(type2, explicit) {
-      return explicit || type2.replace(/-cli$/, "");
-    }
-    function buildCliProviderV1Scaffold(options) {
-      const { type: type2 } = options;
-      const name = options.name || defaultDisplayName(type2);
-      const binary2 = defaultBinaryName(type2, options.binary);
-      const manifest = {
-        $schema: "https://registry.adhf.dev/schemas/v1/cli/provider.schema.json",
-        type: type2,
-        name,
-        category: "cli",
-        binary: binary2,
-        spawn: {
-          command: binary2,
-          args: [],
-          shell: false
-        },
-        compatibility: [
-          { ideVersion: ">=0.0.0", spec: "specs/1.0.json" }
-        ]
-      };
-      const spec = {
-        $schema: "adhdev:cli/spec@4",
-        id: type2,
-        name,
-        binary: binary2,
-        send_message: { submit_key: "\r" },
-        states: [
-          { id: "starting", label: "Starting", initial: true, status: "idle" },
-          { id: "idle", label: "Ready", status: "idle" },
-          { id: "busy", label: "Working", status: "generating" }
-        ],
-        transitions: [
-          {
-            label: "startup \u2192 idle",
-            from: "starting",
-            to: "idle",
-            when: { matches: "READY_MARKER_REPLACE_ME" }
-          },
-          {
-            label: "idle \u2192 busy",
-            from: "idle",
-            to: "busy",
-            min_hold_ms: 200,
-            when: { not: { matches: "READY_MARKER_REPLACE_ME" } }
-          },
-          {
-            label: "busy \u2192 idle",
-            from: "busy",
-            to: "idle",
-            min_hold_ms: 300,
-            when: {
-              all: [
-                { matches: "READY_MARKER_REPLACE_ME" },
-                { stable_ms: 500 }
-              ]
-            }
-          }
-        ]
-      };
-      const readme = `# ${name}
-
-ADHDev CLI provider for \`${binary2}\`.
-
-Generated by \`adhdev provider init\` against the v1 contract (provider.v1.json + FSM spec).
-
-**Before this runs for real**, replace every \`READY_MARKER_REPLACE_ME\` in \`specs/1.0.json\` with a regex that actually matches ${binary2}'s idle-prompt output \u2014 the placeholder will never match, so the provider will report "generating" forever until you do.
-
-## Validate
-
-\`\`\`bash
-adhdev provider validate ./
-\`\`\`
-
-## Learn more
-
-${CUSTOM_PROVIDERS_DOCS_URL}
-`;
-      return {
-        manifest,
-        spec,
-        manifestPath: "provider.v1.json",
-        specPath: path140.join("specs", "1.0.json"),
-        readme,
-        binary: binary2,
-        name
-      };
-    }
-    function resolveCliSpecPath(manifestDir, manifest) {
-      const candidates = [];
-      if (Array.isArray(manifest.compatibility)) {
-        for (const entry of manifest.compatibility) {
-          if (typeof entry?.spec === "string") candidates.push(path140.join(manifestDir, entry.spec));
-        }
-      }
-      candidates.push(path140.join(manifestDir, "specs", "default.json"));
-      candidates.push(path140.join(manifestDir, "spec.json"));
-      return candidates.find((p) => fs145.existsSync(p)) || null;
-    }
-    init_version_archive();
-    init_logger();
-    init_builders();
-    var fs146 = __toESM2(require("fs"));
-    var path141 = __toESM2(require("path"));
-    init_logger();
-    async function handleCdpEvaluate(ctx, req, res) {
-      const body = await ctx.readBody(req);
-      const { expression, timeout, ideType } = body;
-      if (!expression) {
-        ctx.json(res, 400, { error: "expression required" });
-        return;
-      }
-      const cdp = ctx.getCdp(ideType);
-      if (!cdp && !ideType) {
-        LOG.warn("DevServer", "CDP evaluate without ideType \u2014 picked first connected manager");
-      }
-      if (!cdp?.isConnected) {
-        ctx.json(res, 503, { error: "No CDP connection available" });
-        return;
-      }
-      try {
-        const raw = await cdp.evaluate(expression, timeout || 3e4);
-        let result = raw;
-        if (typeof raw === "string") {
-          try {
-            result = JSON.parse(raw);
-          } catch {
-          }
-        }
-        ctx.json(res, 200, { result });
-      } catch (e) {
-        ctx.json(res, 500, { error: e.message });
-      }
-    }
-    async function handleCdpClick(ctx, req, res) {
-      const body = await ctx.readBody(req);
-      const { ideType, x, y } = body;
-      if (x == null || y == null) {
-        ctx.json(res, 400, { error: "x and y coordinates required" });
-        return;
-      }
-      const cdp = ctx.getCdp(ideType);
-      if (!cdp?.isConnected) {
-        ctx.json(res, 503, { error: "No CDP connection available" });
-        return;
-      }
-      try {
-        await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
-        await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
-        ctx.json(res, 200, { success: true, clicked: true, x, y });
-      } catch (e) {
-        ctx.json(res, 500, { error: e.message });
-      }
-    }
-    async function handleCdpDomQuery(ctx, req, res) {
-      const body = await ctx.readBody(req);
-      const { selector, limit = 10, ideType } = body;
-      if (!selector) {
-        ctx.json(res, 400, { error: "selector required" });
-        return;
-      }
-      const cdp = ctx.getCdp(ideType);
-      if (!cdp) {
-        ctx.json(res, 503, { error: "No CDP connection available" });
-        return;
-      }
-      const expr = `(() => {
-    try {
-      const els = document.querySelectorAll('${selector.replace(/'/g, "\\'")}');
-      const results = [];
-      for (let i = 0; i < Math.min(els.length, ${limit}); i++) {
-        const el = els[i];
-        results.push({
-          index: i,
-          tag: el.tagName?.toLowerCase(),
-          id: el.id || null,
-          class: el.className && typeof el.className === 'string' ? el.className.trim().slice(0, 200) : null,
-          role: el.getAttribute?.('role') || null,
-          text: (el.textContent || '').trim().slice(0, 100),
-          visible: el.offsetParent !== null || el.offsetWidth > 0,
-          rect: (() => { try { const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; } catch { return null; } })()
-        });
-      }
-      return JSON.stringify({ total: els.length, results });
-    } catch (e) { return JSON.stringify({ error: e.message }); }
-  })()`;
-      try {
-        const raw = await cdp.evaluate(expr, 1e4);
-        const result = typeof raw === "string" ? JSON.parse(raw) : raw;
-        ctx.json(res, 200, result);
-      } catch (e) {
-        ctx.json(res, 500, { error: e.message });
-      }
-    }
-    async function handleScreenshot2(ctx, req, res) {
-      const url = new URL(req.url || "/", "http://localhost");
-      const ideType = url.searchParams.get("ideType") || void 0;
-      const cdp = ctx.getCdp(ideType);
-      if (!cdp) {
-        ctx.json(res, 503, { error: "No CDP connection available" });
-        return;
-      }
-      try {
-        let vpW = 0, vpH = 0;
-        try {
-          const metrics2 = await cdp.send("Page.getLayoutMetrics", {}, 3e3);
-          const vp = metrics2?.cssVisualViewport || metrics2?.visualViewport;
-          if (vp) {
-            vpW = Math.round(vp.clientWidth || vp.width || 0);
-            vpH = Math.round(vp.clientHeight || vp.height || 0);
-          }
-        } catch {
-        }
-        const buf = await cdp.captureScreenshot();
-        if (buf) {
-          res.writeHead(200, {
-            "Content-Type": "image/webp",
-            "X-Viewport-Width": String(vpW),
-            "X-Viewport-Height": String(vpH)
-          });
-          res.end(buf);
-        } else {
-          ctx.json(res, 500, { error: "Screenshot failed" });
-        }
-      } catch (e) {
-        ctx.json(res, 500, { error: e.message });
-      }
-    }
-    async function handleScriptsRun(ctx, req, res) {
-      const body = await ctx.readBody(req);
-      const { type: type2, script: scriptName } = body;
-      if (!type2 || !scriptName) {
-        ctx.json(res, 400, { error: "type and script required" });
-        return;
-      }
-      await ctx.handleRunScript(type2, req, res, body);
-    }
-    async function handleTypeAndSend(ctx, type2, req, res) {
-      const body = await ctx.readBody(req);
-      const { selector, text: text11 } = body;
-      if (!selector || typeof selector !== "string" || !text11 || typeof text11 !== "string") {
-        ctx.json(res, 400, { error: "selector and text strings required" });
-        return;
-      }
-      const cdp = ctx.getCdp(type2);
-      if (!cdp) {
-        ctx.json(res, 503, { error: `CDP not connected for '${type2}'` });
-        return;
-      }
-      try {
-        const sent = await cdp.typeAndSend(selector, text11);
-        ctx.json(res, 200, { sent });
-      } catch (e) {
-        ctx.json(res, 500, { error: e.message });
-      }
-    }
-    async function handleTypeAndSendAt(ctx, type2, req, res) {
-      const body = await ctx.readBody(req);
-      const { x, y, text: text11 } = body;
-      if (typeof x !== "number" || typeof y !== "number" || !text11 || typeof text11 !== "string") {
-        ctx.json(res, 400, { error: "x, y numbers and text string required" });
-        return;
-      }
-      const cdp = ctx.getCdp(type2);
-      if (!cdp) {
-        ctx.json(res, 503, { error: `CDP not connected for '${type2}'` });
-        return;
-      }
-      try {
-        const sent = await cdp.typeAndSendAt(x, y, text11);
-        ctx.json(res, 200, { sent });
-      } catch (e) {
-        ctx.json(res, 500, { error: e.message });
-      }
-    }
-    async function handleScriptHints(ctx, type2, _req, res) {
-      const dir = ctx.findProviderDir(type2);
-      if (!dir) {
-        ctx.json(res, 404, { error: `Provider not found: ${type2}` });
-        return;
-      }
-      let scriptsPath = "";
-      const directScripts = path141.join(dir, "scripts.js");
-      if (fs146.existsSync(directScripts)) {
-        scriptsPath = directScripts;
-      } else {
-        const scriptsDir = path141.join(dir, "scripts");
-        if (fs146.existsSync(scriptsDir)) {
-          const versions = fs146.readdirSync(scriptsDir).filter((d) => {
-            return fs146.statSync(path141.join(scriptsDir, d)).isDirectory();
-          }).sort().reverse();
-          for (const ver of versions) {
-            const p = path141.join(scriptsDir, ver, "scripts.js");
-            if (fs146.existsSync(p)) {
-              scriptsPath = p;
-              break;
-            }
-          }
-        }
-      }
-      if (!scriptsPath) {
-        ctx.json(res, 200, { hints: {} });
-        return;
-      }
-      try {
-        const source2 = fs146.readFileSync(scriptsPath, "utf-8");
-        const hints = {};
-        const funcRegex = /module\.exports\.(\w+)\s*=\s*function\s+\w+\s*\(params\)/g;
-        let match;
-        while ((match = funcRegex.exec(source2)) !== null) {
-          const name = match[1];
-          const startIdx = match.index;
-          const nextFunc = source2.indexOf("module.exports.", startIdx + 1);
-          const funcBody = source2.substring(startIdx, nextFunc > 0 ? nextFunc : source2.length);
-          const paramFields = {};
-          const dotRegex = /params\?\.([a-zA-Z_]+)|params\.([a-zA-Z_]+)/g;
-          let dm;
-          while ((dm = dotRegex.exec(funcBody)) !== null) {
-            const field3 = dm[1] || dm[2];
-            if (field3 === "length") continue;
-            if (!(field3 in paramFields)) {
-              if (/index|count|port|timeout/i.test(field3)) paramFields[field3] = 0;
-              else if (/action|text|title|message|model|mode|button|name|filter/i.test(field3)) paramFields[field3] = "";
-              else paramFields[field3] = "";
-            }
-          }
-          const typeofRegex = /typeof params === 'string' \? params : params\?\.([a-zA-Z_]+)/g;
-          let tm;
-          while ((tm = typeofRegex.exec(funcBody)) !== null) {
-            const field3 = tm[1];
-            if (!(field3 in paramFields)) paramFields[field3] = "";
-          }
-          const numRegex = /typeof params === 'number' \? params : params\?\.([a-zA-Z_]+)/g;
-          let nm;
-          while ((nm = numRegex.exec(funcBody)) !== null) {
-            const field3 = nm[1];
-            if (!(field3 in paramFields)) paramFields[field3] = 0;
-          }
-          const descriptions = {
-            readChat: "No params required",
-            sendMessage: "Text to send to the chat",
-            listSessions: "No params required",
-            switchSession: "Switch by index or title",
-            newSession: "No params required",
-            focusEditor: "No params required",
-            openPanel: "No params required",
-            resolveAction: "Approve/reject action buttons",
-            listNotifications: "Optional message filter",
-            dismissNotification: "Dismiss by index, message, or button",
-            listModels: "No params required",
-            setModel: "Model name to select",
-            listModes: "No params required",
-            setMode: "Mode name to select"
-          };
-          hints[name] = {
-            template: Object.keys(paramFields).length > 0 ? paramFields : {},
-            description: descriptions[name] || (Object.keys(paramFields).length > 0 ? "Params: " + Object.keys(paramFields).join(", ") : "No params")
-          };
-        }
-        ctx.json(res, 200, { hints });
-      } catch (e) {
-        ctx.json(res, 500, { error: e.message });
-      }
-    }
-    async function handleCdpTargets(ctx, _req, res) {
-      const targets = [];
-      for (const [managerKey, cdp] of ctx.cdpManagers.entries()) {
-        const underscore = managerKey.indexOf("_");
-        const ideBase = underscore === -1 ? managerKey : managerKey.slice(0, underscore);
-        targets.push({
-          managerKey,
-          ide: managerKey,
-          ideBase,
-          pageTitle: cdp.pageTitle,
-          targetId: cdp.targetId,
-          connected: cdp.isConnected,
-          port: cdp.getPort()
-        });
-      }
-      ctx.json(res, 200, { targets });
-    }
-    async function handleDomInspect(ctx, req, res) {
-      const body = await ctx.readBody(req);
-      const { x, y, selector, ideType } = body;
-      const cdp = ctx.getCdp(ideType);
-      if (!cdp) {
-        ctx.json(res, 503, { error: "No CDP connection" });
-        return;
-      }
-      const selectorArg = selector ? JSON.stringify(selector) : "null";
-      const inspectScript = `(() => {
-    function gs(el) {
-      if (!el || el === document.body) return 'body';
-      if (el.id) return '#' + CSS.escape(el.id);
-      let s = el.tagName.toLowerCase();
-      if (el.className && typeof el.className === 'string') {
-        const cls = el.className.trim().split(/\\s+/).filter(c => c && !c.startsWith('_')).slice(0, 3);
-        if (cls.length) s += '.' + cls.map(c => CSS.escape(c)).join('.');
-      }
-      const p = el.parentElement;
-      if (p) {
-        const sibs = [...p.children].filter(c => c.tagName === el.tagName);
-        if (sibs.length > 1) s += ':nth-child(' + ([...p.children].indexOf(el) + 1) + ')';
-      }
-      return s;
-    }
-    function gp(el) {
-      const parts = [];
-      let c = el;
-      while (c && c !== document.documentElement) { parts.unshift(gs(c)); c = c.parentElement; }
-      return parts;
-    }
-    function ni(el) {
-      if (!el) return null;
-      const tag = el.tagName?.toLowerCase() || '#text';
-      const attrs = {};
-      if (el.attributes) for (const a of el.attributes) if (a.name !== 'class' && a.name !== 'style') attrs[a.name] = a.value?.substring(0, 200);
-      const cls = (el.className && typeof el.className === 'string') ? el.className.trim().split(/\\s+/).filter(Boolean).slice(0, 10) : [];
-      const text = el.textContent?.trim().substring(0, 150) || '';
-      const dt = [...(el.childNodes||[])].filter(n=>n.nodeType===3).map(n=>n.textContent.trim()).filter(Boolean).join(' ').substring(0,100);
-      const cc = el.children?.length || 0;
-      const r = el.getBoundingClientRect?.();
-      return { tag, cls, attrs, text, directText: dt, childCount: cc, selector: gs(el), fullSelector: gp(el).join(' > '), rect: r ? {x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)} : null };
-    }
-    const sel = ${selectorArg};
-    let el = sel ? document.querySelector(sel) : document.elementFromPoint(${x || 0}, ${y || 0});
-    if (!el) return JSON.stringify({ error: 'No element found' });
-    const info = ni(el);
-    const ancestors = [];
-    let pp = el.parentElement;
-    while (pp && pp !== document.documentElement) {
-      ancestors.push({ tag: pp.tagName.toLowerCase(), selector: gs(pp), cls: (pp.className && typeof pp.className === 'string') ? pp.className.trim().split(/\\s+/).slice(0,3) : [] });
-      pp = pp.parentElement;
-    }
-    const children = [...(el.children||[])].slice(0,50).map(c => ni(c));
-    return JSON.stringify({ element: info, ancestors: ancestors.reverse(), children });
-  })()`;
-      try {
-        const raw = await cdp.evaluate(inspectScript, 1e4);
-        let result = raw;
-        if (typeof raw === "string") {
-          try {
-            result = JSON.parse(raw);
-          } catch {
-          }
-        }
-        ctx.json(res, 200, result);
-      } catch (e) {
-        ctx.json(res, 500, { error: e.message });
-      }
-    }
-    async function handleDomChildren(ctx, req, res) {
-      const body = await ctx.readBody(req);
-      const { selector, ideType } = body;
-      const cdp = ctx.getCdp(ideType);
-      if (!cdp) {
-        ctx.json(res, 503, { error: "No CDP connection" });
-        return;
-      }
-      if (!selector) {
-        ctx.json(res, 400, { error: "selector required" });
-        return;
-      }
-      const script = `(() => {
-    function gs(el) {
-      if (!el || el === document.body) return 'body';
-      if (el.id) return '#' + CSS.escape(el.id);
-      let s = el.tagName.toLowerCase();
-      if (el.className && typeof el.className === 'string') {
-        const cls = el.className.trim().split(/\\s+/).filter(c => c && !c.startsWith('_')).slice(0, 3);
-        if (cls.length) s += '.' + cls.map(c => CSS.escape(c)).join('.');
-      }
-      const p = el.parentElement;
-      if (p) {
-        const sibs = [...p.children].filter(c => c.tagName === el.tagName);
-        if (sibs.length > 1) s += ':nth-child(' + ([...p.children].indexOf(el) + 1) + ')';
-      }
-      return s;
-    }
-    const el = document.querySelector(${JSON.stringify(selector)});
-    if (!el) return JSON.stringify({ error: 'Element not found' });
-    const children = [...(el.children||[])].slice(0,100).map(c => {
-      const tag = c.tagName?.toLowerCase();
-      const cls = (c.className && typeof c.className === 'string') ? c.className.trim().split(/\\s+/).filter(Boolean).slice(0,10) : [];
-      const attrs = {};
-      for (const a of c.attributes) if (a.name!=='class'&&a.name!=='style') attrs[a.name] = a.value?.substring(0,200);
-      const text = c.textContent?.trim().substring(0,150)||'';
-      const dt = [...c.childNodes].filter(n=>n.nodeType===3).map(n=>n.textContent.trim()).filter(Boolean).join(' ').substring(0,100);
-      return { tag, cls, attrs, text, directText: dt, childCount: c.children?.length||0, selector: gs(c) };
-    });
-    return JSON.stringify({ selector: ${JSON.stringify(selector)}, childCount: el.children?.length||0, children });
-  })()`;
-      try {
-        const raw = await cdp.evaluate(script, 1e4);
-        let result = raw;
-        if (typeof raw === "string") {
-          try {
-            result = JSON.parse(raw);
-          } catch {
-          }
-        }
-        ctx.json(res, 200, result);
-      } catch (e) {
-        ctx.json(res, 500, { error: e.message });
-      }
-    }
-    async function handleDomAnalyze(ctx, req, res) {
-      const body = await ctx.readBody(req);
-      const { ideType, selector, x, y } = body;
-      const cdp = ctx.getCdp(ideType);
-      if (!cdp) {
-        ctx.json(res, 503, { error: "No CDP connection" });
-        return;
-      }
-      const selectorArg = selector ? JSON.stringify(selector) : "null";
-      const analyzeScript = `(() => {
-    function gs(el) {
-      if (!el || el === document.body) return 'body';
-      if (el.id) return '#' + CSS.escape(el.id);
-      let s = el.tagName.toLowerCase();
-      if (el.className && typeof el.className === 'string') {
-        const cls = el.className.trim().split(/\\s+/).filter(c => c && !c.startsWith('_')).slice(0, 3);
-        if (cls.length) s += '.' + cls.map(c => CSS.escape(c)).join('.');
-      }
-      return s;
-    }
-    function fp(el) {
-      const parts = [];
-      let c = el;
-      while (c && c !== document.documentElement) { parts.unshift(gs(c)); c = c.parentElement; }
-      return parts.join(' > ');
-    }
-    function sigOf(el) {
-      return el.tagName + '|' + ((el.className && typeof el.className === 'string') ? el.className.trim().split(/\\s+/).filter(c => c && !c.startsWith('_')).sort().join('.') : '');
-    }
-
-    // Find target element
-    const sel = ${selectorArg};
-    let target = sel ? document.querySelector(sel) : document.elementFromPoint(${x || 0}, ${y || 0});
-    if (!target) return JSON.stringify({ error: 'Element not found' });
-
-    const result = {
-      target: { tag: target.tagName.toLowerCase(), selector: fp(target), text: (target.textContent||'').trim().substring(0, 200) },
-      siblingPattern: null,
-      ancestorAnalysis: [],
-      subtreeTexts: [],
-    };
-
-    // 1. Walk UP parents \u2014 at each level, find sibling patterns
-    let el = target;
-    let depth = 0;
-    while (el && el !== document.body && depth < 15) {
-      const parent = el.parentElement;
-      if (!parent) break;
-
-      const mySig = sigOf(el);
-      const siblings = [...parent.children].filter(c => sigOf(c) === mySig);
-      const totalChildren = parent.children.length;
-      const childSel = gs(el).replace(/:nth-child\\(\\d+\\)/, '');
-      const parentSel = fp(parent);
-
-      result.ancestorAnalysis.push({
-        depth,
-        parentTag: parent.tagName.toLowerCase(),
-        parentSelector: parentSel,
-        totalChildren,
-        matchingSiblings: siblings.length,
-        childSelector: childSel,
-        fullSelector: parentSel + ' > ' + childSel,
-      });
-
-      // Best sibling pattern: 3+ matching siblings with text
-      if (!result.siblingPattern && siblings.length >= 3) {
-        const siblingData = siblings.map((s, i) => {
-          const directText = [...s.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent.trim()).filter(Boolean).join(' ').substring(0, 120);
-          const allText = (s.textContent || '').trim().substring(0, 200);
-          const childCount = s.children?.length || 0;
-          const cls = (s.className && typeof s.className === 'string') ? s.className.trim().split(/\\s+/).filter(Boolean) : [];
-          const attrs = {};
-          if (s.attributes) for (const a of s.attributes) {
-            if (a.name !== 'class' && a.name !== 'style' && a.value) attrs[a.name] = a.value.substring(0, 100);
-          }
-          return { index: i, directText, allText, childCount, cls, attrs, tag: s.tagName.toLowerCase() };
-        });
-
-        // Find common attributes across siblings
-        const allAttrs = siblingData.map(s => Object.keys(s.attrs));
-        const commonAttrs = allAttrs[0]?.filter(attr => allAttrs.every(a => a.includes(attr))) || [];
-        // Find varying attributes (data-*, role, etc)
-        const varyingAttrs = {};
-        for (const attr of commonAttrs) {
-          const values = siblingData.map(s => s.attrs[attr]);
-          const unique = [...new Set(values)];
-          if (unique.length > 1) varyingAttrs[attr] = unique.slice(0, 5);
-        }
-
-        result.siblingPattern = {
-          count: siblings.length,
-          selector: parentSel + ' > ' + childSel,
-          parentSelector: parentSel,
-          depthFromTarget: depth,
-          siblings: siblingData.slice(0, 30),
-          commonAttrs,
-          varyingAttrs,
-        };
-      }
-
-      el = parent;
-      depth++;
-    }
-
-    // 2. Collect subtree text nodes from target
-    const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT, null);
-    let node;
-    while ((node = walker.nextNode()) && result.subtreeTexts.length < 30) {
-      const text = node.textContent.trim();
-      if (text.length > 2) {
-        const parentTag = node.parentElement?.tagName?.toLowerCase() || '';
-        const parentCls = (node.parentElement?.className && typeof node.parentElement.className === 'string')
-          ? node.parentElement.className.trim().split(/\\s+/).filter(Boolean).slice(0,3).join('.') : '';
-        result.subtreeTexts.push({
-          text: text.substring(0, 150),
-          parentTag,
-          parentCls,
-          parentSelector: gs(node.parentElement),
-        });
-      }
-    }
-
-    return JSON.stringify(result);
-  })()`;
-      try {
-        const raw = await cdp.evaluate(analyzeScript, 15e3);
-        let result = raw;
-        if (typeof raw === "string") {
-          try {
-            result = JSON.parse(raw);
-          } catch {
-          }
-        }
-        ctx.json(res, 200, result);
-      } catch (e) {
-        ctx.json(res, 500, { error: e.message });
-      }
-    }
-    async function handleFindCommon(ctx, req, res) {
-      const body = await ctx.readBody(req);
-      const { include, exclude, ideType } = body;
-      if (!Array.isArray(include) || include.length === 0) {
-        ctx.json(res, 400, { error: "include[] is required" });
-        return;
-      }
-      const cdp = ctx.getCdp(ideType);
-      if (!cdp) {
-        ctx.json(res, 503, { error: "No CDP connection" });
-        return;
-      }
-      const script = `(() => {
-    const includes = ${JSON.stringify(include)};
-    const excludes = ${JSON.stringify(exclude || [])};
-
-    function gs(el) {
-      if (!el || el === document.body) return 'body';
-      if (el.id) return '#' + CSS.escape(el.id);
-      let s = el.tagName.toLowerCase();
-      if (el.className && typeof el.className === 'string') {
-        const cls = el.className.trim().split(/\\s+/).filter(c => c && !c.startsWith('_')).slice(0, 3);
-        if (cls.length) s += '.' + cls.map(c => CSS.escape(c)).join('.');
-      }
-      return s;
-    }
-    function fp(el) {
-      const parts = [];
-      let c = el;
-      while (c && c !== document.documentElement) { parts.unshift(gs(c)); c = c.parentElement; }
-      return parts.join(' > ');
-    }
-    function sig(el) {
-      return el.tagName + '|' + ((el.className && typeof el.className === 'string') ? el.className.trim() : '');
-    }
-
-    // Step 1: For each include, find all matching leaf elements
-    const includeMatches = includes.map(text => {
-      const lower = text.toLowerCase();
-      const found = [];
-      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
-        acceptNode: n => n.textContent.toLowerCase().includes(lower) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
-      });
-      let node;
-      while ((node = walker.nextNode()) && found.length < 5) {
-        if (node.parentElement) found.push(node.parentElement);
-      }
-      return found;
-    });
-
-    if (includeMatches.some(m => m.length === 0)) {
-      const missing = includes.filter((_, i) => includeMatches[i].length === 0);
-      return JSON.stringify({ results: [], message: 'Text not found: ' + missing.join(', ') });
-    }
-
-    // Step 2: Find LCA for each combination of include elements
-    // For each pair of include[0] element and include[1] element, find their LCA
-    // Then within the LCA, find the direct-child subtree branch for each
-    const containers = [];
-    const seen = new Set();
-
-    function findLCA(el1, el2) {
-      const ancestors1 = new Set();
-      let c = el1;
-      while (c) { ancestors1.add(c); c = c.parentElement; }
-      c = el2;
-      while (c) { if (ancestors1.has(c)) return c; c = c.parentElement; }
-      return document.body;
-    }
-
-    function findDirectChildContaining(parent, descendant) {
-      let c = descendant;
-      while (c && c.parentElement !== parent) c = c.parentElement;
-      return c;
-    }
-
-    // Try all combinations (first 3 matches per include)
-    for (const el1 of includeMatches[0].slice(0, 3)) {
-      for (let ii = 1; ii < includeMatches.length; ii++) {
-        for (const el2 of includeMatches[ii].slice(0, 3)) {
-          if (el1 === el2) continue;
-          const lca = findLCA(el1, el2);
-          if (!lca || lca === document.body || lca === document.documentElement) continue;
-
-          // Find which direct child of LCA contains each include element
-          const child1 = findDirectChildContaining(lca, el1);
-          const child2 = findDirectChildContaining(lca, el2);
-          if (!child1 || !child2 || child1 === child2) continue;
-
-          const lcaSel = fp(lca);
-          if (seen.has(lcaSel)) continue;
-          seen.add(lcaSel);
-
-          // Check exclude
-          if (excludes.length > 0) {
-            const lcaText = (lca.textContent || '').toLowerCase();
-            if (excludes.some(ex => lcaText.includes(ex.toLowerCase()))) continue;
-          }
-
-          // Are child1 and child2 same tag? (relaxed \u2014 ignore classes)
-          const tag1 = child1.tagName;
-          const tag2 = child2.tagName;
-
-          // Bubble up: walk up from LCA, find the best list container
-          // (the one with most repeating same-tag children)
-          let container = lca;
-          let bestContainer = lca;
-          let bestListCount = 0;
-          for (let up = 0; up < 10; up++) {
-            const p = container.parentElement;
-            if (!p || p === document.body || p === document.documentElement) break;
-            // Check how many same-tag siblings 'container' has in parent
-            const myTag = container.tagName;
-            const sibCount = [...p.children].filter(c => c.tagName === myTag).length;
-            if (sibCount > bestListCount) {
-              bestListCount = sibCount;
-              bestContainer = p;
-            }
-            container = p;
-          }
-          container = bestListCount >= 3 ? bestContainer : lca;
-
-          const allChildren = [...container.children];
-          const childTag = tag1 === tag2 ? tag1 : (allChildren.length > 0 ? allChildren[0].tagName : '');
-          const sameTagCount = allChildren.filter(c => c.tagName === childTag).length;
-          const isList = sameTagCount >= 3 && sameTagCount >= allChildren.length * 0.4;
-
-          // Gather all same-tag children as list items
-          const listItems = isList
-            ? allChildren.filter(c => c.tagName === childTag)
-            : allChildren;
-
-          // Filter rendered items (skip virtual scroll placeholders)
-          const rendered = listItems.filter(c => (c.innerText || '').trim().length > 0);
-          const placeholderCount = listItems.length - rendered.length;
-
-          const containerSel = fp(container);
-          if (seen.has(containerSel)) continue;
-          seen.add(containerSel);
-
-          const r = container.getBoundingClientRect();
-          containers.push({
-            selector: containerSel,
-            tag: container.tagName.toLowerCase(),
-            childCount: allChildren.length,
-            listItemCount: listItems.length,
-            renderedCount: rendered.length,
-            placeholderCount,
-            isList,
-            rect: { w: Math.round(r.width), h: Math.round(r.height) },
-            depth: containerSel.split(' > ').length,
-            items: rendered.slice(0, 30).map((el, i) => {
-              const fullText = (el.innerText || el.textContent || '').trim();
-              // Find snippet around first matched include text
-              let text = fullText.substring(0, 200);
-              const matched = [];
-              for (const inc of includes) {
-                const idx = fullText.toLowerCase().indexOf(inc.toLowerCase());
-                if (idx >= 0) {
-                  matched.push(inc);
-                  if (matched.length === 1) {
-                    // Show snippet around first match
-                    const start = Math.max(0, idx - 30);
-                    const end = Math.min(fullText.length, idx + inc.length + 80);
-                    text = (start > 0 ? '...' : '') + fullText.substring(start, end) + (end < fullText.length ? '...' : '');
-                  }
-                }
-              }
-              return {
-                index: i,
-                tag: el.tagName.toLowerCase(),
-                cls: (el.className && typeof el.className === 'string') ? el.className.trim().split(/\\s+/).slice(0, 2).join(' ') : '',
-                text,
-                matchedIncludes: matched,
-                childCount: el.children.length,
-                h: Math.round(el.getBoundingClientRect().height),
-              };
-            }),
-          });
-        }
-      }
-    }
-
-    // Sort: list containers first (more items = better), then by depth
-    containers.sort((a, b) => {
-      if (a.isList !== b.isList) return a.isList ? -1 : 1;
-      return b.listItemCount - a.listItemCount || b.depth - a.depth;
-    });
-
-    return JSON.stringify({
-      results: containers.slice(0, 10),
-      includeCount: includes.length,
-      excludeCount: excludes.length,
-    });
-  })()`;
-      try {
-        const raw = await cdp.evaluate(script, 1e4);
-        let result = raw;
-        if (typeof raw === "string") {
-          try {
-            result = JSON.parse(raw);
-          } catch {
-          }
-        }
-        ctx.json(res, 200, result);
-      } catch (e) {
-        ctx.json(res, 500, { error: e.message });
-      }
-    }
-    async function handleFindByText(ctx, req, res) {
-      const body = await ctx.readBody(req);
-      const { text: text11, ideType, containerSelector } = body;
-      if (!text11 || typeof text11 !== "string") {
-        ctx.json(res, 400, { error: "text is required" });
-        return;
-      }
-      const cdp = ctx.getCdp(ideType);
-      if (!cdp) {
-        ctx.json(res, 503, { error: "No CDP connection" });
-        return;
-      }
-      const containerArg = containerSelector ? JSON.stringify(containerSelector) : "null";
-      const script = `(() => {
-    function gs(el) {
-      if (!el || el === document.body) return 'body';
-      if (el.id) return '#' + CSS.escape(el.id);
-      let s = el.tagName.toLowerCase();
-      if (el.className && typeof el.className === 'string') {
-        const cls = el.className.trim().split(/\\s+/).filter(c => c && !c.startsWith('_')).slice(0, 3);
-        if (cls.length) s += '.' + cls.map(c => CSS.escape(c)).join('.');
-      }
-      return s;
-    }
-    function fp(el) {
-      const parts = [];
-      let c = el;
-      while (c && c !== document.documentElement) { parts.unshift(gs(c)); c = c.parentElement; }
-      return parts.join(' > ');
-    }
-    function parentSig(el) {
-      // Signature: tag+class chain up 3 levels
-      const parts = [];
-      let c = el;
-      for (let i = 0; i < 3 && c; i++) { parts.push(gs(c)); c = c.parentElement; }
-      return parts.join(' < ');
-    }
-
-    const searchText = ${JSON.stringify(text11)}.toLowerCase();
-    const container = ${containerArg} ? document.querySelector(${containerArg}) : document.body;
-    if (!container) return JSON.stringify({ error: 'Container not found' });
-
-    const matches = [];
-    const seen = new Set();
-
-    // Find all text nodes containing the search text
-    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
-      acceptNode: n => n.textContent.toLowerCase().includes(searchText) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
-    });
-    let node;
-    while ((node = walker.nextNode()) && matches.length < 50) {
-      // Walk up to find the most specific visible element
-      let el = node.parentElement;
-      if (!el) continue;
-
-      // Skip hidden elements
-      const r = el.getBoundingClientRect();
-      if (r.width === 0 && r.height === 0) continue;
-
-      const selector = fp(el);
-      if (seen.has(selector)) continue;
-      seen.add(selector);
-
-      // Walk up parent chain \u2014 record each level's selector + sibling count
-      const ancestors = [];
-      let cur = el;
-      let pLvl = cur.parentElement;
-      for (let lvl = 0; lvl < 10 && pLvl && pLvl !== document.body; lvl++) {
-        const mySig = cur.tagName + '|' + ((cur.className && typeof cur.className === 'string') ? cur.className.trim().split(/\\s+/).sort().join('.') : '');
-        const sibs = [...pLvl.children].filter(c => {
-          const sig = c.tagName + '|' + ((c.className && typeof c.className === 'string') ? c.className.trim().split(/\\s+/).sort().join('.') : '');
-          return sig === mySig;
-        });
-        const childSel = gs(cur).replace(/:nth-child\\(\\d+\\)/, '');
-        ancestors.push({
-          parentSelector: fp(pLvl),
-          childSelector: childSel,
-          fullSelector: fp(pLvl) + ' > ' + childSel,
-          siblingCount: sibs.length,
-          parentTag: pLvl.tagName.toLowerCase(),
-        });
-        cur = pLvl;
-        pLvl = pLvl.parentElement;
-      }
-
-      const directText = (node.textContent || '').trim().substring(0, 200);
-      const allText = (node.parentElement.textContent || '').trim().substring(0, 300);
-      const tag = node.parentElement.tagName.toLowerCase();
-      const cls = (node.parentElement.className && typeof node.parentElement.className === 'string')
-        ? node.parentElement.className.trim().split(/\\s+/).filter(Boolean) : [];
-
-      matches.push({
-        selector,
-        tag,
-        cls,
-        directText,
-        allText,
-        ancestors,
-        rect: { w: Math.round(r.width), h: Math.round(r.height) },
-        depth: selector.split(' > ').length,
-      });
-    }
-
-    // Sort: prefer elements with more siblings in ancestry, then fewer depth
-    matches.sort((a, b) => {
-      const aMax = Math.max(1, ...a.ancestors.map(x => x.siblingCount));
-      const bMax = Math.max(1, ...b.ancestors.map(x => x.siblingCount));
-      return (bMax - aMax) || (a.depth - b.depth);
-    });
-
-    return JSON.stringify({ query: ${JSON.stringify(text11)}, matches, total: matches.length });
-  })()`;
-      try {
-        const raw = await cdp.evaluate(script, 1e4);
-        let result = raw;
-        if (typeof raw === "string") {
-          try {
-            result = JSON.parse(raw);
-          } catch {
-          }
-        }
-        ctx.json(res, 200, result);
-      } catch (e) {
-        ctx.json(res, 500, { error: e.message });
-      }
-    }
-    async function handleDomContext(ctx, type2, req, res) {
-      const body = await ctx.readBody(req);
-      const { ideType } = body;
-      const provider = ctx.providerLoader.resolve(type2);
-      if (!provider) {
-        ctx.json(res, 404, { error: `Provider not found: ${type2}` });
-        return;
-      }
-      const cdp = ctx.getCdp(ideType || type2);
-      if (!cdp) {
-        ctx.json(res, 503, { error: "No CDP connection available. Target IDE must be running with CDP enabled." });
-        return;
-      }
-      try {
-        let screenshot2 = null;
-        try {
-          const buf = await cdp.captureScreenshot();
-          if (buf) screenshot2 = buf.toString("base64");
-        } catch {
-        }
-        const domScript = `(() => {
-      function gs(el) {
-        if (!el || el === document.body) return 'body';
-        if (el.id) return '#' + CSS.escape(el.id);
-        let s = el.tagName.toLowerCase();
-        if (el.className && typeof el.className === 'string') {
-          const cls = el.className.trim().split(/\\s+/).filter(c => c && !c.startsWith('_')).slice(0, 3);
-          if (cls.length) s += '.' + cls.map(c => CSS.escape(c)).join('.');
-        }
-        return s;
-      }
-      function fp(el) {
-        const parts = [];
-        let c = el;
-        while (c && c !== document.documentElement) { parts.unshift(gs(c)); c = c.parentElement; }
-        return parts.join(' > ');
-      }
-      function rect(el) {
-        try { const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; }
-        catch { return null; }
-      }
-
-      const result = { contentEditables: [], chatContainers: [], buttons: [], sidebars: [], dropdowns: [], inputs: [] };
-
-      // Content editables + textareas + inputs
-      document.querySelectorAll('[contenteditable], textarea, input[type="text"], input:not([type])').forEach(el => {
-        if (el.offsetWidth === 0 && el.offsetHeight === 0) return;
-        result.contentEditables.push({
-          selector: fp(el),
-          tag: el.tagName.toLowerCase(),
-          contenteditable: el.getAttribute('contenteditable'),
-          role: el.getAttribute('role'),
-          ariaLabel: el.getAttribute('aria-label'),
-          placeholder: el.getAttribute('placeholder'),
-          rect: rect(el),
-          visible: el.offsetParent !== null || el.offsetWidth > 0,
-        });
-      });
-
-      // Chat containers \u2014 large divs with scroll
-      document.querySelectorAll('div, section, main').forEach(el => {
-        const style = getComputedStyle(el);
-        const isScrollable = style.overflowY === 'auto' || style.overflowY === 'scroll';
-        const r = el.getBoundingClientRect();
-        if (!isScrollable || r.height < 200 || r.width < 200) return;
-        const childCount = el.children.length;
-        if (childCount < 2) return;
-        result.chatContainers.push({
-          selector: fp(el),
-          childCount,
-          rect: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
-          hasScrollable: true,
-          scrollTop: Math.round(el.scrollTop),
-          scrollHeight: Math.round(el.scrollHeight),
-        });
-      });
-
-      // Buttons
-      document.querySelectorAll('button, [role="button"]').forEach(el => {
-        if (el.offsetWidth === 0 && el.offsetHeight === 0) return;
-        const text = (el.textContent || '').trim().substring(0, 80);
-        if (!text && !el.getAttribute('aria-label')) return;
-        result.buttons.push({
-          text,
-          ariaLabel: el.getAttribute('aria-label'),
-          selector: fp(el),
-          rect: rect(el),
-          disabled: el.disabled || el.getAttribute('aria-disabled') === 'true',
-        });
-      });
-
-      // Sidebars \u2014 panels on left/right edges
-      document.querySelectorAll('[class*="sidebar"], [class*="side-bar"], [class*="panel"], [role="complementary"], [role="navigation"], aside').forEach(el => {
-        if (el.offsetWidth === 0 && el.offsetHeight === 0) return;
-        const r = el.getBoundingClientRect();
-        if (r.width < 50 || r.height < 200) return;
-        result.sidebars.push({
-          selector: fp(el),
-          position: r.x < window.innerWidth / 3 ? 'left' : r.x > window.innerWidth * 2 / 3 ? 'right' : 'center',
-          rect: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
-          childCount: el.children.length,
-        });
-      });
-
-      // Dropdowns \u2014 select, popover, menu patterns
-      document.querySelectorAll('select, [role="listbox"], [role="menu"], [role="combobox"], [class*="dropdown"], [class*="popover"]').forEach(el => {
-        result.dropdowns.push({
-          selector: fp(el),
-          tag: el.tagName.toLowerCase(),
-          role: el.getAttribute('role'),
-          visible: el.offsetParent !== null || el.offsetWidth > 0,
-          rect: rect(el),
-        });
-      });
-
-      return JSON.stringify(result);
-    })()`;
-        const raw = await cdp.evaluate(domScript, 15e3);
-        let domSnapshot = {};
-        if (typeof raw === "string") {
-          try {
-            domSnapshot = JSON.parse(raw);
-          } catch {
-            domSnapshot = { raw };
-          }
-        } else domSnapshot = raw;
-        ctx.json(res, 200, {
-          screenshot: screenshot2 ? `base64:${screenshot2}` : null,
-          domSnapshot,
-          pageTitle: await cdp.evaluate("document.title", 3e3).catch(() => ""),
-          pageUrl: await cdp.evaluate("window.location.href", 3e3).catch(() => ""),
-          providerType: type2,
-          timestamp: (/* @__PURE__ */ new Date()).toISOString()
-        });
-      } catch (e) {
-        ctx.json(res, 500, { error: `DOM context collection failed: ${e.message}` });
-      }
-    }
-    var fs147 = __toESM2(require("fs"));
-    var path142 = __toESM2(require("path"));
-    function slugifyFixtureName(value) {
-      const normalized = String(value || "").trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-      return normalized || `fixture-${Date.now()}`;
-    }
-    function getCliFixtureDir(ctx, type2) {
-      const providerDir = ctx.providerLoader.findProviderDir(type2);
-      if (!providerDir) {
-        throw new Error(`Provider directory not found for '${type2}'`);
-      }
-      return path142.join(providerDir, "fixtures");
-    }
-    function readCliFixture(ctx, type2, name) {
-      const fixtureDir = getCliFixtureDir(ctx, type2);
-      const filePath2 = path142.join(fixtureDir, `${name}.json`);
-      if (!fs147.existsSync(filePath2)) {
-        throw new Error(`Fixture not found: ${filePath2}`);
-      }
-      return JSON.parse(fs147.readFileSync(filePath2, "utf-8"));
-    }
-    function getExerciseTranscriptText(result) {
-      const parts = [];
-      const debugMessages = Array.isArray(result?.debug?.messages) ? result.debug.messages : [];
-      const traceMessages = Array.isArray(result?.trace?.messages) ? result.trace.messages : [];
-      for (const message of [...debugMessages, ...traceMessages]) {
-        if (!message || typeof message.content !== "string") continue;
-        parts.push(message.content);
-      }
-      if (typeof result?.debug?.partialResponse === "string") parts.push(result.debug.partialResponse);
-      if (typeof result?.trace?.responseBuffer === "string") parts.push(result.trace.responseBuffer);
-      return parts.join("\n");
-    }
-    function getExerciseLastAssistant(result) {
-      const debugMessages = Array.isArray(result?.debug?.messages) ? result.debug.messages : [];
-      const traceMessages = Array.isArray(result?.trace?.messages) ? result.trace.messages : [];
-      for (const messages of [debugMessages, traceMessages]) {
-        for (let i = messages.length - 1; i >= 0; i -= 1) {
-          const message = messages[i];
-          if (message?.role === "assistant" && typeof message.content === "string" && message.content.trim()) {
-            return message.content;
-          }
-        }
-      }
-      return "";
-    }
-    function getExerciseMessageCount(result) {
-      const debugMessages = Array.isArray(result?.debug?.messages) ? result.debug.messages : [];
-      const traceMessages = Array.isArray(result?.trace?.messages) ? result.trace.messages : [];
-      return Math.max(debugMessages.length, traceMessages.length);
-    }
-    function compileFixtureRegex(source2) {
-      const value = String(source2 || "").trim();
-      if (!value) return null;
-      const delimited = value.match(/^\/([\s\S]+)\/([dgimsuvy]*)$/);
-      try {
-        if (delimited) {
-          return new RegExp(delimited[1], delimited[2]);
-        }
-        return new RegExp(value, "m");
-      } catch {
-        return null;
-      }
-    }
-    function statusesContainSequence(actual, expected) {
-      if (!expected.length) return true;
-      let index = 0;
-      for (const status of actual) {
-        if (status === expected[index]) index += 1;
-        if (index >= expected.length) return true;
-      }
-      return false;
-    }
-    function validateCliFixtureResult(result, assertions) {
-      const failures = [];
-      const transcriptText = getExerciseTranscriptText(result);
-      const lastAssistant = getExerciseLastAssistant(result);
-      const mustContainAny = assertions.mustContainAny || [];
-      const mustNotContainAny = assertions.mustNotContainAny || [];
-      const mustMatchAny = assertions.mustMatchAny || [];
-      const mustNotMatchAny = assertions.mustNotMatchAny || [];
-      const lastAssistantMustContainAny = assertions.lastAssistantMustContainAny || [];
-      const lastAssistantMustNotContainAny = assertions.lastAssistantMustNotContainAny || [];
-      const lastAssistantMustMatchAny = assertions.lastAssistantMustMatchAny || [];
-      const lastAssistantMustNotMatchAny = assertions.lastAssistantMustNotMatchAny || [];
-      const statusesSeen = Array.isArray(result?.statusesSeen) ? result.statusesSeen.map((value) => String(value)) : [];
-      if (assertions.requireNotTimedOut !== false && result?.timedOut) {
-        failures.push("Exercise timed out");
-      }
-      const missingRequired = mustContainAny.filter((value) => !transcriptText.includes(value));
-      if (missingRequired.length > 0) {
-        failures.push(`Missing required substrings: ${missingRequired.join(", ")}`);
-      }
-      const presentBanned = mustNotContainAny.filter((value) => transcriptText.includes(value));
-      if (presentBanned.length > 0) {
-        failures.push(`Found banned substrings: ${presentBanned.join(", ")}`);
-      }
-      const missingRegex = mustMatchAny.filter((value) => {
-        const regex = compileFixtureRegex(value);
-        return !regex || !regex.test(transcriptText);
-      });
-      if (missingRegex.length > 0) {
-        failures.push(`Missing required regex matches: ${missingRegex.join(", ")}`);
-      }
-      const presentBannedRegex = mustNotMatchAny.filter((value) => {
-        const regex = compileFixtureRegex(value);
-        return !!regex && regex.test(transcriptText);
-      });
-      if (presentBannedRegex.length > 0) {
-        failures.push(`Found banned regex matches: ${presentBannedRegex.join(", ")}`);
-      }
-      const missingLastAssistant = lastAssistantMustContainAny.filter((value) => !lastAssistant.includes(value));
-      if (missingLastAssistant.length > 0) {
-        failures.push(`Missing required lastAssistant substrings: ${missingLastAssistant.join(", ")}`);
-      }
-      const presentBannedLastAssistant = lastAssistantMustNotContainAny.filter((value) => lastAssistant.includes(value));
-      if (presentBannedLastAssistant.length > 0) {
-        failures.push(`Found banned lastAssistant substrings: ${presentBannedLastAssistant.join(", ")}`);
-      }
-      const missingLastAssistantRegex = lastAssistantMustMatchAny.filter((value) => {
-        const regex = compileFixtureRegex(value);
-        return !regex || !regex.test(lastAssistant);
-      });
-      if (missingLastAssistantRegex.length > 0) {
-        failures.push(`Missing required lastAssistant regex matches: ${missingLastAssistantRegex.join(", ")}`);
-      }
-      const presentBannedLastAssistantRegex = lastAssistantMustNotMatchAny.filter((value) => {
-        const regex = compileFixtureRegex(value);
-        return !!regex && regex.test(lastAssistant);
-      });
-      if (presentBannedLastAssistantRegex.length > 0) {
-        failures.push(`Found banned lastAssistant regex matches: ${presentBannedLastAssistantRegex.join(", ")}`);
-      }
-      if (assertions.statusesSeen?.length && !statusesContainSequence(statusesSeen, assertions.statusesSeen)) {
-        failures.push(`Expected statuses sequence not observed: ${assertions.statusesSeen.join(" -> ")}`);
-      }
-      if (result && typeof result === "object") {
-        result.lastAssistant = lastAssistant;
-      }
-      return failures;
-    }
-    function isCliTargetState(state2) {
-      return state2.category === "cli";
-    }
-    function getCliAdapterFromInstance(instance) {
-      if (!instance) return null;
-      const candidate = instance;
-      if (typeof candidate.getAdapter === "function") return candidate.getAdapter();
-      return candidate.adapter || null;
-    }
-    function getCliProviderResolutionMeta(ctx, type2, adapter) {
-      const adapterMeta = typeof adapter?.getProviderResolutionMeta === "function" ? adapter.getProviderResolutionMeta() : adapter?.getDebugSnapshot?.()?.providerResolution || null;
-      const resolvedProvider = ctx.providerLoader.resolve(type2);
-      if (!adapterMeta && !resolvedProvider) return null;
-      return {
-        type: type2,
-        providerDir: adapterMeta?.providerDir || resolvedProvider?._resolvedProviderDir || ctx.providerLoader.findProviderDir(type2),
-        scriptDir: adapterMeta?.scriptDir || resolvedProvider?._resolvedScriptDir || null,
-        scriptsPath: adapterMeta?.scriptsPath || resolvedProvider?._resolvedScriptsPath || null,
-        scriptsSource: adapterMeta?.scriptsSource || resolvedProvider?._resolvedScriptsSource || null,
-        resolvedVersion: adapterMeta?.resolvedVersion || resolvedProvider?._resolvedVersion || null,
-        resolvedOs: adapterMeta?.resolvedOs || resolvedProvider?._resolvedOs || null,
-        versionWarning: adapterMeta?.versionWarning || resolvedProvider?._versionWarning || null
-      };
-    }
-    function findCliTarget(ctx, type2, instanceId) {
-      if (!ctx.instanceManager) return null;
-      const cliStates = ctx.instanceManager.collectAllStates().filter(isCliTargetState);
-      if (instanceId) return cliStates.find((s2) => s2.instanceId === instanceId) || null;
-      if (!type2) return cliStates[cliStates.length - 1] || null;
-      const matches = cliStates.filter((s2) => s2.type === type2);
-      return matches[matches.length - 1] || null;
-    }
-    function getCliTargetBundle(ctx, type2, instanceId) {
-      if (!ctx.instanceManager) return null;
-      const target2 = findCliTarget(ctx, type2, instanceId);
-      if (!target2) return null;
-      const instance = ctx.instanceManager.getInstance(target2.instanceId);
-      if (!instance) return null;
-      const adapter = getCliAdapterFromInstance(instance);
-      if (!adapter) return null;
-      return { target: target2, instance, adapter };
-    }
-    function sleep2(ms3) {
-      return new Promise((resolve82) => setTimeout(resolve82, ms3));
-    }
-    async function waitForCliReady(ctx, type2, instanceId, timeoutMs) {
-      const startedAt = Date.now();
-      while (Date.now() - startedAt < timeoutMs) {
-        const bundle = getCliTargetBundle(ctx, type2, instanceId);
-        if (bundle) {
-          const debug = typeof bundle.adapter.getDebugSnapshot === "function" ? bundle.adapter.getDebugSnapshot() : null;
-          const adapterReady = !!debug?.ready;
-          const visibleStatusReady = bundle.target.status === "generating" || bundle.target.status === "waiting_approval";
-          const idleReady = bundle.target.status === "idle";
-          if (adapterReady || visibleStatusReady || idleReady) {
-            return bundle;
-          }
-        }
-        await sleep2(100);
-      }
-      return getCliTargetBundle(ctx, type2, instanceId);
-    }
-    async function runCliExerciseInternal(ctx, body) {
-      if (!ctx.cliManager) {
-        throw new Error("CliManager not available");
-      }
-      if (!ctx.instanceManager) {
-        throw new Error("InstanceManager not available");
-      }
-      const {
-        type: type2,
-        text: text11,
-        instanceId: requestedInstanceId,
-        workingDir,
-        args,
-        autoLaunch = true,
-        freshSession = true,
-        autoResolveApprovals = true,
-        approvalButtonIndex = 0,
-        timeoutMs = 45e3,
-        readyTimeoutMs = 15e3,
-        idleSettledMs = 1200,
-        traceLimit = 160,
-        stopWhenDone = false
-      } = body || {};
-      if (!type2) {
-        throw new Error("type required (e.g. claude-cli, codex-cli)");
-      }
-      if (!text11 || typeof text11 !== "string") {
-        throw new Error("text required (prompt to send to the CLI)");
-      }
-      let resolvedInstanceId = requestedInstanceId;
-      if (freshSession) {
-        const staleTargets = ctx.instanceManager.collectAllStates().filter((state2) => state2.category === "cli" && state2.type === type2).map((state2) => state2.instanceId);
-        for (const staleId of staleTargets) {
-          ctx.instanceManager.removeInstance(staleId);
-        }
-        resolvedInstanceId = void 0;
-      }
-      let bundle = getCliTargetBundle(ctx, type2, resolvedInstanceId);
-      if (!bundle && autoLaunch) {
-        const launchArgs = [type2, workingDir || process.cwd(), Array.isArray(args) ? args : []];
-        let launched = null;
-        let lastLaunchError = null;
-        for (let attempt = 1; attempt <= 2; attempt += 1) {
-          try {
-            launched = await ctx.cliManager.startSession(...launchArgs);
-            lastLaunchError = null;
-            break;
-          } catch (error) {
-            lastLaunchError = error instanceof Error ? error : new Error(String(error?.message || error));
-            const message = String(lastLaunchError.message || "");
-            const retryable = /ECONNREFUSED|session-host|Session host/i.test(message);
-            if (!retryable || attempt === 2) break;
-            await sleep2(1e3);
-          }
-        }
-        if (!launched) {
-          throw lastLaunchError || new Error(`Failed to start ${type2}`);
-        }
-        resolvedInstanceId = launched.runtimeSessionId;
-        bundle = await waitForCliReady(ctx, type2, resolvedInstanceId, Math.max(1e3, readyTimeoutMs));
-      }
-      if (!bundle) {
-        throw new Error(`No running instance found for: ${resolvedInstanceId || type2}`);
-      }
-      const initialDebug = typeof bundle.adapter.getDebugSnapshot === "function" ? bundle.adapter.getDebugSnapshot() : null;
-      const initialTrace = typeof bundle.adapter.getTraceState === "function" ? bundle.adapter.getTraceState(traceLimit) : null;
-      const providerResolution = getCliProviderResolutionMeta(ctx, bundle.target.type, bundle.adapter);
-      const preTraceCount = Number(initialTrace?.entryCount || 0);
-      const startAt = Date.now();
-      const statusesSeen = [];
-      const approvalsResolved = [];
-      let lastStatus = "";
-      let lastModalKey = "";
-      let idleSince = 0;
-      let sawBusy = false;
-      const noteStatus = (status) => {
-        if (status !== lastStatus) {
-          statusesSeen.push(status);
-          lastStatus = status;
-        }
-      };
-      const resolveActiveModalIfNeeded = (status, modal) => {
-        if (!autoResolveApprovals || status !== "waiting_approval" || !modal || !Array.isArray(modal.buttons) || modal.buttons.length === 0) {
-          return false;
-        }
-        const clampedIndex = Math.max(0, Math.min(Number(approvalButtonIndex) || 0, modal.buttons.length - 1));
-        const modalKey = JSON.stringify({
-          message: modal.message || "",
-          buttons: modal.buttons,
-          index: clampedIndex
-        });
-        if (modalKey === lastModalKey || typeof bundle?.adapter?.resolveModal !== "function") {
-          return false;
-        }
-        lastModalKey = modalKey;
-        approvalsResolved.push({
-          at: Date.now(),
-          buttonIndex: clampedIndex,
-          label: modal.buttons[clampedIndex] || null
-        });
-        bundle.adapter.resolveModal(clampedIndex);
-        return true;
-      };
-      const preflightStartedAt = Date.now();
-      while (Date.now() - preflightStartedAt < Math.max(1e3, readyTimeoutMs)) {
-        bundle = getCliTargetBundle(ctx, type2, bundle.target.instanceId);
-        if (!bundle) {
-          throw new Error("CLI instance disappeared before exercise send");
-        }
-        const debug = typeof bundle.adapter.getDebugSnapshot === "function" ? bundle.adapter.getDebugSnapshot() : null;
-        const trace = typeof bundle.adapter.getTraceState === "function" ? bundle.adapter.getTraceState(traceLimit) : null;
-        const status = String(debug?.status || bundle.target.status || "unknown");
-        const modal = debug?.activeModal || trace?.activeModal || null;
-        noteStatus(status);
-        if (resolveActiveModalIfNeeded(status, modal)) {
-          await sleep2(150);
-          continue;
-        }
-        if (status === "idle") break;
-        await sleep2(150);
-      }
-      ctx.instanceManager.sendEvent(bundle.target.instanceId, "send_message", { text: text11 });
-      while (Date.now() - startAt < Math.max(1e3, timeoutMs)) {
-        await sleep2(150);
-        bundle = getCliTargetBundle(ctx, type2, bundle.target.instanceId);
-        if (!bundle) {
-          throw new Error("CLI instance disappeared during exercise");
-        }
-        const debug = typeof bundle.adapter.getDebugSnapshot === "function" ? bundle.adapter.getDebugSnapshot() : null;
-        const trace = typeof bundle.adapter.getTraceState === "function" ? bundle.adapter.getTraceState(traceLimit) : null;
-        const status = String(debug?.status || bundle.target.status || "unknown");
-        const traceEntries = Array.isArray(trace?.entries) ? trace.entries : [];
-        const sawSendMessage = traceEntries.some((entry) => entry?.type === "send_message");
-        const sawSubmitWrite = traceEntries.some((entry) => entry?.type === "submit_write");
-        const hasTurnStarted = sawSendMessage || sawSubmitWrite;
-        noteStatus(status);
-        if (status === "generating" || status === "waiting_approval") {
-          sawBusy = true;
-          idleSince = 0;
-        }
-        const modal = debug?.activeModal || trace?.activeModal || null;
-        if (resolveActiveModalIfNeeded(status, modal)) {
-          continue;
-        }
-        const traceCount = Number(trace?.entryCount || 0);
-        const hasProgress = hasTurnStarted && (traceCount > preTraceCount || statusesSeen.length > 1 || approvalsResolved.length > 0);
-        if (status === "idle" && hasProgress && sawBusy) {
-          if (!idleSince) idleSince = Date.now();
-          if (Date.now() - idleSince >= Math.max(200, idleSettledMs)) {
-            const payload2 = {
-              exercised: true,
-              instanceId: bundle.target.instanceId,
-              providerState: {
-                type: bundle.target.type,
-                name: bundle.target.name,
-                status: bundle.target.status,
-                mode: "mode" in bundle.target ? bundle.target.mode : void 0
-              },
-              providerResolution,
-              initialDebug,
-              initialTrace,
-              debug,
-              trace,
-              statusesSeen,
-              approvalsResolved,
-              elapsedMs: Date.now() - startAt,
-              timedOut: false
-            };
-            payload2.lastAssistant = getExerciseLastAssistant(payload2);
-            payload2.messageCount = getExerciseMessageCount(payload2);
-            if (stopWhenDone) {
-              ctx.instanceManager.removeInstance(bundle.target.instanceId);
-            }
-            return payload2;
-          }
-        } else if (status === "idle" && hasProgress) {
-          if (!idleSince) idleSince = Date.now();
-          if (Date.now() - idleSince >= Math.max(500, idleSettledMs) && Date.now() - startAt >= 750) {
-            const payload2 = {
-              exercised: true,
-              instanceId: bundle.target.instanceId,
-              providerState: {
-                type: bundle.target.type,
-                name: bundle.target.name,
-                status: bundle.target.status,
-                mode: "mode" in bundle.target ? bundle.target.mode : void 0
-              },
-              providerResolution,
-              initialDebug,
-              initialTrace,
-              debug,
-              trace,
-              statusesSeen,
-              approvalsResolved,
-              elapsedMs: Date.now() - startAt,
-              timedOut: false
-            };
-            payload2.lastAssistant = getExerciseLastAssistant(payload2);
-            payload2.messageCount = getExerciseMessageCount(payload2);
-            if (stopWhenDone) {
-              ctx.instanceManager.removeInstance(bundle.target.instanceId);
-            }
-            return payload2;
-          }
-        } else {
-          idleSince = 0;
-        }
-      }
-      const finalBundle = getCliTargetBundle(ctx, type2, bundle.target.instanceId) || bundle;
-      const finalDebug = typeof finalBundle.adapter.getDebugSnapshot === "function" ? finalBundle.adapter.getDebugSnapshot() : null;
-      const finalTrace = typeof finalBundle.adapter.getTraceState === "function" ? finalBundle.adapter.getTraceState(traceLimit) : null;
-      if (stopWhenDone) {
-        ctx.instanceManager.removeInstance(finalBundle.target.instanceId);
-      }
-      const payload = {
-        exercised: true,
-        instanceId: finalBundle.target.instanceId,
-        providerState: {
-          type: finalBundle.target.type,
-          name: finalBundle.target.name,
-          status: finalBundle.target.status,
-          mode: "mode" in finalBundle.target ? finalBundle.target.mode : void 0
-        },
-        providerResolution: getCliProviderResolutionMeta(ctx, finalBundle.target.type, finalBundle.adapter),
-        initialDebug,
-        initialTrace,
-        debug: finalDebug,
-        trace: finalTrace,
-        statusesSeen,
-        approvalsResolved,
-        elapsedMs: Date.now() - startAt,
-        timedOut: true
-      };
-      payload.lastAssistant = getExerciseLastAssistant(payload);
-      payload.messageCount = getExerciseMessageCount(payload);
-      return payload;
-    }
-    async function handleCliStatus(ctx, _req, res) {
-      if (!ctx.instanceManager) {
-        ctx.json(res, 503, { error: "InstanceManager not available (daemon not fully initialized)" });
-        return;
-      }
-      const allStates = ctx.instanceManager.collectAllStates();
-      const cliStates = allStates.filter((s2) => s2.category === "cli");
-      const result = cliStates.map((s2) => ({
-        instanceId: s2.instanceId,
-        type: s2.type,
-        name: s2.name,
-        category: s2.category,
-        status: s2.status,
-        mode: s2.mode,
-        workspace: s2.workspace,
-        messageCount: s2.activeChat?.messages?.length || 0,
-        lastMessage: s2.activeChat?.messages?.slice(-1)[0] || null,
-        activeModal: s2.activeChat?.activeModal || null,
-        settings: s2.settings
-      }));
-      ctx.json(res, 200, { instances: result, count: result.length });
-    }
-    async function handleCliLaunch(ctx, req, res) {
-      if (!ctx.cliManager) {
-        ctx.json(res, 503, { error: "CliManager not available" });
-        return;
-      }
-      const body = await ctx.readBody(req);
-      const { type: type2, workingDir, args } = body;
-      if (!type2) {
-        ctx.json(res, 400, { error: "type required (e.g. claude-cli, antigravity-cli)" });
-        return;
-      }
-      try {
-        await ctx.cliManager.startSession(type2, workingDir || process.cwd(), args || []);
-        ctx.json(res, 200, { launched: true, type: type2, workspace: workingDir || process.cwd() });
-      } catch (e) {
-        ctx.json(res, 500, { error: `Launch failed: ${e.message}` });
-      }
-    }
-    async function handleCliSend(ctx, req, res) {
-      if (!ctx.instanceManager) {
-        ctx.json(res, 503, { error: "InstanceManager not available" });
-        return;
-      }
-      const body = await ctx.readBody(req);
-      const { type: type2, text: text11, instanceId } = body;
-      if (!text11) {
-        ctx.json(res, 400, { error: "text required" });
-        return;
-      }
-      const target2 = findCliTarget(ctx, type2, instanceId);
-      if (!target2) {
-        ctx.json(res, 404, { error: `No running instance found for: ${type2 || instanceId}` });
-        return;
-      }
-      try {
-        if (target2.category === "cli") {
-          const bundle = getCliTargetBundle(ctx, type2, instanceId);
-          if (!bundle) {
-            ctx.json(res, 404, { error: `No running CLI adapter found for: ${type2 || instanceId}` });
-            return;
-          }
-          await bundle.adapter.sendMessage(text11);
-        } else {
-          ctx.instanceManager.sendEvent(target2.instanceId, "send_message", { text: text11 });
-        }
-        ctx.json(res, 200, { sent: true, type: target2.type, instanceId: target2.instanceId });
-      } catch (e) {
-        ctx.json(res, 500, { error: `Send failed: ${e.message}` });
-      }
-    }
-    async function handleCliStop(ctx, req, res) {
-      if (!ctx.instanceManager) {
-        ctx.json(res, 503, { error: "InstanceManager not available" });
-        return;
-      }
-      const body = await ctx.readBody(req);
-      const { type: type2, instanceId } = body;
-      const target2 = findCliTarget(ctx, type2, instanceId);
-      if (!target2) {
-        ctx.json(res, 404, { error: `No running instance found for: ${type2 || instanceId}` });
-        return;
-      }
-      try {
-        ctx.instanceManager.removeInstance(target2.instanceId);
-        ctx.json(res, 200, { stopped: true, type: target2.type, instanceId: target2.instanceId });
-      } catch (e) {
-        ctx.json(res, 500, { error: `Stop failed: ${e.message}` });
-      }
-    }
-    var cliSSEBusListeners = /* @__PURE__ */ new WeakMap();
-    function releaseCliSSEBusListener(bus) {
-      if (!bus) return;
-      const off = cliSSEBusListeners.get(bus);
-      if (!off) return;
-      cliSSEBusListeners.delete(bus);
-      try {
-        off();
-      } catch {
-      }
-    }
-    function handleCliSSE(ctx, cliSSEClients, _req, res) {
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
-        "Access-Control-Allow-Origin": "*"
-      });
-      res.write('data: {"type":"connected"}\n\n');
-      cliSSEClients.push(res);
-      const bus = ctx.bus;
-      if (bus && !cliSSEBusListeners.has(bus)) {
-        cliSSEBusListeners.set(bus, bus.on("provider_event", (e) => {
-          ctx.sendCliSSE(e.event);
-        }, { name: "dev.cli-sse" }));
-      }
-      if (ctx.instanceManager) {
-        const allStates = ctx.instanceManager.collectAllStates();
-        const cliStates = allStates.filter((s2) => s2.category === "cli");
-        for (const s2 of cliStates) {
-          ctx.sendCliSSE({ event: "snapshot", providerType: s2.type, status: s2.status, instanceId: s2.instanceId });
-        }
-      }
-      _req.on("close", () => {
-        const idx = cliSSEClients.indexOf(res);
-        if (idx >= 0) cliSSEClients.splice(idx, 1);
-      });
-    }
-    async function handleCliDebug(ctx, type2, _req, res) {
-      if (!ctx.instanceManager) {
-        ctx.json(res, 503, { error: "InstanceManager not available" });
-        return;
-      }
-      let instanceId;
-      try {
-        instanceId = new URL(_req.url || "", "http://localhost").searchParams.get("instanceId") || void 0;
-      } catch {
-      }
-      const target2 = findCliTarget(ctx, type2, instanceId);
-      if (!target2) {
-        const allStates = ctx.instanceManager.collectAllStates();
-        ctx.json(res, 404, { error: `No running instance for: ${type2}`, available: allStates.filter((s2) => s2.category === "cli").map((s2) => s2.type) });
-        return;
-      }
-      const instance = ctx.instanceManager.getInstance(target2.instanceId);
-      if (!instance) {
-        ctx.json(res, 404, { error: `Instance not found: ${target2.instanceId}` });
-        return;
-      }
-      try {
-        const adapter = getCliAdapterFromInstance(instance);
-        if (adapter && typeof adapter.getDebugSnapshot === "function") {
-          const debugState = adapter.getDebugSnapshot();
-          ctx.json(res, 200, {
-            instanceId: target2.instanceId,
-            providerState: {
-              type: target2.type,
-              name: target2.name,
-              status: target2.status,
-              mode: "mode" in target2 ? target2.mode : void 0
-            },
-            providerResolution: getCliProviderResolutionMeta(ctx, target2.type, adapter),
-            debug: debugState
-          });
-        } else {
-          ctx.json(res, 200, {
-            instanceId: target2.instanceId,
-            providerState: target2,
-            providerResolution: getCliProviderResolutionMeta(ctx, target2.type, adapter),
-            debug: null,
-            message: "No debug state available (adapter.getDebugSnapshot not found)"
-          });
-        }
-      } catch (e) {
-        ctx.json(res, 500, { error: `Debug state failed: ${e.message}` });
-      }
-    }
-    async function handleCliTrace(ctx, type2, req, res) {
-      if (!ctx.instanceManager) {
-        ctx.json(res, 503, { error: "InstanceManager not available" });
-        return;
-      }
-      const target2 = findCliTarget(ctx, type2);
-      if (!target2) {
-        const allStates = ctx.instanceManager.collectAllStates();
-        ctx.json(res, 404, {
-          error: `No running instance for: ${type2}`,
-          available: allStates.filter((s2) => s2.category === "cli").map((s2) => s2.type)
-        });
-        return;
-      }
-      const instance = ctx.instanceManager.getInstance(target2.instanceId);
-      if (!instance) {
-        ctx.json(res, 404, { error: `Instance not found: ${target2.instanceId}` });
-        return;
-      }
-      try {
-        const adapter = getCliAdapterFromInstance(instance);
-        const url = new URL(req.url || "/", "http://127.0.0.1");
-        const limit = parseInt(url.searchParams.get("limit") || "120", 10);
-        if (adapter && typeof adapter.getTraceState === "function") {
-          const trace = adapter.getTraceState(limit);
-          const debug = typeof adapter.getDebugSnapshot === "function" ? adapter.getDebugSnapshot() : null;
-          ctx.json(res, 200, {
-            instanceId: target2.instanceId,
-            providerState: {
-              type: target2.type,
-              name: target2.name,
-              status: target2.status,
-              mode: "mode" in target2 ? target2.mode : void 0
-            },
-            providerResolution: getCliProviderResolutionMeta(ctx, target2.type, adapter),
-            debug,
-            trace
-          });
-        } else {
-          ctx.json(res, 200, {
-            instanceId: target2.instanceId,
-            providerState: target2,
-            providerResolution: getCliProviderResolutionMeta(ctx, target2.type, adapter),
-            debug: typeof adapter?.getDebugSnapshot === "function" ? adapter.getDebugSnapshot() : null,
-            trace: null,
-            message: "No trace state available (adapter.getTraceState not found)"
-          });
-        }
-      } catch (e) {
-        ctx.json(res, 500, { error: `Trace state failed: ${e.message}` });
-      }
-    }
-    async function handleCliExercise(ctx, req, res) {
-      try {
-        const body = await ctx.readBody(req);
-        const result = await runCliExerciseInternal(ctx, body || {});
-        ctx.json(res, 200, result);
-      } catch (e) {
-        ctx.json(res, 500, { error: `Exercise failed: ${e.message}` });
-      }
-    }
-    async function handleCliFixtureCapture(ctx, req, res) {
-      try {
-        const body = await ctx.readBody(req);
-        const type2 = String(body?.type || "");
-        const request = body?.request || {};
-        if (!type2) {
-          ctx.json(res, 400, { error: "type required" });
-          return;
-        }
-        if (!request?.text) {
-          ctx.json(res, 400, { error: "request.text required" });
-          return;
-        }
-        const fixtureDir = getCliFixtureDir(ctx, type2);
-        fs147.mkdirSync(fixtureDir, { recursive: true });
-        const name = slugifyFixtureName(String(body?.name || `${type2}-${Date.now()}`));
-        const result = await runCliExerciseInternal(ctx, { ...request, type: type2 });
-        const fixture = {
-          version: 1,
-          kind: "cli-exercise-fixture",
-          name,
-          type: type2,
-          createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-          providerDir: ctx.providerLoader.findProviderDir(type2),
-          providerResolution: result?.providerResolution || null,
-          request: { ...request, type: type2 },
-          result,
-          assertions: {
-            mustContainAny: Array.isArray(body?.assertions?.mustContainAny) ? body.assertions.mustContainAny : [],
-            mustNotContainAny: Array.isArray(body?.assertions?.mustNotContainAny) ? body.assertions.mustNotContainAny : [],
-            mustMatchAny: Array.isArray(body?.assertions?.mustMatchAny) ? body.assertions.mustMatchAny : [],
-            mustNotMatchAny: Array.isArray(body?.assertions?.mustNotMatchAny) ? body.assertions.mustNotMatchAny : [],
-            lastAssistantMustContainAny: Array.isArray(body?.assertions?.lastAssistantMustContainAny) ? body.assertions.lastAssistantMustContainAny : [],
-            lastAssistantMustNotContainAny: Array.isArray(body?.assertions?.lastAssistantMustNotContainAny) ? body.assertions.lastAssistantMustNotContainAny : [],
-            lastAssistantMustMatchAny: Array.isArray(body?.assertions?.lastAssistantMustMatchAny) ? body.assertions.lastAssistantMustMatchAny : [],
-            lastAssistantMustNotMatchAny: Array.isArray(body?.assertions?.lastAssistantMustNotMatchAny) ? body.assertions.lastAssistantMustNotMatchAny : [],
-            statusesSeen: Array.isArray(body?.assertions?.statusesSeen) ? body.assertions.statusesSeen : void 0,
-            requireNotTimedOut: body?.assertions?.requireNotTimedOut !== false
-          },
-          notes: typeof body?.notes === "string" ? body.notes : void 0
-        };
-        const filePath2 = path142.join(fixtureDir, `${name}.json`);
-        fs147.writeFileSync(filePath2, JSON.stringify(fixture, null, 2));
-        ctx.json(res, 200, {
-          saved: true,
-          name,
-          path: filePath2,
-          fixture,
-          verification: {
-            pass: validateCliFixtureResult(result, fixture.assertions).length === 0,
-            failures: validateCliFixtureResult(result, fixture.assertions)
-          }
-        });
-      } catch (e) {
-        ctx.json(res, 500, { error: `Fixture capture failed: ${e.message}` });
-      }
-    }
-    async function handleCliFixtureList(ctx, type2, _req, res) {
-      try {
-        const fixtureDir = getCliFixtureDir(ctx, type2);
-        if (!fs147.existsSync(fixtureDir)) {
-          ctx.json(res, 200, { fixtures: [], count: 0 });
-          return;
-        }
-        const fixtures = fs147.readdirSync(fixtureDir).filter((file) => file.endsWith(".json")).sort((a, b) => b.localeCompare(a, void 0, { numeric: true, sensitivity: "base" })).map((file) => {
-          const fullPath = path142.join(fixtureDir, file);
-          try {
-            const raw = JSON.parse(fs147.readFileSync(fullPath, "utf-8"));
-            return {
-              name: raw.name || file.replace(/\.json$/i, ""),
-              path: fullPath,
-              createdAt: raw.createdAt || null,
-              notes: raw.notes || null,
-              requestText: raw.request?.text || "",
-              assertions: raw.assertions || {}
-            };
-          } catch {
-            return {
-              name: file.replace(/\.json$/i, ""),
-              path: fullPath,
-              createdAt: null,
-              notes: "Unreadable fixture",
-              requestText: "",
-              assertions: {}
-            };
-          }
-        });
-        ctx.json(res, 200, { fixtures, count: fixtures.length });
-      } catch (e) {
-        ctx.json(res, 500, { error: `Fixture list failed: ${e.message}` });
-      }
-    }
-    async function handleCliFixtureReplay(ctx, req, res) {
-      try {
-        const body = await ctx.readBody(req);
-        const type2 = String(body?.type || "");
-        const rawName = String(body?.name || "").trim();
-        if (!type2 || !rawName) {
-          ctx.json(res, 400, { error: "type and name required" });
-          return;
-        }
-        const name = slugifyFixtureName(rawName);
-        const fixture = readCliFixture(ctx, type2, name);
-        const result = await runCliExerciseInternal(ctx, {
-          ...fixture.request,
-          type: type2
-        });
-        const assertions = {
-          ...fixture.assertions,
-          ...body?.assertions || {}
-        };
-        const failures = validateCliFixtureResult(result, assertions);
-        ctx.json(res, 200, {
-          replayed: true,
-          pass: failures.length === 0,
-          failures,
-          fixture,
-          result,
-          assertions
-        });
-      } catch (e) {
-        ctx.json(res, 500, { error: `Fixture replay failed: ${e.message}` });
-      }
-    }
-    async function handleCliResolve(ctx, req, res) {
-      const body = await ctx.readBody(req);
-      const { type: type2, buttonIndex, instanceId } = body;
-      if (buttonIndex === void 0 || buttonIndex === null) {
-        ctx.json(res, 400, { error: "buttonIndex required (0=Yes, 1=Always, 2=Deny)" });
-        return;
-      }
-      if (!ctx.cliManager) {
-        ctx.json(res, 503, { error: "CliManager not available" });
-        return;
-      }
-      if (!ctx.instanceManager) {
-        ctx.json(res, 503, { error: "InstanceManager not available" });
-        return;
-      }
-      const target2 = findCliTarget(ctx, type2, instanceId);
-      if (!target2) {
-        ctx.json(res, 404, { error: `No running adapter for: ${type2 || instanceId}` });
-        return;
-      }
-      const instance = ctx.instanceManager.getInstance(target2.instanceId);
-      const adapter = getCliAdapterFromInstance(instance);
-      if (!adapter) {
-        ctx.json(res, 404, { error: `Adapter not found for instance: ${target2.instanceId}` });
-        return;
-      }
-      try {
-        if (typeof adapter.resolveModal === "function") {
-          adapter.resolveModal(buttonIndex);
-          ctx.json(res, 200, { resolved: true, type: target2.type, instanceId: target2.instanceId, buttonIndex });
-        } else {
-          ctx.json(res, 400, { error: "resolveModal not available on this adapter" });
-        }
-      } catch (e) {
-        ctx.json(res, 500, { error: `Resolve failed: ${e.message}` });
-      }
-    }
-    async function handleCliRaw(ctx, req, res) {
-      const body = await ctx.readBody(req);
-      const { type: type2, keys: keys2, instanceId } = body;
-      if (!keys2) {
-        ctx.json(res, 400, { error: "keys required (raw string to send to PTY)" });
-        return;
-      }
-      if (!ctx.cliManager) {
-        ctx.json(res, 503, { error: "CliManager not available" });
-        return;
-      }
-      if (!ctx.instanceManager) {
-        ctx.json(res, 503, { error: "InstanceManager not available" });
-        return;
-      }
-      const target2 = findCliTarget(ctx, type2, instanceId);
-      if (!target2) {
-        ctx.json(res, 404, { error: `No running adapter for: ${type2 || instanceId}` });
-        return;
-      }
-      const instance = ctx.instanceManager.getInstance(target2.instanceId);
-      const adapter = getCliAdapterFromInstance(instance);
-      if (!adapter) {
-        ctx.json(res, 404, { error: `Adapter not found for instance: ${target2.instanceId}` });
-        return;
-      }
-      try {
-        if (typeof adapter.writeRaw === "function") {
-          await adapter.writeRaw(keys2);
-          ctx.json(res, 200, { sent: true, type: target2.type, instanceId: target2.instanceId, keysLength: keys2.length });
-        } else {
-          ctx.json(res, 400, { error: "writeRaw not available on this adapter" });
-        }
-      } catch (e) {
-        ctx.json(res, 500, { error: `Raw send failed: ${e.message}` });
-      }
-    }
-    var DEV_SERVER_PORT = 19280;
-    function getScriptNames(scripts) {
-      if (!scripts) return [];
-      return Object.entries(scripts).filter(([, value]) => typeof value === "function").map(([name]) => name);
-    }
-    function toProviderListEntry(provider) {
-      const base = {
-        type: provider.type,
-        name: provider.name,
-        category: provider.category,
-        icon: provider.icon || null,
-        displayName: provider.displayName || provider.name
-      };
-      if (provider.category === "ide" || provider.category === "extension") {
-        base.scripts = getScriptNames(provider.scripts);
-        base.inputMethod = provider.inputMethod || null;
-        base.inputSelector = provider.inputSelector || null;
-        base.extensionId = provider.extensionId || null;
-        base.cdpPorts = provider.cdpPorts || [];
-      }
-      if (provider.category === "cli") {
-        base.spawn = provider.spawn || null;
-        base.install = provider.install || null;
-      }
-      return base;
-    }
-    var DevServer = class {
-      server = null;
-      providerLoader;
-      cdpManagers;
-      instanceManager;
-      cliManager;
-      bus;
-      onProviderSourceConfigChanged;
-      logFn;
-      sseClients = [];
-      watchScriptPath = null;
-      watchScriptName = null;
-      watchTimer = null;
-      // CLI debug SSE
-      cliSSEClients = [];
-      constructor(options) {
-        this.providerLoader = options.providerLoader;
-        this.cdpManagers = options.cdpManagers;
-        this.instanceManager = options.instanceManager || null;
-        this.cliManager = options.cliManager || null;
-        this.bus = options.bus ?? null;
-        this.onProviderSourceConfigChanged = options.onProviderSourceConfigChanged || null;
-        this.logFn = options.logFn || LOG.forComponent("DevServer").asLogFn();
-      }
-      log(msg) {
-        this.logFn(`[DevServer] ${msg}`);
-      }
-      // ─── Route Table ─────────────────────────────────────
-      routes = [
-        // Static routes
-        { method: "GET", pattern: "/api/providers", handler: (q2, s2) => this.handleListProviders(q2, s2) },
-        { method: "GET", pattern: "/api/providers/source-config", handler: (q2, s2) => this.handleGetProviderSourceConfig(q2, s2) },
-        { method: "POST", pattern: "/api/providers/source-config", handler: (q2, s2) => this.handleSetProviderSourceConfig(q2, s2) },
-        { method: "GET", pattern: "/api/providers/versions", handler: (q2, s2) => this.handleDetectVersions(q2, s2) },
-        { method: "POST", pattern: "/api/providers/reload", handler: (q2, s2) => this.handleReload(q2, s2) },
-        { method: "POST", pattern: "/api/cdp/evaluate", handler: (q2, s2) => this.handleCdpEvaluate(q2, s2) },
-        { method: "POST", pattern: "/api/cdp/click", handler: (q2, s2) => this.handleCdpClick(q2, s2) },
-        { method: "POST", pattern: "/api/cdp/dom/query", handler: (q2, s2) => this.handleCdpDomQuery(q2, s2) },
-        { method: "POST", pattern: "/api/cdp/dom/inspect", handler: (q2, s2) => this.handleDomInspect(q2, s2) },
-        { method: "POST", pattern: "/api/cdp/dom/children", handler: (q2, s2) => this.handleDomChildren(q2, s2) },
-        { method: "POST", pattern: "/api/cdp/dom/analyze", handler: (q2, s2) => this.handleDomAnalyze(q2, s2) },
-        { method: "POST", pattern: "/api/cdp/dom/find-text", handler: (q2, s2) => this.handleFindByText(q2, s2) },
-        { method: "POST", pattern: "/api/cdp/dom/find-common", handler: (q2, s2) => this.handleFindCommon(q2, s2) },
-        { method: "GET", pattern: "/api/cdp/screenshot", handler: (q2, s2) => this.handleScreenshot(q2, s2) },
-        { method: "GET", pattern: "/api/cdp/targets", handler: (q2, s2) => this.handleCdpTargets(q2, s2) },
-        { method: "POST", pattern: "/api/scripts/run", handler: (q2, s2) => this.handleScriptsRun(q2, s2) },
-        { method: "GET", pattern: "/api/status", handler: (q2, s2) => this.handleStatus(q2, s2) },
-        { method: "POST", pattern: "/api/watch/start", handler: (q2, s2) => this.handleWatchStart(q2, s2) },
-        { method: "POST", pattern: "/api/watch/stop", handler: (q2, s2) => this.handleWatchStop(q2, s2) },
-        { method: "GET", pattern: "/api/watch/events", handler: (q2, s2) => this.handleSSE(q2, s2) },
-        { method: "POST", pattern: "/api/scaffold", handler: (q2, s2) => this.handleScaffold(q2, s2) },
-        // CLI Debug routes
-        { method: "GET", pattern: "/api/cli/status", handler: (q2, s2) => this.handleCliStatus(q2, s2) },
-        { method: "POST", pattern: "/api/cli/launch", handler: (q2, s2) => this.handleCliLaunch(q2, s2) },
-        { method: "POST", pattern: "/api/cli/send", handler: (q2, s2) => this.handleCliSend(q2, s2) },
-        { method: "POST", pattern: "/api/cli/exercise", handler: (q2, s2) => this.handleCliExercise(q2, s2) },
-        { method: "POST", pattern: "/api/cli/fixture/capture", handler: (q2, s2) => this.handleCliFixtureCapture(q2, s2) },
-        { method: "POST", pattern: "/api/cli/fixture/replay", handler: (q2, s2) => this.handleCliFixtureReplay(q2, s2) },
-        { method: "POST", pattern: "/api/cli/resolve", handler: (q2, s2) => this.handleCliResolve(q2, s2) },
-        { method: "POST", pattern: "/api/cli/raw", handler: (q2, s2) => this.handleCliRaw(q2, s2) },
-        { method: "POST", pattern: "/api/cli/stop", handler: (q2, s2) => this.handleCliStop(q2, s2) },
-        { method: "GET", pattern: "/api/cli/events", handler: (q2, s2) => this.handleCliSSE(q2, s2) },
-        { method: "GET", pattern: /^\/api\/cli\/debug\/([^/]+)$/, handler: (q2, s2, p) => this.handleCliDebug(p[0], q2, s2) },
-        { method: "GET", pattern: /^\/api\/cli\/trace\/([^/]+)$/, handler: (q2, s2, p) => this.handleCliTrace(p[0], q2, s2) },
-        { method: "GET", pattern: /^\/api\/cli\/fixtures\/([^/]+)$/, handler: (q2, s2, p) => this.handleCliFixtureList(p[0], q2, s2) },
-        // Dynamic routes (provider :type param)
-        { method: "POST", pattern: /^\/api\/providers\/([^/]+)\/script$/, handler: (q2, s2, p) => this.handleRunScript(p[0], q2, s2) },
-        { method: "GET", pattern: /^\/api\/providers\/([^/]+)\/files$/, handler: (q2, s2, p) => this.handleListFiles(p[0], q2, s2) },
-        { method: "GET", pattern: /^\/api\/providers\/([^/]+)\/file$/, handler: (q2, s2, p) => this.handleReadFile(p[0], q2, s2) },
-        { method: "POST", pattern: /^\/api\/providers\/([^/]+)\/file$/, handler: (q2, s2, p) => this.handleWriteFile(p[0], q2, s2) },
-        { method: "GET", pattern: /^\/api\/providers\/([^/]+)\/source$/, handler: (q2, s2, p) => this.handleSource(p[0], q2, s2) },
-        { method: "POST", pattern: /^\/api\/providers\/([^/]+)\/save$/, handler: (q2, s2, p) => this.handleSave(p[0], q2, s2) },
-        { method: "POST", pattern: /^\/api\/providers\/([^/]+)\/typeAndSend$/, handler: (q2, s2, p) => this.handleTypeAndSend(p[0], q2, s2) },
-        { method: "POST", pattern: /^\/api\/providers\/([^/]+)\/typeAndSendAt$/, handler: (q2, s2, p) => this.handleTypeAndSendAt(p[0], q2, s2) },
-        { method: "GET", pattern: /^\/api\/providers\/([^/]+)\/config$/, handler: (q2, s2, p) => this.handleProviderConfig(p[0], q2, s2) },
-        { method: "POST", pattern: /^\/api\/providers\/([^/]+)\/dom-context$/, handler: (q2, s2, p) => this.handleDomContext(p[0], q2, s2) },
-        { method: "POST", pattern: /^\/api\/providers\/([^/]+)\/spawn-test$/, handler: (q2, s2, p) => this.handleSpawnTest(p[0], q2, s2) },
-        { method: "POST", pattern: /^\/api\/providers\/([^/]+)\/validate$/, handler: (q2, s2, p) => this.handleValidate(p[0], q2, s2) },
-        { method: "GET", pattern: /^\/api\/providers\/([^/]+)\/script-hints$/, handler: (q2, s2, p) => this.handleScriptHints(p[0], q2, s2) }
-      ];
-      matchRoute(method, pathname) {
-        for (const route of this.routes) {
-          if (route.method !== method) continue;
-          if (typeof route.pattern === "string") {
-            if (pathname === route.pattern) return { handler: route.handler };
-          } else {
-            const m = pathname.match(route.pattern);
-            if (m) return { handler: route.handler, params: m.slice(1) };
-          }
-        }
-        return null;
-      }
-      getEndpointList() {
-        return this.routes.map((r) => {
-          const path147 = typeof r.pattern === "string" ? r.pattern : r.pattern.source.replace(/\\\//g, "/").replace(/\(\[.*?\]\+\)/g, ":type").replace(/[\^$]/g, "");
-          return `${r.method.padEnd(5)} ${path147}`;
-        });
-      }
-      async start(port = DEV_SERVER_PORT) {
-        this.server = http3.createServer(async (req, res) => {
-          res.setHeader("Access-Control-Allow-Origin", "*");
-          res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-          res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-          if (req.method === "OPTIONS") {
-            res.writeHead(200);
-            res.end();
-            return;
-          }
-          const url = new URL(req.url || "/", `http://localhost:${port}`);
-          const pathname = url.pathname;
-          try {
-            const route = this.matchRoute(req.method || "GET", pathname);
-            if (route) {
-              await route.handler(req, res, route.params);
-            } else {
-              this.json(res, 404, { error: "Not found", endpoints: this.getEndpointList() });
-            }
-          } catch (e) {
-            this.log(`Error: ${e.message}`);
-            this.json(res, 500, { error: e.message });
-          }
-        });
-        return new Promise((resolve82, reject) => {
-          this.server.listen(port, "127.0.0.1", () => {
-            this.log(`Dev server listening on http://127.0.0.1:${port}`);
-            resolve82();
-          });
-          this.server.on("error", (e) => {
-            if (e.code === "EADDRINUSE") {
-              this.log(`Port ${port} in use, skipping dev server`);
-              resolve82();
-            } else {
-              reject(e);
-            }
-          });
-        });
-      }
-      stop() {
-        this.server?.close();
-        this.server = null;
-        releaseCliSSEBusListener(this.bus);
-      }
-      // ─── Handlers ───
-      async handleListProviders(_req, res) {
-        const providers = this.providerLoader.getAll().map(toProviderListEntry);
-        this.json(res, 200, { providers, count: providers.length, sourceConfig: this.providerLoader.getSourceConfig() });
-      }
-      async handleGetProviderSourceConfig(_req, res) {
-        this.json(res, 200, { success: true, sourceConfig: this.providerLoader.getSourceConfig() });
-      }
-      async handleSetProviderSourceConfig(req, res) {
-        const body = await this.readBody(req);
-        const parsed = parseProviderSourceConfigUpdate(body || {});
-        if (!parsed.ok) {
-          this.json(res, 400, { success: false, error: parsed.error });
-          return;
-        }
-        const currentConfig2 = loadConfig();
-        const nextConfig = {
-          ...currentConfig2,
-          ...parsed.updates.providerSourceMode ? { providerSourceMode: parsed.updates.providerSourceMode } : {},
-          ...Object.prototype.hasOwnProperty.call(parsed.updates, "providerDir") ? { providerDir: parsed.updates.providerDir } : {}
-        };
-        saveConfig(nextConfig);
-        const sourceConfig = this.providerLoader.applySourceConfig({
-          sourceMode: nextConfig.providerSourceMode,
-          userDir: Object.prototype.hasOwnProperty.call(parsed.updates, "providerDir") ? parsed.updates.providerDir : this.providerLoader.getSourceConfig().explicitProviderDir || void 0
-        });
-        this.providerLoader.reload();
-        this.providerLoader.registerToDetector();
-        await this.onProviderSourceConfigChanged?.();
-        this.json(res, 200, { success: true, reloaded: true, sourceConfig });
-      }
-      async handleProviderConfig(type2, _req, res) {
-        const provider = this.providerLoader.resolve(type2);
-        if (!provider) {
-          this.json(res, 404, { error: `Provider not found: ${type2}` });
-          return;
-        }
-        const config = { ...provider };
-        if (config.scripts) {
-          config.scriptNames = Object.keys(config.scripts).filter((k) => typeof config.scripts[k] === "function");
-          delete config.scripts;
-        }
-        this.json(res, 200, { type: type2, config });
-      }
-      async handleSpawnTest(type2, req, res) {
-        const provider = this.providerLoader.resolve(type2);
-        if (!provider) {
-          this.json(res, 404, { error: `Provider not found: ${type2}` });
-          return;
-        }
-        const spawn14 = provider.spawn;
-        if (!spawn14) {
-          this.json(res, 400, { error: `Provider ${type2} has no spawn config` });
-          return;
-        }
-        const { spawn: spawnFn } = await import("child_process");
-        const start = Date.now();
-        try {
-          const child = spawnFn(spawn14.command, [...spawn14.args || []], {
-            shell: spawn14.shell ?? false,
-            windowsHide: true,
-            timeout: 5e3,
-            stdio: ["pipe", "pipe", "pipe"]
-          });
-          let stdout = "";
-          let stderr = "";
-          child.stdout?.on("data", (d) => {
-            stdout += d.toString().slice(0, 2e3);
-          });
-          child.stderr?.on("data", (d) => {
-            stderr += d.toString().slice(0, 2e3);
-          });
-          await new Promise((resolve82) => {
-            const timer = setTimeout(() => {
-              child.kill();
-              resolve82();
-            }, 3e3);
-            child.on("exit", () => {
-              clearTimeout(timer);
-              resolve82();
-            });
-            child.stdout?.once("data", () => {
-              setTimeout(() => {
-                child.kill();
-                clearTimeout(timer);
-                resolve82();
-              }, 500);
-            });
-          });
-          const elapsed = Date.now() - start;
-          this.json(res, 200, {
-            success: true,
-            command: `${spawn14.command} ${(spawn14.args || []).join(" ")}`,
-            elapsed,
-            stdout: stdout.trim(),
-            stderr: stderr.trim(),
-            exitCode: child.exitCode
-          });
-        } catch (e) {
-          const elapsed = Date.now() - start;
-          this.json(res, 200, {
-            success: false,
-            command: `${spawn14.command} ${(spawn14.args || []).join(" ")}`,
-            elapsed,
-            error: e.message
-          });
-        }
-      }
-      async handleRunScript(type2, req, res, parsedBody) {
-        const body = parsedBody || await this.readBody(req);
-        const { script: scriptName, params, args, ideType: scriptIdeType } = body;
-        const rawParams = args !== void 0 ? args : params;
-        const provider = this.providerLoader.resolve(type2);
-        if (!provider) {
-          this.json(res, 404, { error: `Provider '${type2}' not found` });
-          return;
-        }
-        const fn = provider.scripts?.[scriptName];
-        if (typeof fn !== "function") {
-          this.json(res, 400, { error: `Script '${scriptName}' not found in provider '${type2}'`, available: provider.scripts ? Object.keys(provider.scripts) : [] });
-          return;
-        }
-        const cdp = this.getCdp(scriptIdeType || type2);
-        if (!cdp) {
-          this.json(res, 503, { error: "No CDP connection available" });
-          return;
-        }
-        try {
-          const scriptCode = resolveLegacyProviderScript(fn, scriptName, rawParams);
-          if (!scriptCode) {
-            this.json(res, 500, { error: "Script function returned null" });
-            return;
-          }
-          this.log(`Exec script length: ${scriptCode.length}, first 50 chars: ${scriptCode.slice(0, 50)}...`);
-          const isWebviewScript = scriptName.toLowerCase().includes("webview");
-          let raw;
-          if (provider.category === "extension" && !isWebviewScript) {
-            const sessions = cdp.getAgentSessions();
-            let sessionId = null;
-            for (const [sid, target2] of sessions) {
-              if (target2.agentType === type2) {
-                sessionId = sid;
-                break;
-              }
-            }
-            if (!sessionId) {
-              try {
-                const discovered = await cdp.discoverAgentWebviews();
-                const target2 = discovered.find((entry) => entry.agentType === type2);
-                if (target2) {
-                  sessionId = await cdp.attachToAgent(target2);
-                }
-              } catch (error) {
-                this.log(`Extension attach fallback failed for ${type2}: ${error?.message || String(error)}`);
-              }
-            }
-            if (sessionId) {
-              raw = await cdp.evaluateInSessionFrame(sessionId, scriptCode);
-            } else if (cdp.evaluateInWebviewFrame) {
-              const matchText = provider.webviewMatchText;
-              const matchFn = matchText ? (body2) => body2.includes(matchText) : void 0;
-              raw = await cdp.evaluateInWebviewFrame(scriptCode, matchFn);
-            } else {
-              raw = await cdp.evaluate(scriptCode, 3e4);
-            }
-          } else if (isWebviewScript && cdp.evaluateInWebviewFrame) {
-            const matchText = provider.webviewMatchText;
-            const matchFn = matchText ? (body2) => body2.includes(matchText) : void 0;
-            raw = await cdp.evaluateInWebviewFrame(scriptCode, matchFn);
-          } else {
-            raw = await cdp.evaluate(scriptCode, 3e4);
-          }
-          let result = raw;
-          if (typeof raw === "string") {
-            try {
-              result = JSON.parse(raw);
-            } catch {
-            }
-          }
-          this.log(`Script raw debug: typeof=${typeof raw}, raw=${JSON.stringify(raw)}, parsed=${JSON.stringify(result)}`);
-          this.json(res, 200, { type: type2, script: scriptName, result });
-        } catch (e) {
-          this.json(res, 500, { error: `Script execution failed: ${e.message}` });
-        }
-      }
-      async handleCdpEvaluate(req, res) {
-        return handleCdpEvaluate(this, req, res);
-      }
-      async handleCdpClick(req, res) {
-        return handleCdpClick(this, req, res);
-      }
-      async handleCdpDomQuery(req, res) {
-        return handleCdpDomQuery(this, req, res);
-      }
-      async handleScreenshot(req, res) {
-        return handleScreenshot2(this, req, res);
-      }
-      async handleScriptsRun(req, res) {
-        return handleScriptsRun(this, req, res);
-      }
-      async handleStatus(_req, res) {
-        const providers = this.providerLoader.getAll().map((p) => ({
-          type: p.type,
-          name: p.name,
-          category: p.category
-        }));
-        const cdpStatus = {};
-        for (const [key7, cdp] of this.cdpManagers.entries()) {
-          cdpStatus[key7] = { connected: cdp.isConnected };
-        }
-        this.json(res, 200, {
-          devMode: true,
-          providers,
-          cdp: cdpStatus,
-          uptime: process.uptime()
-        });
-      }
-      async handleReload(_req, res) {
-        try {
-          this.providerLoader.reload();
-          const refreshedInstances = this.instanceManager ? this.instanceManager.refreshProviderDefinitions((providerType) => this.providerLoader.resolve(providerType)) : 0;
-          const providers = this.providerLoader.getAll().map((p) => ({
-            type: p.type,
-            name: p.name,
-            category: p.category
-          }));
-          for (const cdp of this.cdpManagers.values()) {
-            if (!cdp.isConnected) {
-              cdp.clearTargetId();
-            }
-          }
-          this.json(res, 200, { reloaded: true, refreshedInstances, providers });
-        } catch (e) {
-          this.json(res, 500, { error: e.message });
-        }
-      }
-      // ─── Watch Mode (SSE) ───
-      handleSSE(_req, res) {
-        res.writeHead(200, {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          "Connection": "keep-alive",
-          "Access-Control-Allow-Origin": "*"
-        });
-        res.write('data: {"type":"connected"}\n\n');
-        this.sseClients.push(res);
-        _req.on("close", () => {
-          this.sseClients = this.sseClients.filter((c) => c !== res);
-        });
-      }
-      sendSSE(data) {
-        const msg = `data: ${JSON.stringify(data)}
-
-`;
-        for (const client of this.sseClients) {
-          try {
-            client.write(msg);
-          } catch {
-          }
-        }
-      }
-      async handleWatchStart(req, res) {
-        const body = await this.readBody(req);
-        const { type: type2, script: scriptName, interval = 2e3 } = body;
-        if (!type2) {
-          this.json(res, 400, { error: "type required" });
-          return;
-        }
-        this.watchScriptPath = type2;
-        this.watchScriptName = scriptName || "readChat";
-        if (this.watchTimer) clearInterval(this.watchTimer);
-        this.log(`Watch started: ${type2} \u2192 ${this.watchScriptName} (every ${interval}ms)`);
-        this.sendSSE({ type: "watch_started", provider: type2, script: this.watchScriptName });
-        const runWatch = async () => {
-          if (!this.watchScriptPath) return;
-          const provider = this.providerLoader.resolve(this.watchScriptPath);
-          if (!provider) {
-            this.sendSSE({ type: "watch_error", error: `Provider '${this.watchScriptPath}' not found` });
-            return;
-          }
-          const fn = provider.scripts?.[this.watchScriptName];
-          if (typeof fn !== "function") {
-            this.sendSSE({ type: "watch_error", error: `Script '${this.watchScriptName}' not found` });
-            return;
-          }
-          const cdp = this.getCdp();
-          if (!cdp) {
-            this.sendSSE({ type: "watch_error", error: "No CDP connection" });
-            return;
-          }
-          try {
-            const script = fn();
-            const start = Date.now();
-            const raw = await cdp.evaluate(script, 15e3);
-            const elapsed = Date.now() - start;
-            let result = raw;
-            if (typeof raw === "string") {
-              try {
-                result = JSON.parse(raw);
-              } catch {
-              }
-            }
-            this.sendSSE({ type: "watch_result", provider: type2, script: this.watchScriptName, result, elapsed });
-          } catch (e) {
-            this.sendSSE({ type: "watch_error", error: e.message });
-          }
-        };
-        runWatch();
-        this.watchTimer = setInterval(runWatch, Math.max(interval, 500));
-        this.json(res, 200, { watching: true, type: type2, script: this.watchScriptName, interval });
-      }
-      async handleWatchStop(_req, res) {
-        if (this.watchTimer) {
-          clearInterval(this.watchTimer);
-          this.watchTimer = null;
-        }
-        this.watchScriptPath = null;
-        this.watchScriptName = null;
-        this.sendSSE({ type: "watch_stopped" });
-        this.json(res, 200, { watching: false });
-      }
-      // ─── Provider File Explorer ───
-      /** Find the provider directory on disk */
-      findProviderDir(type2) {
-        return this.providerLoader.findProviderDir(type2);
-      }
-      /** GET /api/providers/:type/files — list all files in provider directory */
-      async handleListFiles(type2, _req, res) {
-        const dir = this.findProviderDir(type2);
-        if (!dir) {
-          this.json(res, 404, { error: `Provider directory not found: ${type2}` });
-          return;
-        }
-        const files = [];
-        const scan2 = (d, prefix) => {
-          try {
-            for (const entry of fs148.readdirSync(d, { withFileTypes: true })) {
-              if (entry.name.startsWith(".") || entry.name.endsWith(".bak")) continue;
-              const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
-              if (entry.isDirectory()) {
-                files.push({ path: rel, size: 0, type: "dir" });
-                scan2(path143.join(d, entry.name), rel);
-              } else {
-                const stat2 = fs148.statSync(path143.join(d, entry.name));
-                files.push({ path: rel, size: stat2.size, type: "file" });
-              }
-            }
-          } catch {
-          }
-        };
-        scan2(dir, "");
-        this.json(res, 200, { type: type2, dir, files });
-      }
-      /** GET /api/providers/:type/file?path=scripts.js — read a file */
-      async handleReadFile(type2, req, res) {
-        const url = new URL(req.url || "/", "http://localhost");
-        const filePath2 = url.searchParams.get("path");
-        if (!filePath2) {
-          this.json(res, 400, { error: "path query param required" });
-          return;
-        }
-        const dir = this.findProviderDir(type2);
-        if (!dir) {
-          this.json(res, 404, { error: `Provider directory not found: ${type2}` });
-          return;
-        }
-        const fullPath = path143.resolve(dir, path143.normalize(filePath2));
-        if (!fullPath.startsWith(dir)) {
-          this.json(res, 403, { error: "Forbidden" });
-          return;
-        }
-        if (!fs148.existsSync(fullPath) || fs148.statSync(fullPath).isDirectory()) {
-          this.json(res, 404, { error: `File not found: ${filePath2}` });
-          return;
-        }
-        const content = fs148.readFileSync(fullPath, "utf-8");
-        this.json(res, 200, { type: type2, path: filePath2, content, lines: content.split("\n").length });
-      }
-      /** POST /api/providers/:type/file — write a file { path, content } */
-      async handleWriteFile(type2, req, res) {
-        const body = await this.readBody(req);
-        const { path: filePath2, content } = body;
-        if (!filePath2 || typeof content !== "string") {
-          this.json(res, 400, { error: "path and content required" });
-          return;
-        }
-        const dir = this.findProviderDir(type2);
-        if (!dir) {
-          this.json(res, 404, { error: `Provider directory not found: ${type2}` });
-          return;
-        }
-        const fullPath = path143.resolve(dir, path143.normalize(filePath2));
-        if (!fullPath.startsWith(dir)) {
-          this.json(res, 403, { error: "Forbidden" });
-          return;
-        }
-        try {
-          if (fs148.existsSync(fullPath)) fs148.copyFileSync(fullPath, fullPath + ".bak");
-          fs148.mkdirSync(path143.dirname(fullPath), { recursive: true });
-          fs148.writeFileSync(fullPath, content, "utf-8");
-          this.log(`File saved: ${fullPath} (${content.length} chars)`);
-          this.providerLoader.reload();
-          this.json(res, 200, { saved: true, path: filePath2, chars: content.length });
-        } catch (e) {
-          this.json(res, 500, { error: `Save failed: ${e.message}` });
-        }
-      }
-      // ─── Legacy Source/Save compat ───
-      async handleSource(type2, _req, res) {
-        const dir = this.findProviderDir(type2);
-        if (!dir) {
-          this.json(res, 404, { error: `Provider not found: ${type2}` });
-          return;
-        }
-        for (const name of ["scripts.js", "provider.json"]) {
-          const p = path143.join(dir, name);
-          if (fs148.existsSync(p)) {
-            const source2 = fs148.readFileSync(p, "utf-8");
-            this.json(res, 200, { type: type2, path: p, source: source2, lines: source2.split("\n").length });
-            return;
-          }
-        }
-        this.json(res, 404, { error: `Source file not found for '${type2}'` });
-      }
-      async handleSave(type2, req, res) {
-        const body = await this.readBody(req);
-        const { source: source2 } = body;
-        if (!source2 || typeof source2 !== "string") {
-          this.json(res, 400, { error: "source (string) required" });
-          return;
-        }
-        const dir = this.findProviderDir(type2);
-        if (!dir) {
-          this.json(res, 404, { error: `Provider not found: ${type2}` });
-          return;
-        }
-        const target2 = fs148.existsSync(path143.join(dir, "scripts.js")) ? "scripts.js" : "provider.json";
-        const targetPath = path143.join(dir, target2);
-        try {
-          if (fs148.existsSync(targetPath)) fs148.copyFileSync(targetPath, targetPath + ".bak");
-          fs148.writeFileSync(targetPath, source2, "utf-8");
-          this.log(`Saved provider: ${targetPath} (${source2.length} chars)`);
-          this.providerLoader.reload();
-          this.json(res, 200, { saved: true, path: targetPath, chars: source2.length });
-        } catch (e) {
-          this.json(res, 500, { error: `Save failed: ${e.message}` });
-        }
-      }
-      async handleTypeAndSend(type2, req, res) {
-        return handleTypeAndSend(this, type2, req, res);
-      }
-      async handleTypeAndSendAt(type2, req, res) {
-        return handleTypeAndSendAt(this, type2, req, res);
-      }
-      async handleScriptHints(type2, _req, res) {
-        return handleScriptHints(this, type2, _req, res);
-      }
-      // ─── Validate provider.json ───
-      async handleValidate(type2, req, res) {
-        const body = await this.readBody(req);
-        const { content } = body;
-        const errors = [];
-        const warnings = [];
-        try {
-          const config = typeof content === "string" ? JSON.parse(content) : content;
-          const validation = validateProviderDefinition(config);
-          errors.push(...validation.errors);
-          warnings.push(...validation.warnings);
-          if (config.settings) {
-            for (const [key7, val] of Object.entries(config.settings)) {
-              const s2 = val;
-              if (!s2.type) errors.push(`settings.${key7}: missing type`);
-              else if (!["boolean", "number", "string", "select"].includes(s2.type))
-                errors.push(`settings.${key7}: invalid type '${s2.type}'`);
-              if (s2.default === void 0) warnings.push(`settings.${key7}: no default value`);
-              if (s2.type === "number" && s2.min !== void 0 && s2.max !== void 0 && s2.min > s2.max)
-                errors.push(`settings.${key7}: min (${s2.min}) > max (${s2.max})`);
-              if (s2.type === "select" && (!s2.options || !Array.isArray(s2.options) || s2.options.length === 0))
-                errors.push(`settings.${key7}: select type requires options[]`);
-            }
-          }
-          if (config.cdpPorts && Array.isArray(config.cdpPorts)) {
-            const allProviders = this.providerLoader.getAll();
-            for (const port of config.cdpPorts) {
-              const conflict = allProviders.find((p) => p.type !== type2 && p.cdpPorts?.includes(port));
-              if (conflict) warnings.push(`CDP port ${port} conflicts with provider '${conflict.type}'`);
-            }
-          }
-          this.json(res, 200, { valid: errors.length === 0, errors, warnings });
-        } catch (e) {
-          this.json(res, 200, { valid: false, errors: [`Invalid JSON: ${e.message}`], warnings: [] });
-        }
-      }
-      async handleCdpTargets(_req, res) {
-        return handleCdpTargets(this, _req, res);
-      }
-      // ─── Scaffold ───
-      async handleScaffold(req, res) {
-        const body = await this.readBody(req);
-        const {
-          type: type2,
-          name,
-          category = "ide",
-          cdpPorts,
-          cli,
-          processName,
-          installPath,
-          binary: binary2,
-          extensionId,
-          version: version2,
-          osPaths,
-          processNames
-        } = body;
-        if (!type2 || !name) {
-          this.json(res, 400, { error: "type and name required" });
-          return;
-        }
-        let targetDir;
-        targetDir = this.providerLoader.getUserProviderDir(category, type2);
-        const isV1Category = category === "cli";
-        const manifestFileName = isV1Category ? "provider.v1.json" : "provider.json";
-        const jsonPath = path143.join(targetDir, manifestFileName);
-        if (fs148.existsSync(jsonPath)) {
-          this.json(res, 409, { error: `Provider already exists at ${targetDir}`, path: targetDir });
-          return;
-        }
-        try {
-          const createdFiles = [];
-          fs148.mkdirSync(targetDir, { recursive: true });
-          if (category === "cli") {
-            const scaffold = buildCliProviderV1Scaffold({ type: type2, name, binary: binary2 });
-            fs148.writeFileSync(jsonPath, JSON.stringify(scaffold.manifest, null, 2) + "\n", "utf-8");
-            createdFiles.push(scaffold.manifestPath);
-            const specFullPath = path143.join(targetDir, scaffold.specPath);
-            fs148.mkdirSync(path143.dirname(specFullPath), { recursive: true });
-            fs148.writeFileSync(specFullPath, JSON.stringify(scaffold.spec, null, 2) + "\n", "utf-8");
-            createdFiles.push(scaffold.specPath);
-          } else {
-            const result = generateFiles(type2, name, category, { cdpPorts, cli, processName, installPath, binary: binary2, extensionId, version: version2, osPaths, processNames });
-            fs148.writeFileSync(jsonPath, result["provider.json"], "utf-8");
-            createdFiles.push("provider.json");
-            if (result.files) {
-              for (const [relPath, content] of Object.entries(result.files)) {
-                const fullPath = path143.join(targetDir, relPath);
-                fs148.mkdirSync(path143.dirname(fullPath), { recursive: true });
-                fs148.writeFileSync(fullPath, content, "utf-8");
-                createdFiles.push(relPath);
-              }
-            }
-          }
-          this.log(`Scaffolded provider: ${targetDir} (${createdFiles.length} files)`);
-          this.json(res, 201, { created: true, path: targetDir, files: createdFiles, type: type2, name, category });
-        } catch (e) {
-          this.json(res, 500, { error: e.message });
-        }
-      }
-      // ─── Version Detection ───
-      async handleDetectVersions(req, res) {
-        try {
-          const archive = new VersionArchive();
-          const results = await detectAllVersions(this.providerLoader, archive);
-          const installed2 = results.filter((r) => r.installed);
-          this.json(res, 200, {
-            total: results.length,
-            installed: installed2.length,
-            providers: results,
-            history: archive.getAll()
-          });
-        } catch (e) {
-          this.json(res, 500, { error: e.message });
-        }
-      }
-      // ─── DOM Inspector ───
-      async handleDomInspect(req, res) {
-        return handleDomInspect(this, req, res);
-      }
-      async handleDomChildren(req, res) {
-        return handleDomChildren(this, req, res);
-      }
-      async handleDomAnalyze(req, res) {
-        return handleDomAnalyze(this, req, res);
-      }
-      async handleFindCommon(req, res) {
-        return handleFindCommon(this, req, res);
-      }
-      async handleFindByText(req, res) {
-        return handleFindByText(this, req, res);
-      }
-      // ─── Phase 1: DOM Context API ───
-      async handleDomContext(type2, req, res) {
-        return handleDomContext(this, type2, req, res);
-      }
-      /**
-       * Resolve a CDP manager for DevServer APIs.
-       * - Pass full **managerKey** from `GET /api/cdp/targets` when multiple Cursor/VS Code windows are open
-       *   (e.g. `cursor_0006DE34…`); short `cursor` only works when it maps to exactly one connected manager.
-       * - With `ideType` omitted: only succeeds when exactly one connected manager exists.
-       */
-      getCdp(ideType) {
-        if (ideType) {
-          const cdp = findCdpManager(this.cdpManagers, ideType);
-          if (cdp) return cdp;
-          LOG.warn(
-            "DevServer",
-            `getCdp: no unique match for '${ideType}', available: [${[...this.cdpManagers.keys()].join(", ")}] \u2014 use managerKey from GET /api/cdp/targets`
-          );
-          return null;
-        }
-        const connected = [...this.cdpManagers.entries()].filter(([, m]) => m.isConnected);
-        if (connected.length === 1) return connected[0][1];
-        if (connected.length === 0) return null;
-        LOG.warn(
-          "DevServer",
-          `getCdp: ideType omitted but ${connected.length} CDP windows \u2014 pass managerKey from GET /api/cdp/targets`
-        );
-        return null;
-      }
-      json(res, status, data) {
-        res.writeHead(status, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(data, null, 2));
-      }
-      async readBody(req) {
-        return new Promise((resolve82) => {
-          let body = "";
-          req.on("data", (chunk) => body += chunk);
-          req.on("end", () => {
-            try {
-              resolve82(JSON.parse(body));
-            } catch {
-              resolve82({});
-            }
-          });
-        });
-      }
-      // ─── CLI Debug Handlers ──────────────────────────────
-      /** GET /api/cli/status — list all running CLI instances with state */
-      async handleCliStatus(_req, res) {
-        return handleCliStatus(this, _req, res);
-      }
-      /** POST /api/cli/launch — launch a CLI agent { type, workingDir?, args? } */
-      async handleCliLaunch(req, res) {
-        return handleCliLaunch(this, req, res);
-      }
-      /** POST /api/cli/send — send message to a running CLI { type, text } */
-      async handleCliSend(req, res) {
-        return handleCliSend(this, req, res);
-      }
-      /** POST /api/cli/exercise — launch/send/approve/wait helper for provider-fix loops */
-      async handleCliExercise(req, res) {
-        return handleCliExercise(this, req, res);
-      }
-      async handleCliFixtureCapture(req, res) {
-        return handleCliFixtureCapture(this, req, res);
-      }
-      async handleCliFixtureReplay(req, res) {
-        return handleCliFixtureReplay(this, req, res);
-      }
-      /** POST /api/cli/stop — stop a running CLI { type } */
-      async handleCliStop(req, res) {
-        return handleCliStop(this, req, res);
-      }
-      /** GET /api/cli/events — SSE stream of CLI status events */
-      handleCliSSE(_req, res) {
-        handleCliSSE(this, this.cliSSEClients, _req, res);
-      }
-      sendCliSSE(data) {
-        const msg = `data: ${JSON.stringify({ ...data, timestamp: Date.now() })}
-
-`;
-        for (const client of this.cliSSEClients) {
-          try {
-            client.write(msg);
-          } catch {
-          }
-        }
-      }
-      /** GET /api/cli/debug/:type — full internal debug state of a CLI adapter */
-      async handleCliDebug(type2, _req, res) {
-        return handleCliDebug(this, type2, _req, res);
-      }
-      /** GET /api/cli/trace/:type — recent CLI trace timeline plus current debug snapshot */
-      async handleCliTrace(type2, _req, res) {
-        return handleCliTrace(this, type2, _req, res);
-      }
-      async handleCliFixtureList(type2, _req, res) {
-        return handleCliFixtureList(this, type2, _req, res);
-      }
-      /** POST /api/cli/resolve — resolve an approval modal { type, buttonIndex } */
-      async handleCliResolve(req, res) {
-        return handleCliResolve(this, req, res);
-      }
-      /** POST /api/cli/raw — send raw keystrokes to PTY { type, keys } */
-      async handleCliRaw(req, res) {
-        return handleCliRaw(this, req, res);
-      }
-    };
+    init_dev_server();
     init_pty_transport();
     init_cooperative_gate();
     var import_session_host_core20 = require_dist();
@@ -242641,7 +242916,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     init_ipc_protocol();
     init_fsm_evaluator();
     init_fsm_loader();
-    var crypto24 = __toESM2(require("crypto"));
+    init_scaffold_v1();
+    var crypto25 = __toESM2(require("crypto"));
     var import_node_fs65 = require("fs");
     var import_node_path55 = require("path");
     init_provider_cli_shared();
@@ -246382,6 +246658,7 @@ ${notice.notice}${supersededHint}`;
     init_dist();
     init_dist();
     init_builders();
+    init_dev_server();
     init_logger();
     init_debug_trace();
     init_command_registry();
