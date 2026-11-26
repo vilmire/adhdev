@@ -501,10 +501,18 @@ describe('DevServer /api/scaffold', () => {
       return
     }
 
-    // Stand up a local redirector server on another port to verify redirects are refused and never leak headers
+    // Stand up a local redirector server on another port to verify redirects are refused, never leak headers,
+    // never mask the redirect error behind a JSON redirect body, and close streaming redirect connections promptly.
     let redirectTargetHits = 0
     let redirectTargetLeakedToken: string | undefined
+    const redirectSockets = new Set<any>()
+    const redirectTimers = new Set<NodeJS.Timeout>()
+    let pyStreamingRedirectCloses = 0
     const redirectServer = http.createServer((req, res) => {
+      redirectSockets.add(req.socket)
+      req.socket.on('close', () => {
+        redirectSockets.delete(req.socket)
+      })
       if (req.url?.startsWith('/target')) {
         redirectTargetHits += 1
         redirectTargetLeakedToken = req.headers[ADHDEV_DEV_SERVER_TOKEN_HEADER] as string | undefined
@@ -512,8 +520,33 @@ describe('DevServer /api/scaffold', () => {
         res.end(JSON.stringify({ leaked: true }))
         return
       }
-      res.writeHead(302, { Location: `http://127.0.0.1:${redirectPort}/target` })
-      res.end()
+      if (req.url?.startsWith('/stream-redirect')) {
+        const timer = setInterval(() => {
+          if (!res.destroyed) {
+            res.write('{"masked":true}\n')
+          }
+        }, 10)
+        redirectTimers.add(timer)
+        req.socket.on('close', () => {
+          pyStreamingRedirectCloses += 1
+          clearInterval(timer)
+          redirectTimers.delete(timer)
+        })
+        res.writeHead(302, {
+          Location: `http://127.0.0.1:${redirectPort}/target`,
+          'Content-Type': 'application/json',
+          'Transfer-Encoding': 'chunked',
+        })
+        res.write('{"masked":true}')
+        return
+      }
+      // Return a valid JSON body alongside 302 to verify INGRESS-14: Python verifiers must not parse
+      // the redirect response body and mask the 302 rejection.
+      res.writeHead(302, {
+        Location: `http://127.0.0.1:${redirectPort}/target`,
+        'Content-Type': 'application/json',
+      })
+      res.end(JSON.stringify({ devMode: true, maskedRedirect: true }))
     })
     const redirectPort = await new Promise<number>((resolve) => {
       redirectServer.listen(0, '127.0.0.1', () => {
@@ -565,16 +598,22 @@ describe('DevServer /api/scaffold', () => {
         }),
       ).rejects.toThrow(/Redirects are disallowed for DevServer requests \(HTTP 302\)/)
       // Stand up a streaming redirect server that keeps sending body bytes after 302 headers
-      // to verify INGRESS-12: rejecting a redirect immediately destroys the connection instead of draining.
-      let streamingRedirectClosed = false
+      // to verify INGRESS-12 & INGRESS-15: rejecting a redirect immediately destroys the connection instead of draining.
       let streamingRedirectTimer: NodeJS.Timeout | null = null
+      const streamingSockets = new Set<any>()
+      let resolveStreamingSocketClose: (() => void) | null = null
+      const streamingSocketClosedPromise = new Promise<void>((resolve) => {
+        resolveStreamingSocketClose = resolve
+      })
       const streamingRedirectServer = http.createServer((req, res) => {
+        streamingSockets.add(req.socket)
         req.socket.on('close', () => {
-          streamingRedirectClosed = true
+          streamingSockets.delete(req.socket)
           if (streamingRedirectTimer) {
             clearInterval(streamingRedirectTimer)
             streamingRedirectTimer = null
           }
+          resolveStreamingSocketClose?.()
         })
         res.writeHead(302, {
           Location: `http://127.0.0.1:${redirectPort}/target`,
@@ -603,10 +642,15 @@ describe('DevServer /api/scaffold', () => {
             configDir: tempRoot,
           }),
         ).rejects.toThrow(/Redirects are disallowed for DevServer requests \(HTTP 302\)/)
-        await new Promise((r) => setTimeout(r, 30))
-        expect(streamingRedirectClosed).toBe(true)
+        await Promise.race([
+          streamingSocketClosedPromise,
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Timed out waiting for redirect socket close')), 500)),
+        ])
       } finally {
         if (streamingRedirectTimer) clearInterval(streamingRedirectTimer)
+        for (const sock of streamingSockets) {
+          sock.destroy()
+        }
         streamingRedirectServer.close()
       }
       expect(redirectTargetHits).toBe(0)
@@ -694,11 +738,14 @@ describe('DevServer /api/scaffold', () => {
         'os.environ["ADHDEV_DEV_SERVER_AUTH_FILE"] = "/tmp/unrelated-secret-file"',
         'tok1 = vp._read_dev_token()',
         'tok2 = vcp._read_dev_token()',
-        // INGRESS-06: Redirect responses must be rejected without following Location
+        // INGRESS-06 & INGRESS-14: Redirect responses (including JSON-bodied or streaming 302 responses)
+        // must be rejected at the redirect boundary without reading the body or following Location
         `vp.API = "http://127.0.0.1:${redirectPort}"`,
         `vcp.API = "http://127.0.0.1:${redirectPort}"`,
         'redir_vp = vp.api_call("/api/status", method="GET")',
         'redir_vcp = vcp.api_call("/api/status", method="GET")',
+        'redir_stream_vp = vp.api_call("/stream-redirect", method="GET", timeout=1)',
+        'redir_stream_vcp = vcp.api_call("/stream-redirect", method="GET", timeout=1)',
         'redir_shot = vp.capture_screenshot("demo-ide", "redir")',
         'print(json.dumps({',
         '  "vp_devMode": s1.get("devMode"),',
@@ -719,6 +766,8 @@ describe('DevServer /api/scaffold', () => {
         '  "https_vp_err": https_vp.get("error", ""),',
         '  "redir_vp_err": redir_vp.get("error", ""),',
         '  "redir_vcp_err": redir_vcp.get("error", ""),',
+        '  "redir_stream_vp_err": redir_stream_vp.get("error", ""),',
+        '  "redir_stream_vcp_err": redir_stream_vcp.get("error", ""),',
         '  "redir_shot": redir_shot,',
         '}))',
       ].join('\n')
@@ -766,12 +815,21 @@ describe('DevServer /api/scaffold', () => {
       expect(parsed.evil_vcp_err).toMatch(/Refusing non-loopback DevServer host/)
       expect(parsed.evil_shot).toBeNull()
       expect(parsed.https_vp_err).toMatch(/Refusing non-http DevServer URL/)
-      expect(parsed.redir_vp_err).toMatch(/302/)
-      expect(parsed.redir_vcp_err).toMatch(/302/)
+      expect(parsed.redir_vp_err).toMatch(/Redirects are disallowed for DevServer requests \(HTTP 302\)/)
+      expect(parsed.redir_vcp_err).toMatch(/Redirects are disallowed for DevServer requests \(HTTP 302\)/)
+      expect(parsed.redir_stream_vp_err).toMatch(/Redirects are disallowed for DevServer requests \(HTTP 302\)/)
+      expect(parsed.redir_stream_vcp_err).toMatch(/Redirects are disallowed for DevServer requests \(HTTP 302\)/)
       expect(parsed.redir_shot).toBeNull()
+      expect(pyStreamingRedirectCloses).toBe(2)
       expect(redirectTargetHits).toBe(0)
       expect(redirectTargetLeakedToken).toBeUndefined()
     } finally {
+      for (const t of redirectTimers) {
+        clearInterval(t)
+      }
+      for (const s of redirectSockets) {
+        s.destroy()
+      }
       redirectServer.close()
       proxyTrapServer.close()
       try { rmSync(expectedScreenshotFile, { force: true }) } catch { /* ignore */ }
