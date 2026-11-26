@@ -11,6 +11,7 @@ import {
   buildDevServerAuthHeaders,
   devServerAuthFilePath,
   readDevServerAuthToken,
+  requestDevServerLoopback,
 } from '../../src/daemon/dev-server.js'
 import { ProviderLoader } from '../../src/providers/provider-loader.js'
 import { validateCliProviderManifest } from '../../src/providers/sdk/v1/index.js'
@@ -542,6 +543,44 @@ describe('DevServer /api/scaffold', () => {
     const expectedScreenshotFile = `/tmp/screenshot_demo-ide_${screenshotLabel}.webp`
 
     try {
+      // INGRESS-10: Node requestDevServerLoopback attaches the per-boot token over a direct loopback
+      // socket (agent: false, bypassing global fetch/proxy dispatchers) and rejects 3xx redirects
+      // without following Location or leaking x-adhdev-dev-token to the redirect target.
+      const directStatus = await requestDevServerLoopback({
+        port,
+        path: '/api/status',
+        method: 'GET',
+        configDir: tempRoot,
+      })
+      expect(directStatus.ok).toBe(true)
+      expect(directStatus.status).toBe(200)
+      expect(directStatus.data?.devMode).toBe(true)
+
+      await expect(
+        requestDevServerLoopback({
+          port: redirectPort,
+          path: '/api/status',
+          method: 'GET',
+          configDir: tempRoot,
+        }),
+      ).rejects.toThrow(/Redirects are disallowed for DevServer requests \(HTTP 302\)/)
+      expect(redirectTargetHits).toBe(0)
+      expect(redirectTargetLeakedToken).toBeUndefined()
+
+      await expect(
+        requestDevServerLoopback({
+          port: 0,
+          path: '/api/status',
+        }),
+      ).rejects.toThrow(/Invalid DevServer port: 0/)
+
+      await expect(
+        requestDevServerLoopback({
+          port,
+          path: '//evil.example/api/status',
+        }),
+      ).rejects.toThrow(/Invalid DevServer path/)
+
       const pySnippet = [
         'import sys, os, json',
         `sys.path.insert(0, ${JSON.stringify(scriptsDir)})`,

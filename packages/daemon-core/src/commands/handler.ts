@@ -681,31 +681,18 @@ export class DaemonCommandHandler implements CommandHelpers {
     handleSetActiveProviderSource(args: any): CommandResult { return handleSetActiveProviderSource(this, args); }
 
     // ─── DevServer HTTP proxy helpers ─────────────────
-    // These bridge WS commands to the DevServer REST API (localhost:19280)
+    // These bridge WS commands to the DevServer REST API (127.0.0.1:19280)
 
     async proxyDevServerPost(args: any, endpoint: string): Promise<CommandResult> {
         const { providerType, ...body } = args || {};
         if (!providerType) return { success: false, error: 'providerType required' };
         try {
-            const http = await import('http');
-            const { buildDevServerAuthHeaders, DEV_SERVER_PORT } = await import('../daemon/dev-server.js');
-            const postData = JSON.stringify(body);
-            const result = await new Promise<any>((resolve, reject) => {
-                const req = http.request({
-                    hostname: '127.0.0.1', port: DEV_SERVER_PORT,
-                    path: `/api/providers/${providerType}/${endpoint}`,
-                    method: 'POST',
-                    headers: buildDevServerAuthHeaders({ 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) }, DEV_SERVER_PORT),
-                }, (res) => {
-                    let data = '';
-                    res.on('data', (chunk: Buffer) => data += chunk);
-                    res.on('end', () => {
-                        try { resolve(JSON.parse(data)); } catch { resolve({ raw: data }); }
-                    });
-                });
-                req.on('error', reject);
-                req.write(postData);
-                req.end();
+            const { requestDevServerLoopback, DEV_SERVER_PORT } = await import('../daemon/dev-server.js');
+            const { data: result } = await requestDevServerLoopback({
+                port: DEV_SERVER_PORT,
+                path: `/api/providers/${encodeURIComponent(providerType)}/${endpoint}`,
+                method: 'POST',
+                body,
             });
             return { success: true, ...result };
         } catch (e: any) {
@@ -717,21 +704,11 @@ export class DaemonCommandHandler implements CommandHelpers {
         const { providerType } = args || {};
         if (!providerType) return { success: false, error: 'providerType required' };
         try {
-            const http = await import('http');
-            const { buildDevServerAuthHeaders, DEV_SERVER_PORT } = await import('../daemon/dev-server.js');
-            const result = await new Promise<any>((resolve, reject) => {
-                http.get({
-                    hostname: '127.0.0.1',
-                    port: DEV_SERVER_PORT,
-                    path: `/api/providers/${providerType}/${endpoint}`,
-                    headers: buildDevServerAuthHeaders({}, DEV_SERVER_PORT),
-                }, (res) => {
-                    let data = '';
-                    res.on('data', (chunk: Buffer) => data += chunk);
-                    res.on('end', () => {
-                        try { resolve(JSON.parse(data)); } catch { resolve({ raw: data }); }
-                    });
-                }).on('error', reject);
+            const { requestDevServerLoopback, DEV_SERVER_PORT } = await import('../daemon/dev-server.js');
+            const { data: result } = await requestDevServerLoopback({
+                port: DEV_SERVER_PORT,
+                path: `/api/providers/${encodeURIComponent(providerType)}/${endpoint}`,
+                method: 'GET',
             });
             return { success: true, ...result };
         } catch (e: any) {
@@ -741,25 +718,12 @@ export class DaemonCommandHandler implements CommandHelpers {
 
     async proxyDevServerScaffold(args: any): Promise<CommandResult> {
         try {
-            const http = await import('http');
-            const { buildDevServerAuthHeaders, DEV_SERVER_PORT } = await import('../daemon/dev-server.js');
-            const postData = JSON.stringify(args || {});
-            const result = await new Promise<any>((resolve, reject) => {
-                const req = http.request({
-                    hostname: '127.0.0.1', port: DEV_SERVER_PORT,
-                    path: '/api/scaffold',
-                    method: 'POST',
-                    headers: buildDevServerAuthHeaders({ 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) }, DEV_SERVER_PORT),
-                }, (res) => {
-                    let data = '';
-                    res.on('data', (chunk: Buffer) => data += chunk);
-                    res.on('end', () => {
-                        try { resolve(JSON.parse(data)); } catch { resolve({ raw: data }); }
-                    });
-                });
-                req.on('error', reject);
-                req.write(postData);
-                req.end();
+            const { requestDevServerLoopback, DEV_SERVER_PORT } = await import('../daemon/dev-server.js');
+            const { data: result } = await requestDevServerLoopback({
+                port: DEV_SERVER_PORT,
+                path: '/api/scaffold',
+                method: 'POST',
+                body: args || {},
             });
             return { success: true, ...result };
         } catch (e: any) {

@@ -547,6 +547,11 @@ export {
   writeDevServerAuthFile,
   readDevServerAuthToken,
   buildDevServerAuthHeaders,
+  requestDevServerLoopback,
+} from './daemon/dev-server.js';
+export type {
+  DirectLoopbackDevServerRequestOptions,
+  DirectLoopbackDevServerResponse,
 } from './daemon/dev-server.js';
 
 // ── CLI Adapters ──
