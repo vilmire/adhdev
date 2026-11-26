@@ -521,6 +521,24 @@ describe('DevServer /api/scaffold', () => {
         res.end(JSON.stringify({ leaked: true }))
         return
       }
+      if (req.url?.startsWith('/conn-close-delayed')) {
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          Connection: 'close',
+        })
+        res.flushHeaders()
+        const timer = setTimeout(() => {
+          if (!res.destroyed) {
+            res.end(JSON.stringify({ connectionCloseOk: true, chunksDelivered: 2 }))
+          }
+        }, 30)
+        redirectTimers.add(timer)
+        req.socket.on('close', () => {
+          clearTimeout(timer)
+          redirectTimers.delete(timer)
+        })
+        return
+      }
       if (req.url?.startsWith('/slow-ok') || req.url?.startsWith('/slow-err')) {
         const statusCode = req.url.startsWith('/slow-err') ? 500 : 200
         const timer = setInterval(() => {
@@ -537,7 +555,9 @@ describe('DevServer /api/scaffold', () => {
         res.writeHead(statusCode, {
           'Content-Type': 'application/json',
           'Content-Length': '65536',
+          Connection: 'close',
         })
+        res.flushHeaders()
         res.write('{"slow":')
         return
       }
@@ -768,8 +788,12 @@ describe('DevServer /api/scaffold', () => {
         'redir_stream_vp = vp.api_call("/stream-redirect", method="GET", timeout=1)',
         'redir_stream_vcp = vcp.api_call("/stream-redirect", method="GET", timeout=1)',
         'redir_shot = vp.capture_screenshot("demo-ide", "redir")',
+        // INGRESS-17: A valid response with Connection: close whose body arrives after headers flush
+        // must complete cleanly in both scripts without losing the body on premature socket close
+        'close_ok_vp = vp.api_call("/conn-close-delayed", method="GET", timeout=2)',
+        'close_ok_vcp = vcp.api_call("/conn-close-delayed", method="GET", timeout=2)',
         // INGRESS-16: Slowly trickle-streaming accepted (200) and non-redirect error (500) responses
-        // must be aborted at the total deadline and close their sockets promptly
+        // (including with Connection: close) must be aborted at the total deadline and close their sockets promptly
         'slow_ok_vp = vp.api_call("/slow-ok", method="GET", timeout=0.15)',
         'slow_ok_vcp = vcp.api_call("/slow-ok", method="GET", timeout=0.15)',
         'slow_err_vp = vp.api_call("/slow-err", method="GET", timeout=0.15)',
@@ -796,6 +820,8 @@ describe('DevServer /api/scaffold', () => {
         '  "redir_stream_vp_err": redir_stream_vp.get("error", ""),',
         '  "redir_stream_vcp_err": redir_stream_vcp.get("error", ""),',
         '  "redir_shot": redir_shot,',
+        '  "close_ok_vp": close_ok_vp.get("connectionCloseOk"),',
+        '  "close_ok_vcp": close_ok_vcp.get("connectionCloseOk"),',
         '  "slow_ok_vp_err": slow_ok_vp.get("error", ""),',
         '  "slow_ok_vcp_err": slow_ok_vcp.get("error", ""),',
         '  "slow_err_vp_err": slow_err_vp.get("error", ""),',
@@ -851,6 +877,8 @@ describe('DevServer /api/scaffold', () => {
       expect(parsed.redir_stream_vp_err).toMatch(/Redirects are disallowed for DevServer requests \(HTTP 302\)/)
       expect(parsed.redir_stream_vcp_err).toMatch(/Redirects are disallowed for DevServer requests \(HTTP 302\)/)
       expect(parsed.redir_shot).toBeNull()
+      expect(parsed.close_ok_vp).toBe(true)
+      expect(parsed.close_ok_vcp).toBe(true)
       expect(parsed.slow_ok_vp_err).toBe('timeout')
       expect(parsed.slow_ok_vcp_err).toBe('timeout')
       expect(parsed.slow_err_vp_err).toBe('timeout')
