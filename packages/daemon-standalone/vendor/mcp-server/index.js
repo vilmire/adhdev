@@ -168920,8 +168920,10 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           (res) => {
             const status = res.statusCode ?? 0;
             if (status >= 300 && status < 400) {
-              res.resume();
-              finish(() => reject(new Error(`Redirects are disallowed for DevServer requests (HTTP ${status})`)));
+              const err2 = new Error(`Redirects are disallowed for DevServer requests (HTTP ${status})`);
+              finish(() => reject(err2));
+              res.destroy();
+              req.destroy();
               return;
             }
             let raw = "";

@@ -564,6 +564,51 @@ describe('DevServer /api/scaffold', () => {
           configDir: tempRoot,
         }),
       ).rejects.toThrow(/Redirects are disallowed for DevServer requests \(HTTP 302\)/)
+      // Stand up a streaming redirect server that keeps sending body bytes after 302 headers
+      // to verify INGRESS-12: rejecting a redirect immediately destroys the connection instead of draining.
+      let streamingRedirectClosed = false
+      let streamingRedirectTimer: NodeJS.Timeout | null = null
+      const streamingRedirectServer = http.createServer((req, res) => {
+        req.socket.on('close', () => {
+          streamingRedirectClosed = true
+          if (streamingRedirectTimer) {
+            clearInterval(streamingRedirectTimer)
+            streamingRedirectTimer = null
+          }
+        })
+        res.writeHead(302, {
+          Location: `http://127.0.0.1:${redirectPort}/target`,
+          'Transfer-Encoding': 'chunked',
+        })
+        res.write('redirecting...')
+        streamingRedirectTimer = setInterval(() => {
+          if (!res.destroyed) {
+            res.write('more...')
+          }
+        }, 10)
+      })
+      const streamingRedirectPort = await new Promise<number>((resolve) => {
+        streamingRedirectServer.listen(0, '127.0.0.1', () => {
+          const addr = streamingRedirectServer.address()
+          resolve(typeof addr === 'object' && addr ? addr.port : 0)
+        })
+      })
+      try {
+        await expect(
+          requestDevServerLoopback({
+            port: streamingRedirectPort,
+            path: '/api/status',
+            method: 'GET',
+            timeoutMs: 1000,
+            configDir: tempRoot,
+          }),
+        ).rejects.toThrow(/Redirects are disallowed for DevServer requests \(HTTP 302\)/)
+        await new Promise((r) => setTimeout(r, 30))
+        expect(streamingRedirectClosed).toBe(true)
+      } finally {
+        if (streamingRedirectTimer) clearInterval(streamingRedirectTimer)
+        streamingRedirectServer.close()
+      }
       expect(redirectTargetHits).toBe(0)
       expect(redirectTargetLeakedToken).toBeUndefined()
 
@@ -581,8 +626,8 @@ describe('DevServer /api/scaffold', () => {
         }),
       ).rejects.toThrow(/Invalid DevServer path/)
 
-      // INGRESS-11: A response that disconnects after sending headers / partial body must promptly
-      // reject requestDevServerLoopback rather than leaving callers (such as daemon:status) hanging.
+      // INGRESS-11 & INGRESS-13: A response that disconnects after sending headers / partial body must promptly
+      // reject requestDevServerLoopback with an abort or premature-close error (never waiting for the timeout).
       const truncatedServer = http.createServer((_req, res) => {
         res.writeHead(200, {
           'Content-Type': 'application/json',
@@ -605,10 +650,10 @@ describe('DevServer /api/scaffold', () => {
             port: truncatedPort,
             path: '/api/status',
             method: 'GET',
-            timeoutMs: 1000,
+            timeoutMs: 2000,
             configDir: tempRoot,
           }),
-        ).rejects.toThrow(/DevServer (response|request)|aborted|closed|socket hang up/i)
+        ).rejects.toThrow(/DevServer response (aborted|closed|ended) before completion|DevServer request closed before response completed|aborted/i)
       } finally {
         truncatedServer.close()
       }
