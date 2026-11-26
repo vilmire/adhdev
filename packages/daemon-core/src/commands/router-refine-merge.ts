@@ -210,6 +210,7 @@ export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter,
             const contract = await checkRefinePublicationContract(ctx);
             if (contract) return contract;
 
+            await ctx.approvedRuntime?.verify(ctx.node.workspace);
             let mergeResult: Record<string, unknown> | undefined;
             const mergeStarted = Date.now();
             try {
@@ -327,7 +328,7 @@ export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter,
             // destructive worktree/branch cleanup once the push is proven — a push failure
             // must leave the worktree + branch ref intact so a retry can re-push without
             // reconstructing anything, and the batch must NOT count the node as merged.
-            const requireApprovalForPush: boolean = resolveMeshPolicy((mesh as any)?.policy).requireApprovalForPush;
+            const requireApprovalForPush: boolean = Boolean(ctx.approvedRuntime) || resolveMeshPolicy((mesh as any)?.policy).requireApprovalForPush;
 
             let pushResult: Record<string, unknown> | undefined;
             if (!requireApprovalForPush) {
@@ -435,7 +436,7 @@ export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter,
                     refineStages,
                     pushReady: true,
                     pushCommand: `git push origin ${baseBranch}`,
-                    pushNote: 'requireApprovalForPush is enabled — the merge landed on the local base but was NOT pushed and the worktree was NOT cleaned up. Run the push (or approve it), then re-run refine/cleanup to remove the worktree.',
+                    pushNote: ctx.approvedRuntime ? 'The approved runtime job retains the candidate and stops before Root push.' : 'requireApprovalForPush is enabled — the merge landed on the local base but was NOT pushed and the worktree was NOT cleaned up. Run the push (or approve it), then re-run refine/cleanup to remove the worktree.',
                     finalBranchConvergenceState: {
                         branch: baseBranch,
                         mergedBranch: branch,

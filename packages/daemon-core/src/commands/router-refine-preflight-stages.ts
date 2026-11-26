@@ -95,6 +95,10 @@ export async function refinePatchEquivalenceStage(self: DaemonCommandRouter, ctx
                 }
 
                 {
+                    if (ctx.approvedRuntime) return { kind: 'terminal', result: {
+                        success: false, code: 'approved_runtime_candidate_retained',
+                        error: 'Candidate content already exists in the base. The approved runtime operation retains the worktree.',
+                    } };
                     // Content already in base — skip merge, go straight to cleanup.
                     recordMeshRefineStage(refineStages, 'merge', 'skipped', Date.now(), {
                         reason: 'already_merged_via_other_path',
@@ -165,7 +169,8 @@ export async function refineSubmoduleReachabilityStage(self: DaemonCommandRouter
                 autoPublishPolicySource: autoPublishSubmoduleMainCommits.source,
                 worktreeRoot: node.workspace,
                 approvedPublishShas: ctx.args?.approvedPublishShas,
-                ...(!resolveMeshPolicy((mesh as any)?.policy).requireApprovalForPush ? { rootCommit: branchHead, rootBranch: baseBranch } : {}),
+                beforePublish: ctx.approvedRuntime?.checkPublication,
+                ...(!ctx.approvedRuntime && !resolveMeshPolicy((mesh as any)?.policy).requireApprovalForPush ? { rootCommit: branchHead, rootBranch: baseBranch } : {}),
             });
             recordMeshRefineStage(refineStages, 'submodule_reachability', submoduleReachability.status, submoduleReachabilityStarted, {
                 checked: submoduleReachability.checked,

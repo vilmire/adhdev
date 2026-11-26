@@ -266,7 +266,7 @@ export function queueRefineJobEvent(self: DaemonCommandRouter, event: 'refine:ac
         notifyMeshCoordinator(eventPayload);
     }
 
-export async function appendRefineJobLedger(self: DaemonCommandRouter, kind: 'task_dispatched' | 'task_completed' | 'task_failed', handle: MeshRefineJobHandle, result?: Record<string, unknown>): Promise<void> {
+export async function appendRefineJobLedger(self: DaemonCommandRouter, kind: 'task_dispatched' | 'task_completed' | 'task_failed', handle: MeshRefineJobHandle, result?: Record<string, unknown>): Promise<boolean> {
         try {
             const { buildLedgerOriginatingCoordinatorStamp } = await import('../mesh/mesh-ledger.js');
             const { meshRecord } = await import('../mesh/mesh-record.js');
@@ -286,7 +286,7 @@ export async function appendRefineJobLedger(self: DaemonCommandRouter, kind: 'ta
             const executorStamp = kind === 'task_dispatched'
                 ? (await import('../mesh/mesh-refine-executor-liveness.js')).buildRefineExecutorStamp()
                 : undefined;
-            meshRecord(handle.meshId, kind, {
+            const record = meshRecord(handle.meshId, kind, {
                 nodeId: handle.targetNodeId,
                 payload: {
                     source: 'refine_mesh_node_async_job',
@@ -303,6 +303,7 @@ export async function appendRefineJobLedger(self: DaemonCommandRouter, kind: 'ta
                         completedAt: handle.completedAt,
                         retryOfJobId: handle.retryOfJobId,
                         publicationContract: handle.publicationContract,
+                        approvedRuntimeAudit: handle.approvedRuntimeAudit,
                         ...(executorStamp ? { executor: executorStamp } : {}),
                     },
                     async: true,
@@ -326,7 +327,9 @@ export async function appendRefineJobLedger(self: DaemonCommandRouter, kind: 'ta
                 const { scheduleMissionGitEvalAfterRefine } = await import('../mesh/mission-git-triggers.js');
                 scheduleMissionGitEvalAfterRefine(handle.meshId, { selfDaemonId: self.deps.statusInstanceId, dispatch: self.deps.dispatchMeshCommand });
             }
+            return record.storedLocally;
         } catch (e: any) {
             LOG.warn('Mesh', `[Refinery] Failed to append async refine ledger entry: ${e?.message || e}`);
+            return false;
         }
     }

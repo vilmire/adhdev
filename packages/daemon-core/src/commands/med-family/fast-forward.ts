@@ -18,6 +18,9 @@ import { resolveMeshRefineConfigBaseRefs } from '../../mesh/refine-config.js';
 import type { CommandRouterResult } from '../router.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
 import { defineCommandSpecs } from '../command-registry.js';
+import { APPROVED_RUNTIME_COMMAND, approvedRuntime, resolveApprovedRefineRuntime } from './refine-approved-runtime.js';
+import { stripRouterInternalArgs } from '../router-internal-args.js';
+import { readAuthenticatedMcpScope } from '../mcp-command-ingress.js';
 import { readMeshDirectDispatchFlag, withMeshDirectDispatch, resolveDryRunVeto } from '../command-args.js';
 import { rosterEvidenceExtra } from '../mesh-sender.js';
 import { unwrapMeshRelayResult } from '../mesh-relay-result.js';
@@ -146,6 +149,36 @@ export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
                 operationError: errorMessage,
                 error: errorMessage,
             } as CommandRouterResult;
+        }
+    },
+
+    [APPROVED_RUNTIME_COMMAND]: async (ctx, args) => {
+        const allowed = new Set(['meshId', 'nodeId', 'runtimeApprovalId', 'execute', 'dryRun']);
+        const payload = stripRouterInternalArgs(args);
+        if (Object.keys(payload).some(key => !allowed.has(key))
+            || [args.execute, args.dryRun].some(value => value !== undefined && typeof value !== 'boolean')) {
+            return { success: false, code: 'invalid_runtime_approval_request' };
+        }
+        const veto = resolveDryRunVeto(args);
+        if (veto.refused) return { success: false, code: veto.code, error: veto.error };
+        try {
+            const runtime = await resolveApprovedRefineRuntime(ctx, args);
+            if (veto.isDryRun) {
+                const plan = await fastForwardHandlers.refine_mesh_node(ctx, {
+                    meshId: args.meshId, nodeId: args.nodeId, dryRun: true, ...runtime.publication,
+                });
+                await runtime.verify(plan?.workspace as string);
+                return { ...plan, approvedRuntime: runtime.audit };
+            }
+            return await ctx.startMeshRefineJob(args.meshId, args.nodeId, {
+                ...runtime.publication,
+                coordinatorDaemonId: ctx.deps.statusInstanceId,
+                coordinatorSessionId: readAuthenticatedMcpScope(args, APPROVED_RUNTIME_COMMAND)?.sessionId,
+                [approvedRuntime]: runtime,
+            });
+        } catch (error) {
+            return { success: false, code: 'runtime_approval_refused',
+                error: error instanceof Error && /^[a-z_]+$/.test(error.message) ? error.message : 'approved_runtime_unavailable' };
         }
     },
 
@@ -288,4 +321,5 @@ export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
 export const fastForwardSpecs = defineCommandSpecs('med', fastForwardHandlers, {
     fast_forward_mesh_node: { meshSender: 'any_member_mesh' },
     refine_mesh_node: { meshSender: 'any_member_mesh' },
+    [APPROVED_RUNTIME_COMMAND]: { sources: ['ipc'] },
 }, { meshSender: 'authenticated_peer' });

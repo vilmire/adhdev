@@ -28,10 +28,12 @@ export const MESH_REFINE_NODE_TOOL = {
         + 'Converges ONE node: to land two or more sibling worktrees that share a base branch, use mesh_refine_batch instead of calling this repeatedly — it orders nodes conflict-aware and re-checks each against the advanced base. Approval contracts preserve history and refuse when fast-forward is impossible; only requests without approval contracts retain automatic rebase.',
     inputSchema: {
         type: 'object' as const,
+        additionalProperties: false,
         properties: {
             node_id: { type: 'string', description: 'Node ID of the completed worktree node to refine and merge.' },
             execute: { type: 'boolean', description: 'When true, run validation/merge/push/cleanup for this node. Defaults false/dry-run.' },
             dry_run: { type: 'boolean', description: 'Preview the validation plan without merging. Defaults true unless execute=true; dry_run=true overrides execute.' },
+            runtime_approval_id: { type: 'string', pattern: '^mi_[0-9a-f]{12}$', description: 'Existing owner decision for a supported local Refinery runtime. The daemon resolves all runtime and publication pins.' },
             approved_publish_shas: PUBLIC_PUBLISH_APPROVAL_SCHEMA,
             ...REFINE_PUBLICATION_PROPERTIES,
         },

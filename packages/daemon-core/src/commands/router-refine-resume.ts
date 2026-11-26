@@ -156,7 +156,7 @@ export async function resumePendingRefineJobsOnStartup(self: DaemonCommandRouter
                         continue;
                     }
 
-                    if (decision.disposition === 'close_removed_node' || decision.disposition === 'close_stale') {
+                    if (node?.approvedRuntimeAudit || decision.disposition === 'close_removed_node' || decision.disposition === 'close_stale') {
                         const removedNode = decision.disposition === 'close_removed_node';
                         const zombieHandle = buildRefineJobHandle(self, {
                             meshId,
@@ -169,7 +169,10 @@ export async function resumePendingRefineJobsOnStartup(self: DaemonCommandRouter
                             coordinatorDaemonId,
                             coordinatorSessionId,
                         });
-                        const zombieResult = removedNode
+                        zombieHandle.approvedRuntimeAudit = node?.approvedRuntimeAudit;
+                        const zombieResult = node?.approvedRuntimeAudit
+                            ? { success: false, code: 'approved_runtime_interrupted', error: 'Restart closed the runtime-scoped job. Revalidate through the approved runtime command.' }
+                            : removedNode
                             // NODE-EXISTENCE (D): the target node was removed
                             // (mesh_remove_node / worktree retention) while its dispatch row
                             // stayed behind. Re-running is impossible and there is no

@@ -205,6 +205,7 @@ export type MeshRefineAsyncJobStatus = 'accepted' | 'completed' | 'failed';
 
 export type MeshRefineJobHandle = {
     /** Durable authority: recovery must never downgrade an explicit mode. */
+    approvedRuntimeAudit?: Record<string, unknown>;
     publicationContract?: import('./mesh-refine-publication-contract.js').RefinePublicationOptions;
     success: true;
     async: true;
@@ -465,6 +466,7 @@ export type RefineExecFileAsync = (file: string, args: string[], options: { cwd:
  * are carried on the mutable context rather than re-threaded through return types.
  */
 export interface RefineContext {
+    approvedRuntime?: import('../commands/med-family/refine-approved-runtime.js').ApprovedRefineRuntime;
     meshId: string;
     nodeId: string;
     args: import('./mesh-refine-publication-contract.js').RefineCommandArgs;
@@ -693,6 +695,7 @@ interface MeshRefineValidationGateOptions {
     baseSha?: string;
     /** LIGHT-TASK: skip the node bootstrap stage (light/review workspaces share a linked node_modules; they must never install). */
     skipBootstrap?: boolean;
+    approvedRuntime?: { path: string; checkAuthority: () => void };
 }
 
 function refineCommandRecord(candidate: MeshRefineValidationCommand, cwd: string, startedAt: number, result: any, passed: boolean, extras: Record<string, unknown> = {}) {
@@ -846,9 +849,11 @@ interface RefineCommandControl {
     scheduled?: boolean;
     env?: Record<string, string>;
     onSpawn?: (child: RefineGroupChild | undefined) => void;
+    approvedRuntime?: MeshRefineValidationGateOptions['approvedRuntime'];
 }
 
 async function execRefineCommand(execFileFn: RefineGateExecFile, candidate: MeshRefineValidationCommand, cwd: string, resolvedCommand: string, control?: RefineCommandControl): Promise<{ stdout?: string; stderr?: string }> {
+    control?.approvedRuntime?.checkAuthority();
     const spawn = buildWin32ExecFileSpawn(resolvedCommand, candidate.args);
     const idleTimeoutMs = candidate.timeoutMs || REFINE_VALIDATION_TIMEOUT_MS;
     const execOptions: Record<string, unknown> = {
@@ -857,7 +862,7 @@ async function execRefineCommand(execFileFn: RefineGateExecFile, candidate: Mesh
         windowsHide: true,
         timeout: 0,
         maxBuffer: candidate.outputLimitBytes || REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
-        env: { ...sanitizeRefineGateChildEnv(), CI: process.env.CI || '1', ...refineGateChildEnv(), ...(control?.env || {}), ...(candidate.env || {}) },
+        env: { ...sanitizeRefineGateChildEnv(), CI: process.env.CI || '1', ...refineGateChildEnv(), ...(control?.env || {}), ...(candidate.env || {}), ...(control?.approvedRuntime ? { PATH: control.approvedRuntime.path } : {}) },
         ...(spawn.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     };
     return new Promise((resolve, reject) => {
@@ -954,7 +959,7 @@ async function runRefineWorktreeBootstrap(
         summary.bootstrap = { stage: 'cached', status: 'ready', skipped: true, configSource: evaluated.configSource };
         return { runLegacyBootstrapCommands: false };
     }
-    const ran = await runMeshWorktreeBootstrap(mesh, workspace);
+    const ran = await runMeshWorktreeBootstrap(mesh, workspace, opts?.approvedRuntime);
     try { opts?.onBootstrapStateChange?.(ran); } catch { /* persistence is best-effort */ }
     if (ran.status === 'ready') {
         summary.bootstrap = {
@@ -985,6 +990,7 @@ async function runLegacyRefineBootstrap(
     workspace: string,
     selection: RefineValidationSelection,
     summary: MeshRefineValidationSummary,
+    approvedRuntime?: MeshRefineValidationGateOptions['approvedRuntime'],
 ): Promise<boolean> {
     summary.bootstrap = { stage: 'legacy' };
     for (const candidate of selection.bootstrapCommands) {
@@ -992,7 +998,7 @@ async function runLegacyRefineBootstrap(
         const cwd = candidate.cwd ? pathResolve(workspace, candidate.cwd) : workspace;
         const resolvedCommand = resolveWin32Executable(candidate.command);
         try {
-            const result = await execRefineCommand(execFileAsync, candidate, cwd, resolvedCommand);
+            const result = await execRefineCommand(execFileAsync, candidate, cwd, resolvedCommand, { approvedRuntime });
             summary.bootstrapCommandsRun.push(refineCommandRecord(candidate, cwd, startedAt, result, true, { exitCode: 0 }));
         } catch (error: any) {
             const spawnResolutionFailed = isSpawnResolutionError(error);
@@ -1170,7 +1176,7 @@ export async function runMeshRefineValidationGate(
     if (bootstrap === 'failed') return summary;
     let commandsToRun = selectRefineCommandsToRun(selection, summary, opts?.changeImpact);
     if (profileRun) commandsToRun = applyRefineProfileSelection(profileRun, commandsToRun, summary.commandsRun);
-    if (bootstrap.runLegacyBootstrapCommands && !(await runLegacyRefineBootstrap(execFileAsync, workspace, selection, summary))) {
+    if (bootstrap.runLegacyBootstrapCommands && !(await runLegacyRefineBootstrap(execFileAsync, workspace, selection, summary, opts?.approvedRuntime))) {
         return summary;
     }
 
@@ -1220,7 +1226,7 @@ export async function runMeshRefineValidationGate(
             } catch { /* observability must never fail the run */ }
         }
         try {
-            const result = await execRefineCommand(execFileAsync, candidate, cwd, resolvedCommand, control);
+            const result = await execRefineCommand(execFileAsync, candidate, cwd, resolvedCommand, opts?.approvedRuntime ? { ...control, approvedRuntime: opts.approvedRuntime } : control);
             if (handle?.cancelRequested) {
                 // A gate that exited 0 BECAUSE we cancelled it (graceful SIGTERM
                 // handler) did not pass — record it as cancelled, like a killed one.

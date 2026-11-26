@@ -671,16 +671,21 @@ function enqueueBootstrap<T>(run: () => Promise<T>): { queuePosition: number; re
  * re-bootstrap. The failure direction is "bootstrap again", never "ready without
  * having run".
  */
-export function startMeshWorktreeBootstrap(mesh: any, workspace: string): { queuePosition: number; result: Promise<WorktreeBootstrapState> } {
-    const { queuePosition, result } = enqueueBootstrap(() => runMeshWorktreeBootstrapUnqueued(mesh, workspace));
+interface BootstrapRuntime {
+    path: string;
+    checkAuthority: () => void;
+}
+
+export function startMeshWorktreeBootstrap(mesh: any, workspace: string, runtime?: BootstrapRuntime): { queuePosition: number; result: Promise<WorktreeBootstrapState> } {
+    const { queuePosition, result } = enqueueBootstrap(() => runMeshWorktreeBootstrapUnqueued(mesh, workspace, runtime));
     return {
         queuePosition,
         result: result.then((state) => (queuePosition > 0 ? { ...state, queuePosition } : state)),
     };
 }
 
-export async function runMeshWorktreeBootstrap(mesh: any, workspace: string): Promise<WorktreeBootstrapState> {
-    return startMeshWorktreeBootstrap(mesh, workspace).result;
+export async function runMeshWorktreeBootstrap(mesh: any, workspace: string, runtime?: BootstrapRuntime): Promise<WorktreeBootstrapState> {
+    return startMeshWorktreeBootstrap(mesh, workspace, runtime).result;
 }
 
 /**
@@ -688,7 +693,7 @@ export async function runMeshWorktreeBootstrap(mesh: any, workspace: string): Pr
  * {@link runMeshWorktreeBootstrap} / {@link startMeshWorktreeBootstrap} so the
  * per-base serialization can never be bypassed.
  */
-async function runMeshWorktreeBootstrapUnqueued(mesh: any, workspace: string): Promise<WorktreeBootstrapState> {
+async function runMeshWorktreeBootstrapUnqueued(mesh: any, workspace: string, runtime?: BootstrapRuntime): Promise<WorktreeBootstrapState> {
     const loaded = loadMeshWorktreeBootstrapConfig(mesh, workspace);
     if (!loaded.config) {
         return { status: 'not_configured', required: false, configSource: loaded.source, configSourceType: loaded.sourceType, error: loaded.error };
@@ -739,12 +744,13 @@ async function runMeshWorktreeBootstrapUnqueued(mesh: any, workspace: string): P
         // it in cmd.exe /c (no-op off win32 / for a real .exe).
         const spawn = buildWin32ExecFileSpawn(resolvedCommand, command.args);
         try {
+            runtime?.checkAuthority();
             const result = await execFileAsync(spawn.file, spawn.args, {
                 cwd,
                 encoding: 'utf8',
                 timeout: command.timeoutMs || DEFAULT_TIMEOUT_MS,
                 maxBuffer: command.outputLimitBytes || DEFAULT_OUTPUT_LIMIT_BYTES,
-                env: { ...process.env, CI: process.env.CI || '1', ...(command.env || {}) },
+                env: { ...process.env, CI: process.env.CI || '1', ...(command.env || {}), ...(runtime ? { PATH: runtime.path } : {}) },
                 windowsHide: true,
                 ...(spawn.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
             });

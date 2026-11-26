@@ -30,6 +30,7 @@ import { findOpenLedgerRefineDispatch, refineWorktreeVanishedOutcome } from '../
 import { decideRefineTerminalWriteFromLedger } from '../mesh/mesh-refine-terminal-guard.js';
 // GHOST-FAILURE terminal classification (mesh-refine-landing.ts).
 import { classifyRefineTerminal, refineTerminalNextStep, buildRefineBlockerContext } from '../mesh/mesh-refine-landing.js';
+import { approvedRuntime, type ApprovedRefineRuntime } from './med-family/refine-approved-runtime.js';
 import type { WorktreeBootstrapState } from '../mesh/worktree-bootstrap-config.js';
 import { gitChildEnv, GIT_LOCAL_TIMEOUT_MS as REFINE_GIT_LOCAL_TIMEOUT_MS } from '../git/git-locale.js';
 import { readStringValue } from '../mesh/mesh-node-identity.js';
@@ -74,6 +75,11 @@ export async function executeMeshRefineNodeSynchronously(self: DaemonCommandRout
             const resolved = light ? await refineResolveLightRefsStage(self, meshId, nodeId, args, refineStages, light) : await refineResolveRefsStage(self, meshId, nodeId, args, refineStages);
             if (resolved.kind === 'terminal') return resolved.result;
             const ctx = resolved.ctx;
+            ctx.approvedRuntime = (args as RefineCommandArgs & { [approvedRuntime]?: ApprovedRefineRuntime })[approvedRuntime];
+            if (ctx.approvedRuntime && ctx.baseBranch !== 'main') {
+                return { success: false, code: 'approved_runtime_base_mismatch', error: 'The approved runtime is scoped to main.' };
+            }
+            await ctx.approvedRuntime?.verify(ctx.node.workspace);
             // ★B1: thread the caller's progress channel onto the context so the stages can
             // announce slow gates. Carried on `args` (which already flows through every
             // entry point) rather than as a new parameter, so the many existing callers of
@@ -155,6 +161,7 @@ export async function executeMeshRefineNodeSynchronously(self: DaemonCommandRout
             const afterSyncBase = refineWorktreeVanishedOutcome(ctx, 'validation');
             if (afterSyncBase) return afterSyncBase.result;
 
+            await ctx.approvedRuntime?.verify(ctx.node.workspace);
             const validation = await refineValidationStage(self, ctx);
             if (validation.kind === 'terminal') return validation.result;
 
@@ -195,6 +202,7 @@ export async function refineValidationStage(self: DaemonCommandRouter, ctx: Refi
                 ? ((m: any, w: string, o: any) => runMeshRefineValidationProfile(m, w, ctx.lightTarget!.profile, { ...o, baseSha: ctx.baseHead }))
                 : runMeshRefineValidationGate;
             const validationSummary = await runGate(mesh, node.workspace, {
+                approvedRuntime: ctx.approvedRuntime,
                 // (a) Scope the validation command set by coarse change-impact (resolved
                 // in resolve_refs). Undefined → gate runs the full command set (fail-open).
                 changeImpact: ctx.changeImpact,
@@ -842,8 +850,13 @@ export async function startMeshRefineJob(self: DaemonCommandRouter, meshId: stri
             : undefined;
         const handle = buildRefineJobHandle(self, { meshId, nodeId, node, jobId, interactionId, retryOfJobId: terminal?.jobId, coordinatorDaemonId, coordinatorSessionId });
         handle.publicationContract = snapshotRefinePublicationContract(args);
+        handle.approvedRuntimeAudit = (args as RefineCommandArgs & { [approvedRuntime]?: ApprovedRefineRuntime })[approvedRuntime]?.audit;
         self.runningRefineJobs.set(key, handle);
-        await appendRefineJobLedger(self, 'task_dispatched', handle);
+        const logged = await appendRefineJobLedger(self, 'task_dispatched', handle);
+        if (handle.approvedRuntimeAudit && !logged) {
+            self.runningRefineJobs.delete(key);
+            return { success: false, code: 'approved_runtime_audit_unavailable', error: 'The approved runtime job requires a durable local dispatch audit.' };
+        }
         queueRefineJobEvent(self, 'refine:accepted', handle);
 
         setImmediate(() => {

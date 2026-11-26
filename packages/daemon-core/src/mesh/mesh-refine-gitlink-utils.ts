@@ -917,7 +917,7 @@ export async function assertRefineryPublishApproved(repo: string, commit: string
 export async function runMeshRefineSubmoduleReachabilityGate(
     repoRoot: string,
     mergedTree: string,
-    options: { allowAutoPublishSubmoduleMainCommits?: boolean; autoPublishPolicySource?: string; worktreeRoot?: string; approvedPublishShas?: PublicPublishApprovals; rootCommit?: string; rootBranch?: string } = {},
+    options: { allowAutoPublishSubmoduleMainCommits?: boolean; autoPublishPolicySource?: string; worktreeRoot?: string; approvedPublishShas?: PublicPublishApprovals; rootCommit?: string; rootBranch?: string; beforePublish?: (workspace: string, commit: string, branch: string, base: string) => Promise<void> } = {},
 ): Promise<MeshRefineSubmoduleReachabilitySummary> {
     const startedAt = Date.now();
     const entries: MeshRefineSubmoduleReachabilityEntry[] = [];
@@ -955,6 +955,7 @@ export async function runMeshRefineSubmoduleReachabilityGate(
                 integrationBase,
                 onScan: scan => { integrationScans.push(scan); },
             });
+            await options.beforePublish?.(submodulePath, commit, branch, integrationBase);
             const { stdout, stderr } = await pushRefineryPinnedCommit(submodulePath, commit, branch, integrationBase);
             return { stdout: `integration-range: ${JSON.stringify(integrationScans)}\n${String(stdout || '')}`, stderr: String(stderr || ''), refspec };
         };

@@ -223,7 +223,7 @@ export async function meshWriteMeshJsonConfig(
 
 export async function meshRefineNode(
     ctx: MeshContext,
-    args: { node_id: string; execute?: boolean; dry_run?: boolean } & RefinePublicationArgs,
+    args: { node_id: string; execute?: boolean; dry_run?: boolean; runtime_approval_id?: string } & RefinePublicationArgs,
 ): Promise<string> {
     const node = await findNodeWithRefresh(ctx, args.node_id);
 
@@ -265,6 +265,20 @@ export async function meshRefineNode(
     // stamps its own session (mesh-tools-internal drainerIdentity), so the pair completes
     // the match. Absent (legacy ctx) → daemon-level delivery, unchanged.
     const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
+    if (args.runtime_approval_id !== undefined) {
+        const allowed = new Set(['node_id', 'execute', 'dry_run', 'runtime_approval_id']);
+        if (Object.keys(args).some(key => !allowed.has(key)) || !/^mi_[0-9a-f]{12}$/.test(args.runtime_approval_id)) {
+            return JSON.stringify({ success: false, code: 'invalid_runtime_approval_request' });
+        }
+        const result = await ctx.transport.command('refine_mesh_node_approved_runtime', {
+            meshId: ctx.mesh.id,
+            nodeId: args.node_id,
+            runtimeApprovalId: args.runtime_approval_id,
+            execute: args.execute,
+            dryRun: args.dry_run,
+        });
+        return JSON.stringify(unwrapCommandPayload(result) ?? result, null, 2);
+    }
     const result = await commandForNode(ctx, node, 'refine_mesh_node', {
         meshId: ctx.mesh.id,
         nodeId: args.node_id,
