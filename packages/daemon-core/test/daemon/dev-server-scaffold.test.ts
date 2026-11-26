@@ -304,6 +304,32 @@ describe('DevServer /api/scaffold', () => {
     expect(existsSync(authFile)).toBe(true)
     expect(readFileSync(authFile, 'utf-8').trim()).toBe(started.token)
 
+    // INGRESS-09: After an EADDRINUSE skip (without calling stop() in between), startPromise is cleared
+    // so the same DevServer instance can immediately retry on an available port and bind cleanly.
+    const retryAfterCollisionServer = new DevServer({
+      providerLoader: duplicateLoader,
+      cdpManagers: new Map(),
+      logFn: () => {},
+      configDir: tempRoot,
+    })
+    await retryAfterCollisionServer.start(started.port)
+    expect(retryAfterCollisionServer.getAuthToken()).toBeNull()
+    const retryFreePort = 20000 + Math.floor(Math.random() * 10000)
+    await retryAfterCollisionServer.start(retryFreePort)
+    const retryFreeToken = retryAfterCollisionServer.getAuthToken() || ''
+    expect(retryFreeToken).toMatch(/^add_/)
+    const statusOnRetryFree = await rawDevRequest(retryFreePort, {
+      method: 'GET',
+      path: '/api/status',
+      headers: { [ADHDEV_DEV_SERVER_TOKEN_HEADER]: retryFreeToken },
+    })
+    expect(statusOnRetryFree.status).toBe(200)
+    retryAfterCollisionServer.stop()
+    expect(existsSync(devServerAuthFilePath(tempRoot, retryFreePort))).toBe(false)
+
+    // Restore incumbent env pointer after retryAfterCollisionServer.stop()
+    process.env[ADHDEV_DEV_SERVER_AUTH_FILE_ENV] = authFile
+
     const statusAfterDuplicate = await rawDevRequest(started.port, {
       method: 'GET',
       path: '/api/status',
@@ -349,23 +375,53 @@ describe('DevServer /api/scaffold', () => {
 
     // Fail-closed publication test: if the run directory is not writable when a fresh server starts,
     // start() rejects and closes the listener rather than running unauthenticated or with an unpublished token.
+    // INGRESS-09: Once the permissions are restored, the same DevServer instance can retry start() without stop().
     restarted.stop()
     server = null
     const runDir = path.join(tempRoot, 'run')
+    const failClosedServer = new DevServer({
+      providerLoader: duplicateLoader,
+      cdpManagers: new Map(),
+      logFn: () => {},
+      configDir: tempRoot,
+    })
+    const failPort = 20000 + Math.floor(Math.random() * 10000)
     chmodSync(runDir, 0o500)
     try {
-      const failClosedServer = new DevServer({
-        providerLoader: duplicateLoader,
-        cdpManagers: new Map(),
-        logFn: () => {},
-        configDir: tempRoot,
-      })
-      const failPort = 20000 + Math.floor(Math.random() * 10000)
       await expect(failClosedServer.start(failPort)).rejects.toThrow(/Failed to publish DevServer auth credential/)
       expect(failClosedServer.getAuthToken()).toBeNull()
     } finally {
       chmodSync(runDir, 0o700)
     }
+    await failClosedServer.start(failPort)
+    expect(failClosedServer.getAuthToken()).toMatch(/^add_/)
+    failClosedServer.stop()
+
+    // INGRESS-09: Calling stop() while start() is still pending (before the listen callback completes)
+    // settles the pending start promise instead of hanging, closes the pending server, and allows a clean restart.
+    const stopDuringBindServer = new DevServer({
+      providerLoader: duplicateLoader,
+      cdpManagers: new Map(),
+      logFn: () => {},
+      configDir: tempRoot,
+    })
+    const pendingBindPort = 20000 + Math.floor(Math.random() * 10000)
+    const pendingStart = stopDuringBindServer.start(pendingBindPort)
+    stopDuringBindServer.stop()
+    await pendingStart
+    expect(stopDuringBindServer.getAuthToken()).toBeNull()
+    expect(existsSync(devServerAuthFilePath(tempRoot, pendingBindPort))).toBe(false)
+
+    await stopDuringBindServer.start(pendingBindPort)
+    const restartedAfterCancelToken = stopDuringBindServer.getAuthToken() || ''
+    expect(restartedAfterCancelToken).toMatch(/^add_/)
+    const statusAfterCancelRestart = await rawDevRequest(pendingBindPort, {
+      method: 'GET',
+      path: '/api/status',
+      headers: { [ADHDEV_DEV_SERVER_TOKEN_HEADER]: restartedAfterCancelToken },
+    })
+    expect(statusAfterCancelRestart.status).toBe(200)
+    stopDuringBindServer.stop()
 
     // INGRESS-05: Overlapping start() calls on the SAME DevServer instance must not bind a second listener,
     // overwrite the first listener/token, or leave an open listener serving protected routes without auth after stop().
@@ -466,6 +522,22 @@ describe('DevServer /api/scaffold', () => {
     })
     writeFileSync(devServerAuthFilePath(tempRoot, redirectPort), token, { mode: 0o600 })
 
+    // Stand up a local proxy trap server to verify HTTP_PROXY / http_proxy environment settings are ignored
+    let proxyTrapHits = 0
+    let proxyTrapLeakedToken: string | undefined
+    const proxyTrapServer = http.createServer((req, res) => {
+      proxyTrapHits += 1
+      proxyTrapLeakedToken = req.headers[ADHDEV_DEV_SERVER_TOKEN_HEADER] as string | undefined
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ proxied: true }))
+    })
+    const proxyTrapPort = await new Promise<number>((resolve) => {
+      proxyTrapServer.listen(0, '127.0.0.1', () => {
+        const addr = proxyTrapServer.address()
+        resolve(typeof addr === 'object' && addr ? addr.port : 0)
+      })
+    })
+
     const screenshotLabel = `ing08_${process.pid}_${Date.now()}`
     const expectedScreenshotFile = `/tmp/screenshot_demo-ide_${screenshotLabel}.webp`
 
@@ -475,9 +547,23 @@ describe('DevServer /api/scaffold', () => {
         `sys.path.insert(0, ${JSON.stringify(scriptsDir)})`,
         'import verify_provider as vp',
         'import verify_cli_provider as vcp',
+        // INGRESS-06: Even when HTTP_PROXY / http_proxy is set and NO_PROXY is cleared, requests bypass the proxy
+        `os.environ["HTTP_PROXY"] = "http://127.0.0.1:${proxyTrapPort}"`,
+        `os.environ["http_proxy"] = "http://127.0.0.1:${proxyTrapPort}"`,
+        'os.environ.pop("NO_PROXY", None)',
+        'os.environ.pop("no_proxy", None)',
         's1 = vp.api_call("/api/status", method="GET")',
         's2 = vcp.api_call("/api/providers", method="GET")',
         `shot_path = vp.capture_screenshot("demo-ide", ${JSON.stringify(screenshotLabel)})`,
+        // INGRESS-06: Implicit port in http://127.0.0.1 or http://[::1] materializes canonical port 19280
+        // (matching the 19280 token lookup) rather than connecting to port 80, and explicit port 0 is rejected
+        'vp_implicit_base, vp_implicit_port = vp._validate_dev_server_api("http://127.0.0.1")',
+        'vcp_implicit_base, vcp_implicit_port = vcp._validate_dev_server_api("http://[::1]")',
+        'vp.API = "http://127.0.0.1:0"',
+        'vcp.API = "http://127.0.0.1:0"',
+        'port0_vp = vp.api_call("/api/status", method="GET")',
+        'port0_vcp = vcp.api_call("/api/status", method="GET")',
+        'port0_shot = vp.capture_screenshot("demo-ide", "port0")',
         // INGRESS-06: Non-loopback URLs must be rejected before reading or sending any local token
         'vp.API = "http://evil.example:19280"',
         'vcp.API = "http://evil.example:19280"',
@@ -502,6 +588,13 @@ describe('DevServer /api/scaffold', () => {
         '  "vp_devMode": s1.get("devMode"),',
         '  "vcp_has_providers": isinstance(s2.get("providers"), list),',
         '  "shot_path": shot_path,',
+        '  "vp_implicit_base": vp_implicit_base,',
+        '  "vp_implicit_port": vp_implicit_port,',
+        '  "vcp_implicit_base": vcp_implicit_base,',
+        '  "vcp_implicit_port": vcp_implicit_port,',
+        '  "port0_vp_err": port0_vp.get("error", ""),',
+        '  "port0_vcp_err": port0_vcp.get("error", ""),',
+        '  "port0_shot": port0_shot,',
         '  "tok1": tok1,',
         '  "tok2": tok2,',
         '  "evil_vp_err": evil_vp.get("error", ""),',
@@ -535,8 +628,18 @@ describe('DevServer /api/scaffold', () => {
       const parsed = JSON.parse(pyRes.stdout.trim().split('\n').pop() || '{}')
       expect(parsed.vp_devMode).toBe(true)
       expect(parsed.vcp_has_providers).toBe(true)
+      expect(parsed.vp_implicit_base).toBe('http://127.0.0.1:19280')
+      expect(parsed.vp_implicit_port).toBe(19280)
+      expect(parsed.vcp_implicit_base).toBe('http://[::1]:19280')
+      expect(parsed.vcp_implicit_port).toBe(19280)
+      expect(parsed.port0_vp_err).toMatch(/Invalid DevServer port: 0/)
+      expect(parsed.port0_vcp_err).toMatch(/Invalid DevServer port: 0/)
+      expect(parsed.port0_shot).toBeNull()
       expect(parsed.tok1).toBe(token)
       expect(parsed.tok2).toBe(token)
+      // INGRESS-06: Verify proxy trap received 0 requests and no token
+      expect(proxyTrapHits).toBe(0)
+      expect(proxyTrapLeakedToken).toBeUndefined()
       // INGRESS-08: Verify authenticated screenshot reached handler and wrote expected WebP binary
       expect(screenshotCaptures).toBe(1)
       expect(parsed.shot_path).toBe(expectedScreenshotFile)
@@ -554,6 +657,7 @@ describe('DevServer /api/scaffold', () => {
       expect(redirectTargetLeakedToken).toBeUndefined()
     } finally {
       redirectServer.close()
+      proxyTrapServer.close()
       try { rmSync(expectedScreenshotFile, { force: true }) } catch { /* ignore */ }
     }
   })

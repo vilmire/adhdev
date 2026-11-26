@@ -228,6 +228,7 @@ export class DevServer implements DevServerContext {
   private readonly configDir?: string;
   private startPromise: Promise<void> | null = null;
   private pendingServer: http.Server | null = null;
+  private pendingStartSettle: (() => void) | null = null;
   private startEpoch = 0;
 
   constructor(options: {
@@ -467,14 +468,28 @@ export class DevServer implements DevServerContext {
     });
 
     this.pendingServer = server;
+    let settled = false;
+    const settleOnce = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (this.pendingStartSettle === settleCancelled) {
+        this.pendingStartSettle = null;
+      }
+      fn();
+    };
+    let settleCancelled!: () => void;
     const promise = new Promise<void>((resolve, reject) => {
+      settleCancelled = () => settleOnce(resolve);
+      this.pendingStartSettle = settleCancelled;
+
       server.listen(port, '127.0.0.1', () => {
         if (this.pendingServer === server) {
           this.pendingServer = null;
         }
         if (epoch !== this.startEpoch) {
           server.closeAllConnections?.();
-          server.close(() => resolve());
+          server.close(() => settleOnce(resolve));
+          settleOnce(resolve);
           return;
         }
         const address = server.address();
@@ -486,48 +501,52 @@ export class DevServer implements DevServerContext {
           this.cleanupPublishedAuth();
           server.closeAllConnections?.();
           server.close(() => {
-            reject(new Error(`Failed to publish DevServer auth credential: ${err?.message || err}`));
+            settleOnce(() => reject(new Error(`Failed to publish DevServer auth credential: ${err?.message || err}`)));
           });
           return;
         }
         this.server = server;
         this.log(`Dev server listening on http://127.0.0.1:${boundPort}`);
-        resolve();
+        settleOnce(resolve);
       });
       server.on('error', (e: any) => {
         if (this.pendingServer === server) {
           this.pendingServer = null;
         }
         if (epoch !== this.startEpoch) {
-          resolve();
+          settleOnce(resolve);
           return;
         }
         if (e.code === 'EADDRINUSE') {
           this.log(`Port ${port} in use, skipping dev server`);
-          resolve(); // non-fatal; do not touch incumbent auth file or token
+          settleOnce(resolve); // non-fatal; do not touch incumbent auth file or token
         } else {
-          reject(e);
+          settleOnce(() => reject(e));
         }
       });
     });
 
-    this.startPromise = promise.finally(() => {
-      if (this.startPromise === promise) {
+    const trackedPromise = promise.finally(() => {
+      if (this.startPromise === trackedPromise) {
         this.startPromise = null;
       }
     });
-    return this.startPromise;
+    this.startPromise = trackedPromise;
+    return trackedPromise;
   }
 
   stop(): void {
     this.startEpoch += 1;
     this.startPromise = null;
+    const settlePending = this.pendingStartSettle;
+    this.pendingStartSettle = null;
     const pending = this.pendingServer;
     this.pendingServer = null;
     const srv = this.server;
     this.server = null;
     pending?.closeAllConnections?.();
     pending?.close();
+    settlePending?.();
     srv?.closeAllConnections?.();
     srv?.close();
     this.cleanupPublishedAuth();
