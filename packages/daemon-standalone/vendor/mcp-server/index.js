@@ -50198,7 +50198,9 @@ ${error.message || ""}`;
       return { version: 1, parentTaskId: parent.id, childTaskId: "", round: state2.round, headSha, submodules, checkout, artifacts };
     }
     function validateCurrentDiff(parent, artifacts, workspace) {
-      const latest = parent.stageState?.artifacts.diff.at(-1);
+      const diffIds = parent.stageState?.artifacts?.diff;
+      if (!Array.isArray(diffIds)) throw new Error("review_diff_metadata_missing");
+      const latest = diffIds.at(-1);
       const grant = artifacts.find((a) => a.id === latest);
       if (!grant) {
         if (latest) throw new Error("review_diff_latest_missing");
@@ -50227,11 +50229,12 @@ ${error.message || ""}`;
     function validateStageReviewRetainedGrants(store5, parent, ids) {
       const grants = stageReviewArtifactGrants(store5, parent, ids);
       validateCurrentDiff(parent, grants);
-      const latest = grants.find((a) => a.id === parent.stageState?.artifacts.diff.at(-1));
+      const latest = grants.find((a) => a.id === parent.stageState?.artifacts?.diff?.at(-1));
       if (latest && decodeStageSourceGenerated(readStageReviewArtifact(latest)) && (!parent.stageReviewInput || parent.stageReviewInput.round !== parent.stageState?.round || JSON.stringify(ids) !== JSON.stringify(grants.map((a) => a.id)))) throw new Error("review_diff_registered_grant_changed");
       if (parent.stageReviewInput && parent.stageReviewInput.round === parent.stageState?.round && JSON.stringify(grants) !== JSON.stringify(parent.stageReviewInput.artifacts)) throw new Error("review_diff_registered_grant_changed");
     }
     function validateStageSourceGeneratedRead(store5, parent, child) {
+      if (parent.stageState && !Array.isArray(parent.stageState.artifacts?.diff)) throw new Error("review_diff_metadata_missing");
       const id4 = parent.stageState?.artifacts.diff.at(-1);
       if (!id4) return;
       const grant = stageReviewArtifactGrant(store5, parent, id4);
@@ -50245,7 +50248,7 @@ ${error.message || ""}`;
       try {
         const proof = parent.stageReviewInput;
         const state2 = parent.stageState;
-        if (!proof || proof.version !== 1 || !state2 || proof.parentTaskId !== parent.id || proof.childTaskId !== child.id || child.origin !== "stage" || child.parentTaskId !== parent.id || child.stageRole !== "review" || child.stageRound !== state2.round || proof.round !== state2.round || !state2.reviewTaskIds.includes(child.id) || state2.stageHeads.at(-1)?.rootSha !== proof.headSha || JSON.stringify(child.inputArtifactIds ?? []) !== JSON.stringify(proof.artifacts.map((a) => a.id))) return void 0;
+        if (!proof || proof.version !== 1 || !state2 || !Array.isArray(state2.artifacts?.diff) || proof.parentTaskId !== parent.id || proof.childTaskId !== child.id || child.origin !== "stage" || child.parentTaskId !== parent.id || child.stageRole !== "review" || child.stageRound !== state2.round || proof.round !== state2.round || !state2.reviewTaskIds.includes(child.id) || state2.stageHeads.at(-1)?.rootSha !== proof.headSha || JSON.stringify(child.inputArtifactIds ?? []) !== JSON.stringify(proof.artifacts.map((a) => a.id))) return void 0;
         const latest = proof.artifacts.find((a) => a.id === state2.artifacts.diff.at(-1));
         if (latest && decodeStageSourceGenerated(readStageReviewArtifact(latest))) {
           if (child.meshId !== parent.meshId || child.missionId !== parent.missionId || child.review?.sourceTaskId !== parent.id || state2.reviewTaskIds.filter((id4) => id4 === child.id).length !== 1 || child.reviewerWorkspace?.path !== proof.checkout.worktree || child.reviewerWorkspace.headSha !== proof.headSha) return void 0;
@@ -80640,7 +80643,7 @@ ${asText(streams.stderr)}
         queue: {
           reviewReplacementReady,
           requiresDetachedReview(parent) {
-            const id4 = parent.stageState?.artifacts.diff.at(-1);
+            const id4 = parent.stageState?.artifacts?.diff?.at(-1);
             if (!id4) return false;
             const grant = stageReviewArtifactGrants(store5(), parent, [id4])[0];
             return !!grant && !!decodeStageSourceGenerated(readStageReviewArtifact(grant));
@@ -80690,7 +80693,7 @@ ${asText(streams.stderr)}
               );
               validateCurrentDiff(current5, grants);
               const inputArtifactIds = grants.map((g3) => g3.id);
-              const latest = grants.find((g3) => g3.id === current5.stageState.artifacts.diff.at(-1));
+              const latest = grants.find((g3) => g3.id === current5.stageState.artifacts?.diff?.at(-1));
               const latestBytes = latest && readStageReviewArtifact(latest);
               const sourceGenerated = latestBytes && decodeStageSourceGenerated(latestBytes);
               if (sourceGenerated) {

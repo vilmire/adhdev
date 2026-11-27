@@ -191,7 +191,9 @@ export function attestStageReviewCheckoutForRecovery(parent: MeshWorkQueueEntry,
 }
 
 export function validateCurrentDiff(parent: MeshWorkQueueEntry, artifacts: StageReviewInput['artifacts'], workspace?: string): void {
-    const latest = parent.stageState?.artifacts.diff.at(-1);
+    const diffIds = parent.stageState?.artifacts?.diff;
+    if (!Array.isArray(diffIds)) throw new Error('review_diff_metadata_missing');
+    const latest = diffIds.at(-1);
     const grant = artifacts.find(a => a.id === latest);
     if (!grant) {
         if (latest) throw new Error('review_diff_latest_missing');
@@ -225,7 +227,7 @@ export function validateCurrentDiff(parent: MeshWorkQueueEntry, artifacts: Stage
 export function validateStageReviewRetainedGrants(store: Pick<MeshRuntimeStore, 'db'>, parent: MeshWorkQueueEntry, ids: string[]): void {
     const grants = stageReviewArtifactGrants(store, parent, ids);
     validateCurrentDiff(parent, grants);
-    const latest = grants.find(a => a.id === parent.stageState?.artifacts.diff.at(-1));
+    const latest = grants.find(a => a.id === parent.stageState?.artifacts?.diff?.at(-1));
     if (latest && decodeStageSourceGenerated(readStageReviewArtifact(latest))
         && (!parent.stageReviewInput || parent.stageReviewInput.round !== parent.stageState?.round
             || JSON.stringify(ids) !== JSON.stringify(grants.map(a => a.id)))) throw new Error('review_diff_registered_grant_changed');
@@ -236,6 +238,7 @@ export function validateStageReviewRetainedGrants(store: Pick<MeshRuntimeStore, 
 /** Artifact reads re-enter the same verifier for source/generated review grants. */
 export function validateStageSourceGeneratedRead(store: Pick<MeshRuntimeStore, 'db'>, parent: MeshWorkQueueEntry,
     child: MeshWorkQueueEntry): PhysicalOwnershipScope | undefined {
+    if (parent.stageState && !Array.isArray(parent.stageState.artifacts?.diff)) throw new Error('review_diff_metadata_missing');
     const id = parent.stageState?.artifacts.diff.at(-1);
     if (!id) return;
     const grant = stageReviewArtifactGrant(store, parent, id);
@@ -251,7 +254,7 @@ export function currentStageReviewScope(parent: MeshWorkQueueEntry, child: Parti
     try {
         const proof = parent.stageReviewInput;
         const state = parent.stageState;
-        if (!proof || proof.version !== 1 || !state || proof.parentTaskId !== parent.id || proof.childTaskId !== child.id
+        if (!proof || proof.version !== 1 || !state || !Array.isArray(state.artifacts?.diff) || proof.parentTaskId !== parent.id || proof.childTaskId !== child.id
             || child.origin !== 'stage' || child.parentTaskId !== parent.id || child.stageRole !== 'review'
             || child.stageRound !== state.round || proof.round !== state.round || !state.reviewTaskIds.includes(child.id!)
             || state.stageHeads.at(-1)?.rootSha !== proof.headSha

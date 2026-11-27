@@ -32,7 +32,9 @@ import { sweepOrphanedUncorrelatedDispatches } from '../../src/mesh/mesh-orphane
 import { collectSessionIdsWithActiveWork } from '../../src/mesh/mesh-idle-session-reaper.js';
 import { findPriorWorkerReport, WORKER_REPORT_EVENT_KIND } from '../../src/mesh/worker-report.js';
 import { reviewRoutingRefusal } from '../../src/mesh/mesh-task-routing-contract.js';
-import { attestStageReviewInput } from '../../src/mesh/stage-review-input.js';
+import { attestStageReviewInput, currentStageReviewScope, validateCurrentDiff, validateStageSourceGeneratedRead } from '../../src/mesh/stage-review-input.js';
+import { decodeStageSourceGenerated } from '../../src/mesh/stage-source-generated-provider.js';
+import { authorizeCrossSessionArtifactAccess } from '../../src/commands/med-family/artifact-sharing.js';
 import { attestLocalOwnership } from '../../src/mesh/mesh-physical-ownership.js';
 import { seedMeshAttempt } from '../helpers/turn-attempt-seed.js';
 import type { MeshWorkQueueEntry } from '../../src/mesh/mesh-work-queue-types.js';
@@ -303,7 +305,7 @@ describe('review routing (stage-aware)', () => {
         const parent = {
             id: 'parent', status: 'assigned', assignedProviderType: 'claude-cli', assignedSessionId: 'sess-impl', assignedNodeId: 'author',
             ownedPaths, ownershipScope: scope, stagePlan: { review: true, maxRevisions: 2, independence: 'fresh_session_ok' },
-            stageState: { phase: 'awaiting_review', round: 1, stageHeads: [{ round: 1, rootSha: head }], reviewTaskIds: ['child'] },
+            stageState: { phase: 'awaiting_review', round: 1, stageHeads: [{ round: 1, rootSha: head }], reviewTaskIds: ['child'], artifacts: { diff: [], selfCheck: [], verdict: [] } },
         } as unknown as MeshWorkQueueEntry;
         const file = fs.realpathSync.native(join(workspace, 'f.ts'));
         parent.stageReviewInput = { ...attestStageReviewInput(parent, { workspace, repoIdentity: 'repo', machineId: 'machine', nodeId: 'author' }, [{ id: 'art_evidence', file, size: fs.statSync(file).size, sha256: createHash('sha256').update(fs.readFileSync(file)).digest('hex') }]), childTaskId: 'child' };
@@ -339,8 +341,126 @@ describe('review routing (stage-aware)', () => {
     it('a prepared reviewer workspace skips input availability and busy checks', () => {
         const { parent } = fixture();
         const task = child('different_provider', { reviewerWorkspace: { path: '/opt/light/ws', headSha: 'abc' } });
-        expect(reviewRoutingRefusal(task, { ...parent, status: 'completed' } as MeshWorkQueueEntry, 'codex-cli', { workspace: '/nowhere', machineId: 'x' }, [{ id: 'w', status: 'assigned', assignedNodeId: 'author' } as MeshWorkQueueEntry])).toBeUndefined();
-        expect(reviewRoutingRefusal(task, parent, 'claude-cli', undefined, [])).toBe('review_independence_required');
+        expect(reviewRoutingRefusal(task, { ...parent, status: 'completed', stageReviewInput: undefined } as MeshWorkQueueEntry, 'codex-cli', { workspace: '/nowhere', machineId: 'x' }, [{ id: 'w', status: 'assigned', assignedNodeId: 'author' } as MeshWorkQueueEntry])).toBeUndefined();
+        expect(reviewRoutingRefusal(task, { ...parent, stageReviewInput: undefined } as MeshWorkQueueEntry, 'claude-cli', undefined, [])).toBe('review_independence_required');
+        // When stageReviewInput IS present (e.g. detached source-generated review), reviewerWorkspace does not bypass stageReviewInput verification
+        expect(reviewRoutingRefusal(task, { ...parent, status: 'completed' } as MeshWorkQueueEntry, 'codex-cli', { workspace: '/nowhere', machineId: 'x' }, [])).toBe('review_input_unavailable');
+    });
+
+    it('handles missing or legacy empty stageState.artifacts safely while enforcing current diff and fail-closed negatives', async () => {
+        const { workspace, parent } = fixture();
+        const ctx = { workspace, machineId: 'machine' };
+        const evidence = parent.stageReviewInput!.artifacts[0]!;
+
+        // 1. Missing required stageState.artifacts metadata fails closed (review_diff_metadata_missing -> review_input_unavailable) without throwing a raw TypeError
+        const missingArtifacts = {
+            ...parent,
+            stageState: { ...parent.stageState!, artifacts: undefined },
+        } as unknown as MeshWorkQueueEntry;
+        expect(() => validateCurrentDiff(missingArtifacts, [evidence], workspace)).toThrow('review_diff_metadata_missing');
+        expect(() => validateStageSourceGeneratedRead({ db: {} as any }, missingArtifacts, child('different_provider'))).toThrow('review_diff_metadata_missing');
+        expect(currentStageReviewScope(missingArtifacts, child('different_provider'))).toBeUndefined();
+        expect(reviewRoutingRefusal(child('different_provider'), missingArtifacts, 'codex-cli', ctx, [missingArtifacts])).toBe('review_input_unavailable');
+
+        // 2. Explicit legacy empty `diff: []` succeeds when proof & artifacts are valid
+        const legacyEmptyDiff = {
+            ...parent,
+            stageState: { ...parent.stageState!, artifacts: { diff: [], selfCheck: [], verdict: [] } },
+        } as MeshWorkQueueEntry;
+        expect(() => validateCurrentDiff(legacyEmptyDiff, [evidence], workspace)).not.toThrow();
+        expect(validateStageSourceGeneratedRead({ db: {} as any }, legacyEmptyDiff, child('different_provider'))).toBeUndefined();
+        expect(currentStageReviewScope(legacyEmptyDiff, child('different_provider'))?.worktree).toBe(parent.stageReviewInput!.checkout.worktree);
+        expect(reviewRoutingRefusal(child('different_provider'), legacyEmptyDiff, 'codex-cli', ctx, [legacyEmptyDiff])).toBeUndefined();
+
+        // 2b. Existing non-detached stage reviewer reading a pipeline input artifact is refused when stageState.artifacts metadata is missing, and allowed when explicit legacy diff: [] is present
+        const reviewChildEntry = child('different_provider', { meshId: 'm', inputArtifactIds: ['art_pipe_1'] });
+        const pipelineRecord = {
+            artifactId: 'art_pipe_1', sessionId: 'stage:parent', taskId: 'parent', meshId: 'm', missionId: null,
+            producerRole: 'pipeline' as const, originDaemonId: 'machine', workspaceRoot: evidence.file, relPath: 'f.ts',
+            kind: 'markdown' as const, mime: 'text/markdown', title: 'Pipeline Check', sizeBytes: evidence.size, sha256: evidence.sha256,
+            createdAt: 1, updatedAt: 1,
+        };
+        const nonDetachedAuthority = {
+            sessionId: 'sess-reviewer', taskId: 'child', meshId: 'm', missionId: null, producerRole: 'worker' as const,
+            originDaemonId: 'machine', workspaceRoot: parent.stageReviewInput!.checkout.worktree, providerType: 'codex-cli', status: 'assigned', title: null,
+        };
+        const storeSpy = vi.spyOn(MeshRuntimeStore, 'getInstance');
+        try {
+            storeSpy.mockReturnValue({
+                findQueueEntryById: (_m: string, id: string) => (id === 'child' ? reviewChildEntry : { ...missingArtifacts, meshId: 'm' }),
+            } as any);
+            expect(await authorizeCrossSessionArtifactAccess({} as any, nonDetachedAuthority, pipelineRecord)).toMatchObject({
+                ok: false,
+                result: { success: false, code: 'artifact_access_denied' },
+            });
+            storeSpy.mockReturnValue({
+                findQueueEntryById: (_m: string, id: string) => (id === 'child' ? reviewChildEntry : { ...legacyEmptyDiff, meshId: 'm' }),
+            } as any);
+            expect(await authorizeCrossSessionArtifactAccess({} as any, nonDetachedAuthority, pipelineRecord)).toMatchObject({
+                ok: true,
+            });
+        } finally {
+            storeSpy.mockRestore();
+        }
+
+        // 3. Normal diff artifact present in stageState.artifacts.diff and matched in grants succeeds
+        const withValidDiff = {
+            ...parent,
+            stageState: { ...parent.stageState!, artifacts: { diff: ['art_evidence'], selfCheck: [], verdict: [] } },
+        } as MeshWorkQueueEntry;
+        expect(() => validateCurrentDiff(withValidDiff, [evidence], workspace)).not.toThrow();
+        expect(currentStageReviewScope(withValidDiff, child('different_provider'))?.worktree).toBe(parent.stageReviewInput!.checkout.worktree);
+        expect(reviewRoutingRefusal(child('different_provider'), withValidDiff, 'codex-cli', ctx, [withValidDiff])).toBeUndefined();
+
+        // 4. Stale/missing latest diff artifact in grants fails closed (review_diff_latest_missing -> review_input_unavailable)
+        const withUnmatchedDiff = {
+            ...parent,
+            stageState: { ...parent.stageState!, artifacts: { diff: ['art_latest_diff_missing'], selfCheck: [], verdict: [] } },
+        } as MeshWorkQueueEntry;
+        expect(() => validateCurrentDiff(withUnmatchedDiff, [evidence], workspace)).toThrow('review_diff_latest_missing');
+        expect(currentStageReviewScope(withUnmatchedDiff, child('different_provider'))).toBeUndefined();
+        expect(reviewRoutingRefusal(child('different_provider'), withUnmatchedDiff, 'codex-cli', ctx, [withUnmatchedDiff])).toBe('review_input_unavailable');
+
+        // 5. Source-generated diff manifest requires detached reviewerWorkspace binding and fails closed when missing or when artifacts metadata is stripped
+        const sourceGenFile = join(fs.realpathSync.native(workspace), 'source-gen-manifest.json');
+        const headSha = parent.stageState!.stageHeads[0]!.rootSha;
+        const chunkBytes = Buffer.from('+export {};\n');
+        const chunkSha = createHash('sha256').update(chunkBytes).digest('hex');
+        writeFileSync(sourceGenFile, JSON.stringify({
+            header: 'adhdev-stage-source-generated', version: 1, state: 'complete',
+            scope: { meshId: parent.meshId ?? 'm', parentTaskId: parent.id, taskId: parent.id, round: 1, producerRole: 'pipeline', originDaemonId: 'machine', baseSha: headSha, headSha, checkout: { path: parent.stageReviewInput!.checkout.worktree, identity: '1:1' }, gitlinks: { base: '160000 commit ' + headSha + '\toss', head: '160000 commit ' + headSha + '\toss' } },
+            source: { bytes: chunkBytes.length, sha256: chunkSha },
+            inventory: [], sourceChunks: [{ id: 'art_chunk_0', index: 0, offset: 0, bytes: chunkBytes.length, sha256: chunkSha }],
+        }));
+        const sourceGenGrant = { id: 'art_src_gen', file: sourceGenFile, size: fs.statSync(sourceGenFile).size, sha256: createHash('sha256').update(fs.readFileSync(sourceGenFile)).digest('hex') };
+        expect(decodeStageSourceGenerated(fs.readFileSync(sourceGenFile))?.header).toBe('adhdev-stage-source-generated');
+        const sourceGenParent = {
+            ...parent, meshId: 'm',
+            stageState: { ...parent.stageState!, baseSha: headSha, artifacts: { diff: ['art_src_gen'], selfCheck: [], verdict: [] } },
+            stageReviewInput: { ...parent.stageReviewInput!, artifacts: [sourceGenGrant] },
+        } as MeshWorkQueueEntry;
+        const sourceGenChildNoDetached = child('different_provider', { meshId: 'm', inputArtifactIds: ['art_src_gen'] });
+        expect(currentStageReviewScope(sourceGenParent, sourceGenChildNoDetached)).toBeUndefined();
+        expect(reviewRoutingRefusal(sourceGenChildNoDetached, sourceGenParent, 'codex-cli', ctx, [sourceGenParent])).toBe('review_input_unavailable');
+        const sourceGenParentStripped = {
+            ...sourceGenParent,
+            stageState: { ...sourceGenParent.stageState!, artifacts: undefined },
+        } as unknown as MeshWorkQueueEntry;
+        expect(currentStageReviewScope(sourceGenParentStripped, sourceGenChildNoDetached)).toBeUndefined();
+        expect(reviewRoutingRefusal(sourceGenChildNoDetached, sourceGenParentStripped, 'codex-cli', ctx, [sourceGenParentStripped])).toBe('review_input_unavailable');
+
+        // 6. Missing authoritative stageReviewInput or mismatched round/head/inputArtifactIds/tampered file fails closed
+        expect(reviewRoutingRefusal(child('different_provider'), { ...parent, stageReviewInput: undefined } as MeshWorkQueueEntry, 'codex-cli', ctx, [parent])).toBe('review_input_unavailable');
+        expect(reviewRoutingRefusal(child('different_provider', { stageRound: 2 }), parent, 'codex-cli', ctx, [parent])).toBe('review_input_unavailable');
+        expect(reviewRoutingRefusal(child('different_provider', { inputArtifactIds: ['art_other'] }), parent, 'codex-cli', ctx, [parent])).toBe('review_input_unavailable');
+        expect(reviewRoutingRefusal(child('different_provider'), {
+            ...parent,
+            stageState: { ...parent.stageState!, stageHeads: [{ round: 1, rootSha: '0'.repeat(40) }] },
+        } as MeshWorkQueueEntry, 'codex-cli', ctx, [parent])).toBe('review_input_unavailable');
+
+        writeFileSync(evidence.file, 'export const tampered = true;');
+        expect(currentStageReviewScope(parent, child('different_provider'))).toBeUndefined();
+        expect(reviewRoutingRefusal(child('different_provider'), parent, 'codex-cli', ctx, [parent])).toBe('review_input_unavailable');
     });
 });
 

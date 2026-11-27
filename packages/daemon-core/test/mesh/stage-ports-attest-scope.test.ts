@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 
-const testTmpDir = path.join(tmpdir(), `adhdev-stage-attest-${randomUUID().slice(0, 8)}`);
+const testTmpDir = path.join(fs.realpathSync.native(tmpdir()), `adhdev-stage-attest-${randomUUID().slice(0, 8)}`);
 const testConfigDir = path.join(testTmpDir, '.adhdev');
 vi.mock('../../src/config/config.js', () => ({
     getConfigDir: () => { if (!fs.existsSync(testConfigDir)) fs.mkdirSync(testConfigDir, { recursive: true }); return testConfigDir; },
@@ -45,7 +45,7 @@ afterEach(() => {
 });
 
 function setup(opts: { ownedPaths?: string[] | null } = {}) {
-    const ws = fs.mkdtempSync(path.join(tmpdir(), 'stage-attest-')); dirs.push(ws);
+    const ws = fs.mkdtempSync(path.join(fs.realpathSync.native(tmpdir()), 'stage-attest-')); dirs.push(ws);
     const g = (...args: string[]) => execFileSync('git', args, { cwd: ws, stdio: 'pipe', windowsHide: true, encoding: 'utf8' }).trim();
     g('init', '-q');
     g('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'fixture');

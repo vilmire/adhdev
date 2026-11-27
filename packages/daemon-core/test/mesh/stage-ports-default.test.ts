@@ -1,17 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
-vi.mock('../../src/config/config.js', () => ({ getConfigDir: () => join(tmpdir(), 'adhdev-stage-ports-cfg'), loadConfig: () => ({}), getMachineId: () => 'm', getMachineNickname: () => null }));
+const testConfigDir = join(realpathSync.native(tmpdir()), `adhdev-stage-ports-cfg-${randomUUID().slice(0, 8)}`);
+vi.mock('../../src/config/config.js', () => ({ getConfigDir: () => testConfigDir, loadConfig: () => ({}), getMachineId: () => 'm', getMachineNickname: () => null }));
 vi.mock('../../src/config/mesh-config.js', () => ({ getMesh: vi.fn(() => undefined), getMeshByRepo: vi.fn(), listMeshes: vi.fn(() => []) }));
 
 import { ArtifactGuardError } from '../../src/artifacts/types.js';
 import { defaultStageGit, noReviewerWorkspace, resolveStagePipelineCeilingMs, unavailableSelfCheck, mapProfileSummary, createRefineProfileSelfCheck, createLightReviewerWorkspaceProvider, createProductionStagePorts, setStageArtifactRegistrar, setStagePorts } from '../../src/mesh/stage-ports-default.js';
 
 const dirs: string[] = [];
-afterEach(() => { dirs.splice(0).forEach(d => rmSync(d, { recursive: true, force: true })); setStageArtifactRegistrar(null); setStagePorts({ selfCheck: undefined, reviewerWorkspace: undefined }); });
+afterEach(() => { dirs.splice(0).forEach(d => rmSync(d, { recursive: true, force: true })); rmSync(testConfigDir, { recursive: true, force: true }); setStageArtifactRegistrar(null); setStagePorts({ selfCheck: undefined, reviewerWorkspace: undefined }); });
 const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.test', ...args], { cwd, stdio: 'pipe' }).toString();
 
 describe('production stage ports', () => {
@@ -182,7 +184,7 @@ describe('production stage ports', () => {
         expect(conflict).toMatchObject({ ok: false, code: 'artifact_revision_conflict', preserved: true });
 
         // R4-01: a successful shorter body that is a proper prefix of the retry must NOT be unlinked/replaced.
-        const dir = join(tmpdir(), 'adhdev-stage-ports-cfg', 'stage-artifacts', 'task-op');
+        const dir = join(testConfigDir, 'stage-artifacts', 'task-op');
         const prefixPath = join(dir, 'self_check-r0-b1.md');
         mkdirSync(dir, { recursive: true });
         const shortBody = 'abc';
@@ -235,7 +237,7 @@ describe('production stage ports', () => {
             code: 'artifact_revision_conflict',
             preserved: true,
         });
-        const dir = join(tmpdir(), 'adhdev-stage-ports-cfg', 'stage-artifacts', 'task-guard');
+        const dir = join(testConfigDir, 'stage-artifacts', 'task-guard');
         expect(readFileSync(join(dir, 'diff-guard.diff'), 'utf8')).toBe('abc');
 
         // Same bytes retry still reaches registrar; GuardError details are preserved.
@@ -288,7 +290,7 @@ describe('production stage ports', () => {
             selfCheck: 'unavailable',
         });
         const parent: any = { id: basename(ws), meshId: 'm', status: 'assigned', stagePlan: { review: true, maxRevisions: 2, independence: 'different_provider' }, stageState: st };
-        dirs.push(join(tmpdir(), 'adhdev-stage-ports-cfg', 'stage-artifacts', parent.id));
+        dirs.push(join(testConfigDir, 'stage-artifacts', parent.id));
         const db = new Database(':memory:');
         const artifacts = new ArtifactStore(db);
         const facade = { db, findQueueEntryById: () => parent } as any;
@@ -352,7 +354,7 @@ describe('production stage ports', () => {
         expect(second.relPath).not.toBe(first.relPath);
         expect(ports.artifacts.readRecovery!({ taskId, operationKey: op, sha256: first.sha256 })).toBe(bodyA);
         expect(ports.artifacts.readRecovery!({ taskId, operationKey: op, sha256: second.sha256 })).toBe(bodyB);
-        const dir = join(tmpdir(), 'adhdev-stage-ports-cfg', 'stage-artifacts', taskId, '.recovery');
+        const dir = join(testConfigDir, 'stage-artifacts', taskId, '.recovery');
         expect(readFileSync(join(dir, `${op}.${first.sha256.slice(0, 12)}.md`), 'utf8')).toBe(bodyA);
         expect(readFileSync(join(dir, `${op}.${second.sha256.slice(0, 12)}.md`), 'utf8')).toBe(bodyB);
     });
@@ -374,7 +376,7 @@ describe('production stage ports', () => {
         const written = ports.artifacts.writeRecovery!({ taskId, operationKey: op, content: bodyA, ext: '.json' });
         expect(written).toMatchObject({ ok: true });
         if (!written.ok) return;
-        const dir = join(tmpdir(), 'adhdev-stage-ports-cfg', 'stage-artifacts', taskId, '.recovery');
+        const dir = join(testConfigDir, 'stage-artifacts', taskId, '.recovery');
         const fileName = `${op}.${written.sha256.slice(0, 12)}.json`;
         const bodyB = JSON.stringify({
             round: 1,
@@ -397,7 +399,7 @@ describe('production stage ports', () => {
         const prior = ports.artifacts.writeRecovery!({ taskId, operationKey: op, content: 'prior-body\n', ext: '.diff' });
         expect(prior.ok).toBe(true);
         if (!prior.ok) return;
-        const dir = join(tmpdir(), 'adhdev-stage-ports-cfg', 'stage-artifacts', taskId, '.recovery');
+        const dir = join(testConfigDir, 'stage-artifacts', taskId, '.recovery');
         // Real fs failure (no ESM spy on fsync): make the recovery dir non-writable so the next publish fails.
         chmodSync(dir, 0o555);
         try {

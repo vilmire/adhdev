@@ -307,7 +307,7 @@ const LEGACY_MED_FAMILY_COMMANDS = [
     'reattach_mesh_source_parent', 'recover_mesh_node_identity', 'stage_recover_mesh_review', 'pin_mesh_host_key',
     'create_mesh_host_pairing_token', 'apply_mesh_host_join', 'join_mesh_host_pairing', 'revoke_mesh_peer', 'get_mesh_queue',
     'cancel_mesh_queue_task', 'requeue_mesh_queue_task', 'trigger_mesh_queue', 'stage_decide_mesh_task', 'mesh_init',
-    'plan_mesh_refine_node', 'fast_forward_mesh_node', 'refine_mesh_node', 'batch_refine_mesh_nodes',
+    'plan_mesh_refine_node', 'fast_forward_mesh_node', 'refine_mesh_node', 'refine_mesh_node_approved_runtime', 'batch_refine_mesh_nodes',
     'restart_daemon_node', 'plan_mesh_onboarding', 'cleanup_worktree_nodes', 'mesh_route_preview',
     'mesh_task_output',
     'driver_describe', 'driver_invoke', 'driver_list', 'driver_set_enabled', 'driver_grants_get', 'driver_grants_set',

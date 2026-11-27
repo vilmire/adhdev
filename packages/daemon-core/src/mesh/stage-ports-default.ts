@@ -538,7 +538,7 @@ export function createProductionStagePorts(components: Pick<DaemonComponents, 's
         queue: {
             reviewReplacementReady,
             requiresDetachedReview(parent) {
-                const id = parent.stageState?.artifacts.diff.at(-1);
+                const id = parent.stageState?.artifacts?.diff?.at(-1);
                 if (!id) return false;
                 const grant = stageReviewArtifactGrants(store(), parent, [id])[0];
                 return !!grant && !!decodeStageSourceGenerated(readStageReviewArtifact(grant));
@@ -586,7 +586,7 @@ export function createProductionStagePorts(components: Pick<DaemonComponents, 's
                         new Set(current.stageState.workerArtifactIds ?? []));
                     validateCurrentDiff(current, grants);
                     const inputArtifactIds = grants.map(g => g.id);
-                    const latest = grants.find(g => g.id === current.stageState!.artifacts.diff.at(-1));
+                    const latest = grants.find(g => g.id === current.stageState!.artifacts?.diff?.at(-1));
                     const latestBytes = latest && readStageReviewArtifact(latest);
                     const sourceGenerated = latestBytes && decodeStageSourceGenerated(latestBytes);
                     if (sourceGenerated) {

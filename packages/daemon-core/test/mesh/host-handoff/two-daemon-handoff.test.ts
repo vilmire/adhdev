@@ -281,6 +281,23 @@ describe.skipIf(process.platform === 'win32')('two real daemons moving a project
         await rolledBack(before, r.handoffId);
         expect(await book.call('dump', { meshId: MESH })).toEqual(bookBefore);
         expect(net.count('mesh_host_handoff_activate')).toBe(0);
+
+        // Same-origin session_artifacts path collision also rolls back during rehearsal and preserves the local row untouched.
+        await air.call('sql', { sql: "DELETE FROM turn_attempts WHERE attempt_id='conflict'" });
+        await book.call('sql', { sql: "DELETE FROM turn_attempts WHERE attempt_id='conflict'" });
+        const artifact = "INSERT INTO session_artifacts (artifact_id,session_id,mesh_id,origin_daemon_id,workspace_root,rel_path,kind,mime,title,size_bytes,sha256,created_at,updated_at) VALUES (?,?,?,?,'/ws',?,'file','text/plain',?,1,'aa',1,2)";
+        await air.call('sql', { sql: artifact, args: ['host-copy', 'worker', MESH, AIR, 'out.md', 'host copy'] });
+        await book.call('sql', { sql: artifact, args: ['member-copy', 'worker', MESH, AIR, 'out.md', 'stale copy of a host file'] });
+        const bookArtBefore = await book.call('dump', { meshId: MESH });
+        const airArtBefore = await air.call('dump', { meshId: MESH });
+        const rArt = await start();
+        await settled(rArt.handoffId, 'aborted');
+        expect((await air.call('source', { handoffId: rArt.handoffId })).abortReason).toMatch(/snapshot_conflict: .*session_artifacts key \["worker","out\.md"\].*preserving local artifact member-copy; refuse replace with incoming host-copy/);
+        expect((await book.call('target', { handoffId: rArt.handoffId })).phase).toBe('discarded');
+        await rolledBack(airArtBefore, rArt.handoffId);
+        expect(await book.call('dump', { meshId: MESH })).toEqual(bookArtBefore);
+        expect(await book.call('sql', { sql: 'SELECT artifact_id, title FROM session_artifacts WHERE mesh_id=? ORDER BY artifact_id', args: [MESH] })).toEqual([{ artifact_id: 'member-copy', title: 'stale copy of a host file' }]);
+        expect(net.count('mesh_host_handoff_activate')).toBe(0);
     }, 60_000);
 
     it('a member with its own overlapping history for the project takes the move and nothing it observed is lost', async () => {
@@ -305,7 +322,6 @@ describe.skipIf(process.platform === 'win32')('two real daemons moving a project
         await on(book, "INSERT INTO turn_holds (hold_id,attempt_id,reason,on_expire,created_at) VALUES ('member-attempt:owner','member-attempt','owner','hold',1)");
         await on(book, "INSERT INTO mesh_handoff_note_text (mesh_id,task_id,attempt_id,notes_json,recorded_at) VALUES (?,'member-task','member-attempt','[]','now')", MESH);
         await on(book, "INSERT INTO assistant_relays (attempt_id,mesh_id,coordinator_session_id,committed_at,kind,outcome) VALUES ('member-attempt',?,'c',1,'turn','completed')", MESH);
-        await on(book, artifact, 'member-copy', 'worker', MESH, AIR, 'out.md', 'stale copy of a host file');
         await on(book, artifact, 'member-file', 'worker', MESH, BOOK, 'member.md', 'member wrote this');
 
         const pf = await air.call('preflight', { meshId: MESH, targetDaemonId: BOOK, targetNodeId: bookNode });
@@ -343,13 +359,13 @@ describe.skipIf(process.platform === 'win32')('two real daemons moving a project
         const ids = (side: string, table: string, column: string) => { const t = archive[side][table]; return t.rows.map((row: unknown[]) => row[t.columns.indexOf(column)]); };
         expect(ids('target-before', 'turn_attempts', 'attempt_id')).toEqual(expect.arrayContaining(['member-attempt', 'same-id']));
         expect(ids('target-before', 'turn_events', 'event_id')).toEqual(expect.arrayContaining(['member-only', 'member-report', 'member-notice']));
-        expect(ids('target-before', 'session_artifacts', 'artifact_id')).toEqual(expect.arrayContaining(['member-copy', 'member-file']));
+        expect(ids('target-before', 'session_artifacts', 'artifact_id')).toEqual(expect.arrayContaining(['member-file']));
         const source = archive['source-snapshot'].tables;
         expect(source.turn_attempts.rows.map((row: unknown[]) => row[source.turn_attempts.columns.indexOf('attempt_id')])).toEqual(expect.arrayContaining(['host-attempt', 'same-id']));
         expect(source.turn_events.rows.map((row: unknown[]) => row[source.turn_events.columns.indexOf('event_id')])).toEqual(expect.arrayContaining(['host-report', 'host-notice']));
         const decided = (archive.reconciliation as Array<{ table: string; winner: string; incomingKey?: string }>).map(e => `${e.table}:${e.incomingKey}:${e.winner}`);
         expect(decided).toEqual(expect.arrayContaining(['turn_attempts:host-attempt:source', 'turn_events:host-report:target', 'turn_events:host-notice:source',
-            'session_artifacts:host-copy:source', 'session_artifacts:host-record-of-member-file:target']));
+            'session_artifacts:host-record-of-member-file:target']));
     }, 60_000);
 
     it('preflight finds a collision only the owner can settle, before anything stops', async () => {
