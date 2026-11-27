@@ -68,7 +68,7 @@ jobs:
         run: |
           test "$(git -C control rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git -C source rev-parse HEAD)" = "$TAG_SHA"
-          git -C control fetch --no-tags ../source "$TAG_SHA"
+          git -C control fetch --no-tags --update-shallow ../source "$TAG_SHA"
           python3 control/.github/scripts/recover-v1.0.82.py verify-control control "$GITHUB_SHA"
           node --input-type=module -e '
             import { nativeCiFindings } from "./control/packages/ghostty-vt-node/scripts/check-prebuilts.mjs";
