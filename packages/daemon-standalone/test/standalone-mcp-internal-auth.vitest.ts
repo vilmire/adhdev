@@ -287,6 +287,7 @@ describe('captureOwnerAuthGuard — bearer token + password auth coexistence and
     fsMod.mkdirSync(workspaceDir, { recursive: true });
     fsMod.mkdirSync(foreignDir, { recursive: true });
     fsMod.writeFileSync(join(workspaceDir, 'doc.md'), 'STANDALONE-SECRET-DOC', 'utf8');
+    fsMod.writeFileSync(join(workspaceDir, 'owner-doc.md'), 'STANDALONE-OWNER-DOC', 'utf8');
     fsMod.writeFileSync(join(foreignDir, 'foreign.md'), 'FOREIGN-STANDALONE-SECRET', 'utf8');
 
     const sessionRegistry = new SessionRegistry();
@@ -671,16 +672,41 @@ describe('captureOwnerAuthGuard — bearer token + password auth coexistence and
       });
       expect(loginRes.status).toBe(200);
       const cookiePair = (loginRes.headers.get('set-cookie') || '').split(';')[0] || '';
+      const ownerHeaders = { Cookie: cookiePair };
+
+      // A live owner can register artifacts, but cannot reattribute the worker's unchanged file.
+      const workerRecord = artifactStore.getById(workerArtId);
+      expect(workerRecord).toMatchObject({
+        sessionId: 'worker-sa', relPath: 'doc.md', producerRole: 'worker',
+      });
+      const conflict = await postCmd(
+        'artifact_register',
+        { sessionId: 'worker-sa', path: 'doc.md' },
+        ownerHeaders,
+      );
+      expect(conflict.status).toBe(200);
+      expect(await conflict.json()).toMatchObject({
+        success: false,
+        code: 'artifact_revision_conflict',
+        error: expect.stringContaining('attribution producer_role conflict'),
+      });
+      expect(artifactStore.getById(workerArtId)).toEqual(workerRecord);
 
       for (const cmd of allAliases) {
+        const isRegister = cmd === 'artifact_register' || cmd === 'session_artifact_register';
         const res = await postCmd(
           cmd,
-          { sessionId: 'worker-sa', artifactId: workerArtId, path: 'doc.md' },
-          { Cookie: cookiePair },
+          isRegister ? { sessionId: 'worker-sa', path: 'owner-doc.md' } : { sessionId: 'worker-sa', artifactId: workerArtId },
+          ownerHeaders,
         );
         expect(res.status).toBe(200);
         const body = (await res.json()) as any;
         expect(body.success, `standalone owner ${cmd}`).toBe(true);
+        if (isRegister) {
+          expect(body.artifact).toMatchObject({
+            sessionId: 'worker-sa', relPath: 'owner-doc.md', producerRole: 'user',
+          });
+        }
       }
 
       // Capture a live owner-proof-attached payload before logout, then logout to revoke it
