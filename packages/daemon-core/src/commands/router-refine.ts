@@ -76,8 +76,8 @@ export async function executeMeshRefineNodeSynchronously(self: DaemonCommandRout
             if (resolved.kind === 'terminal') return resolved.result;
             const ctx = resolved.ctx;
             ctx.approvedRuntime = (args as RefineCommandArgs & { [approvedRuntime]?: ApprovedRefineRuntime })[approvedRuntime];
-            if (ctx.approvedRuntime && ctx.baseBranch !== 'main') {
-                return { success: false, code: 'approved_runtime_base_mismatch', error: 'The approved runtime is scoped to main.' };
+            if (ctx.approvedRuntime && (ctx.baseBranch !== 'main' || ctx.baseHead !== ctx.approvedRuntime.rootBase)) {
+                return { success: false, code: 'approved_runtime_base_mismatch', error: 'The approved runtime requires this stage’s exact main base.' };
             }
             await ctx.approvedRuntime?.verify(ctx.node.workspace);
             // ★B1: thread the caller's progress channel onto the context so the stages can

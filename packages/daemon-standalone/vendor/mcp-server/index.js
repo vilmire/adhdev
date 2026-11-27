@@ -24316,8 +24316,8 @@ var require_dist3 = __commonJS({
         return {};
       }
     }
-    function joinRepoPath(root2, relativePath) {
-      const normalizedRoot = typeof root2 === "string" ? root2.trim().replace(/[\\/]+$/, "") : "";
+    function joinRepoPath(root, relativePath) {
+      const normalizedRoot = typeof root === "string" ? root.trim().replace(/[\\/]+$/, "") : "";
       const normalizedPath = typeof relativePath === "string" ? relativePath.trim() : "";
       if (!normalizedPath) return void 0;
       if (/^(?:[A-Za-z]:[\\/]|\/)/.test(normalizedPath)) return normalizedPath;
@@ -27215,7 +27215,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         resolvedAt,
         providerType,
         sessionId,
-        nodeId: nodeId2,
+        nodeId,
         meshId: meshId2,
         taskId,
         attemptId,
@@ -27230,7 +27230,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         resolvedAt,
         providerType,
         sessionId,
-        nodeId: nodeId2,
+        nodeId,
         meshId: meshId2,
         taskId,
         attemptId,
@@ -33342,8 +33342,8 @@ ${renderWorkerProtocolFooter2(input)}`;
       if (base !== void 0 && !/^[a-f0-9]{40,64}$/.test(base)) throw Error("invalid retirement base");
       return !!retirementGit(repo, ["log", "-1", "--format=%H", "--diff-filter=D", ref2, ...base ? [`^${base}`] : [], "--", ...retirementMarkers]);
     }
-    function configuredRetirementGates(root2, env2) {
-      const config = JSON.parse(retirementGit(root2, ["show", ":.adhdev/refine.json"], env2));
+    function configuredRetirementGates(root, env2) {
+      const config = JSON.parse(retirementGit(root, ["show", ":.adhdev/refine.json"], env2));
       const commands = config.validation?.commands;
       if (config.validation?.required !== true || !Array.isArray(commands) || !commands.length || new Set(commands.map((c) => c.id)).size !== commands.length) throw Error("required retirement gates missing");
       const prepare2 = config.validation.schedule?.prepare || [];
@@ -33593,9 +33593,9 @@ ${renderWorkerProtocolFooter2(input)}`;
     function loadPublicPushPatterns(repo, { forRepo = repo, expectedDigest = process.env.ADHDEV_PUBLIC_PUSH_PATTERNS_SHA256, requireAuthorityPin = false } = {}) {
       try {
         const git15 = (args) => (0, import_node_child_process3.execFileSync)("git", ["--no-replace-objects", "-C", repo, ...args], { encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "ignore"] });
-        const root2 = (0, import_node_fs4.realpathSync)(git15(["rev-parse", "--show-toplevel"]).replace(/\n$/, ""));
+        const root = (0, import_node_fs4.realpathSync)(git15(["rev-parse", "--show-toplevel"]).replace(/\n$/, ""));
         const target2 = (0, import_node_fs4.realpathSync)(forRepo);
-        const location = (0, import_node_path5.relative)(root2, target2);
+        const location = (0, import_node_path5.relative)(root, target2);
         const containsTarget = !(0, import_node_path5.isAbsolute)(location) && location !== ".." && !location.startsWith("../") && !location.startsWith("..\\");
         const urls = git15(["remote", "get-url", "--push", "--all", "origin"]).replace(/\n$/, "").split("\n");
         const configured = git15(["config", "--get-all", "remote.origin.url"]).replace(/\n$/, "").split("\n");
@@ -35687,13 +35687,13 @@ ${tail}`;
         probedRepo: submoduleRepo
       };
     }
-    function buildSubmoduleReachabilityUndeterminableWarning(nodeId2, evidence) {
+    function buildSubmoduleReachabilityUndeterminableWarning(nodeId, evidence) {
       if (!evidence.submoduleReachabilityUndeterminable) return void 0;
       const entries3 = (evidence.submoduleGitlinks || []).filter((g3) => (g3.undeterminable || []).includes("reachableFromOriginMain")).map((g3) => `${g3.path}@${(g3.branchCommit || "?").slice(0, 12)} (probed: ${g3.probedRepo || "unknown"})`).join(", ");
-      return `[Refinery] Could NOT determine submodule gitlink reachability from submodule origin/main for node ${nodeId2} \u2014 probe had NO ANSWER (missing commit object and/or missing refs/remotes/origin/main in the probed repo). "undeterminable", NOT "unpublished" and NOT "nothing to converge": ${entries3}`;
+      return `[Refinery] Could NOT determine submodule gitlink reachability from submodule origin/main for node ${nodeId} \u2014 probe had NO ANSWER (missing commit object and/or missing refs/remotes/origin/main in the probed repo). "undeterminable", NOT "unpublished" and NOT "nothing to converge": ${entries3}`;
     }
-    function warnRefineSubmoduleUndeterminable(nodeId2, evidence) {
-      const message = buildSubmoduleReachabilityUndeterminableWarning(nodeId2, evidence);
+    function warnRefineSubmoduleUndeterminable(nodeId, evidence) {
+      const message = buildSubmoduleReachabilityUndeterminableWarning(nodeId, evidence);
       if (message) LOG.warn("Mesh", message);
     }
     function submoduleCommitPresent(submoduleRepoPath, commit2) {
@@ -38586,8 +38586,8 @@ ${res.stderr}`);
       if (typeof parsed !== "object" || parsed === null) {
         return { kind: "invalid", platform: platform10, reason: "Antigravity credential is not an object" };
       }
-      const root2 = parsed;
-      const token = typeof root2.token === "object" && root2.token !== null ? root2.token : root2;
+      const root = parsed;
+      const token = typeof root.token === "object" && root.token !== null ? root.token : root;
       const accessToken = token.access_token;
       if (typeof accessToken !== "string" || accessToken.length === 0) {
         return { kind: "invalid", platform: platform10, reason: "Antigravity credential has no access token" };
@@ -38600,8 +38600,8 @@ ${res.stderr}`);
       } else if (typeof expiryRaw === "number" && Number.isFinite(expiryRaw)) {
         expiresAtMs = expiryRaw < 1e11 ? expiryRaw * 1e3 : expiryRaw;
       }
-      const authMethod = typeof root2.auth_method === "string" && root2.auth_method.trim() !== "" ? root2.auth_method.trim() : null;
-      const identity5 = cliJwtIdentity(root2.id_token ?? token.id_token);
+      const authMethod = typeof root.auth_method === "string" && root.auth_method.trim() !== "" ? root.auth_method.trim() : null;
+      const identity5 = cliJwtIdentity(root.id_token ?? token.id_token);
       return {
         kind: "ok",
         credentials: { accessToken, expiresAtMs, authMethod, identity: identity5 },
@@ -38797,14 +38797,14 @@ ${res.stderr}`);
       };
     }
     function mapQuotaSummary(data) {
-      const root2 = asRecord(data);
-      if (!root2) {
+      const root = asRecord(data);
+      if (!root) {
         return quotaFailure("antigravity-cli", "error", "Antigravity quota response was not an object", {
           source: "oauth",
           failureKind: "parse"
         });
       }
-      const buckets = collectBuckets(root2);
+      const buckets = collectBuckets(root);
       if (buckets.length === 0) {
         return quotaFailure(
           "antigravity-cli",
@@ -39310,8 +39310,8 @@ child.on('exit', () => process.exit(0));
         }
       }
       const tmpRoots = [env2.TMPDIR, env2.TEMP, env2.TMP, os7.tmpdir()];
-      for (const root2 of tmpRoots) {
-        const trimmed3 = root2?.trim();
+      for (const root of tmpRoots) {
+        const trimmed3 = root?.trim();
         if (!trimmed3) continue;
         const normalizedRoot = normalize(trimmed3);
         if (resolved === normalizedRoot || resolved.startsWith(normalizedRoot + path12.sep)) {
@@ -39699,8 +39699,8 @@ child.on('exit', () => process.exit(0));
     function readClaudeQuotaAccountLineage(overrides2 = {}) {
       if (isTestRuntimeEnv() && !overrides2.env?.CLAUDE_CONFIG_DIR) return UNKNOWN_ACCOUNT_LINEAGE;
       try {
-        const root2 = JSON.parse(fs8.readFileSync(claudeAccountStatePath(overrides2.env ?? process.env), "utf8"));
-        const account = root2?.oauthAccount;
+        const root = JSON.parse(fs8.readFileSync(claudeAccountStatePath(overrides2.env ?? process.env), "utf8"));
+        const account = root?.oauthAccount;
         const accountUuid = typeof account?.accountUuid === "string" ? account.accountUuid.trim() : "";
         if (!accountUuid) return UNKNOWN_ACCOUNT_LINEAGE;
         const organizationUuid = typeof account.organizationUuid === "string" && account.organizationUuid.trim() ? account.organizationUuid.trim() : null;
@@ -39951,12 +39951,12 @@ child.on('exit', () => process.exit(0));
       }
     }
     function listRolloutFilesNewestFirst(env2 = process.env, nowMs2 = Date.now()) {
-      const root2 = codexSessionsDir(env2);
+      const root = codexSessionsDir(env2);
       const files = [];
       for (let back = 0; back <= MAX_LOOKBACK_DAYS; back += 1) {
         const day = new Date(nowMs2 - back * 24 * 60 * 60 * 1e3);
         const dir = path15.join(
-          root2,
+          root,
           String(day.getUTCFullYear()),
           String(day.getUTCMonth() + 1).padStart(2, "0"),
           String(day.getUTCDate()).padStart(2, "0")
@@ -40157,15 +40157,15 @@ child.on('exit', () => process.exit(0));
       return windowFromPercent(toNumber(record8.usedPercent), minutes, toEpochResetMs(record8.resetsAt));
     }
     function withAccountEmail(quota, accountResult) {
-      const root2 = typeof accountResult === "object" && accountResult !== null ? accountResult : {};
-      const account = typeof root2.account === "object" && root2.account !== null ? root2.account : {};
+      const root = typeof accountResult === "object" && accountResult !== null ? accountResult : {};
+      const account = typeof root.account === "object" && root.account !== null ? root.account : {};
       const email = typeof account.email === "string" ? account.email.trim() : "";
       if (!email) return quota;
       return { ...quota, metadata: { ...quota.metadata ?? {}, accountEmail: email } };
     }
     function mapRateLimits(result, nowMs2) {
-      const root2 = typeof result === "object" && result !== null ? result : {};
-      const snapshot = typeof root2.rateLimits === "object" && root2.rateLimits !== null ? root2.rateLimits : {};
+      const root = typeof result === "object" && result !== null ? result : {};
+      const snapshot = typeof root.rateLimits === "object" && root.rateLimits !== null ? root.rateLimits : {};
       const reported = [];
       const primary = mapWindow(snapshot.primary, SESSION_WINDOW_MINUTES);
       if (primary) {
@@ -40410,11 +40410,11 @@ child.on('exit', () => process.exit(0));
     function readCodexQuotaAccountLineage(overrides2 = {}) {
       if (isTestRuntimeEnv() && !overrides2.env?.CODEX_HOME) return UNKNOWN_ACCOUNT_LINEAGE;
       try {
-        const root2 = JSON.parse(fs10.readFileSync(path16.join(codexHome(overrides2.env ?? process.env), "auth.json"), "utf8"));
-        if (typeof root2?.auth_mode === "string" && root2.auth_mode.toLowerCase() !== "chatgpt") return UNKNOWN_ACCOUNT_LINEAGE;
-        const identity5 = cliJwtIdentity(root2?.tokens?.id_token);
+        const root = JSON.parse(fs10.readFileSync(path16.join(codexHome(overrides2.env ?? process.env), "auth.json"), "utf8"));
+        if (typeof root?.auth_mode === "string" && root.auth_mode.toLowerCase() !== "chatgpt") return UNKNOWN_ACCOUNT_LINEAGE;
+        const identity5 = cliJwtIdentity(root?.tokens?.id_token);
         if (!identity5) return UNKNOWN_ACCOUNT_LINEAGE;
-        const accountId = typeof root2.tokens.account_id === "string" && root2.tokens.account_id.trim() ? root2.tokens.account_id.trim() : null;
+        const accountId = typeof root.tokens.account_id === "string" && root.tokens.account_id.trim() ? root.tokens.account_id.trim() : null;
         return accountLineageFromStableIdentity(
           "codex-cli",
           CODEX_QUOTA_AUTHORITY,
@@ -40983,8 +40983,8 @@ child.on('exit', () => process.exit(0));
       return asRecord3(config.currentPeriod) !== null || typeof config.billingPeriodEnd === "string" || typeof config.billingPeriodStart === "string";
     }
     function mapBillingResponse(data, measuredAt) {
-      const root2 = asRecord3(data);
-      const config = root2 ? asRecord3(root2.config) : null;
+      const root = asRecord3(data);
+      const config = root ? asRecord3(root.config) : null;
       const period = config ? asRecord3(config.currentPeriod) : null;
       const reportedPercent = config ? toNumber(config.creditUsagePercent) : null;
       const resetsAt = config ? toIsoResetMs(period?.end) ?? toIsoResetMs(config.billingPeriodEnd) : null;
@@ -40999,7 +40999,7 @@ child.on('exit', () => process.exit(0));
           { source: "oauth", failureKind: "parse" }
         );
       }
-      const tierRaw = root2?.subscription_tier;
+      const tierRaw = root?.subscription_tier;
       const tier = typeof tierRaw === "string" && tierRaw.trim() !== "" ? tierRaw : null;
       return {
         provider: "grok-cli",
@@ -47102,10 +47102,10 @@ ${error.message || ""}`;
         ...prev.upstreamStatus === "stale" && typeof prev.upstreamFetchError === "string" ? { upstreamFetchError: prev.upstreamFetchError } : {}
       };
     }
-    function emptyEntry(meshId2, nodeId2, workspace) {
+    function emptyEntry(meshId2, nodeId, workspace) {
       return {
         meshId: meshId2,
-        nodeId: nodeId2,
+        nodeId,
         workspace,
         git: null,
         observedAt: null,
@@ -47270,8 +47270,8 @@ ${error.message || ""}`;
           }
           entries = /* @__PURE__ */ new Map();
           loadedMeshes = /* @__PURE__ */ new Set();
-          key(meshId2, nodeId2) {
-            return `${meshId2}\0${nodeId2}`;
+          key(meshId2, nodeId) {
+            return `${meshId2}\0${nodeId}`;
           }
           ensureLoaded(meshId2) {
             if (this.loadedMeshes.has(meshId2)) return;
@@ -47294,17 +47294,17 @@ ${error.message || ""}`;
               LOG.warn("MeshNodeGitState", `save failed for ${entry.meshId}/${entry.nodeId}: ${error?.message || error}`);
             }
           }
-          get(meshId2, nodeId2) {
-            if (!meshId2 || !nodeId2) return void 0;
+          get(meshId2, nodeId) {
+            if (!meshId2 || !nodeId) return void 0;
             this.ensureLoaded(meshId2);
-            return this.entries.get(this.key(meshId2, nodeId2));
+            return this.entries.get(this.key(meshId2, nodeId));
           }
-          upsertBase(meshId2, nodeId2, workspace) {
+          upsertBase(meshId2, nodeId, workspace) {
             this.ensureLoaded(meshId2);
-            const key7 = this.key(meshId2, nodeId2);
+            const key7 = this.key(meshId2, nodeId);
             let entry = this.entries.get(key7);
             if (!entry) {
-              entry = emptyEntry(meshId2, nodeId2, workspace);
+              entry = emptyEntry(meshId2, nodeId, workspace);
               this.entries.set(key7, entry);
             }
             if (workspace) entry.workspace = workspace;
@@ -47371,15 +47371,15 @@ ${error.message || ""}`;
             this.persist(entry);
             return { held: true, changed: recovered2 };
           }
-          recordProbeAttempt(meshId2, nodeId2, workspace, at = this.now()) {
-            if (!meshId2 || !nodeId2) return;
-            const entry = this.upsertBase(meshId2, nodeId2, workspace);
+          recordProbeAttempt(meshId2, nodeId, workspace, at = this.now()) {
+            if (!meshId2 || !nodeId) return;
+            const entry = this.upsertBase(meshId2, nodeId, workspace);
             entry.lastAttemptAt = at;
           }
           /** Returns `changed` when this failure is the transition into unreachable. */
-          recordProbeFailure(meshId2, nodeId2, workspace, reason, at = this.now()) {
-            if (!meshId2 || !nodeId2) return { changed: false };
-            const entry = this.upsertBase(meshId2, nodeId2, workspace);
+          recordProbeFailure(meshId2, nodeId, workspace, reason, at = this.now()) {
+            if (!meshId2 || !nodeId) return { changed: false };
+            const entry = this.upsertBase(meshId2, nodeId, workspace);
             const changed = entry.unreachableSince === null;
             if (entry.unreachableSince === null) entry.unreachableSince = at;
             entry.lastFailureAt = at;
@@ -47431,8 +47431,8 @@ ${error.message || ""}`;
            * the restart's report is expected, and it must still come from the new
            * process. Only nodes the coordinator already holds state for are marked.
            */
-          markHandshakePending(meshId2, nodeId2, reason, at = this.now()) {
-            const entry = this.get(meshId2, nodeId2);
+          markHandshakePending(meshId2, nodeId, reason, at = this.now()) {
+            const entry = this.get(meshId2, nodeId);
             if (!entry) return false;
             if (entry.handshakePendingSince !== null && entry.handshakePendingReason === "restart" && reason === "reconnect") return true;
             entry.handshakePendingSince = at;
@@ -47448,8 +47448,8 @@ ${error.message || ""}`;
            * that restarted without the row, a pending restart handshake) `false`
            * tells the member to send the full summary.
            */
-          confirmRuntime(meshId2, nodeId2, signature, observedAt) {
-            const entry = this.get(meshId2, nodeId2);
+          confirmRuntime(meshId2, nodeId, signature, observedAt) {
+            const entry = this.get(meshId2, nodeId);
             if (!entry?.runtime || entry.runtimeSource !== "member_push" || !meshNodeStateSignatureMatches(entry.runtimeSignature, signature)) return false;
             if (entry.handshakePendingSince !== null) {
               if (entry.handshakePendingReason === "restart") return false;
@@ -48337,8 +48337,8 @@ ${error.message || ""}`;
         return void 0;
       }
     }
-    function inside(root2, p) {
-      const relative30 = path28.relative(root2, p);
+    function inside(root, p) {
+      const relative30 = path28.relative(root, p);
       return relative30 === "" || !relative30.startsWith(`..${path28.sep}`) && relative30 !== ".." && !path28.isAbsolute(relative30);
     }
     function canonical(p) {
@@ -49442,17 +49442,17 @@ ${error.message || ""}`;
       return {
         matches: isStageVendorOutput,
         reproduce(git15, scope2) {
-          const root2 = directory2();
+          const root = directory2();
           const outputs2 = /* @__PURE__ */ new Map();
           const inputs = [], configs = [], producers = [];
           let totalBytes = 0;
           try {
-            const authority = (0, import_node_crypto9.createPublicKey)(readPrivate((0, import_node_path7.join)(root2, "authority.pem"), 8192));
+            const authority = (0, import_node_crypto9.createPublicKey)(readPrivate((0, import_node_path7.join)(root, "authority.pem"), 8192));
             if (authority.asymmetricKeyType !== "ed25519") return deny("review_source_generated_producer_authority");
             for (const side of ["before", "after"]) {
               const rootSha = side === "before" ? scope2.baseSha : scope2.headSha;
               if (!commitPin.test(rootSha)) return deny("review_source_generated_producer_scope");
-              const snapshot = (0, import_node_path7.join)(root2, rootSha);
+              const snapshot = (0, import_node_path7.join)(root, rootSha);
               const raw = readPrivate((0, import_node_path7.join)(snapshot, "receipt.json"), 4 * 1024 * 1024);
               if (!(0, import_node_crypto9.verify)(null, raw, authority, readPrivate((0, import_node_path7.join)(snapshot, "receipt.sig"), 64))) {
                 return deny("review_source_generated_producer_signature");
@@ -49471,7 +49471,7 @@ ${error.message || ""}`;
                 }
                 totalBytes += row2.bytes;
                 if (totalBytes > 512 * 1024 * 1024) return deny("review_source_generated_producer_budget");
-                const bytes = readPrivate((0, import_node_path7.join)(root2, "outputs", row2.sha256), row2.bytes);
+                const bytes = readPrivate((0, import_node_path7.join)(root, "outputs", row2.sha256), row2.bytes);
                 if (bytes.length !== row2.bytes || diffDigest(bytes) !== row2.sha256) return deny("review_source_generated_producer_bytes");
                 const key7 = row2.repo + ":" + row2.path;
                 const paired = outputs2.get(key7) ?? {};
@@ -49573,11 +49573,11 @@ ${error.message || ""}`;
           return git15(repo, ["cat-file", "blob", oid], maxBytes);
         },
         inventory(scope2) {
-          const [ossBase2, ossHead] = range(scope2, "oss");
+          const [ossBase, ossHead] = range(scope2, "oss");
           const changes = [];
           const trees = {
             root: { baseTree: tree("root", scope2.baseSha), headTree: tree("root", scope2.headSha) },
-            oss: { baseTree: tree("oss", ossBase2), headTree: tree("oss", ossHead) }
+            oss: { baseTree: tree("oss", ossBase), headTree: tree("oss", ossHead) }
           };
           for (const [i, commit2] of range(scope2, "root").entries()) {
             const link2 = range(scope2, "oss")[i];
@@ -49747,12 +49747,12 @@ ${error.message || ""}`;
         if (import_node_fs9.realpathSync.native(run4("--show-toplevel")) !== cwd) deny2("review_source_generated_checkout");
         return { gitDir: import_node_fs9.realpathSync.native(run4("--absolute-git-dir")), head: run4("HEAD") };
       };
-      const root2 = import_node_fs9.realpathSync.native(scope2.checkout.path);
-      const st = (0, import_node_fs9.statSync)(root2);
-      if (root2 !== scope2.checkout.path || `${st.dev}:${st.ino}` !== scope2.checkout.identity) deny2("review_source_generated_checkout");
-      const ossPath = (0, import_node_path8.join)(root2, "oss");
+      const root = import_node_fs9.realpathSync.native(scope2.checkout.path);
+      const st = (0, import_node_fs9.statSync)(root);
+      if (root !== scope2.checkout.path || `${st.dev}:${st.ino}` !== scope2.checkout.identity) deny2("review_source_generated_checkout");
+      const ossPath = (0, import_node_path8.join)(root, "oss");
       if (import_node_fs9.realpathSync.native(ossPath) !== ossPath) deny2("review_source_generated_checkout");
-      const rootGit = directory2(root2), ossGit = directory2(ossPath);
+      const rootGit = directory2(root), ossGit = directory2(ossPath);
       if (rootGit.head !== scope2.headSha || !scope2.gitlinks.head.split("\n").includes(`160000 commit ${ossGit.head}	oss`)) {
         deny2("review_source_generated_checkout");
       }
@@ -50176,10 +50176,10 @@ ${error.message || ""}`;
     function stageReviewArtifactGrant(store5, parent, id4) {
       const row2 = artifactRow(store5, id4);
       if (!row2 || row2.mesh_id !== parent.meshId || !row2.session_id || row2.task_id !== parent.id && !parent.inputArtifactIds?.includes(id4) || row2.task_id === parent.id && !["worker", "pipeline"].includes(row2.producer_role)) throw new Error(`review_input_artifact_unauthorized: ${id4}`);
-      const root2 = import_node_fs11.realpathSync.native(row2.workspace_root);
-      const file = path30.resolve(root2, row2.rel_path);
-      if (root2 !== row2.workspace_root || path30.isAbsolute(row2.rel_path) || row2.rel_path.split(/[\\/]/).includes("..")) throw new Error(`review_input_artifact_path: ${id4}`);
-      const relative30 = path30.relative(root2, file);
+      const root = import_node_fs11.realpathSync.native(row2.workspace_root);
+      const file = path30.resolve(root, row2.rel_path);
+      if (root !== row2.workspace_root || path30.isAbsolute(row2.rel_path) || row2.rel_path.split(/[\\/]/).includes("..")) throw new Error(`review_input_artifact_path: ${id4}`);
+      const relative30 = path30.relative(root, file);
       if (!relative30 || relative30 === ".." || relative30.startsWith(`..${path30.sep}`) || path30.isAbsolute(relative30)) throw new Error(`review_input_artifact_path: ${id4}`);
       const grant = { id: id4, file, sha256: row2.sha256, size: row2.size_bytes };
       if (!hashMatches(grant)) throw new Error(`review_input_artifact_hash: ${id4}`);
@@ -50631,12 +50631,12 @@ ${error.message || ""}`;
     });
     function checkoutOfWriter(entry) {
       if (entry.light) return { light: entry.lightWorkspaceId ?? entry.id ?? "light" };
-      const nodeId2 = entry.assignedNodeId || entry.autoLaunch?.nodeId;
-      return nodeId2 ? { nodeId: nodeId2 } : void 0;
+      const nodeId = entry.assignedNodeId || entry.autoLaunch?.nodeId;
+      return nodeId ? { nodeId } : void 0;
     }
-    function checkoutOfCandidate(entry, nodeId2) {
+    function checkoutOfCandidate(entry, nodeId) {
       if (entry.light) return { light: entry.lightWorkspaceId ?? entry.id ?? "light" };
-      const node = nodeId2 || entry.assignedNodeId || entry.targetNodeId;
+      const node = nodeId || entry.assignedNodeId || entry.targetNodeId;
       return node ? { nodeId: node } : void 0;
     }
     function sharesCheckout(candidate, other) {
@@ -50664,7 +50664,7 @@ ${error.message || ""}`;
         }
       }
     }
-    function queueHoldContext(task, reason, queue, nodeId2, prospectiveScope) {
+    function queueHoldContext(task, reason, queue, nodeId, prospectiveScope) {
       const active = holdActiveWriters(task, queue);
       const pathGate = resolvePathOwnershipGate(task.meshId);
       const overlaps2 = [];
@@ -50678,7 +50678,7 @@ ${error.message || ""}`;
           const candidateScope = prospectiveScope ?? currentPhysicalScope(task.ownershipScope, task.ownedPaths);
           const otherScope = currentPhysicalScope(blockingScope, blockingPaths);
           const otherCheckout = isReadonly && blockingScope ? { nodeId: blockingScope.nodeId } : checkoutOfWriter(other);
-          const candidateCheckout = checkoutOfCandidate(task, nodeId2);
+          const candidateCheckout = checkoutOfCandidate(task, nodeId);
           const wide = pathGate === "mesh_wide" && !candidateCheckout?.light && !otherCheckout?.light;
           if (!wide && !sharesCheckout(candidateCheckout, otherCheckout)) {
             if (!candidateScope || !otherScope) continue;
@@ -50715,7 +50715,7 @@ ${error.message || ""}`;
         }
         return { blockingTaskIds: blockingTaskIds2, detail };
       }
-      const blockingTaskIds = reason === "dependencies_unsatisfied" ? (task.dependsOn || []).filter((id4) => !queue.some((other) => other.id === id4 && other.status === "completed")) : reason === "node_busy_with_active_assignment" || reason === "node_has_active_assignment" ? active.filter((other) => !other.readonly && other.taskMode !== "live_debug_readonly" && nodeId2 && meshNodeIdMatches7({ id: other.assignedNodeId }, nodeId2)).map((other) => other.id) : [];
+      const blockingTaskIds = reason === "dependencies_unsatisfied" ? (task.dependsOn || []).filter((id4) => !queue.some((other) => other.id === id4 && other.status === "completed")) : reason === "node_busy_with_active_assignment" || reason === "node_has_active_assignment" ? active.filter((other) => !other.readonly && other.taskMode !== "live_debug_readonly" && nodeId && meshNodeIdMatches7({ id: other.assignedNodeId }, nodeId)).map((other) => other.id) : [];
       return { blockingTaskIds, detail: overlaps2.length ? { overlappingPaths: overlaps2 } : {} };
     }
     function ownershipUnprovenResolution(message) {
@@ -50943,8 +50943,8 @@ ${error.message || ""}`;
         async prepare({ sourceWorkspace, rootSha }) {
           const base = baseDir();
           await (0, import_promises6.mkdir)(base, { recursive: true, mode: 448 });
-          const root2 = await (0, import_promises6.mkdtemp)((0, import_node_path9.join)(await (0, import_promises6.realpath)(base), "review-"));
-          const release2 = () => (0, import_promises6.rm)(root2, { recursive: true, force: true });
+          const root = await (0, import_promises6.mkdtemp)((0, import_node_path9.join)(await (0, import_promises6.realpath)(base), "review-"));
+          const release2 = () => (0, import_promises6.rm)(root, { recursive: true, force: true });
           let repos = 0;
           async function materialize(source2, target2, head) {
             if (!pin2.test(head) || ++repos > 128 || await (0, import_promises6.realpath)(source2) !== source2 || await (0, import_promises6.realpath)((await git3(source2, "rev-parse", "--show-toplevel")).trim()) !== source2) {
@@ -50970,8 +50970,8 @@ ${error.message || ""}`;
             }
           }
           try {
-            await materialize(await (0, import_promises6.realpath)(sourceWorkspace), root2, rootSha);
-            return { path: root2, headSha: rootSha, release: release2 };
+            await materialize(await (0, import_promises6.realpath)(sourceWorkspace), root, rootSha);
+            return { path: root, headSha: rootSha, release: release2 };
           } catch (error) {
             await release2();
             throw error;
@@ -51586,9 +51586,9 @@ ${pattern}
       if (!input.forcedConfigFile) return null;
       const declared = String(input.declaredPath || "").trim();
       if (!declared || declared.startsWith("~") || path33.isAbsolute(declared)) return null;
-      const root2 = path33.join(input.baseDir || os17.tmpdir(), "adhdev-worker-mcp-config");
+      const root = path33.join(input.baseDir || os17.tmpdir(), "adhdev-worker-mcp-config");
       const sessionDir = crypto3.createHash("sha256").update(String(input.sessionKey || "")).digest("hex").slice(0, 16);
-      return path33.join(root2, sessionDir, path33.basename(declared));
+      return path33.join(root, sessionDir, path33.basename(declared));
     }
     function resolveWorkerMcpPlacement(input) {
       const declared = String(input.declaredPath || "").trim();
@@ -51641,8 +51641,8 @@ ${pattern}
       if (input.privateConfigPath && path33.resolve(target2) === path33.resolve(input.privateConfigPath)) return true;
       return Boolean(input.workerHome) && isPathInside2(target2, input.workerHome);
     }
-    function isPathInside2(target2, root2) {
-      const rel = path33.relative(path33.resolve(root2), path33.resolve(target2));
+    function isPathInside2(target2, root) {
+      const rel = path33.relative(path33.resolve(root), path33.resolve(target2));
       return !!rel && !rel.startsWith("..") && !path33.isAbsolute(rel);
     }
     function workerMcpConfigDeclaresServer(filePath2, format, serverName) {
@@ -56039,10 +56039,10 @@ Next step: ${nextStep}`;
       if (failedNodes.length > 0) {
         parts.push("Per-node failures:");
         for (const entry of failedNodes) {
-          const nodeId2 = entry.nodeId || "(unknown node)";
+          const nodeId = entry.nodeId || "(unknown node)";
           const codeStage = [entry.code ? `code=${entry.code}` : "", entry.stage ? `stage=${entry.stage}` : ""].filter(Boolean).join(", ");
           const err2 = entry.error ? truncateAppend(entry.error, REFINE_NODE_ERROR_TRUNCATE_CHARS, "\u2026") : "";
-          parts.push(`- ${nodeId2}${entry.convergence ? `: ${entry.convergence}` : ""}${codeStage ? ` (${codeStage})` : ""}${err2 ? ` \u2014 ${err2}` : ""}`);
+          parts.push(`- ${nodeId}${entry.convergence ? `: ${entry.convergence}` : ""}${codeStage ? ` (${codeStage})` : ""}${err2 ? ` \u2014 ${err2}` : ""}`);
         }
       }
       return parts.join("\n");
@@ -56235,8 +56235,8 @@ ${resolve22(input.refs.summary, input.resolveRef, missing) ?? ""}`,
       const stamp2 = {};
       const meshId2 = readText(meshContext.meshId);
       if (meshId2 && !readText(settings2.meshNodeFor)) stamp2.meshNodeFor = meshId2;
-      const nodeId2 = readText(meshContext.nodeId);
-      if (nodeId2 && !readText(settings2.meshNodeId)) stamp2.meshNodeId = nodeId2;
+      const nodeId = readText(meshContext.nodeId);
+      if (nodeId && !readText(settings2.meshNodeId)) stamp2.meshNodeId = nodeId;
       const coordinatorDaemonId = readText(meshContext.coordinatorDaemonId);
       if (coordinatorDaemonId && !readText(settings2.meshCoordinatorDaemonId)) {
         stamp2.meshCoordinatorDaemonId = coordinatorDaemonId;
@@ -56245,7 +56245,7 @@ ${resolve22(input.refs.summary, input.resolveRef, missing) ?? ""}`,
       if (coordinatorSessionId && !readText(settings2.meshCoordinatorSessionId)) {
         stamp2.meshCoordinatorSessionId = coordinatorSessionId;
       }
-      if ((meshId2 || nodeId2 || coordinatorDaemonId || coordinatorSessionId) && settings2.launchedByCoordinator !== true) {
+      if ((meshId2 || nodeId || coordinatorDaemonId || coordinatorSessionId) && settings2.launchedByCoordinator !== true) {
         stamp2.launchedByCoordinator = true;
       }
       return Object.keys(stamp2).length > 0 ? stamp2 : void 0;
@@ -56552,13 +56552,13 @@ Next step: ${nextStep}`;
         if (failedNodes.length > 0) {
           parts.push("Per-node failures:");
           for (const entry of failedNodes) {
-            const nodeId2 = readText(entry.nodeId) || "(unknown node)";
+            const nodeId = readText(entry.nodeId) || "(unknown node)";
             const nodeConvergence = readText(entry.convergence);
             const nodeCode = readText(entry.code);
             const nodeStage = readText(entry.stage);
             const nodeError = readText(entry.error);
             const codeStage = [nodeCode ? `code=${nodeCode}` : "", nodeStage ? `stage=${nodeStage}` : ""].filter(Boolean).join(", ");
-            parts.push(`- ${nodeId2}${nodeConvergence ? `: ${nodeConvergence}` : ""}${codeStage ? ` (${codeStage})` : ""}${nodeError ? ` \u2014 ${nodeError.length > 200 ? `${nodeError.slice(0, 200)}\u2026` : nodeError}` : ""}`);
+            parts.push(`- ${nodeId}${nodeConvergence ? `: ${nodeConvergence}` : ""}${codeStage ? ` (${codeStage})` : ""}${nodeError ? ` \u2014 ${nodeError.length > 200 ? `${nodeError.slice(0, 200)}\u2026` : nodeError}` : ""}`);
           }
         }
         return parts.join("\n");
@@ -57391,8 +57391,8 @@ ${line}`;
       const eventId = s(ctx.eventId);
       if (eventId) segs.push(`evt=${eventId}`);
       segs.push(`sess=${s(ctx.sessionId) || "-"}`);
-      const nodeId2 = s(ctx.nodeId);
-      if (nodeId2) segs.push(`node=${nodeId2}`);
+      const nodeId = s(ctx.nodeId);
+      if (nodeId) segs.push(`node=${nodeId}`);
       const meshId2 = s(ctx.meshId);
       if (meshId2) segs.push(`mesh=${meshId2}`);
       const event = s(ctx.event);
@@ -57413,8 +57413,8 @@ ${line}`;
       if (taskId) return `task=${taskId}`;
       const sessionId = s(ctx.sessionId);
       if (sessionId) return `sess=${sessionId}`;
-      const nodeId2 = s(ctx.nodeId);
-      if (nodeId2) return `node=${nodeId2}`;
+      const nodeId = s(ctx.nodeId);
+      if (nodeId) return `node=${nodeId}`;
       return "-";
     }
     function traceMeshEventDrop(reason, ctx, detail) {
@@ -67443,12 +67443,12 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function buildQueueDependencyNotice(meshId2, rootId, policy, cancelled, machineReason) {
       const store5 = MeshRuntimeStore.getInstance();
-      const root2 = store5.findQueueEntryById(meshId2, rootId);
-      if (!root2 || root2.status !== "failed" && root2.status !== "cancelled") return null;
+      const root = store5.findQueueEntryById(meshId2, rootId);
+      if (!root || root.status !== "failed" && root.status !== "cancelled") return null;
       const rootRef = {
-        taskId: root2.id,
-        outcome: root2.status,
-        reasonCode: queueRootReasonCode(root2, machineReason)
+        taskId: root.id,
+        outcome: root.status,
+        reasonCode: queueRootReasonCode(root, machineReason)
       };
       const generation = rootGeneration(store5, rootId);
       if (policy === "cancel") {
@@ -67479,14 +67479,14 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         }
       }
       let noticesQueued = 0;
-      for (const [rootId, root2] of deadRoots) {
+      for (const [rootId, root] of deadRoots) {
         const waiting2 = collectWaitingQueueDependents(store5, meshId2, rootId);
         if (waiting2.length === 0) continue;
         const notice = {
           kind: "queue_dependency_blocked",
           meshId: meshId2,
           generation: rootGeneration(store5, rootId),
-          root: { taskId: rootId, outcome: root2.status, reasonCode: queueRootReasonCode(root2) },
+          root: { taskId: rootId, outcome: root.status, reasonCode: queueRootReasonCode(root) },
           waiting: waiting2,
           source: "mesh_queue_stall_sweep"
         };
@@ -67521,44 +67521,44 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return tasks.slice(0, QUEUE_DEPENDENCY_NOTICE_LIST_CAP).map((t) => `'${t.taskId}'`).join(", ") + (tasks.length > QUEUE_DEPENDENCY_NOTICE_LIST_CAP ? ` (+${tasks.length - QUEUE_DEPENDENCY_NOTICE_LIST_CAP} more \u2014 mesh_view_queue)` : "");
     }
     function renderQueueDependencyNotice(n) {
-      const root2 = n.root;
-      const rootLabel = `${shortTask(root2.taskId)} (task_id ${root2.taskId})`;
-      const requeue = `mesh_queue_requeue(task_id='${root2.taskId}', force=true)`;
+      const root = n.root;
+      const rootLabel = `${shortTask(root.taskId)} (task_id ${root.taskId})`;
+      const requeue = `mesh_queue_requeue(task_id='${root.taskId}', force=true)`;
       if (n.kind === "queue_dependency_cancelled") {
-        const coordinatorMessage2 = `Queue task ${rootLabel} ${root2.outcome === "failed" ? "failed" : "was cancelled"} (reason: ${root2.reasonCode}). Under on_dependency_failure=cancel, ${n.cancelled.length} dependent task(s) were cancelled: ${listCapped(n.cancelled, describeQueueTask)}. Cancelled tasks do not revive \u2014 if the work is still wanted, fix the cause and enqueue replacements (mesh_enqueue_task with depends_on).`;
+        const coordinatorMessage2 = `Queue task ${rootLabel} ${root.outcome === "failed" ? "failed" : "was cancelled"} (reason: ${root.reasonCode}). Under on_dependency_failure=cancel, ${n.cancelled.length} dependent task(s) were cancelled: ${listCapped(n.cancelled, describeQueueTask)}. Cancelled tasks do not revive \u2014 if the work is still wanted, fix the cause and enqueue replacements (mesh_enqueue_task with depends_on).`;
         return {
           event: "mesh:queue_dependency_cancelled",
-          eventId: `queue:queue_dependency_cancelled:${root2.taskId}:${n.generation}`,
-          nodeLabel: shortTask(root2.taskId),
+          eventId: `queue:queue_dependency_cancelled:${root.taskId}:${n.generation}`,
+          nodeLabel: shortTask(root.taskId),
           coordinatorMessage: coordinatorMessage2,
           metadataEvent: {
             source: "mesh_queue_dependency",
-            taskId: root2.taskId,
-            rootOutcome: root2.outcome,
-            reasonCode: root2.reasonCode,
+            taskId: root.taskId,
+            rootOutcome: root.outcome,
+            reasonCode: root.reasonCode,
             generation: n.generation,
             cancelledTaskIds: n.cancelled.map((t) => t.taskId),
             policy: "cancel"
           }
         };
       }
-      const operatorCancel = root2.outcome === "cancelled" && root2.reasonCode === "operator_cancel";
+      const operatorCancel = root.outcome === "cancelled" && root.reasonCode === "operator_cancel";
       const waiting2 = n.waiting;
-      const head = operatorCancel ? `${waiting2.length} task(s) still wait on the task you cancelled, ${rootLabel} (reason: operator_cancel): ` : `Queue task ${rootLabel} ${root2.outcome === "failed" ? "failed" : "was cancelled"} (reason: ${root2.reasonCode}) and ${waiting2.length} task(s) still wait on it: `;
+      const head = operatorCancel ? `${waiting2.length} task(s) still wait on the task you cancelled, ${rootLabel} (reason: operator_cancel): ` : `Queue task ${rootLabel} ${root.outcome === "failed" ? "failed" : "was cancelled"} (reason: ${root.reasonCode}) and ${waiting2.length} task(s) still wait on it: `;
       const next = operatorCancel ? `Next: cancel them too with mesh_queue_cancel(task_id=\u2026) for ${queueIdList(waiting2)}; or, if the cancel was a mistake, ${requeue} and they run once it completes.` : `Next: retry it with ${requeue} (add message=<corrected instruction> to change the approach) \u2014 the waiting tasks then run automatically; or drop them with mesh_queue_cancel(task_id=\u2026) for ${queueIdList(waiting2)}.`;
       const coordinatorMessage = `${head}${listCapped(waiting2, describeQueueTask)}. Policy is on_dependency_failure=block (the default), so nothing was cancelled and they will not run on their own. ` + next;
       return {
         event: "mesh:queue_dependency_blocked",
         // One id for the terminal-time notice AND the sweep: the root's output
         // version is the generation, so a root announced once never pages twice.
-        eventId: `queue:queue_dependency_blocked:${root2.taskId}:${n.generation}`,
-        nodeLabel: shortTask(root2.taskId),
+        eventId: `queue:queue_dependency_blocked:${root.taskId}:${n.generation}`,
+        nodeLabel: shortTask(root.taskId),
         coordinatorMessage,
         metadataEvent: {
           source: n.source,
-          taskId: root2.taskId,
-          rootOutcome: root2.outcome,
-          reasonCode: root2.reasonCode,
+          taskId: root.taskId,
+          rootOutcome: root.outcome,
+          reasonCode: root.reasonCode,
           generation: n.generation,
           waitingTaskIds: waiting2.map((t) => t.taskId),
           policy: "block"
@@ -67578,8 +67578,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       if (!detail || Object.keys(detail).length === 0) return null;
       let json2 = JSON.stringify(detail);
       if (Buffer.byteLength(json2) > DETAIL_MAX_BYTES) {
-        const { reasonCode, unknownReason, note: note2, nodeId: nodeId2 } = detail;
-        json2 = JSON.stringify({ reasonCode, unknownReason, note: note2, nodeId: nodeId2 });
+        const { reasonCode, unknownReason, note: note2, nodeId } = detail;
+        json2 = JSON.stringify({ reasonCode, unknownReason, note: note2, nodeId });
       }
       return json2;
     }
@@ -67700,11 +67700,11 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       if (repo.startsWith("/") || repo.includes("\\") || /^[A-Za-z]:/.test(repo)) return false;
       return !repo.split("/").some((seg) => seg === ".." || seg === ".");
     }
-    function containedRepoPath(root2, repo) {
+    function containedRepoPath(root, repo) {
       if (!isSafeRelativeRepo(repo)) return void 0;
       try {
-        const realRoot = (0, import_node_fs13.realpathSync)(root2);
-        const real3 = (0, import_node_fs13.realpathSync)((0, import_node_path10.join)(root2, repo));
+        const realRoot = (0, import_node_fs13.realpathSync)(root);
+        const real3 = (0, import_node_fs13.realpathSync)((0, import_node_path10.join)(root, repo));
         return real3 === realRoot || real3.startsWith(realRoot + import_node_path10.sep) ? real3 : void 0;
       } catch {
         return void 0;
@@ -68173,9 +68173,9 @@ ${e?.stderr || ""}`
         };
       }
     }
-    async function classifyAndWarnPatchEquivalenceFailure(nodeId2, repoRoot, baseHead, branchHead, summary, options = {}) {
+    async function classifyAndWarnPatchEquivalenceFailure(nodeId, repoRoot, baseHead, branchHead, summary, options = {}) {
       const classification = await classifyPatchEquivalenceFailure(repoRoot, baseHead, branchHead, summary, options);
-      warnRefineSubmoduleUndeterminable(nodeId2, classification.evidence);
+      warnRefineSubmoduleUndeterminable(nodeId, classification.evidence);
       return classification;
     }
     async function classifyPatchEquivalenceFailure(repoRoot, baseHead, branchHead, summary, options = {}) {
@@ -70824,16 +70824,16 @@ ${env2.envelopes.join("\n\n")}${tail}`;
       }
     }
     function foldLegacyTopLevelMeshSetting(config, key7, rebindHint) {
-      const root2 = config;
-      const legacy = root2[key7];
+      const root = config;
+      const legacy = root[key7];
       if (!legacy || typeof legacy !== "object" || Array.isArray(legacy)) {
-        if (key7 in root2) {
-          delete root2[key7];
+        if (key7 in root) {
+          delete root[key7];
           return true;
         }
         return false;
       }
-      delete root2[key7];
+      delete root[key7];
       const entryKeys2 = Object.keys(legacy);
       if (config.meshes.length === 1 && entryKeys2.length > 0) {
         const mesh = config.meshes[0];
@@ -71477,8 +71477,8 @@ ${env2.envelopes.join("\n\n")}${tail}`;
     function getMeshQueueRevision(meshId2) {
       return MeshRuntimeStore.getInstance().getQueueRevision(meshId2);
     }
-    function claimNextTask(meshId2, nodeId2, sessionId, capabilityTags, opts) {
-      return MeshRuntimeStore.getInstance().claimNextQueueTask(meshId2, nodeId2, sessionId, capabilityTags, opts);
+    function claimNextTask(meshId2, nodeId, sessionId, capabilityTags, opts) {
+      return MeshRuntimeStore.getInstance().claimNextQueueTask(meshId2, nodeId, sessionId, capabilityTags, opts);
     }
     function resolveDependencyFailurePolicy(meshId2) {
       try {
@@ -72033,9 +72033,9 @@ ${env2.envelopes.join("\n\n")}${tail}`;
       if (capture.requestKey !== key2(r)) throw new Error("writer_stop_request_identity_changed");
       return capture;
     }
-    function captureWriterStop(r, root2, tree, runtimeKey, startedAt) {
+    function captureWriterStop(r, root, tree, runtimeKey, startedAt) {
       const requestKey = key2(r);
-      const capture = { requestKey, runtimeKey, startedAt, root: root2, tree, incarnation: (0, import_node_crypto17.createHash)("sha256").update(JSON.stringify([requestKey, runtimeKey, startedAt, root2, tree])).digest("hex") };
+      const capture = { requestKey, runtimeKey, startedAt, root, tree, incarnation: (0, import_node_crypto17.createHash)("sha256").update(JSON.stringify([requestKey, runtimeKey, startedAt, root, tree])).digest("hex") };
       db(true).prepare("INSERT OR IGNORE INTO mesh_writer_stop_captures (request_id,session_id,capture_json) VALUES (?,?,?)").run(r.stopRequestId, r.sessionId, JSON.stringify(capture));
       return readWriterStopCapture(r);
     }
@@ -72323,9 +72323,9 @@ ${body.replace(/<\/?\s*(untrusted_[a-z_]+)\b[^>]*>/gi, "[tag removed]")}
       const reviewerSessions = new Set(
         (parent.stageState?.reviewTaskIds ?? []).map((id4) => store5.findQueueEntryById(parent.meshId, id4)?.assignedSessionId).filter(nonEmpty).map((s2) => s2.trim())
       );
-      const accept = (nodeId2, sessionId, providerType, via) => {
-        if (!nonEmpty(nodeId2) || !nonEmpty(sessionId) || !nonEmpty(providerType)) return void 0;
-        const cand = { nodeId: nodeId2.trim(), sessionId: sessionId.trim(), providerType: providerType.trim(), via };
+      const accept = (nodeId, sessionId, providerType, via) => {
+        if (!nonEmpty(nodeId) || !nonEmpty(sessionId) || !nonEmpty(providerType)) return void 0;
+        const cand = { nodeId: nodeId.trim(), sessionId: sessionId.trim(), providerType: providerType.trim(), via };
         if (reviewerSessions.has(cand.sessionId)) return void 0;
         if (nonEmpty(parent.assignedNodeId) && !meshNodeIdMatches7({ nodeId: parent.assignedNodeId }, cand.nodeId)) return void 0;
         if (nonEmpty(parent.assignedSessionId) && parent.assignedSessionId.trim() !== cand.sessionId) return void 0;
@@ -74642,19 +74642,19 @@ ${out.stderr}`);
       }
       return { converged: resolutions.length > 0, resolutions, gitlinks };
     }
-    function describeSubmodulePublishRequired(nodeId2, gitlinks) {
+    function describeSubmodulePublishRequired(nodeId, gitlinks) {
       const pending = gitlinks.filter((g3) => g3.action === "publish_required_before_rebase");
-      return `[Refinery] Refusing to auto-converge diverged submodule gitlink(s) for node ${nodeId2} \u2014 the rebase would create a NEW submodule commit that is not reachable from the submodule remote, and allowAutoPublishSubmoduleMainCommits is disabled, so the reachability gate would reject it. The branch was left untouched. NEXT STEP: publish the branch-side submodule commit(s) to submodule origin main, then rerun mesh_refine_node \u2014 do NOT rebase: ` + pending.map((g3) => `${g3.path} (branch=${(g3.branchCommit || "?").slice(0, 12)} base=${(g3.baseCommit || "?").slice(0, 12)} remote=${g3.remoteMainRef || "unresolved"})`).join(", ");
+      return `[Refinery] Refusing to auto-converge diverged submodule gitlink(s) for node ${nodeId} \u2014 the rebase would create a NEW submodule commit that is not reachable from the submodule remote, and allowAutoPublishSubmoduleMainCommits is disabled, so the reachability gate would reject it. The branch was left untouched. NEXT STEP: publish the branch-side submodule commit(s) to submodule origin main, then rerun mesh_refine_node \u2014 do NOT rebase: ` + pending.map((g3) => `${g3.path} (branch=${(g3.branchCommit || "?").slice(0, 12)} base=${(g3.baseCommit || "?").slice(0, 12)} remote=${g3.remoteMainRef || "unresolved"})`).join(", ");
     }
-    function describeSubmoduleConvergeDecline(nodeId2, reason, gitlinks) {
+    function describeSubmoduleConvergeDecline(nodeId, reason, gitlinks) {
       if (reason === "submodule_publish_required") {
-        return describeSubmodulePublishRequired(nodeId2, gitlinks);
+        return describeSubmodulePublishRequired(nodeId, gitlinks);
       }
       if (reason === "submodule_publication_undeterminable") {
-        return `[Refinery] Could NOT determine whether the branch-side submodule commit(s) are already published for node ${nodeId2} \u2014 the submodule remote was not successfully consulted, so refs/remotes/origin/* is stale or absent. Refusing to rebase: minting a submodule commit on absent evidence can synthesize a redundant twin of a commit that is already on origin. The branch was left untouched. NEXT STEP: restore access to the submodule remote and rerun mesh_refine_node \u2014 do NOT publish or rebase on this evidence: ` + gitlinks.filter((g3) => g3.action === "publication_undeterminable").map((g3) => `${g3.path} (branch=${(g3.branchCommit || "?").slice(0, 12)} base=${(g3.baseCommit || "?").slice(0, 12)} remote=${g3.remoteMainRef || "unresolved"} fetched=${g3.remoteFetched === true})`).join(", ");
+        return `[Refinery] Could NOT determine whether the branch-side submodule commit(s) are already published for node ${nodeId} \u2014 the submodule remote was not successfully consulted, so refs/remotes/origin/* is stale or absent. Refusing to rebase: minting a submodule commit on absent evidence can synthesize a redundant twin of a commit that is already on origin. The branch was left untouched. NEXT STEP: restore access to the submodule remote and rerun mesh_refine_node \u2014 do NOT publish or rebase on this evidence: ` + gitlinks.filter((g3) => g3.action === "publication_undeterminable").map((g3) => `${g3.path} (branch=${(g3.branchCommit || "?").slice(0, 12)} base=${(g3.baseCommit || "?").slice(0, 12)} remote=${g3.remoteMainRef || "unresolved"} fetched=${g3.remoteFetched === true})`).join(", ");
       }
       if (reason === "submodule_commit_unavailable") {
-        return `[Refinery] Could NOT determine submodule gitlink divergence for node ${nodeId2} \u2014 a gitlink commit is missing from the local submodule object store (auto-converge could not run): ` + gitlinks.filter((g3) => g3.action === "skipped_commit_unavailable").map((g3) => `${g3.path} (missing: ${(g3.unavailable || []).join("+") || "unknown"}; base=${(g3.baseCommit || "?").slice(0, 12)} branch=${(g3.branchCommit || "?").slice(0, 12)})`).join(", ");
+        return `[Refinery] Could NOT determine submodule gitlink divergence for node ${nodeId} \u2014 a gitlink commit is missing from the local submodule object store (auto-converge could not run): ` + gitlinks.filter((g3) => g3.action === "skipped_commit_unavailable").map((g3) => `${g3.path} (missing: ${(g3.unavailable || []).join("+") || "unknown"}; base=${(g3.baseCommit || "?").slice(0, 12)} branch=${(g3.branchCommit || "?").slice(0, 12)})`).join(", ");
       }
       return void 0;
     }
@@ -74668,10 +74668,10 @@ ${out.stderr}`);
         autoPublishAllowed: autoPublishEnabled
       };
     }
-    function describeMintedUnpublishedCommits(nodeId2, gitlinks, autoPublishEnabled) {
+    function describeMintedUnpublishedCommits(nodeId, gitlinks, autoPublishEnabled) {
       const minted = gitlinks.filter((g3) => g3.mintedUnpublishedCommit);
       if (minted.length === 0) return void 0;
-      return `[Refinery] Node ${nodeId2}: the convergence MINTED ${minted.length} new submodule commit(s) not reachable from the submodule remote (allowed because allowAutoPublishSubmoduleMainCommits=${autoPublishEnabled}); a publish is still required before merge: ` + minted.map((g3) => `${g3.path}\u2192${(g3.rebasedCommit || "?").slice(0, 12)} (remote=${g3.remoteMainRef || "unresolved"})`).join(", ");
+      return `[Refinery] Node ${nodeId}: the convergence MINTED ${minted.length} new submodule commit(s) not reachable from the submodule remote (allowed because allowAutoPublishSubmoduleMainCommits=${autoPublishEnabled}); a publish is still required before merge: ` + minted.map((g3) => `${g3.path}\u2192${(g3.rebasedCommit || "?").slice(0, 12)} (remote=${g3.remoteMainRef || "unresolved"})`).join(", ");
     }
     function rootRebaseResolvingGitlinks(worktreeRoot, baseHead, resolutions) {
       const resolveByPath = new Map(resolutions.map((r) => [r.path, r.rebasedCommit]));
@@ -74821,8 +74821,8 @@ ${asText(streams.stderr)}
       }
       return String(error?.message || error);
     }
-    function recordMeshRefineStage(stages, stage, status, startedAt, details) {
-      stages.push({
+    function recordMeshRefineStage(stages2, stage, status, startedAt, details) {
+      stages2.push({
         stage,
         status,
         durationMs: Date.now() - startedAt,
@@ -75464,11 +75464,11 @@ ${asText(streams.stderr)}
       }
       return { version: 1, linkNodeModules: link2 };
     }
-    function expandRepoPattern(root2, pattern) {
+    function expandRepoPattern(root, pattern) {
       const segs = pattern.split("/");
       const star = segs.indexOf("*");
       if (star < 0) return [pattern];
-      const parent = path37.join(root2, ...segs.slice(0, star));
+      const parent = path37.join(root, ...segs.slice(0, star));
       let names;
       try {
         names = fs19.readdirSync(parent, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
@@ -75494,8 +75494,8 @@ ${asText(streams.stderr)}
         KNOWN_KEYS = /* @__PURE__ */ new Set(["version", "baseDir", "linkNodeModules", "copyDirs", "copyExclude", "freshDirs", "minFreeBytes"]);
       }
     });
-    function inside2(root2, p) {
-      const rel = path38.relative(root2, p);
+    function inside2(root, p) {
+      const rel = path38.relative(root, p);
       return rel === "" || !rel.startsWith(`..${path38.sep}`) && rel !== ".." && !path38.isAbsolute(rel);
     }
     function hasNodeModulesSegment(rel) {
@@ -75843,8 +75843,8 @@ ${asText(streams.stderr)}
         }
       });
     }
-    function isInside2(root2, p) {
-      const rel = path39.relative(root2, p);
+    function isInside2(root, p) {
+      const rel = path39.relative(root, p);
       return rel !== "" && !rel.startsWith(`..${path39.sep}`) && rel !== ".." && !path39.isAbsolute(rel);
     }
     async function removeLightWorkspace(input) {
@@ -76027,9 +76027,9 @@ ${asText(streams.stderr)}
         formatMiB2 = (bytes) => `${(bytes / 1048576).toFixed(1)} MiB`;
       }
     });
-    function assertStageDiffRetentionGrowth(root2, deltaBytes, deltaEntries = 1) {
+    function assertStageDiffRetentionGrowth(root, deltaBytes, deltaEntries = 1) {
       let bytes = 0, entries3 = 0;
-      const pending = [root2];
+      const pending = [root];
       while (pending.length) {
         const directory2 = pending.pop();
         if (!fs222.existsSync(directory2)) continue;
@@ -76058,7 +76058,7 @@ ${asText(streams.stderr)}
         limitBytes: STAGE_DIFF_MAX_BYTES,
         entries: entries3
       });
-      let ancestor = root2;
+      let ancestor = root;
       while (!fs222.existsSync(ancestor) && path40.dirname(ancestor) !== ancestor) ancestor = path40.dirname(ancestor);
       if (fs222.realpathSync.native(ancestor) !== ancestor) throw new StageDiffBlocked("review_diff_retention_path", { ancestor });
       const disk = fs222.statfsSync(ancestor);
@@ -76262,14 +76262,14 @@ ${asText(streams.stderr)}
     function logStaleQuotaFailOpen(node, providerType, facts, quota, policy, now, context2) {
       if (context2?.suppressObservabilityLogs === true) return;
       const staleAfterMs = resolveQuotaRoutingPolicy(policy).staleAfterMs;
-      const nodeId2 = typeof node?.nodeId === "string" && node.nodeId ? node.nodeId : typeof node?.id === "string" && node.id ? node.id : "unknown";
-      const key7 = `${nodeId2} ${providerType}`;
+      const nodeId = typeof node?.nodeId === "string" && node.nodeId ? node.nodeId : typeof node?.id === "string" && node.id ? node.id : "unknown";
+      const key7 = `${nodeId} ${providerType}`;
       const last = staleFailOpenLoggedAt.get(key7);
       if (last !== void 0 && now - last < staleAfterMs) return;
       staleFailOpenLoggedAt.set(key7, now);
       const ageMs2 = quotaSnapshotAgeMs2(facts, quota, now);
       const ageText = Number.isFinite(ageMs2) ? `${Math.round(ageMs2 / 6e4)}m` : "unparseable";
-      LOG.info("MeshQuota", `QUOTA GATE: provider '${providerType}' on node ${nodeId2} fails open \u2014 snapshot age ${ageText} exceeds the ${Math.round(staleAfterMs / 6e4)}m freshness threshold`);
+      LOG.info("MeshQuota", `QUOTA GATE: provider '${providerType}' on node ${nodeId} fails open \u2014 snapshot age ${ageText} exceeds the ${Math.round(staleAfterMs / 6e4)}m freshness threshold`);
     }
     function classifyAbsentQuotaReason(node, providerType, context2) {
       const enablement = context2?.providerEnablement;
@@ -76305,14 +76305,14 @@ ${asText(streams.stderr)}
     function logAbsentQuotaFailOpen(node, providerType, policy, now, context2) {
       if (context2?.suppressObservabilityLogs === true) return;
       const staleAfterMs = resolveQuotaRoutingPolicy(policy).staleAfterMs;
-      const nodeId2 = typeof node?.nodeId === "string" && node.nodeId ? node.nodeId : typeof node?.id === "string" && node.id ? node.id : "unknown";
-      const key7 = `${nodeId2} ${providerType}`;
+      const nodeId = typeof node?.nodeId === "string" && node.nodeId ? node.nodeId : typeof node?.id === "string" && node.id ? node.id : "unknown";
+      const key7 = `${nodeId} ${providerType}`;
       const last = absentFailOpenLoggedAt.get(key7);
       if (last !== void 0 && now - last < staleAfterMs) return;
       absentFailOpenLoggedAt.set(key7, now);
       const reason = classifyAbsentQuotaReason(node, providerType, context2);
       const reasonText = reason === "probe_disabled" ? "quota probing is disabled for this provider on that node (quotaEnabled: false \u2014 an intended opt-out, not a fault)" : reason === "provider_disabled" ? "this provider is not enabled on that node" : reason === "not_measured" ? "no snapshot has been measured yet" : "that node reported no provider-enablement facts (a daemon predating them, or no loader injected here) \u2014 cannot tell not-yet-measured from an opt-out; check the owning node's config directly";
-      LOG.info("MeshQuota", `QUOTA GATE: provider '${providerType}' on node ${nodeId2} fails open \u2014 no quota entry (${reason}: ${reasonText})`);
+      LOG.info("MeshQuota", `QUOTA GATE: provider '${providerType}' on node ${nodeId} fails open \u2014 no quota entry (${reason}: ${reasonText})`);
     }
     var staleFailOpenLoggedAt;
     var absentFailOpenLoggedAt;
@@ -76731,15 +76731,15 @@ ${asText(streams.stderr)}
       } catch {
       }
     }
-    function clearQuotaClaimBlockState(meshId2, nodeId2, sessionId, providerType) {
-      const key7 = quotaClaimBlockKey(meshId2, { nodeId: nodeId2, sessionId, providerType });
+    function clearQuotaClaimBlockState(meshId2, nodeId, sessionId, providerType) {
+      const key7 = quotaClaimBlockKey(meshId2, { nodeId, sessionId, providerType });
       if (lastQuotaClaimBlockLog.has(key7)) {
         try {
           meshRecord(meshId2, "quota_claim_gate", {
-            nodeId: nodeId2,
+            nodeId,
             sessionId,
             providerType,
-            payload: { phase: "cleared", nodeId: nodeId2, sessionId, providerType }
+            payload: { phase: "cleared", nodeId, sessionId, providerType }
           }, { local: true });
         } catch {
         }
@@ -76762,8 +76762,8 @@ ${asText(streams.stderr)}
     function clearAllQuotaClaimCandidatesBlockedState(meshId2) {
       lastAllQuotaClaimBlockedLog.delete(meshId2);
     }
-    function claimRefusalKey(meshId2, nodeId2, sessionId) {
-      return `${meshId2}:${nodeId2}:${sessionId}`;
+    function claimRefusalKey(meshId2, nodeId, sessionId) {
+      return `${meshId2}:${nodeId}:${sessionId}`;
     }
     function recordClaimRefusal(meshId2, args) {
       if (!args.reason || args.reason === "no_pending_candidates") {
@@ -76788,23 +76788,23 @@ ${asText(streams.stderr)}
       } catch {
       }
     }
-    function clearClaimRefusalState(meshId2, nodeId2, sessionId) {
-      lastClaimRefusalLog.delete(claimRefusalKey(meshId2, nodeId2, sessionId));
+    function clearClaimRefusalState(meshId2, nodeId, sessionId) {
+      lastClaimRefusalLog.delete(claimRefusalKey(meshId2, nodeId, sessionId));
     }
-    function logWorktreeBootstrapStaleBypass(meshId2, nodeId2, sessionId) {
-      const key7 = `${meshId2}:${nodeId2}:${sessionId}`;
+    function logWorktreeBootstrapStaleBypass(meshId2, nodeId, sessionId) {
+      const key7 = `${meshId2}:${nodeId}:${sessionId}`;
       if (lastWorktreeBootstrapBypassLog.has(key7)) return;
       rememberBounded(lastWorktreeBootstrapBypassLog, key7, "bypassed");
-      LOG.warn("MeshQueue", `Worktree node ${nodeId2} (${sessionId}) bootstrap stuck 'running' beyond the stale backstop and its worktree is git-clean \u2014 treating bootstrap as silently complete and allowing the claim (the terminal-state stamp likely never reached this daemon's mesh view)`);
+      LOG.warn("MeshQueue", `Worktree node ${nodeId} (${sessionId}) bootstrap stuck 'running' beyond the stale backstop and its worktree is git-clean \u2014 treating bootstrap as silently complete and allowing the claim (the terminal-state stamp likely never reached this daemon's mesh view)`);
     }
-    function clearWorktreeBootstrapStaleBypassState(meshId2, nodeId2, sessionId) {
-      lastWorktreeBootstrapBypassLog.delete(`${meshId2}:${nodeId2}:${sessionId}`);
+    function clearWorktreeBootstrapStaleBypassState(meshId2, nodeId, sessionId) {
+      lastWorktreeBootstrapBypassLog.delete(`${meshId2}:${nodeId}:${sessionId}`);
     }
-    function logAutoLaunchQuotaFallbackSuccess(resolved, taskId, nodeId2, sessionId, effectiveProviderType) {
+    function logAutoLaunchQuotaFallbackSuccess(resolved, taskId, nodeId, sessionId, effectiveProviderType) {
       const spawnedProviderType = typeof effectiveProviderType === "string" && effectiveProviderType.trim() ? effectiveProviderType.trim() : typeof resolved.providerType === "string" ? resolved.providerType.trim() : "";
       if (!spawnedProviderType || !resolved.quotaGated?.length) return;
       const detail = resolved.quotaGated.map((item) => quotaClaimBlockDescription(item.providerType, item.block)).join("; ");
-      LOG.info("MeshQueue", `QUOTA GATE: auto-launch fallback succeeded for task ${taskId} on node ${nodeId2}: ${detail} \u2192 spawned provider '${spawnedProviderType}'${sessionId ? ` (${sessionId})` : ""}`);
+      LOG.info("MeshQueue", `QUOTA GATE: auto-launch fallback succeeded for task ${taskId} on node ${nodeId}: ${detail} \u2192 spawned provider '${spawnedProviderType}'${sessionId ? ` (${sessionId})` : ""}`);
     }
     function recordAutoLaunchEvent(meshId2, args) {
       const dedupKey = `${meshId2}:${args.taskId}:${args.nodeId || ""}`;
@@ -76873,31 +76873,31 @@ ${asText(streams.stderr)}
       }
       return { reason: deepestReason ?? "no_pending_candidates", ...deepest !== void 0 ? { deepest } : {} };
     }
-    function claimDeferralKey(meshId2, nodeId2) {
-      return `${meshId2}::${nodeId2}`;
+    function claimDeferralKey(meshId2, nodeId) {
+      return `${meshId2}::${nodeId}`;
     }
-    function noteClaimDeferredForNode(meshId2, nodeId2) {
-      if (!nodeId2) return;
-      const key7 = claimDeferralKey(meshId2, nodeId2);
+    function noteClaimDeferredForNode(meshId2, nodeId) {
+      if (!nodeId) return;
+      const key7 = claimDeferralKey(meshId2, nodeId);
       claimDeferredByFastForward.set(key7, (claimDeferredByFastForward.get(key7) || 0) + 1);
       if (claimDeferredByFastForward.size > CLAIM_DEFERRAL_MAX_ENTRIES) {
         const oldest = claimDeferredByFastForward.keys().next().value;
         if (oldest !== void 0) claimDeferredByFastForward.delete(oldest);
       }
     }
-    function claimDeferralOwedForNode(meshId2, nodeId2) {
-      if (!nodeId2) return false;
-      const seen2 = claimDeferredByFastForward.get(claimDeferralKey(meshId2, nodeId2)) || 0;
+    function claimDeferralOwedForNode(meshId2, nodeId) {
+      if (!nodeId) return false;
+      const seen2 = claimDeferredByFastForward.get(claimDeferralKey(meshId2, nodeId)) || 0;
       return seen2 > 0 && seen2 <= MAX_FAST_FORWARD_CLAIM_REDRIVES;
     }
-    function shouldRedriveDeferredClaim(meshId2, nodeId2, sessionId, leaseHeld) {
-      if (!nodeId2 || !sessionId) return false;
-      if (!claimDeferralOwedForNode(meshId2, nodeId2)) return false;
+    function shouldRedriveDeferredClaim(meshId2, nodeId, sessionId, leaseHeld) {
+      if (!nodeId || !sessionId) return false;
+      if (!claimDeferralOwedForNode(meshId2, nodeId)) return false;
       return !leaseHeld();
     }
-    function clearClaimDeferralForNode(meshId2, nodeId2) {
-      if (!nodeId2) return;
-      claimDeferredByFastForward.delete(claimDeferralKey(meshId2, nodeId2));
+    function clearClaimDeferralForNode(meshId2, nodeId) {
+      if (!nodeId) return;
+      claimDeferredByFastForward.delete(claimDeferralKey(meshId2, nodeId));
     }
     function sessionRefusalKey(meshId2, sessionId) {
       return `${meshId2}::${sessionId}`;
@@ -77028,18 +77028,18 @@ ${asText(streams.stderr)}
         ...losers.length > RATIONALE_LOSERS_MAX ? { losersOmitted: losers.length - RATIONALE_LOSERS_MAX } : {}
       };
     }
-    function recordLastQuotaRanking(nodeId2, record8) {
-      if (!nodeId2) return;
-      lastQuotaRankingByNode.set(nodeId2, record8);
+    function recordLastQuotaRanking(nodeId, record8) {
+      if (!nodeId) return;
+      lastQuotaRankingByNode.set(nodeId, record8);
     }
-    function getLastQuotaRanking(nodeId2) {
-      return lastQuotaRankingByNode.get(nodeId2);
+    function getLastQuotaRanking(nodeId) {
+      return lastQuotaRankingByNode.get(nodeId);
     }
-    function recordLastQuotaRankingOutcome(nodeId2, outcome, refusalReason2) {
-      if (!nodeId2) return;
-      const existing = lastQuotaRankingByNode.get(nodeId2);
+    function recordLastQuotaRankingOutcome(nodeId, outcome, refusalReason2) {
+      if (!nodeId) return;
+      const existing = lastQuotaRankingByNode.get(nodeId);
       if (!existing) return;
-      lastQuotaRankingByNode.set(nodeId2, {
+      lastQuotaRankingByNode.set(nodeId, {
         ...existing,
         claimOutcome: outcome,
         ...outcome === "refused" && refusalReason2 ? { claimRefusalReason: refusalReason2 } : {}
@@ -77485,10 +77485,10 @@ ${asText(streams.stderr)}
       }
       if (changed) node.userOverrides = overrides2;
     }
-    function persistNodeReporterPlatform(meshSource, mesh, nodeId2, reporter) {
+    function persistNodeReporterPlatform(meshSource, mesh, nodeId, reporter) {
       if (meshSource !== "local_config") return;
       const meshId2 = readStringValue(mesh?.id);
-      if (!meshId2 || !nodeId2) return;
+      if (!meshId2 || !nodeId) return;
       const reportedPlatform = reporter.reporterPlatform ?? void 0;
       const reportedArch = reporter.reporterArch ?? void 0;
       const reportedMachineNickname = reporter.reporterMachineNickname ?? void 0;
@@ -77499,7 +77499,7 @@ ${asText(streams.stderr)}
       if (!reportedPlatform && !reportedArch && !reportedMachineNickname && !reportedProviderVersions && !reportedDaemonBuildVersion && !reportedMemberState && !nodeFacts) {
         return;
       }
-      void Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports)).then(({ updateNode: updateNode2 }) => updateNode2(meshId2, nodeId2, {
+      void Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports)).then(({ updateNode: updateNode2 }) => updateNode2(meshId2, nodeId, {
         reportedPlatform,
         reportedArch,
         reportedMachineNickname,
@@ -77655,14 +77655,14 @@ ${asText(streams.stderr)}
       const cacheFieldsWinOnConflict = Number.isFinite(cachedUpdatedAt) && (!Number.isFinite(incomingUpdatedAt) || cachedUpdatedAt > incomingUpdatedAt);
       const cachedById = /* @__PURE__ */ new Map();
       for (const node of cachedNodes) {
-        const nodeId2 = readInlineMeshNodeId(node);
-        if (nodeId2) cachedById.set(nodeId2, node);
+        const nodeId = readInlineMeshNodeId(node);
+        if (nodeId) cachedById.set(nodeId, node);
       }
       const mergedIncomingIds = /* @__PURE__ */ new Set();
       const nodes = incomingNodes.map((incomingNode) => {
-        const nodeId2 = readInlineMeshNodeId(incomingNode);
-        const cachedNode = nodeId2 ? cachedById.get(nodeId2) : void 0;
-        if (nodeId2) mergedIncomingIds.add(nodeId2);
+        const nodeId = readInlineMeshNodeId(incomingNode);
+        const cachedNode = nodeId ? cachedById.get(nodeId) : void 0;
+        if (nodeId) mergedIncomingIds.add(nodeId);
         if (!cachedNode) return incomingNode;
         if (hasInlineMeshTransientNodeState(incomingNode)) {
           return cacheFieldsWinOnConflict ? { ...incomingNode, ...cachedNode } : { ...cachedNode, ...incomingNode };
@@ -77671,10 +77671,10 @@ ${asText(streams.stderr)}
       });
       const droppedNodeIds = [];
       for (const cachedNode of cachedNodes) {
-        const nodeId2 = readInlineMeshNodeId(cachedNode);
-        if (!nodeId2 || mergedIncomingIds.has(nodeId2)) continue;
-        if (removedNodeIds?.has(nodeId2)) {
-          droppedNodeIds.push(nodeId2);
+        const nodeId = readInlineMeshNodeId(cachedNode);
+        if (!nodeId || mergedIncomingIds.has(nodeId)) continue;
+        if (removedNodeIds?.has(nodeId)) {
+          droppedNodeIds.push(nodeId);
           continue;
         }
         nodes.push(cachedNode);
@@ -78235,9 +78235,9 @@ ${asText(streams.stderr)}
         ...workerMcp ? { workerMcp } : {}
       };
     }
-    function liveSessionRecordMatchesMeshNode(record8, meshId2, nodeId2, nodeWorkspace = "", nodeIsMissingLocalWorktree = false) {
+    function liveSessionRecordMatchesMeshNode(record8, meshId2, nodeId, nodeWorkspace = "", nodeIsMissingLocalWorktree = false) {
       const recordNodeId = readStringValue(record8?.meta?.meshNodeId);
-      if (!recordNodeId || !daemonIdsEquivalent5(recordNodeId, nodeId2)) return false;
+      if (!recordNodeId || !daemonIdsEquivalent5(recordNodeId, nodeId)) return false;
       if (nodeIsMissingLocalWorktree) return false;
       const recordWorkspace = readStringValue(record8?.workspace);
       if (nodeWorkspace && recordWorkspace && !meshWorkspacesEquivalent(recordWorkspace, nodeWorkspace)) return false;
@@ -78289,12 +78289,12 @@ ${asText(streams.stderr)}
       const liveWorkspaces = /* @__PURE__ */ new Set();
       const missingLocalWorktreeNodeIds = /* @__PURE__ */ new Set();
       for (const node of args.nodes || []) {
-        const nodeId2 = normalizeMeshNodeId(node);
+        const nodeId = normalizeMeshNodeId(node);
         const workspace = readStringValue(node?.workspace);
-        if (nodeId2) liveNodeIds.add(nodeId2);
+        if (nodeId) liveNodeIds.add(nodeId);
         if (workspace) liveWorkspaces.add(workspace);
-        if (nodeId2 && node?.isLocalWorktree === true && workspace && !fs24.existsSync(workspace)) {
-          missingLocalWorktreeNodeIds.add(nodeId2);
+        if (nodeId && node?.isLocalWorktree === true && workspace && !fs24.existsSync(workspace)) {
+          missingLocalWorktreeNodeIds.add(nodeId);
         }
       }
       const sessions = [];
@@ -78754,11 +78754,11 @@ ${asText(streams.stderr)}
       const unavailableNodeIds = [];
       const deadNodeIds = [];
       const classifyNode = async (nodeIndex, node) => {
-        const nodeId2 = normalizeMeshNodeId(node) || `node_${nodeIndex}`;
+        const nodeId = normalizeMeshNodeId(node) || `node_${nodeIndex}`;
         const workspace = readStringValue(node?.workspace);
         const daemonId = readStringValue(node?.daemonId);
         const isSelfNode = Boolean(
-          nodeId2 && selectedCoordinatorNodeId && daemonIdsEquivalent5(nodeId2, selectedCoordinatorNodeId)
+          nodeId && selectedCoordinatorNodeId && daemonIdsEquivalent5(nodeId, selectedCoordinatorNodeId)
         ) || Boolean(
           daemonId && (daemonIdsEquivalent5(daemonId, args.localMachineId) || daemonIdsEquivalent5(daemonId, args.statusInstanceId))
         ) || Boolean(args.meshSource !== "local_config" && nodeIndex === 0);
@@ -78766,10 +78766,10 @@ ${asText(streams.stderr)}
           daemonId && (daemonIdsEquivalent5(daemonId, args.localMachineId) || daemonIdsEquivalent5(daemonId, args.statusInstanceId))
         );
         if ((isSelfNode || isSelfDaemonNode) && isDeadLocalWorktreeNode(node)) {
-          return { kind: "dead", nodeId: nodeId2 };
+          return { kind: "dead", nodeId };
         }
         if (!workspace) {
-          return !isSelfNode && daemonId ? { kind: "unavailable", nodeId: nodeId2 } : { kind: "skip" };
+          return !isSelfNode && daemonId ? { kind: "unavailable", nodeId } : { kind: "skip" };
         }
         if (fs26.existsSync(workspace)) {
           try {
@@ -78777,7 +78777,7 @@ ${asText(streams.stderr)}
             const localGit = args.probeCache ? await args.probeCache.probeLocal(workspace, runLocalProbe) : await runLocalProbe();
             if (localGit?.isGitRepo) {
               const reporter = recordInlineMeshDirectGitTruth(node, localGit, "selected_coordinator_local_git");
-              persistNodeReporterPlatform(args.meshSource, args.mesh, nodeId2, reporter);
+              persistNodeReporterPlatform(args.meshSource, args.mesh, nodeId, reporter);
               return { kind: "local" };
             }
           } catch {
@@ -78796,14 +78796,14 @@ ${asText(streams.stderr)}
       settledResults.forEach((settled, i) => {
         const [nodeIndex, node] = nodeEntries[i];
         const result = settled.status === "fulfilled" ? settled.value : (() => {
-          const nodeId2 = normalizeMeshNodeId(node) || `node_${nodeIndex}`;
+          const nodeId = normalizeMeshNodeId(node) || `node_${nodeIndex}`;
           const daemonId = readStringValue(node?.daemonId);
           const isSelfNode = Boolean(
-            nodeId2 && selectedCoordinatorNodeId && daemonIdsEquivalent5(nodeId2, selectedCoordinatorNodeId)
+            nodeId && selectedCoordinatorNodeId && daemonIdsEquivalent5(nodeId, selectedCoordinatorNodeId)
           ) || Boolean(
             daemonId && (daemonIdsEquivalent5(daemonId, args.localMachineId) || daemonIdsEquivalent5(daemonId, args.statusInstanceId))
           );
-          return !isSelfNode && daemonId ? { kind: "unavailable", nodeId: nodeId2 } : { kind: "skip" };
+          return !isSelfNode && daemonId ? { kind: "unavailable", nodeId } : { kind: "skip" };
         })();
         switch (result.kind) {
           case "dead":
@@ -79195,24 +79195,24 @@ ${asText(streams.stderr)}
         LOG.info("MeshStatusDebug", `[RepoMeshStatusDebug] ${event}`);
       }
     }
-    function buildMeshNodeMachineLabel(node, nodeId2) {
+    function buildMeshNodeMachineLabel(node, nodeId) {
       const machineName = readMeshNodeDisplayMachineName(node);
       if (machineName) {
         return machineName === readMeshNodeHostname(node) ? machineName.replace(/\.local$/i, "") : machineName;
       }
       const id4 = readStringValue(node.daemonId, node.daemon_id, node.machineId, node.machine_id);
       if (id4) return id4.length > 16 ? `${id4.slice(0, 12)}\u2026` : id4;
-      return nodeId2 || "unidentified mesh node";
+      return nodeId || "unidentified mesh node";
     }
-    function buildMeshNodeCheckoutLabel(node, nodeId2) {
+    function buildMeshNodeCheckoutLabel(node, nodeId) {
       const branch = readStringValue(node.worktreeBranch, node.worktree_branch);
       if (branch) return `\u2387 ${branch}`;
       const workspace = readStringValue(node.workspace, node.repoRoot, node.repo_root);
       const basename41 = workspace ? workingDirBasename(workspace) : void 0;
-      return basename41 || (nodeId2 ? nodeId2.slice(0, 8) : "node");
+      return basename41 || (nodeId ? nodeId.slice(0, 8) : "node");
     }
-    function buildMeshNodeDisplayLabel(node, nodeId2, _providerPriority) {
-      return buildMeshNodeMachineLabel(node, nodeId2);
+    function buildMeshNodeDisplayLabel(node, nodeId, _providerPriority) {
+      return buildMeshNodeMachineLabel(node, nodeId);
     }
     function normalizeMeshHostname(value) {
       const hostname6 = readStringValue(value);
@@ -79395,8 +79395,8 @@ ${asText(streams.stderr)}
       }
       return LOCAL_DAEMON_KEY;
     }
-    function resolveDaemonSiblingNodeIds(nodeId2, nodes) {
-      const self = readNonEmpty(nodeId2);
+    function resolveDaemonSiblingNodeIds(nodeId, nodes) {
+      const self = readNonEmpty(nodeId);
       const list5 = Array.isArray(nodes) ? nodes : [];
       if (!self || list5.length === 0) return self ? [self] : [];
       const selfNode = list5.find(
@@ -79440,14 +79440,14 @@ ${asText(streams.stderr)}
     function activeReadonlyAssignedCount(meshId2) {
       return getQueue(meshId2, { status: ["assigned"] }).filter(isTaskReadonly3).length;
     }
-    function nodeHasActiveAssignment(meshId2, nodeId2) {
-      return getQueue(meshId2, { status: ["assigned"] }).some((task) => daemonIdsEquivalent5(task.assignedNodeId, nodeId2));
+    function nodeHasActiveAssignment(meshId2, nodeId) {
+      return getQueue(meshId2, { status: ["assigned"] }).some((task) => daemonIdsEquivalent5(task.assignedNodeId, nodeId));
     }
-    function nodeHasActiveWriteAssignment(meshId2, nodeId2) {
-      return getQueue(meshId2, { status: ["assigned"] }).some((task) => !isTaskReadonly3(task) && daemonIdsEquivalent5(task.assignedNodeId, nodeId2));
+    function nodeHasActiveWriteAssignment(meshId2, nodeId) {
+      return getQueue(meshId2, { status: ["assigned"] }).some((task) => !isTaskReadonly3(task) && daemonIdsEquivalent5(task.assignedNodeId, nodeId));
     }
-    function nodeActiveLoad(meshId2, nodeId2) {
-      return MeshRuntimeStore.getInstance().nodeActiveAssignmentCount(meshId2, nodeId2);
+    function nodeActiveLoad(meshId2, nodeId) {
+      return MeshRuntimeStore.getInstance().nodeActiveAssignmentCount(meshId2, nodeId);
     }
     function meshHasExplicitSlots(mesh) {
       const nodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
@@ -79465,9 +79465,9 @@ ${asText(streams.stderr)}
         ...c,
         nodeId: normalizeMeshNodeId(c.node) ?? c.nodeId
       }));
-      const uniqueNodes = [...new Set(pool.map((c) => c.nodeId))].map((nodeId2, index) => ({
-        nodeId: nodeId2,
-        node: pool.find((c) => meshNodeIdMatches7({ id: c.nodeId }, nodeId2))?.node,
+      const uniqueNodes = [...new Set(pool.map((c) => c.nodeId))].map((nodeId, index) => ({
+        nodeId,
+        node: pool.find((c) => meshNodeIdMatches7({ id: c.nodeId }, nodeId))?.node,
         index
       }));
       return { pool, uniqueNodes };
@@ -79515,9 +79515,9 @@ ${asText(streams.stderr)}
     function scoreSlotForTask(slot, task, quotaBonus = 0) {
       return scoreSlotForTaskBreakdown(slot, task, quotaBonus).total;
     }
-    function orderSlotsForProviderSelection(slots2, meshId2, nodeId2, node, task, quotaBonusByProvider, meshNodes) {
+    function orderSlotsForProviderSelection(slots2, meshId2, nodeId, node, task, quotaBonusByProvider, meshNodes) {
       return [...slotsMeetingTaskDifficultyFloor(node, slots2, task)].sort((a, b) => {
-        const capDelta = Number(slotHasCapacity(meshId2, nodeId2, node, b, meshNodes)) - Number(slotHasCapacity(meshId2, nodeId2, node, a, meshNodes));
+        const capDelta = Number(slotHasCapacity(meshId2, nodeId, node, b, meshNodes)) - Number(slotHasCapacity(meshId2, nodeId, node, a, meshNodes));
         if (capDelta !== 0) return capDelta;
         return scoreSlotForTask(b, task, quotaBonusByProvider?.[b.provider] ?? 0) - scoreSlotForTask(a, task, quotaBonusByProvider?.[a.provider] ?? 0);
       });
@@ -79590,46 +79590,46 @@ ${asText(streams.stderr)}
         return rotationRank(a.index) - rotationRank(b.index);
       });
     }
-    function rowChargedToDaemon(assignedNodeId, nodeId2, daemonNodeIds) {
-      const scope2 = Array.isArray(daemonNodeIds) && daemonNodeIds.length > 0 ? daemonNodeIds : [nodeId2];
+    function rowChargedToDaemon(assignedNodeId, nodeId, daemonNodeIds) {
+      const scope2 = Array.isArray(daemonNodeIds) && daemonNodeIds.length > 0 ? daemonNodeIds : [nodeId];
       return scope2.some((candidate) => daemonIdsEquivalent5(assignedNodeId, candidate));
     }
-    function activeProviderAssignedCount(meshId2, nodeId2, providerType, daemonNodeIds) {
+    function activeProviderAssignedCount(meshId2, nodeId, providerType, daemonNodeIds) {
       return getQueue(meshId2, { status: [...CAPACITY_OCCUPYING_STATUSES] }).filter((task) => {
         const reserved = pendingLaunchReservation(task);
-        return (task.status === "assigned" || reserved) && rowChargedToDaemon(reserved ? task.autoLaunch?.nodeId : task.assignedNodeId, nodeId2, daemonNodeIds) && (reserved ? task.autoLaunch?.providerType : task.assignedProviderType) === providerType;
+        return (task.status === "assigned" || reserved) && rowChargedToDaemon(reserved ? task.autoLaunch?.nodeId : task.assignedNodeId, nodeId, daemonNodeIds) && (reserved ? task.autoLaunch?.providerType : task.assignedProviderType) === providerType;
       }).length;
     }
-    function activeSlotAssignedCount(meshId2, nodeId2, providerType, slot, daemonNodeIds) {
+    function activeSlotAssignedCount(meshId2, nodeId, providerType, slot, daemonNodeIds) {
       return getQueue(meshId2, { status: [...CAPACITY_OCCUPYING_STATUSES] }).filter((task) => {
         const reserved = pendingLaunchReservation(task);
         if (task.status !== "assigned" && !reserved) return false;
-        if (!rowChargedToDaemon(reserved ? task.autoLaunch?.nodeId : task.assignedNodeId, nodeId2, daemonNodeIds)) return false;
+        if (!rowChargedToDaemon(reserved ? task.autoLaunch?.nodeId : task.assignedNodeId, nodeId, daemonNodeIds)) return false;
         if ((reserved ? task.autoLaunch?.providerType : task.assignedProviderType) !== providerType) return false;
         const assignedModel = reserved ? task.autoLaunch?.model : task.assignedModel;
         if (typeof assignedModel !== "string" || !assignedModel.trim()) return true;
         return isModelAllowedBySlot(assignedModel, slot);
       }).length;
     }
-    function slotCapacityRemaining(meshId2, nodeId2, node, slot, meshNodes, forReadonlyTask = false) {
+    function slotCapacityRemaining(meshId2, nodeId, node, slot, meshNodes, forReadonlyTask = false) {
       const providerType = typeof slot.provider === "string" ? slot.provider.trim() : "";
       if (!providerType) return { available: false };
       const slots2 = resolveNodeCapabilitySlots(node, meshId2);
-      const daemonNodeIds = resolveDaemonSiblingNodeIds(nodeId2, meshNodes ?? nodesForMesh(meshId2));
+      const daemonNodeIds = resolveDaemonSiblingNodeIds(nodeId, meshNodes ?? nodesForMesh(meshId2));
       const slotCap = resolveSlotMaxParallel(slots2, providerType, slot.model, isModelAllowedBySlot);
       const effSlotCap = effectiveSlotCap(slotCap, forReadonlyTask);
-      if (effSlotCap !== void 0 && activeSlotAssignedCount(meshId2, nodeId2, providerType, slot, daemonNodeIds) >= effSlotCap) {
+      if (effSlotCap !== void 0 && activeSlotAssignedCount(meshId2, nodeId, providerType, slot, daemonNodeIds) >= effSlotCap) {
         return { available: false, slotCap };
       }
       const providerCap = resolveProviderMaxParallel(slots2, providerType);
       const effProviderCap = effectiveSlotCap(providerCap, forReadonlyTask);
-      if (effProviderCap !== void 0 && activeProviderAssignedCount(meshId2, nodeId2, providerType, daemonNodeIds) >= effProviderCap) {
+      if (effProviderCap !== void 0 && activeProviderAssignedCount(meshId2, nodeId, providerType, daemonNodeIds) >= effProviderCap) {
         return { available: false, slotCap, providerCap };
       }
       return { available: true, slotCap, providerCap };
     }
-    function slotHasCapacity(meshId2, nodeId2, node, slot, meshNodes, forReadonlyTask = false) {
-      return slotCapacityRemaining(meshId2, nodeId2, node, slot, meshNodes, forReadonlyTask).available;
+    function slotHasCapacity(meshId2, nodeId, node, slot, meshNodes, forReadonlyTask = false) {
+      return slotCapacityRemaining(meshId2, nodeId, node, slot, meshNodes, forReadonlyTask).available;
     }
     function sessionHasActiveAssignment(meshId2, sessionId) {
       if (getQueue(meshId2, { status: ["assigned"] }).some((task) => sessionIdsEquivalent(task.assignedSessionId, sessionId))) {
@@ -79751,30 +79751,30 @@ ${asText(streams.stderr)}
           const oldest = autoLaunchOrphanNotified.values().next().value;
           if (oldest !== void 0) autoLaunchOrphanNotified.delete(oldest);
         }
-        const nodeId2 = readText(settings2.meshNodeId) || readText(settings2.nodeId);
+        const nodeId = readText(settings2.meshNodeId) || readText(settings2.nodeId);
         const detail = assignedElsewhere ? `task ${originTaskId} is assigned to a different session (${readText(originTask.assignedSessionId)})` : `task ${originTaskId} is no longer active (${originTask ? originTask.status : "absent from the queue"})`;
         recordAutoLaunchEvent(meshId2, {
           phase: "skipped",
           taskId: originTaskId,
           reason: "auto_launch_orphan_session_detected",
-          nodeId: nodeId2,
+          nodeId,
           sessionId
         });
         const reclaim3 = describeOrphanReclaim(opts.idleTtlMinutes);
-        LOG.warn("MeshQueue", `AUTOLAUNCH-ORPHAN-SWEEP: session ${sessionId}${nodeId2 ? ` on node ${nodeId2}` : ""} (mesh ${meshId2}) was auto-launched for task ${originTaskId} but ${detail}; it is idle with no work. ${reclaim3}`);
+        LOG.warn("MeshQueue", `AUTOLAUNCH-ORPHAN-SWEEP: session ${sessionId}${nodeId ? ` on node ${nodeId}` : ""} (mesh ${meshId2}) was auto-launched for task ${originTaskId} but ${detail}; it is idle with no work. ${reclaim3}`);
         try {
           notifyMeshCoordinator({
             event: "mesh:dispatch_blocked",
             meshId: meshId2,
-            nodeLabel: nodeId2 || meshId2,
-            ...nodeId2 ? { nodeId: nodeId2 } : {},
+            nodeLabel: nodeId || meshId2,
+            ...nodeId ? { nodeId } : {},
             metadataEvent: {
               source: "mesh_auto_launch_orphan_session",
               taskId: originTaskId,
               sessionId,
               reason: "auto_launch_orphan_session_detected"
             },
-            coordinatorMessage: `[System] Mesh session ${sessionId}${nodeId2 ? ` on node ${nodeId2}` : ""} was auto-launched for task ${originTaskId}, but ${detail}. The session is idle with no work assigned; it can still claim other queued work through the normal idle drain. ${reclaim3}`,
+            coordinatorMessage: `[System] Mesh session ${sessionId}${nodeId ? ` on node ${nodeId}` : ""} was auto-launched for task ${originTaskId}, but ${detail}. The session is idle with no work assigned; it can still claim other queued work through the normal idle drain. ${reclaim3}`,
             queuedAt: Date.now(),
             ...readText(originTask?.sourceCoordinatorSessionId) ? { targetCoordinatorSessionId: readText(originTask.sourceCoordinatorSessionId) } : {},
             ...localCoordinatorDaemonId() ? { targetCoordinatorDaemonId: localCoordinatorDaemonId() } : {}
@@ -79880,14 +79880,14 @@ ${asText(streams.stderr)}
       }
       return { blocked: false };
     }
-    function inWindowAutoLaunchSessionIdsForNode(meshId2, nodeId2) {
+    function inWindowAutoLaunchSessionIdsForNode(meshId2, nodeId) {
       const nowMs2 = Date.now();
       const out = [];
       for (const task of getQueue(meshId2, { status: ["pending"] })) {
         const al = task.autoLaunch;
         const sid = al ? readText(al.sessionId) : "";
         if (!al || al.status !== "started" && al.status !== "completed" || !sid) continue;
-        if (!daemonIdsEquivalent5(al.nodeId, nodeId2)) continue;
+        if (!daemonIdsEquivalent5(al.nodeId, nodeId)) continue;
         const launchedAtMs = Date.parse(al.updatedAt);
         const inBaseWindow = isAutoLaunchWithinAwaitClaimWindow(launchedAtMs, nowMs2);
         const inBackoff = autoLaunchAwaitClaimBackoff.has(`${meshId2}::${task.id}`);
@@ -79896,7 +79896,7 @@ ${asText(streams.stderr)}
       return out;
     }
     function driveExpiredAwaitClaim(components, meshId2, task, ctx, assignQueueTask) {
-      const { sessionId, nodeId: nodeId2, providerType } = ctx;
+      const { sessionId, nodeId, providerType } = ctx;
       const backoffKey = `${meshId2}::${task.id}`;
       const nowMs2 = Date.now();
       const state2 = autoLaunchAwaitClaimBackoff.get(backoffKey) || { cycles: 0, nextAttemptAtMs: 0 };
@@ -79913,7 +79913,7 @@ ${asText(streams.stderr)}
             phase: "skipped",
             taskId: task.id,
             reason: admissionBlock.reason || "awaiting_launched_session_claim_backoff",
-            nodeId: nodeId2,
+            nodeId,
             sessionId
           });
         }
@@ -79923,7 +79923,7 @@ ${asText(streams.stderr)}
       if (!blockerJustReleased && state2.nextAttemptAtMs && nowMs2 < state2.nextAttemptAtMs) return "backoff";
       if (localSessionIsProtected(components, sessionId)) {
         autoLaunchAwaitClaimBackoff.delete(backoffKey);
-        recordAutoLaunchEvent(meshId2, { phase: "skipped", taskId: task.id, reason: "await_claim_session_protected", nodeId: nodeId2, sessionId });
+        recordAutoLaunchEvent(meshId2, { phase: "skipped", taskId: task.id, reason: "await_claim_session_protected", nodeId, sessionId });
         return "respawn";
       }
       const effectiveCycles = blockerJustReleased ? 0 : state2.cycles;
@@ -79931,14 +79931,14 @@ ${asText(streams.stderr)}
       const remoteLive = remoteSessionAppearsLive(meshId2, sessionId);
       const localLive = localSessionAppearsLive(components, meshId2, sessionId);
       const live = remoteLive || localLive;
-      if ((live || atCap || blockerJustReleased) && nodeId2 && providerType) {
+      if ((live || atCap || blockerJustReleased) && nodeId && providerType) {
         if (!localLive) {
           try {
-            MeshRuntimeStore.getInstance().setRemoteIdleSession(meshId2, nodeId2, sessionId, providerType, nowMs2 + AUTO_LAUNCH_REMOTE_IDLE_TTL_MS);
+            MeshRuntimeStore.getInstance().setRemoteIdleSession(meshId2, nodeId, sessionId, providerType, nowMs2 + AUTO_LAUNCH_REMOTE_IDLE_TTL_MS);
           } catch {
           }
         }
-        const assigned = assignQueueTask(components, meshId2, nodeId2, sessionId, providerType);
+        const assigned = assignQueueTask(components, meshId2, nodeId, sessionId, providerType);
         if (assigned) {
           autoLaunchAwaitClaimBackoff.delete(backoffKey);
           const isFallback = atCap && !live;
@@ -79946,10 +79946,10 @@ ${asText(streams.stderr)}
             phase: "completed",
             taskId: task.id,
             reason: isFallback ? "await_claim_direct_dispatch_fallback" : "await_claim_redriven",
-            nodeId: nodeId2,
+            nodeId,
             sessionId
           });
-          LOG.info("MeshQueue", `Auto-launch await-claim ${isFallback ? "direct-dispatch fallback" : "re-drive"} claimed task ${task.id} into existing session ${sessionId} on node ${nodeId2} (mesh ${meshId2})`);
+          LOG.info("MeshQueue", `Auto-launch await-claim ${isFallback ? "direct-dispatch fallback" : "re-drive"} claimed task ${task.id} into existing session ${sessionId} on node ${nodeId} (mesh ${meshId2})`);
           return isFallback ? "fallback" : "claimed";
         }
         const postAttemptBlock = isTaskKnownAdmissionBlocked(meshId2, task, sessionId, Date.now());
@@ -79964,7 +79964,7 @@ ${asText(streams.stderr)}
             phase: "skipped",
             taskId: task.id,
             reason: postAttemptBlock.reason || "awaiting_launched_session_claim_backoff",
-            nodeId: nodeId2,
+            nodeId,
             sessionId
           });
           return "backoff";
@@ -79976,7 +79976,7 @@ ${asText(streams.stderr)}
       }
       const cycles = Math.min(effectiveCycles + 1, AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES);
       autoLaunchAwaitClaimBackoff.set(backoffKey, { cycles, nextAttemptAtMs: nowMs2 + awaitClaimWindowMs(cycles) });
-      recordAutoLaunchEvent(meshId2, { phase: "skipped", taskId: task.id, reason: "awaiting_launched_session_claim_backoff", nodeId: nodeId2, sessionId });
+      recordAutoLaunchEvent(meshId2, { phase: "skipped", taskId: task.id, reason: "awaiting_launched_session_claim_backoff", nodeId, sessionId });
       return "backoff";
     }
     function remoteGeneratingKey(meshId2, sessionId) {
@@ -79994,26 +79994,26 @@ ${asText(streams.stderr)}
       if (!meshId2 || !sessionId) return false;
       return remoteGeneratingSessions.has(remoteGeneratingKey(meshId2, sessionId));
     }
-    function claimAfterRemoteAutoLaunch(components, meshId2, nodeId2, sessionId, providerType, assignQueueTask) {
+    function claimAfterRemoteAutoLaunch(components, meshId2, nodeId, sessionId, providerType, assignQueueTask) {
       if (!sessionId) return "no_session";
       if (isRemoteSessionMarkedGenerating(meshId2, sessionId)) {
-        LOG.info("MeshQueue", `Remote auto-launch claim skipped for session ${sessionId} on node ${nodeId2} (mesh ${meshId2}): generating_started observed \u2014 fail-closed, will not inject into a mid-turn worker`);
+        LOG.info("MeshQueue", `Remote auto-launch claim skipped for session ${sessionId} on node ${nodeId} (mesh ${meshId2}): generating_started observed \u2014 fail-closed, will not inject into a mid-turn worker`);
         return "skipped_generating";
       }
       try {
         MeshRuntimeStore.getInstance().setRemoteIdleSession(
           meshId2,
-          nodeId2,
+          nodeId,
           sessionId,
           providerType,
           Date.now() + AUTO_LAUNCH_REMOTE_IDLE_TTL_MS
         );
       } catch {
       }
-      const assigned = assignQueueTask(components, meshId2, nodeId2, sessionId, providerType);
+      const assigned = assignQueueTask(components, meshId2, nodeId, sessionId, providerType);
       if (assigned) {
         try {
-          MeshRuntimeStore.getInstance().deleteRemoteIdleSession(meshId2, nodeId2, sessionId);
+          MeshRuntimeStore.getInstance().deleteRemoteIdleSession(meshId2, nodeId, sessionId);
         } catch {
         }
         return "claimed";
@@ -80087,14 +80087,14 @@ ${asText(streams.stderr)}
       if (!allowed || !isMeshTaskDifficulty2(task.difficulty) || task.difficulty === "freeform") return true;
       return allowed.includes(task.difficulty);
     }
-    function launchSideDifficultyFloorMismatch(node, slots2, providerType, model, task, nodeId2, decidedSlot) {
+    function launchSideDifficultyFloorMismatch(node, slots2, providerType, model, task, nodeId, decidedSlot) {
       if (decidedSlot && taskRequiresDifficultyFloor(node, task) && !slotCoversTaskDifficulty(decidedSlot, task.difficulty)) {
-        LOG.info("MeshQueue", `LAUNCH-SIDE DIFFICULTY FLOOR: not launching '${providerType}'${model ? ` (model '${model}')` : ""} on node ${nodeId2} for task ${task.id} \u2014 the decided slot only covers [${(decidedSlot.difficulty || []).join(", ")}], below the task's '${task.difficulty}' floor`);
+        LOG.info("MeshQueue", `LAUNCH-SIDE DIFFICULTY FLOOR: not launching '${providerType}'${model ? ` (model '${model}')` : ""} on node ${nodeId} for task ${task.id} \u2014 the decided slot only covers [${(decidedSlot.difficulty || []).join(", ")}], below the task's '${task.difficulty}' floor`);
         return `task_difficulty_floor_launch_model_mismatch:${task.difficulty || "classified"}`;
       }
       const allowed = allowedClassifiedDifficultiesForSession(node, slots2, providerType, model);
       if (taskMeetsSessionDifficultyFloor(task, allowed)) return void 0;
-      LOG.info("MeshQueue", `LAUNCH-SIDE DIFFICULTY FLOOR: not launching '${providerType}'${model ? ` (model '${model}')` : ""} on node ${nodeId2} for task ${task.id} \u2014 the resolved launch model only covers [${(allowed || []).join(", ")}], below the task's '${task.difficulty}' floor; the claim side would refuse it identically (difficulty_floor_unmet), so spawning would only orphan a session`);
+      LOG.info("MeshQueue", `LAUNCH-SIDE DIFFICULTY FLOOR: not launching '${providerType}'${model ? ` (model '${model}')` : ""} on node ${nodeId} for task ${task.id} \u2014 the resolved launch model only covers [${(allowed || []).join(", ")}], below the task's '${task.difficulty}' floor; the claim side would refuse it identically (difficulty_floor_unmet), so spawning would only orphan a session`);
       return `task_difficulty_floor_launch_model_mismatch:${task.difficulty || "classified"}`;
     }
     function readSessionModel2(state2) {
@@ -80707,12 +80707,12 @@ Note: implementer artifact(s) ${withheld.join(", ")} changed or disappeared afte
               }
               const reviewNodeId = current5.assignedNodeId ?? current5.targetNodeId;
               if (!spec.reviewerWorkspace || sourceGenerated) {
-                const nodeId2 = reviewNodeId;
+                const nodeId = reviewNodeId;
                 const mesh = getMesh(current5.meshId);
-                const node = mesh?.nodes?.find((n) => n.id === nodeId2);
+                const node = mesh?.nodes?.find((n) => n.id === nodeId);
                 const machineId = getMachineId();
-                if (!nodeId2 || !node?.workspace || !mesh?.repoIdentity || !machineId || !components.statusInstanceId || !daemonIdsEquivalent5(node.daemonId, components.statusInstanceId)) throw new Error("review_input_local_context_required");
-                proof = attestStageReviewInput(current5, { repoIdentity: mesh.repoIdentity, machineId, nodeId: nodeId2, workspace: spec.reviewerWorkspace?.path ?? node.workspace }, grants);
+                if (!nodeId || !node?.workspace || !mesh?.repoIdentity || !machineId || !components.statusInstanceId || !daemonIdsEquivalent5(node.daemonId, components.statusInstanceId)) throw new Error("review_input_local_context_required");
+                proof = attestStageReviewInput(current5, { repoIdentity: mesh.repoIdentity, machineId, nodeId, workspace: spec.reviewerWorkspace?.path ?? node.workspace }, grants);
                 if (sourceGenerated && proof.checkout.worktree === fs28.realpathSync.native(node.workspace)) throw new Error("review_detached_checkout_required");
                 if (reviewInputBusy(current5, proof.checkout, store5().getQueueEntries(current5.meshId, ["assigned", "pending"]), true)) throw new Error("review_input_busy");
               }
@@ -80803,8 +80803,8 @@ ${e.stageState.originalMessage}`;
               const state2 = components.instanceManager?.getInstance?.(sessionId)?.getState?.();
               if (!state2) return true;
               const settings2 = state2.settings || {};
-              const nodeId2 = String(settings2.meshNodeId || settings2.nodeId || "");
-              const node = getMesh(meshId2)?.nodes?.find((n) => daemonIdsEquivalent5(n.id, nodeId2));
+              const nodeId = String(settings2.meshNodeId || settings2.nodeId || "");
+              const node = getMesh(meshId2)?.nodes?.find((n) => daemonIdsEquivalent5(n.id, nodeId));
               if (!node) return true;
               const providerType = String(state2.type || settings2.providerType || "");
               const allowed = allowedClassifiedDifficultiesForSession(node, resolveNodeCapabilitySlots(node, meshId2), providerType, readSessionModel2(state2));
@@ -80852,10 +80852,10 @@ ${report}`;
             } catch {
             }
           }
-          const nodeId2 = parent.assignedNodeId ?? parent.targetNodeId;
+          const nodeId = parent.assignedNodeId ?? parent.targetNodeId;
           if (parent.ownershipScope?.worktree) return parent.ownershipScope.worktree;
           const mesh = getMesh(parent.meshId);
-          return mesh?.nodes?.find((n) => (n.id ?? n.nodeId) === nodeId2)?.workspace ?? null;
+          return mesh?.nodes?.find((n) => (n.id ?? n.nodeId) === nodeId)?.workspace ?? null;
         },
         pipelineCeilingMs: () => resolveStagePipelineCeilingMs()
       };
@@ -82325,7 +82325,7 @@ ${report}`;
       }
       return out;
     }
-    function attachRefineMergeEvidence(meshId2, nodeId2, result) {
+    function attachRefineMergeEvidence(meshId2, nodeId, result) {
       try {
         if (!result || result.merged !== true) return null;
         const s2 = store();
@@ -82359,7 +82359,7 @@ ${report}`;
           kind: "evidence",
           text: `Refinery merged ${branch || "branch"}${into ? ` into ${into}` : ""}${sha8 ? ` (${sha8.slice(0, 12)})` : ""}${result.pushed === true ? ", pushed" : ""}`,
           refs,
-          dedupe_key: `refine-merge:${nodeId2 ?? ""}:${sha8 || branch}`
+          dedupe_key: `refine-merge:${nodeId ?? ""}:${sha8 || branch}`
         });
         if ("error" in n) return null;
         let itemId;
@@ -82701,14 +82701,14 @@ ${block3.text}`,
       if (!binding) return null;
       const attempt = resolveRecentlyTerminalAttempt(binding.meshId, binding.sessionId, nowMs2, isSelfDaemon, reportedAtMs);
       if (!attempt) return null;
-      const nodeId2 = attempt.nodeId || binding.nodeId;
+      const nodeId = attempt.nodeId || binding.nodeId;
       return {
         token: "",
         meshId: binding.meshId,
         taskId: attempt.taskId,
         attemptId: attempt.attemptId,
         sessionId: binding.sessionId,
-        ...nodeId2 ? { nodeId: nodeId2 } : {},
+        ...nodeId ? { nodeId } : {},
         terminalOutcome: attempt.terminalOutcome,
         terminalAtMs: attempt.terminalAtMs
       };
@@ -83560,7 +83560,7 @@ ${block3.text}`,
       }
       const taskId = tokenTaskId || reqTaskId || stampTaskId || (!stamp2 ? trim2(binding?.spawnedForTaskId) : "");
       const attemptId = tokenAttemptId || reqAttemptId || stampAttemptId;
-      const nodeId2 = trim2(effectiveStamp.nodeId) || trim2(stamp2?.nodeId) || binding?.nodeId || directToken?.nodeId;
+      const nodeId = trim2(effectiveStamp.nodeId) || trim2(stamp2?.nodeId) || binding?.nodeId || directToken?.nodeId;
       const generation = Number.isInteger(effectiveStamp.generation) ? effectiveStamp.generation : Number.isInteger(stamp2?.generation) ? stamp2?.generation : void 0;
       return {
         meshId: meshId2,
@@ -83569,24 +83569,24 @@ ${block3.text}`,
         ...taskId ? { taskId } : {},
         ...attemptId ? { attemptId } : {},
         ...generation !== void 0 ? { generation } : {},
-        ...nodeId2 ? { nodeId: nodeId2 } : {}
+        ...nodeId ? { nodeId } : {}
       };
     }
     function resolveForwardedWorkerIdentity(claim, sender, nowMs2 = Date.now(), isSelfDaemon) {
       const refuse12 = (reason, detail) => ({ refused: reason, detail });
       const senderDaemonId = typeof sender.senderDaemonId === "string" ? sender.senderDaemonId.trim() : "";
       if (!senderDaemonId) return refuse12("sender_unknown", "the mesh transport did not identify the relaying daemon");
-      const senderOwnsNode = (nodeId2) => {
-        if (!nodeId2) return refuse12("node_unresolved", "the owner's record of this task names no node");
+      const senderOwnsNode = (nodeId) => {
+        if (!nodeId) return refuse12("node_unresolved", "the owner's record of this task names no node");
         let owner;
         try {
-          owner = sender.nodeDaemonId(nodeId2);
+          owner = sender.nodeDaemonId(nodeId);
         } catch {
           owner = void 0;
         }
-        if (!owner) return refuse12("node_unresolved", `node ${nodeId2} is not on the owner's mesh roster`);
+        if (!owner) return refuse12("node_unresolved", `node ${nodeId} is not on the owner's mesh roster`);
         if (!daemonIdsEquivalent5(owner, senderDaemonId)) {
-          return refuse12("sender_not_node_owner", `node ${nodeId2} belongs to daemon ${owner}, not the relaying daemon ${senderDaemonId}`);
+          return refuse12("sender_not_node_owner", `node ${nodeId} belongs to daemon ${owner}, not the relaying daemon ${senderDaemonId}`);
         }
         return null;
       };
@@ -84587,10 +84587,10 @@ ${block3.text}`,
     }
     function persistedBindingEvidence(sessionId, configDir = getConfigDir2()) {
       if (!/^[\w-]+$/.test(sessionId)) return [];
-      const root2 = (0, import_node_path16.join)(configDir, "session-host");
+      const root = (0, import_node_path16.join)(configDir, "session-host");
       let namespaces;
       try {
-        namespaces = (0, import_node_fs19.readdirSync)(root2);
+        namespaces = (0, import_node_fs19.readdirSync)(root);
       } catch (error) {
         if (error.code === "ENOENT") return [];
         throw error;
@@ -84599,7 +84599,7 @@ ${block3.text}`,
       for (const namespace of namespaces) for (const kind of ["runtimes", "tombstones"]) {
         let value;
         try {
-          value = JSON.parse((0, import_node_fs19.readFileSync)((0, import_node_path16.join)(root2, namespace, kind, `${sessionId}.json`), "utf8"));
+          value = JSON.parse((0, import_node_fs19.readFileSync)((0, import_node_path16.join)(root, namespace, kind, `${sessionId}.json`), "utf8"));
         } catch (error) {
           if (["ENOENT", "ENOTDIR"].includes(error.code ?? "")) continue;
           throw error;
@@ -86659,9 +86659,9 @@ ${includeRefs[0]}`;
           const role = readText(live.meshRole || live.role).toLowerCase();
           const launch = live.launchRecord;
           if (live.meshCoordinatorFor || live.assistant || live.isAssistant || live.spawnedForTaskId === null || role === "coordinator" || role === "assistant" || readText(live.launchedBy).toLowerCase() === "assistant" || launch?.spawnedForTaskId === null || launch?.launchedBy === "assistant" || ["coordinator", "assistant"].includes(launch?.roleLaunch?.role ?? "")) continue;
-          const nodeId2 = readText(live.meshNodeId);
-          if (!nodeId2 || !nodes.some((node) => meshNodeIdMatches7(node, nodeId2))) continue;
-          if (task.targetNodeId && !meshNodeIdMatches7({ nodeId: nodeId2 }, task.targetNodeId)) continue;
+          const nodeId = readText(live.meshNodeId);
+          if (!nodeId || !nodes.some((node) => meshNodeIdMatches7(node, nodeId))) continue;
+          if (task.targetNodeId && !meshNodeIdMatches7({ nodeId }, task.targetNodeId)) continue;
           try {
             const hot = inst.getHotChatSessionState?.();
             if (readText(hot?.status) === "generating" && inst.lastStatus === "generating") {
@@ -86983,7 +86983,7 @@ ${includeRefs[0]}`;
       store5.db.prepare("UPDATE mesh_queue SET payload = ? WHERE mesh_id = ? AND id = ? AND status = 'pending'").run(JSON.stringify(task), task.meshId, task.id);
       store5.maybeCheckpointWal();
     }
-    function recordQueueTaskHold(meshId2, taskId, reason, nodeId2, preserveExisting = false) {
+    function recordQueueTaskHold(meshId2, taskId, reason, nodeId, preserveExisting = false) {
       const store5 = MeshRuntimeStore.getInstance();
       store5.transaction(() => {
         const task = store5.findQueueEntryById(meshId2, taskId);
@@ -86992,7 +86992,7 @@ ${includeRefs[0]}`;
         const writers = store5.assignedRowsMeshWide(meshId2).map((row2) => JSON.parse(row2.payload));
         const pending = store5.getQueueEntries(meshId2, ["pending"]);
         const queue = [...writers, ...pending.filter((p) => !writers.some((w) => w.id === p.id))];
-        const context2 = queueHoldContext(task, reason, queue, nodeId2);
+        const context2 = queueHoldContext(task, reason, queue, nodeId);
         if (reason === "dependencies_unsatisfied") {
           const completed = new Set(store5.getQueueHeads(meshId2, ["completed"]).map((head) => head.id));
           context2.blockingTaskIds = (task.dependsOn || []).filter((id4) => !completed.has(id4));
@@ -87093,21 +87093,21 @@ ${includeRefs[0]}`;
     function readCooperativeMaintenance2(configDir = getConfigDir2()) {
       const requiredPlan = process.env.ADHDEV_COOPERATIVE_MAINTENANCE_PLAN;
       if (requiredPlan !== void 0 && !hash2(requiredPlan)) throw new Error("maintenance_expected_plan_invalid");
-      const root2 = path45.resolve(configDir), file = path45.join(root2, MAINTENANCE_FILE);
-      let enrolled = seen.has(root2);
+      const root = path45.resolve(configDir), file = path45.join(root, MAINTENANCE_FILE);
+      let enrolled = seen.has(root);
       let enrollment;
       try {
-        fs322.lstatSync(path45.join(root2, marker));
+        fs322.lstatSync(path45.join(root, marker));
         enrolled = true;
-        seen.add(root2);
-        enrollment = validateCooperativeMaintenance(privateJson(path45.join(root2, marker)));
+        seen.add(root);
+        enrollment = validateCooperativeMaintenance(privateJson(path45.join(root, marker)));
       } catch (e) {
         if (e.code !== "ENOENT") throw e;
       }
       let raw;
       try {
         raw = privateJson(file);
-        seen.add(root2);
+        seen.add(root);
       } catch (e) {
         if (e.code === "ENOENT" && !enrolled && !requiredPlan) return null;
         throw new Error("maintenance_state_unavailable", { cause: e });
@@ -87131,9 +87131,9 @@ ${includeRefs[0]}`;
       const s2 = readCooperativeMaintenance2();
       if (s2 && !expandDaemonIdForms(daemonId).some((form) => s2.roster.includes(form))) throw new Error("maintenance_unknown_daemon");
     }
-    function assertMaintenanceCommandNode(meshIds, nodeId2, daemonId) {
+    function assertMaintenanceCommandNode(meshIds, nodeId, daemonId) {
       const s2 = readCooperativeMaintenance2();
-      if (s2 && nodeId2 && !s2.nodeRoster.some((n) => meshIds.includes(n.meshId) && meshNodeIdMatches7(n, nodeId2) && daemonIdsEquivalent5(n.daemonId, daemonId || s2.daemonId))) throw new Error("maintenance_unknown_node_or_owner");
+      if (s2 && nodeId && !s2.nodeRoster.some((n) => meshIds.includes(n.meshId) && meshNodeIdMatches7(n, nodeId) && daemonIdsEquivalent5(n.daemonId, daemonId || s2.daemonId))) throw new Error("maintenance_unknown_node_or_owner");
     }
     function assertMaintenanceCommandIdentity(args) {
       const text11 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
@@ -87153,14 +87153,14 @@ ${includeRefs[0]}`;
         assertMaintenanceCommandNode(text11(mesh) ? [text11(mesh)] : [], text11(node), text11(owner));
       }
     }
-    function assertMaintenanceJoin(meshId2, nodeId2, daemonId) {
+    function assertMaintenanceJoin(meshId2, nodeId, daemonId) {
       assertMaintenanceAdmission([meshId2]);
-      assertMaintenanceCommandNode([meshId2], nodeId2, daemonId);
+      assertMaintenanceCommandNode([meshId2], nodeId, daemonId);
       if (readCooperativeMaintenance2()) throw new Error("maintenance_roster_transition_required");
     }
-    function assertMaintenanceNode(meshId2, nodeId2, daemonId) {
+    function assertMaintenanceNode(meshId2, nodeId, daemonId) {
       const s2 = readCooperativeMaintenance2();
-      if (s2 && !s2.nodeRoster.some((n) => n.meshId === meshId2 && meshNodeIdMatches7(n, nodeId2) && daemonIdsEquivalent5(n.daemonId, daemonId || s2.daemonId))) throw new Error("maintenance_unknown_node_or_owner");
+      if (s2 && !s2.nodeRoster.some((n) => n.meshId === meshId2 && meshNodeIdMatches7(n, nodeId) && daemonIdsEquivalent5(n.daemonId, daemonId || s2.daemonId))) throw new Error("maintenance_unknown_node_or_owner");
     }
     async function withMaintenanceObservation(run4) {
       const state2 = readCooperativeMaintenance2();
@@ -87178,11 +87178,11 @@ ${includeRefs[0]}`;
     }
     async function withMaintenanceAdmission(run4) {
       assertMaintenanceAdmission();
-      const root2 = path45.resolve(getConfigDir2()), nested = context.getStore();
+      const root = path45.resolve(getConfigDir2()), nested = context.getStore();
       const current5 = {
-        root: root2,
+        root,
         snapshot: nested?.snapshot ?? JSON.stringify(readCooperativeMaintenance2()),
-        lease: nested?.lease?.references ? nested.lease : readCooperativeMaintenance2() ? { release: maintenanceLock(root2), references: 0 } : void 0
+        lease: nested?.lease?.references ? nested.lease : readCooperativeMaintenance2() ? { release: maintenanceLock(root), references: 0 } : void 0
       };
       if (current5.lease) current5.lease.references++;
       activeAdmissions++;
@@ -87194,8 +87194,8 @@ ${includeRefs[0]}`;
         if (current5.lease && --current5.lease.references === 0) current5.lease.release();
       }
     }
-    function maintenanceLock(root2) {
-      const Database = loadBetterSqlite3(), db3 = new Database(path45.join(root2, "cooperative-maintenance.lock.sqlite"));
+    function maintenanceLock(root) {
+      const Database = loadBetterSqlite3(), db3 = new Database(path45.join(root, "cooperative-maintenance.lock.sqlite"));
       try {
         db3.pragma("busy_timeout = 0");
         db3.exec("BEGIN IMMEDIATE");
@@ -87214,10 +87214,10 @@ ${includeRefs[0]}`;
     function withMaintenanceEffect(run4) {
       assertMaintenanceAdmission();
       if (context.getStore()?.lease?.references || !readCooperativeMaintenance2()) return run4();
-      const root2 = path45.resolve(getConfigDir2()), lease = { release: maintenanceLock(root2), references: 1 };
+      const root = path45.resolve(getConfigDir2()), lease = { release: maintenanceLock(root), references: 1 };
       try {
         assertMaintenanceAdmission();
-        return context.run({ root: root2, snapshot: JSON.stringify(readCooperativeMaintenance2()), lease }, run4);
+        return context.run({ root, snapshot: JSON.stringify(readCooperativeMaintenance2()), lease }, run4);
       } finally {
         if (--lease.references === 0) lease.release();
       }
@@ -87335,7 +87335,7 @@ ${includeRefs[0]}`;
         id3 = (s2) => typeof s2 === "string" && !!s2 && s2.trim() === s2;
       }
     });
-    async function waitForRemoteSessionReady(meshId2, nodeId2, sessionId, opts) {
+    async function waitForRemoteSessionReady(meshId2, nodeId, sessionId, opts) {
       if (!sessionId) return false;
       const timeoutMs = opts.timeoutMs ?? REMOTE_LAUNCH_READY_TIMEOUT_MS;
       const pollMs = opts.pollMs ?? REMOTE_LAUNCH_READY_POLL_MS;
@@ -87353,7 +87353,7 @@ ${includeRefs[0]}`;
         if (now() >= deadline) break;
         await sleep3(pollMs);
       }
-      LOG.warn("MeshQueue", `Remote auto-launched session ${sessionId} on node ${nodeId2} (mesh ${meshId2}) did not report agent:ready within ${timeoutMs}ms; proceeding optimistically \u2014 unchanged behavior, the claim still fires via the normal event/reconcile path`);
+      LOG.warn("MeshQueue", `Remote auto-launched session ${sessionId} on node ${nodeId} (mesh ${meshId2}) did not report agent:ready within ${timeoutMs}ms; proceeding optimistically \u2014 unchanged behavior, the claim still fires via the normal event/reconcile path`);
       return false;
     }
     var REMOTE_LAUNCH_READY_TIMEOUT_MS;
@@ -87510,7 +87510,7 @@ ${includeRefs[0]}`;
     });
     async function fastForwardMeshNode(args) {
       const workspace = typeof args.workspace === "string" ? args.workspace.trim() : "";
-      const nodeId2 = normalizeOptionalString(args.nodeId);
+      const nodeId = normalizeOptionalString(args.nodeId);
       const meshId2 = normalizeOptionalString(args.meshId);
       const requestedBranch = normalizeOptionalString(args.branch);
       const trigger = normalizeOptionalString(args.trigger) || "manual";
@@ -87520,7 +87520,7 @@ ${includeRefs[0]}`;
       const pushSubmodules = mode === "push" && args.pushSubmodules === true;
       const plannedSteps = buildPlannedSteps(mode, updateSubmodules, pushSubmodules);
       const base = {
-        ...nodeId2 ? { nodeId: nodeId2 } : {},
+        ...nodeId ? { nodeId } : {},
         ...meshId2 ? { meshId: meshId2 } : {},
         workspace,
         mode,
@@ -91225,8 +91225,8 @@ ${includeRefs[0]}`;
         entries2 = /* @__PURE__ */ new Map();
       }
     });
-    function key4(meshId2, nodeId2, sessionId, providerType, taskId) {
-      return `${meshId2}:${nodeId2}:${sessionId}:${providerType}:${taskId}`;
+    function key4(meshId2, nodeId, sessionId, providerType, taskId) {
+      return `${meshId2}:${nodeId}:${sessionId}:${providerType}:${taskId}`;
     }
     function notePinnedClaimCrossedReserve(args) {
       const k = key4(args.meshId, args.nodeId, args.sessionId, args.providerType, args.taskId);
@@ -91262,8 +91262,8 @@ ${includeRefs[0]}`;
         return false;
       }
     }
-    function forgetPinCrossings(meshId2, nodeId2, sessionId, providerType) {
-      const prefix = `${meshId2}:${nodeId2}:${sessionId}:${providerType}:`;
+    function forgetPinCrossings(meshId2, nodeId, sessionId, providerType) {
+      const prefix = `${meshId2}:${nodeId}:${sessionId}:${providerType}:`;
       for (const k of notified) if (k.startsWith(prefix)) notified.delete(k);
     }
     var notified;
@@ -91558,27 +91558,27 @@ ${includeRefs[0]}`;
       return countGitWorktreeChanges2(git15) > 0 || Array.isArray(git15.submodules) && git15.submodules.some((entry) => !!entry && typeof entry === "object" && entry.dirty === true);
     }
     function readRuntimeHeld(response) {
-      const root2 = readRecord2(response);
-      const held = root2.runtimeHeld ?? readRecord2(root2.result).runtimeHeld;
+      const root = readRecord2(response);
+      const held = root.runtimeHeld ?? readRecord2(root.result).runtimeHeld;
       return typeof held === "boolean" ? held : null;
     }
     function readGitHeld(response) {
-      const root2 = readRecord2(response);
-      const held = root2.gitHeld ?? readRecord2(root2.result).gitHeld;
+      const root = readRecord2(response);
+      const held = root.gitHeld ?? readRecord2(root.result).gitHeld;
       return typeof held === "boolean" ? held : null;
     }
     function readBootId(response) {
-      const root2 = readRecord2(response);
-      return readText(root2.coordinatorBootId) || readText(readRecord2(root2.result).coordinatorBootId) || null;
+      const root = readRecord2(response);
+      return readText(root.coordinatorBootId) || readText(readRecord2(root.result).coordinatorBootId) || null;
     }
     function readAck(response) {
-      const root2 = readRecord2(response);
-      const inner = readRecord2(root2.result);
-      const accepted = root2.accepted ?? inner.accepted;
+      const root = readRecord2(response);
+      const inner = readRecord2(root.result);
+      const accepted = root.accepted ?? inner.accepted;
       if (accepted === true) return true;
       if (accepted === false) return false;
-      if (root2.success === false || inner.success === false) {
-        const code = readText(root2.code) || readText(inner.code) || readText(root2.error) || readText(inner.error);
+      if (root.success === false || inner.success === false) {
+        const code = readText(root.code) || readText(inner.code) || readText(root.error) || readText(inner.error);
         if (code.startsWith("mesh_sender_") || code === "mesh_node_unknown" || code === "mesh_not_found") return false;
         if (code.startsWith("Unknown command")) return false;
       }
@@ -91719,8 +91719,8 @@ ${includeRefs[0]}`;
               this.gitQuietUntil.set(workspace, this.now() + this.selfReadQuietMs);
             }
           }
-          key(coordinatorDaemonId, meshId2, nodeId2) {
-            return `${coordinatorDaemonId}\0${meshId2}\0${nodeId2}`;
+          key(coordinatorDaemonId, meshId2, nodeId) {
+            return `${coordinatorDaemonId}\0${meshId2}\0${nodeId}`;
           }
           list() {
             return [...this.subscriptions.values()].map((sub) => ({ ...sub }));
@@ -91736,15 +91736,15 @@ ${includeRefs[0]}`;
             if (!this.options.dispatch) return false;
             const coordinatorDaemonId = readText(target2.coordinatorDaemonId);
             const meshId2 = readText(target2.meshId);
-            const nodeId2 = readText(target2.nodeId);
+            const nodeId = readText(target2.nodeId);
             const workspace = readText(target2.workspace);
-            if (!coordinatorDaemonId || !meshId2 || !nodeId2 || !workspace) return false;
-            const key7 = this.key(coordinatorDaemonId, meshId2, nodeId2);
+            if (!coordinatorDaemonId || !meshId2 || !nodeId || !workspace) return false;
+            const key7 = this.key(coordinatorDaemonId, meshId2, nodeId);
             if (this.subscriptions.has(key7)) return false;
             this.subscriptions.set(key7, {
               coordinatorDaemonId,
               meshId: meshId2,
-              nodeId: nodeId2,
+              nodeId,
               workspace,
               expiresAt: this.now() + this.ttlMs,
               lastSignature: null,
@@ -91840,15 +91840,15 @@ ${includeRefs[0]}`;
            * push itself runs in the background; the upstream is re-fetched only when
            * the last refresh is older than MESH_NODE_STATE_NUDGE_UPSTREAM_MIN_MS.
            */
-          nudge(coordinatorDaemonId, meshId2, nodeId2, workspace) {
+          nudge(coordinatorDaemonId, meshId2, nodeId, workspace) {
             if (!this.options.dispatch) return false;
             const coordinator = readText(coordinatorDaemonId);
-            const key7 = this.key(coordinator, readText(meshId2), readText(nodeId2));
+            const key7 = this.key(coordinator, readText(meshId2), readText(nodeId));
             if (!this.subscriptions.has(key7)) {
               const path148 = readText(workspace);
               if (!path148 || !fs38.existsSync(path148)) return false;
-              if (!this.selfRegister({ coordinatorDaemonId: coordinator, meshId: meshId2, nodeId: nodeId2, workspace: path148 })) return false;
-              LOG.info("MeshNodeState", `pushing state of node ${nodeId2} (mesh ${meshId2}) to coordinator ${coordinator.slice(0, 12)}`);
+              if (!this.selfRegister({ coordinatorDaemonId: coordinator, meshId: meshId2, nodeId, workspace: path148 })) return false;
+              LOG.info("MeshNodeState", `pushing state of node ${nodeId} (mesh ${meshId2}) to coordinator ${coordinator.slice(0, 12)}`);
             }
             const sub = this.subscriptions.get(key7);
             if (!sub) return false;
@@ -92143,12 +92143,12 @@ ${includeRefs[0]}`;
           lastNudgeAt = /* @__PURE__ */ new Map();
           now;
           failureBackoffMs;
-          key(meshId2, nodeId2) {
-            return `${meshId2}\0${nodeId2}`;
+          key(meshId2, nodeId) {
+            return `${meshId2}\0${nodeId}`;
           }
           /** A nudge for this node is in flight. */
-          isRefreshing(meshId2, nodeId2) {
-            return this.inflight.has(this.key(meshId2, nodeId2));
+          isRefreshing(meshId2, nodeId) {
+            return this.inflight.has(this.key(meshId2, nodeId));
           }
           /** A nudge for any node of this daemon is in flight (runtime is daemon-wide). */
           isRuntimeRefreshing(meshId2, daemonId) {
@@ -92269,20 +92269,20 @@ ${includeRefs[0]}`;
       const chatStatus = readText(state2?.activeChat?.status).toLowerCase();
       return isBusyStatus(status) || isBusyStatus(chatStatus);
     }
-    function nodeHasActiveMeshWork(components, meshId2, nodeId2, currentSessionId) {
-      if (nodeHasActiveAssignment(meshId2, nodeId2)) return true;
+    function nodeHasActiveMeshWork(components, meshId2, nodeId, currentSessionId) {
+      if (nodeHasActiveAssignment(meshId2, nodeId)) return true;
       return components.instanceManager.getByCategory("cli").some((inst) => {
         const liveSettings = inst.settings;
         if (liveSettings && typeof liveSettings === "object") {
           if (readText(liveSettings.meshNodeFor) !== meshId2) return false;
-          if (!daemonIdsEquivalent5(readText(liveSettings.meshNodeId) || readText(liveSettings.nodeId), nodeId2)) return false;
+          if (!daemonIdsEquivalent5(readText(liveSettings.meshNodeId) || readText(liveSettings.nodeId), nodeId)) return false;
         }
         const state2 = inst.getState();
         const settings2 = state2.settings || {};
         if (readText(settings2.meshNodeFor) !== meshId2) return false;
         if (isLightWorkerSession2({ settings: liveSettings }) || isLightWorkerSession2(state2)) return false;
         const instNodeId = readText(settings2.meshNodeId) || readText(settings2.nodeId);
-        if (!daemonIdsEquivalent5(instNodeId, nodeId2)) return false;
+        if (!daemonIdsEquivalent5(instNodeId, nodeId)) return false;
         const sessionId = readText(state2.instanceId);
         if (currentSessionId && sessionIdsEquivalent(sessionId, currentSessionId) && isIdleSessionState(state2)) return false;
         return sessionStateLooksActive(state2);
@@ -92338,20 +92338,20 @@ ${includeRefs[0]}`;
         return "UNKNOWN";
       }
     }
-    function liveSessionCountForNode(components, meshId2, nodeId2) {
+    function liveSessionCountForNode(components, meshId2, nodeId) {
       const localSessionIds = [];
       const localInstances = components.instanceManager.getByCategory("cli").filter((inst) => {
         const liveSettings = inst.settings;
         if (liveSettings && typeof liveSettings === "object") {
           if (readText(liveSettings.meshNodeFor) !== meshId2) return false;
-          if (!daemonIdsEquivalent5(readText(liveSettings.meshNodeId) || readText(liveSettings.nodeId), nodeId2)) return false;
+          if (!daemonIdsEquivalent5(readText(liveSettings.meshNodeId) || readText(liveSettings.nodeId), nodeId)) return false;
         }
         const state2 = inst.getState();
         const settings2 = state2.settings || {};
         if (readText(settings2.meshNodeFor) !== meshId2) return false;
         if (isLightWorkerSession2({ settings: liveSettings }) || isLightWorkerSession2(state2)) return false;
         const instNodeId = readText(settings2.meshNodeId) || readText(settings2.nodeId);
-        if (!daemonIdsEquivalent5(instNodeId, nodeId2)) return false;
+        if (!daemonIdsEquivalent5(instNodeId, nodeId)) return false;
         const status = readText(state2.status).toLowerCase();
         if (isTerminalSessionRecordStatus(status)) return false;
         const sessionId = readText(state2.instanceId);
@@ -92359,21 +92359,21 @@ ${includeRefs[0]}`;
         return true;
       });
       let count2 = localInstances.length;
-      for (const sid of inWindowAutoLaunchSessionIdsForNode(meshId2, nodeId2)) {
+      for (const sid of inWindowAutoLaunchSessionIdsForNode(meshId2, nodeId)) {
         if (!localSessionIds.some((local) => sessionIdsEquivalent(local, sid))) count2 += 1;
       }
       return count2;
     }
-    function nodeHasLiveSessionPendingClaim(components, meshId2, nodeId2, task, node) {
-      if (inWindowAutoLaunchSessionIdsForNode(meshId2, nodeId2).some((sid) => !sessionClaimRefusalReleasesSpawnGate(meshId2, sid))) return true;
+    function nodeHasLiveSessionPendingClaim(components, meshId2, nodeId, task, node) {
+      if (inWindowAutoLaunchSessionIdsForNode(meshId2, nodeId).some((sid) => !sessionClaimRefusalReleasesSpawnGate(meshId2, sid))) return true;
       const busySessionIds = new Set(
-        getQueue(meshId2, { status: ["assigned"] }).filter((task2) => daemonIdsEquivalent5(task2.assignedNodeId, nodeId2)).map((task2) => readText(task2.assignedSessionId)).filter(Boolean)
+        getQueue(meshId2, { status: ["assigned"] }).filter((task2) => daemonIdsEquivalent5(task2.assignedNodeId, nodeId)).map((task2) => readText(task2.assignedSessionId)).filter(Boolean)
       );
       return components.instanceManager.getByCategory("cli").some((inst) => {
         const liveSettings = inst.settings;
         if (liveSettings && typeof liveSettings === "object") {
           if (readText(liveSettings.meshNodeFor) !== meshId2) return false;
-          if (!daemonIdsEquivalent5(readText(liveSettings.meshNodeId) || readText(liveSettings.nodeId), nodeId2)) return false;
+          if (!daemonIdsEquivalent5(readText(liveSettings.meshNodeId) || readText(liveSettings.nodeId), nodeId)) return false;
         }
         const state2 = inst.getState();
         const settings2 = state2.settings || {};
@@ -92381,7 +92381,7 @@ ${includeRefs[0]}`;
         if (isLightWorkerSession2({ settings: liveSettings }) || isLightWorkerSession2(state2)) return false;
         if (readText(settings2.meshCoordinatorFor) === meshId2) return false;
         const instNodeId = readText(settings2.meshNodeId) || readText(settings2.nodeId);
-        if (!daemonIdsEquivalent5(instNodeId, nodeId2)) return false;
+        if (!daemonIdsEquivalent5(instNodeId, nodeId)) return false;
         const status = readText(state2.status).toLowerCase();
         if (isTerminalSessionRecordStatus(status)) return false;
         if (status === "error") return false;
@@ -92434,7 +92434,7 @@ ${includeRefs[0]}`;
       })?.id;
     }
     function evaluateQuotaClaimGateForAssignment(args) {
-      const { meshId: meshId2, nodeId: nodeId2, sessionId, providerType, model, trigger, node, mesh, providerLoader, quotaClaimTrace } = args;
+      const { meshId: meshId2, nodeId, sessionId, providerType, model, trigger, node, mesh, providerLoader, quotaClaimTrace } = args;
       const pinCandidateTaskId = providerPinOverrideCandidateTaskId(meshId2, providerType);
       const isPinOverride = !!pinCandidateTaskId;
       const quotaClaimBlock = evaluateProviderQuotaGate3(
@@ -92448,7 +92448,7 @@ ${includeRefs[0]}`;
       if (quotaClaimTrace) quotaClaimTrace.evaluated += 1;
       if (quotaClaimBlock) {
         const observation = {
-          nodeId: nodeId2,
+          nodeId,
           sessionId,
           providerType,
           block: quotaClaimBlock,
@@ -92456,7 +92456,7 @@ ${includeRefs[0]}`;
         };
         if (isPinOverride && quotaBlockPinOverridable(quotaClaimBlock)) {
           logQuotaClaimBlockTransition(meshId2, observation, "overridden_by_pin");
-          notePinnedClaimCrossedReserve({ meshId: meshId2, nodeId: nodeId2, sessionId, providerType, taskId: pinCandidateTaskId, block: quotaClaimBlock });
+          notePinnedClaimCrossedReserve({ meshId: meshId2, nodeId, sessionId, providerType, taskId: pinCandidateTaskId, block: quotaClaimBlock });
           return false;
         }
         const ownerOverrideTaskId = args.quotaOverrideOnly && quotaBlockOverridable(quotaClaimBlock) ? quotaOverrideCandidateTaskId(meshId2, providerType) : void 0;
@@ -92469,8 +92469,8 @@ ${includeRefs[0]}`;
         quotaClaimTrace?.blocked.push(observation);
         return true;
       }
-      clearQuotaClaimBlockState(meshId2, nodeId2, sessionId, providerType);
-      forgetPinCrossings(meshId2, nodeId2, sessionId, providerType);
+      clearQuotaClaimBlockState(meshId2, nodeId, sessionId, providerType);
+      forgetPinCrossings(meshId2, nodeId, sessionId, providerType);
       if (quotaClaimTrace) quotaClaimTrace.clear += 1;
       return false;
     }
@@ -92769,11 +92769,11 @@ ${includeRefs[0]}`;
     }
     function readDirtyWriteGate2(node) {
       const worktreeBranch = readWorktreeNodeBranch2(node);
-      const nodeId2 = normalizeMeshNodeId(node) || void 0;
+      const nodeId = normalizeMeshNodeId(node) || void 0;
       return {
         dirty: isDirtyNode(node),
         ...worktreeBranch ? { worktreeBranch } : {},
-        ...nodeId2 ? { nodeId: nodeId2 } : {}
+        ...nodeId ? { nodeId } : {}
       };
     }
     function isTaskBoundToWorktree(gate, task) {
@@ -93505,11 +93505,11 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         };
       }
     });
-    function normalizeNodeIdKey(nodeId2) {
-      return normalizeMeshNodeId({ id: nodeId2 ?? void 0 }) ?? "";
+    function normalizeNodeIdKey(nodeId) {
+      return normalizeMeshNodeId({ id: nodeId ?? void 0 }) ?? "";
     }
-    function noteRecentlyClonedNode(nodeId2, nowMs2 = Date.now()) {
-      const key7 = normalizeNodeIdKey(nodeId2);
+    function noteRecentlyClonedNode(nodeId, nowMs2 = Date.now()) {
+      const key7 = normalizeNodeIdKey(nodeId);
       if (!key7) return;
       recentlyClonedNodeExpiry.set(key7, nowMs2 + CLONE_BOOTSTRAP_GRACE_MS);
       if (recentlyClonedNodeExpiry.size > MAX_TRACKED_CLONED_NODES) {
@@ -93517,8 +93517,8 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         if (oldest !== void 0) recentlyClonedNodeExpiry.delete(oldest);
       }
     }
-    function isWithinCloneBootstrapGrace(nodeId2, nowMs2 = Date.now()) {
-      const key7 = normalizeNodeIdKey(nodeId2);
+    function isWithinCloneBootstrapGrace(nodeId, nowMs2 = Date.now()) {
+      const key7 = normalizeNodeIdKey(nodeId);
       if (!key7) return false;
       const expiry = recentlyClonedNodeExpiry.get(key7);
       if (expiry === void 0) return false;
@@ -93528,9 +93528,9 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       }
       return true;
     }
-    function isWithinCloneBootstrapGraceDurable(meshId2, nodeId2, nowMs2 = Date.now()) {
-      if (isWithinCloneBootstrapGrace(nodeId2, nowMs2)) return true;
-      const key7 = normalizeNodeIdKey(nodeId2);
+    function isWithinCloneBootstrapGraceDurable(meshId2, nodeId, nowMs2 = Date.now()) {
+      if (isWithinCloneBootstrapGrace(nodeId, nowMs2)) return true;
+      const key7 = normalizeNodeIdKey(nodeId);
       if (!key7 || !meshId2) return false;
       try {
         const local = readLocalRecordsByKind(meshId2, ["node_cloned"], CLONE_LEDGER_LOOKBACK_CAP);
@@ -93779,9 +93779,9 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         nextAction: "Inspect the node/mesh state with mesh_status and resolve the blocker, or re-enqueue the task."
       };
     }
-    function notifyCoordinatorOfActionableSkip(meshId2, taskId, reason, nodeId2) {
+    function notifyCoordinatorOfActionableSkip(meshId2, taskId, reason, nodeId) {
       if (!isActionableSkipReason(reason)) return;
-      if (reason === "target_node_id_unmatched" && isWithinCloneBootstrapGraceDurable(meshId2, readText(nodeId2))) return;
+      if (reason === "target_node_id_unmatched" && isWithinCloneBootstrapGraceDurable(meshId2, readText(nodeId))) return;
       const dedupKey = `${meshId2}:${taskId}`;
       if (lastActionableSkipNotified.get(dedupKey) === reason) return;
       lastActionableSkipNotified.set(dedupKey, reason);
@@ -93801,7 +93801,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       }
       const targetCoordinatorDaemonId = readText(getMachineId());
       const targetCoordinatorSessionId = readText(task?.sourceCoordinatorSessionId);
-      const nodeLabel = readText(nodeId2) || readText(task?.targetNodeId);
+      const nodeLabel = readText(nodeId) || readText(task?.targetNodeId);
       const evidence = reason === "target_session_pin_expired" || reason === PARKED_SKIP_REASON ? resolveTaskDeliveryEvidence(meshId2, taskId) : void 0;
       const spawnCap = reason === SPAWN_CAP_PARK_REASON ? resolveSpawnCapCause(task) : void 0;
       const { summary, nextAction } = actionableSkipGuidance(reason, evidence, spawnCap);
@@ -93924,11 +93924,11 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       try {
         const row2 = getLightWorkspace(MeshRuntimeStore.getInstance().db, task.lightWorkspaceId);
         if (!row2) return void 0;
-        const ossBase2 = row2.submoduleBases["oss"];
+        const ossBase = row2.submoduleBases["oss"];
         return {
           workspace: row2.path,
           baseSha: row2.rootBaseSha,
-          ...ossBase2 ? { ossBaseSha: ossBase2 } : {},
+          ...ossBase ? { ossBaseSha: ossBase } : {},
           ownedPaths: (task.ownedPaths?.paths ?? []).map((p) => p.subtree ? `${p.path.replace(/\/+$/, "")}/**` : p.path)
         };
       } catch {
@@ -94189,26 +94189,26 @@ ${manifest}`;
       const target2 = toPosix22(configPath);
       return !!ws && (target2 === ws || target2.startsWith(`${ws}/`));
     }
-    function repoConfigStreakKey(nodeId2, workspace) {
-      return `${nodeId2}\0${workspace}`;
+    function repoConfigStreakKey(nodeId, workspace) {
+      return `${nodeId}\0${workspace}`;
     }
     function warnUnreadableRepoConfigForNode(node, providerType) {
       const workspace = typeof node?.workspace === "string" && node.workspace.trim() ? node.workspace.trim() : "";
       if (!workspace) return;
-      const nodeId2 = readText(node?.id) || readText(node?.nodeId) || "unknown-node";
-      const key7 = repoConfigStreakKey(nodeId2, workspace);
+      const nodeId = readText(node?.id) || readText(node?.nodeId) || "unknown-node";
+      const key7 = repoConfigStreakKey(nodeId, workspace);
       if (warnedInvalidRepoConfigNodes.has(key7)) return;
       warnedInvalidRepoConfigNodes.add(key7);
       LOG.warn(
         "MeshQueue",
-        `repo mesh.json unreadable from this daemon for node=${nodeId2} workspace=${workspace} provider=${providerType || "unknown"} \u2014 delegated auto-approve MODE falls back to the provider default here; the worker daemon re-resolves it from its own checkout at launch`
+        `repo mesh.json unreadable from this daemon for node=${nodeId} workspace=${workspace} provider=${providerType || "unknown"} \u2014 delegated auto-approve MODE falls back to the provider default here; the worker daemon re-resolves it from its own checkout at launch`
       );
     }
     function clearUnreadableRepoConfigStreak(node) {
       const workspace = typeof node?.workspace === "string" && node.workspace.trim() ? node.workspace.trim() : "";
       if (!workspace) return;
-      const nodeId2 = readText(node?.id) || readText(node?.nodeId) || "unknown-node";
-      warnedInvalidRepoConfigNodes.delete(repoConfigStreakKey(nodeId2, workspace));
+      const nodeId = readText(node?.id) || readText(node?.nodeId) || "unknown-node";
+      warnedInvalidRepoConfigNodes.delete(repoConfigStreakKey(nodeId, workspace));
     }
     function delegatedWorkerAutoApproveSettingsForNode(mesh, node, provider, providerType) {
       const { config: repoConfig, reason } = loadRepoConfigForNodeDetailed(node);
@@ -94486,7 +94486,7 @@ ${manifest}`;
         init_mesh_relay_result();
       }
     });
-    function liveSessionsForNode(components, meshId2, nodeId2) {
+    function liveSessionsForNode(components, meshId2, nodeId) {
       try {
         const instances2 = components.instanceManager?.getByCategory?.("cli") || [];
         const sessions = [];
@@ -94496,7 +94496,7 @@ ${manifest}`;
           const settings2 = state2.settings || {};
           if (readText(settings2.meshNodeFor) !== meshId2) continue;
           const instNodeId = readText(settings2.meshNodeId) || readText(settings2.nodeId);
-          if (!daemonIdsEquivalent5(instNodeId, nodeId2)) continue;
+          if (!daemonIdsEquivalent5(instNodeId, nodeId)) continue;
           const status = readText(state2.status).toLowerCase();
           if (isTerminalSessionRecordStatus(status)) continue;
           const sessionId = readText(state2.instanceId);
@@ -94508,15 +94508,15 @@ ${manifest}`;
         }
         return sessions;
       } catch (e) {
-        LOG.warn("MeshQueue", `Live-session lookup failed for node ${nodeId2} (mesh ${meshId2}): ${e?.message || e}`);
+        LOG.warn("MeshQueue", `Live-session lookup failed for node ${nodeId} (mesh ${meshId2}): ${e?.message || e}`);
         return [];
       }
     }
     function buildDispatchFailedPinnedNotice(opts) {
-      const { taskId, targetSessionId, nodeId: nodeId2, error, liveSessions } = opts;
+      const { taskId, targetSessionId, nodeId, error, liveSessions } = opts;
       const errorLine = error ? ` (${error})` : "";
       const others = liveSessions.filter((s2) => !sessionIdsEquivalent(s2.sessionId, targetSessionId));
-      const liveList = others.length > 0 ? `Other live session(s) currently on node '${nodeId2}': ${others.map((s2) => `${s2.sessionId}${s2.providerType ? ` (${s2.providerType})` : ""}`).join(", ")}.` : `No other live session was found on node '${nodeId2}' at notification time.`;
+      const liveList = others.length > 0 ? `Other live session(s) currently on node '${nodeId}': ${others.map((s2) => `${s2.sessionId}${s2.providerType ? ` (${s2.providerType})` : ""}`).join(", ")}.` : `No other live session was found on node '${nodeId}' at notification time.`;
       return `[System] Dispatch to pinned session '${targetSessionId}' failed for task ${taskId}${errorLine} and the task returned to pending, STILL PINNED to that same session \u2014 it will keep retrying against it (with backoff) until it either succeeds or a slower liveness backstop (dead-target grace / pin TTL, up to 15min) clears the pin. Do not send a fresh task to '${targetSessionId}' \u2014 it just failed to accept one.
 ${liveList}
 If the pin is stale (session is actually gone), re-target now instead of waiting: mesh_queue_requeue(task_id='${taskId}', target_session_id=<live session id>) to re-pin, or mesh_queue_requeue(task_id='${taskId}', clear_target_session=true) to let any compatible session on the node claim it. If this looks transient (session mid-boot/reconnect), no action is needed \u2014 the retry will likely succeed on its own.`;
@@ -94612,8 +94612,8 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       }
       LOG.warn("MeshQueue", `Auto-launched session ${sessionId} not interactive after ${LOCAL_LAUNCH_READY_TIMEOUT_MS}ms; dispatching anyway (adapter queue-until-ready will buffer)`);
     }
-    function remoteSessionReadyProbe(meshId2, nodeId2, sessionId) {
-      return () => MeshRuntimeStore.getInstance().getRemoteIdleSessions(meshId2).some((s2) => sessionIdsEquivalent(s2.sessionId, sessionId) && meshNodeIdMatches7({ nodeId: s2.nodeId }, nodeId2));
+    function remoteSessionReadyProbe(meshId2, nodeId, sessionId) {
+      return () => MeshRuntimeStore.getInstance().getRemoteIdleSessions(meshId2).some((s2) => sessionIdsEquivalent(s2.sessionId, sessionId) && meshNodeIdMatches7({ nodeId: s2.nodeId }, nodeId));
     }
     function recordTaskDispatchedLedger(ctx, deliveryId) {
       const task = ctx.task;
@@ -95185,12 +95185,12 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         ...previewOnly
       };
     }
-    function shouldLogRoutingDecision(taskId, nodeId2, outcome) {
+    function shouldLogRoutingDecision(taskId, nodeId, outcome) {
       if (outcome.winner) {
-        lastRoutingDecisionLogged.delete(`${taskId}:${nodeId2}`);
+        lastRoutingDecisionLogged.delete(`${taskId}:${nodeId}`);
         return true;
       }
-      const key7 = `${taskId}:${nodeId2}`;
+      const key7 = `${taskId}:${nodeId}`;
       const fingerprint = JSON.stringify(outcome);
       if (lastRoutingDecisionLogged.get(key7) === fingerprint) return false;
       if (lastRoutingDecisionLogged.size >= 1e3) {
@@ -95488,14 +95488,14 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       if (isLocalAutoLaunchNode(node) && !isLocalNodeProviderFallbackInstalled()) return "provider_loader_unavailable";
       return "missing_provider_priority";
     }
-    async function resolveUsableProvider(components, nodeId2, node, meshId2, requiredTags, task, quotaRouting, quotaFactsContext, taskId, routingRefusal) {
+    async function resolveUsableProvider(components, nodeId, node, meshId2, requiredTags, task, quotaRouting, quotaFactsContext, taskId, routingRefusal) {
       const providerLoader = components.providerLoader;
       if (!providerLoader) return { reason: "provider_loader_unavailable" };
       const slots2 = resolveNodeCapabilitySlots(node, meshId2);
       if (!slots2.length) return { reason: describeEmptyNodeSlots(node) };
       const quotaTargetsByProvider = task ? quotaTargetsFromSlots3(slots2) : void 0;
       const quotaBonusByProvider = task ? quotaSpreadBonusByProvider(node, quotaRouting, Date.now(), quotaFactsContext, quotaTargetsByProvider) : void 0;
-      const orderedSlots = task ? orderSlotsForProviderSelection(slots2, meshId2 ?? "", nodeId2, node, task, quotaBonusByProvider) : slots2;
+      const orderedSlots = task ? orderSlotsForProviderSelection(slots2, meshId2 ?? "", nodeId, node, task, quotaBonusByProvider) : slots2;
       const difficultyFloorRequired = !!task && taskRequiresDifficultyFloor(node, task);
       if (difficultyFloorRequired && !orderedSlots.length) {
         return { reason: `task_difficulty_floor_unavailable:${task.difficulty}` };
@@ -95532,14 +95532,14 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         if (difficultyFloorRequired) {
           return { reason: `task_difficulty_floor_unavailable:${task.difficulty}`, preScoreExclusions };
         }
-        return { reason: `provider_priority_unusable: ${failed.join("; ") || nodeId2}`, preScoreExclusions };
+        return { reason: `provider_priority_unusable: ${failed.join("; ") || nodeId}`, preScoreExclusions };
       }
       const overrideQuotaGate = !!(meshId2 && taskId) && hasQuotaOverride(getQueueEntryById(meshId2, taskId));
       if (!overrideQuotaGate && quotaStillWarmingUp(usableSlots.map(({ providerType }) => quotaEntryFor(node, providerType, quotaFactsContext, Date.now()) ? "measured" : classifyAbsentQuotaReason(node, providerType, quotaFactsContext)))) return { reason: "quota_not_measured_after_restart", preScoreExclusions };
       const selection = selectProviderWithDiagnostics({
         overrideQuotaGate,
         node,
-        nodeId: nodeId2,
+        nodeId,
         meshId: meshId2,
         task,
         taskId,
@@ -95557,8 +95557,8 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const rationale = selectionRationaleFrom(routingDiagnostics.selectionTrajectory, allLosers);
       if (!ranked2.clear.length) {
         const detail = ranked2.gated.map((g3) => `${g3.providerType}: ${g3.block.reason}`).join("; ");
-        LOG.info("MeshQueue", `QUOTA GATE: every usable provider on node ${nodeId2} is quota-gated (${detail}); leaving the task queued until a quota window resets`);
-        recordLastQuotaRanking(nodeId2, {
+        LOG.info("MeshQueue", `QUOTA GATE: every usable provider on node ${nodeId} is quota-gated (${detail}); leaving the task queued until a quota window resets`);
+        recordLastQuotaRanking(nodeId, {
           decidedAt: Date.now(),
           clear: riskSnapshot,
           gated: ranked2.gated.map((g3) => ({ providerType: g3.providerType, reason: g3.block.reason })),
@@ -95569,8 +95569,8 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       }
       if (meshId2 && taskId) clearQuotaGateEvidence(meshId2, taskId);
       const selectedWinner = winner;
-      LOG.debug("MeshQueue", `QUOTA RANK: node ${nodeId2} clear=[${riskSnapshot.map((s2) => `${s2.providerType}:${s2.risk?.toFixed(1) ?? "?"}`).join(",")}] gated=[${ranked2.gated.map((g3) => `${g3.providerType}:${g3.block.reason}`).join(",")}] winner=${selectedWinner.providerType}`);
-      recordLastQuotaRanking(nodeId2, {
+      LOG.debug("MeshQueue", `QUOTA RANK: node ${nodeId} clear=[${riskSnapshot.map((s2) => `${s2.providerType}:${s2.risk?.toFixed(1) ?? "?"}`).join(",")}] gated=[${ranked2.gated.map((g3) => `${g3.providerType}:${g3.block.reason}`).join(",")}] winner=${selectedWinner.providerType}`);
+      recordLastQuotaRanking(nodeId, {
         decidedAt: Date.now(),
         winner: selectedWinner.providerType,
         clear: riskSnapshot,
@@ -95805,13 +95805,13 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       })();
       if (!admission) return false;
       const node = (mesh.nodes ?? []).find((n) => meshNodeIdMatches7(n, admission.lightBaseNodeId));
-      const nodeId2 = admission.lightBaseNodeId;
+      const nodeId = admission.lightBaseNodeId;
       let skipReason;
-      const plan = await resolveAutoLaunchPlan(components, meshId2, mesh, task, node, nodeId2, false, [], (_n, reason) => {
+      const plan = await resolveAutoLaunchPlan(components, meshId2, mesh, task, node, nodeId, false, [], (_n, reason) => {
         skipReason = reason;
       });
       if (!plan) {
-        recordQueueTaskHold(meshId2, task.id, skipReason || "provider_unusable", nodeId2);
+        recordQueueTaskHold(meshId2, task.id, skipReason || "provider_unusable", nodeId);
         return false;
       }
       let handle;
@@ -95822,11 +95822,11 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           checkoutRoot: admission.checkoutRoot,
           config: admission.config,
           db: MeshRuntimeStore.getInstance().db,
-          ...task.ownedPaths && mesh.repoIdentity ? { ownership: { paths: task.ownedPaths, repoIdentity: mesh.repoIdentity, machineId: getMachineId() ?? "", nodeId: nodeId2 } } : {}
+          ...task.ownedPaths && mesh.repoIdentity ? { ownership: { paths: task.ownedPaths, repoIdentity: mesh.repoIdentity, machineId: getMachineId() ?? "", nodeId } } : {}
         });
       } catch (e) {
         if (e instanceof LightWorkspaceError && e.code === "light_workspace_disk_low") {
-          recordQueueTaskHold(meshId2, task.id, LIGHT_HOLD.DISK_LOW, nodeId2);
+          recordQueueTaskHold(meshId2, task.id, LIGHT_HOLD.DISK_LOW, nodeId);
           return false;
         }
         noteLightPrepareFailure(meshId2, task, e instanceof LightWorkspaceError ? e.code : "prepare", e?.message || String(e));
@@ -95836,7 +95836,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const cleanup = () => removeLightWorkspace({ path: handle.path, checkoutRoot: admission.checkoutRoot, config: admission.config, db: MeshRuntimeStore.getInstance().db, workspaceId: handle.workspaceId, submodules: Object.keys(handle.submoduleBases), deleteBranches: true }).catch(() => void 0);
       try {
         assertMaintenanceAdmission([meshId2]);
-        assertMaintenanceNode(meshId2, nodeId2);
+        assertMaintenanceNode(meshId2, nodeId);
         try {
           setLightWorkspaceFingerprint(MeshRuntimeStore.getInstance().db, handle.workspaceId, await takeLightCheckoutFingerprint(admission.checkoutRoot, admission.config.linkNodeModules, Object.keys(handle.submoduleBases)));
         } catch (e) {
@@ -95859,7 +95859,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         const pinned = pinRowToLightSession(meshId2, task.id, {
           lightWorkspaceId: handle.workspaceId,
           targetSessionId: sessionId,
-          targetNodeId: nodeId2,
+          targetNodeId: nodeId,
           ...handle.ownershipScope ? { ownershipScope: handle.ownershipScope } : {}
         });
         if (!pinned) {
@@ -95867,7 +95867,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           return false;
         }
         await waitForLocalSessionReady(components, sessionId);
-        tryAssignQueueTask(components, meshId2, nodeId2, sessionId, plan.effectiveProviderType, plan.buildRoutingDecision(), void 0, "light_dispatch");
+        tryAssignQueueTask(components, meshId2, nodeId, sessionId, plan.effectiveProviderType, plan.buildRoutingDecision(), void 0, "light_dispatch");
         return true;
       } catch (e) {
         await cleanup();
@@ -95892,18 +95892,18 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       })();
       if (!admission) return false;
       const node = (mesh.nodes ?? []).find((n) => meshNodeIdMatches7(n, admission.lightBaseNodeId));
-      const nodeId2 = admission.lightBaseNodeId;
+      const nodeId = admission.lightBaseNodeId;
       let skipReason;
-      const plan = await resolveAutoLaunchPlan(components, meshId2, mesh, task, node, nodeId2, false, [], (_n, reason) => {
+      const plan = await resolveAutoLaunchPlan(components, meshId2, mesh, task, node, nodeId, false, [], (_n, reason) => {
         skipReason = reason;
       });
       if (!plan) {
-        recordQueueTaskHold(meshId2, task.id, skipReason || "provider_unusable", nodeId2);
+        recordQueueTaskHold(meshId2, task.id, skipReason || "provider_unusable", nodeId);
         return false;
       }
       try {
         assertMaintenanceAdmission([meshId2]);
-        assertMaintenanceNode(meshId2, nodeId2);
+        assertMaintenanceNode(meshId2, nodeId);
         const launch = await components.router.execute("launch_cli", {
           cliType: plan.effectiveProviderType,
           dir: handle.path,
@@ -95920,12 +95920,12 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         const pinned = pinRowToLightSession(meshId2, task.id, {
           lightWorkspaceId: handle.workspaceId,
           targetSessionId: sessionId,
-          targetNodeId: nodeId2,
+          targetNodeId: nodeId,
           ...task.ownershipScope ? { ownershipScope: task.ownershipScope } : {}
         });
         if (!pinned) return false;
         await waitForLocalSessionReady(components, sessionId);
-        tryAssignQueueTask(components, meshId2, nodeId2, sessionId, plan.effectiveProviderType, plan.buildRoutingDecision(), void 0, "light_dispatch");
+        tryAssignQueueTask(components, meshId2, nodeId, sessionId, plan.effectiveProviderType, plan.buildRoutingDecision(), void 0, "light_dispatch");
         return true;
       } catch (e) {
         noteLightPrepareFailure(meshId2, task, "launch", e?.message || String(e));
@@ -96054,11 +96054,11 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       }
       if (!anyUntargeted && wantedNodes.size === 0) return out;
       for (const node of nodes) {
-        const nodeId2 = readText(node.id) || readText(node.nodeId) || readText(node.node_id);
-        if (!nodeId2) continue;
+        const nodeId = readText(node.id) || readText(node.nodeId) || readText(node.node_id);
+        if (!nodeId) continue;
         if (!anyUntargeted && ![...wantedNodes].some((t) => meshNodeIdMatches7(node, t))) continue;
         const daemonId = readMeshNodeDaemonId(node) ?? "";
-        const held = readLiveHeldRuntime(store5, { meshId: meshId2, nodeId: nodeId2, daemonId }, now);
+        const held = readLiveHeldRuntime(store5, { meshId: meshId2, nodeId, daemonId }, now);
         if (!held) continue;
         for (const session of held.runtime.sessions) {
           if (readText(session.status).toLowerCase() !== "idle") continue;
@@ -96071,21 +96071,21 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           if (components.instanceManager?.getInstance?.(sessionId)) continue;
           if (alreadyOffered.some((c) => sessionIdsEquivalent(c.sessionId, sessionId))) continue;
           if (out.some((c) => sessionIdsEquivalent(c.sessionId, sessionId))) continue;
-          out.push({ nodeId: nodeId2, sessionId, providerType, origin: "remote", node });
+          out.push({ nodeId, sessionId, providerType, origin: "remote", node });
         }
       }
       return out;
     }
     function launchedSessionProvablyGone(components, meshId2, mesh, launched, now = Date.now()) {
-      const { nodeId: nodeId2, sessionId, launchedAtMs } = launched;
-      if (!sessionId || !nodeId2 || !Number.isFinite(launchedAtMs)) return false;
+      const { nodeId, sessionId, launchedAtMs } = launched;
+      if (!sessionId || !nodeId || !Number.isFinite(launchedAtMs)) return false;
       try {
         if (components.instanceManager?.getInstance?.(sessionId)) return false;
         if (MeshRuntimeStore.getInstance().getRemoteIdleSessions(meshId2).some((r) => sessionIdsEquivalent(r.sessionId, sessionId))) return false;
-        const node = (mesh?.nodes ?? []).find((n) => meshNodeIdMatches7(n, nodeId2));
+        const node = (mesh?.nodes ?? []).find((n) => meshNodeIdMatches7(n, nodeId));
         const store5 = components.router?.meshNodeGitState;
         if (!node || !store5) return false;
-        const held = readLiveHeldRuntime(store5, { meshId: meshId2, nodeId: readText(node.id) || nodeId2, daemonId: readMeshNodeDaemonId(node) ?? "" }, now);
+        const held = readLiveHeldRuntime(store5, { meshId: meshId2, nodeId: readText(node.id) || nodeId, daemonId: readMeshNodeDaemonId(node) ?? "" }, now);
         if (!held || held.observedAt <= launchedAtMs) return false;
         return !held.runtime.sessions.some((s2) => sessionIdsEquivalent(readText(s2.id) || readText(s2.instanceId) || readText(s2.sessionId), sessionId));
       } catch {
@@ -96187,13 +96187,13 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
             const hot = inst.getHotChatSessionState();
             const status = readText(hot?.status).toLowerCase();
             const lastStatus = readText(inst.lastStatus).toLowerCase();
-            const nodeId3 = readText(liveSettings.meshNodeId) || readText(liveSettings.nodeId);
-            if (status === "generating" && lastStatus === "generating" && nodeId3) {
+            const nodeId2 = readText(liveSettings.meshNodeId) || readText(liveSettings.nodeId);
+            if (status === "generating" && lastStatus === "generating" && nodeId2) {
               const now = Date.now();
               const checkedAt = busyProjectionCheckedAt2.get(inst);
               if (checkedAt === void 0) busyProjectionCheckedAt2.set(inst, now);
               if (checkedAt === void 0 || now >= checkedAt && now - checkedAt < BUSY_PROJECTION_RECHECK_MS2) {
-                skippedSessions.push({ nodeId: nodeId3, sessionId: readText(hot?.id) || void 0, reason: "session_not_idle", status });
+                skippedSessions.push({ nodeId: nodeId2, sessionId: readText(hot?.id) || void 0, reason: "session_not_idle", status });
                 continue;
               }
             }
@@ -96205,12 +96205,12 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         const settings2 = state2.settings || {};
         const instMeshId = readText(settings2.meshNodeFor);
         if (instMeshId !== meshId2) continue;
-        const nodeId2 = readText(settings2.meshNodeId) || readText(settings2.nodeId);
-        if (!nodeId2) continue;
+        const nodeId = readText(settings2.meshNodeId) || readText(settings2.nodeId);
+        if (!nodeId) continue;
         if (!isIdleSessionState(state2)) {
           const status = readText(state2.status).toLowerCase();
           skippedSessions.push({
-            nodeId: nodeId2,
+            nodeId,
             sessionId: readText(state2.instanceId),
             reason: isTerminalSessionRecordStatus(status) ? "terminal_session" : "session_not_idle",
             status: status || void 0
@@ -96221,10 +96221,10 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         const providerType = state2.type || readText(settings2.providerType);
         if (providerType) {
           localIdleSessionsChecked += 1;
-          localCandidates.push({ nodeId: nodeId2, sessionId, providerType, origin: "local", node: mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId2)) });
+          localCandidates.push({ nodeId, sessionId, providerType, origin: "local", node: mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId)) });
         } else {
           skippedSessions.push({
-            nodeId: nodeId2,
+            nodeId,
             sessionId,
             reason: "provider_type_missing"
           });
@@ -96424,11 +96424,11 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         return void 0;
       }
     }
-    function isClaimGatedByWorktreeBootstrap(components, meshId2, nodeId2, sessionId, node) {
+    function isClaimGatedByWorktreeBootstrap(components, meshId2, nodeId, sessionId, node) {
       const inlineBootstrapNode = (() => {
         try {
           const inlineMesh = components.router?.getCachedInlineMesh?.(meshId2);
-          const inlineNode = Array.isArray(inlineMesh?.nodes) ? inlineMesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId2)) : void 0;
+          const inlineNode = Array.isArray(inlineMesh?.nodes) ? inlineMesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId)) : void 0;
           return readText(inlineNode?.worktreeBootstrap?.status) ? inlineNode : void 0;
         } catch {
           return void 0;
@@ -96441,17 +96441,17 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         return git15 ? { ...base, lastGit: git15, last_git: git15 } : base;
       })();
       if (bootstrapGateNode?.worktreeBootstrap?.status !== "running") {
-        clearWorktreeBootstrapStaleBypassState(meshId2, nodeId2, sessionId);
+        clearWorktreeBootstrapStaleBypassState(meshId2, nodeId, sessionId);
         return false;
       }
       if (!shouldDeferDispatchForBootstrap(bootstrapGateNode)) {
-        logWorktreeBootstrapStaleBypass(meshId2, nodeId2, sessionId);
+        logWorktreeBootstrapStaleBypass(meshId2, nodeId, sessionId);
         return false;
       }
-      LOG.info("MeshQueue", `Gating queue claim for worktree node ${nodeId2} (${sessionId}): worktree bootstrap still running \u2014 task left pending; claim re-fires once bootstrap reaches a terminal state (guards against dispatching into a half-built worktree \u2192 empty session)`);
+      LOG.info("MeshQueue", `Gating queue claim for worktree node ${nodeId} (${sessionId}): worktree bootstrap still running \u2014 task left pending; claim re-fires once bootstrap reaches a terminal state (guards against dispatching into a half-built worktree \u2192 empty session)`);
       return true;
     }
-    function resolveClaimingSessionState(components, nodeId2, sessionId, node) {
+    function resolveClaimingSessionState(components, nodeId, sessionId, node) {
       const localClaimAdapter = components.cliManager?.adapters?.get(sessionId);
       let claimInstanceWorkspace = "";
       let claimStampedNodeId = "", claimState;
@@ -96468,13 +96468,13 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         const pid = localClaimAdapter?.getPid?.();
         if (!Number.isSafeInteger(pid) || Number(pid) <= 0) return null;
       }
-      if (claimStampedNodeId && nodeId2) {
-        if (!meshNodeIdMatches7({ id: claimStampedNodeId }, nodeId2)) {
-          LOG.info("MeshQueue", `WTDISPATCH: refusing claim for node ${nodeId2} (${sessionId}) \u2014 session is bound to node "${claimStampedNodeId}" (cross-node claim blocked)`);
+      if (claimStampedNodeId && nodeId) {
+        if (!meshNodeIdMatches7({ id: claimStampedNodeId }, nodeId)) {
+          LOG.info("MeshQueue", `WTDISPATCH: refusing claim for node ${nodeId} (${sessionId}) \u2014 session is bound to node "${claimStampedNodeId}" (cross-node claim blocked)`);
           return null;
         }
       } else if (sessionWorkspaceRaw && nodeWorkspaceRaw && !meshWorkspacesEquivalent(sessionWorkspaceRaw, nodeWorkspaceRaw)) {
-        LOG.info("MeshQueue", `WTCLAIM: refusing claim for node ${nodeId2} (${sessionId}) \u2014 session workspace "${normalizeMeshWorkspaceForCompare(sessionWorkspaceRaw)}" \u2260 node workspace "${normalizeMeshWorkspaceForCompare(nodeWorkspaceRaw)}" (cross-workspace dispatch blocked)`);
+        LOG.info("MeshQueue", `WTCLAIM: refusing claim for node ${nodeId} (${sessionId}) \u2014 session workspace "${normalizeMeshWorkspaceForCompare(sessionWorkspaceRaw)}" \u2260 node workspace "${normalizeMeshWorkspaceForCompare(nodeWorkspaceRaw)}" (cross-workspace dispatch blocked)`);
         return null;
       }
       return { claimState };
@@ -96483,8 +96483,8 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       if (settings2?.stageReviewerCheckout === true) return true;
       if (!workspace) return false;
       try {
-        const root2 = import_node_fs222.realpathSync.native((0, import_node_path20.join)(getConfigDir2(), "stage-review-checkouts"));
-        return import_node_fs222.realpathSync.native(workspace).startsWith(root2 + import_node_path20.sep);
+        const root = import_node_fs222.realpathSync.native((0, import_node_path20.join)(getConfigDir2(), "stage-review-checkouts"));
+        return import_node_fs222.realpathSync.native(workspace).startsWith(root + import_node_path20.sep);
       } catch {
         return false;
       }
@@ -96498,7 +96498,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       }
     }
     function buildClaimOptions(p) {
-      const { components, meshId: meshId2, nodeId: nodeId2, sessionId, providerType, node, mesh } = p;
+      const { components, meshId: meshId2, nodeId, sessionId, providerType, node, mesh } = p;
       const nodeSlotsForCap = resolveNodeCapabilitySlots(node, meshId2);
       const providerMaxParallel = resolveProviderMaxParallel(nodeSlotsForCap, providerType);
       const assignedModel = typeof p.routingDecision?.resolvedModel === "string" && p.routingDecision.resolvedModel.trim() ? p.routingDecision.resolvedModel.trim() : readSessionModel2(p.claimState);
@@ -96515,7 +96515,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         ...gitGateMaxBehind !== void 0 ? { maxBehind: gitGateMaxBehind } : {}
       };
       if (nodeGitGate.staleBehind && resolveAutoFastForwardPolicy2(mesh).mode === "continuous") {
-        void maybeAutoFastForwardIdleNode(components, { meshId: meshId2, nodeId: nodeId2, sessionId, providerType }).catch(() => {
+        void maybeAutoFastForwardIdleNode(components, { meshId: meshId2, nodeId, sessionId, providerType }).catch(() => {
         });
       }
       const claimSettings = p.claimState?.settings;
@@ -96525,14 +96525,14 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const nodeDaemonId = readMeshNodeDaemonId(node ?? {});
       const remoteOwnership = !lightWorkspaceId && nodeDaemonId && !isLocalAutoLaunchNode(node) ? (candidate) => remoteOwnershipProofSync(components.dispatchMeshCommand, {
         meshId: meshId2,
-        nodeId: nodeId2,
+        nodeId,
         daemonId: nodeDaemonId,
         workspace: readText(node?.workspace),
         repoIdentity: readText(mesh?.repoIdentity),
         phase: candidate.phase === "integration" ? "integration" : "source",
         paths: candidate.ownedPaths ?? { paths: [] },
         sessionId
-      }, () => noteClaimDeferredForNode(meshId2, nodeId2)) : void 0;
+      }, () => noteClaimDeferredForNode(meshId2, nodeId)) : void 0;
       return {
         capabilityTags: buildMeshNodeCapabilityTags2(node, providerType),
         assignedTranscriptProfile,
@@ -96554,7 +96554,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           // DAEMON MACHINE (CPU, memory, upstream rate limit, one on-disk CLI auth),
           // not this node alone — per-node counting let cloned worktrees multiply the
           // budget. Remote machines declare their own daemonId and keep their own.
-          daemonNodeIds: resolveDaemonSiblingNodeIds(nodeId2, mesh?.nodes),
+          daemonNodeIds: resolveDaemonSiblingNodeIds(nodeId, mesh?.nodes),
           // WTDISPATCH-FANOUT: a `convergence` task (base-only: merge → push →
           // cleanup) is refused for worktree sessions, so sibling worktree sessions
           // cannot all claim the same convergence intent and race push/deploy.
@@ -96592,25 +96592,25 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       }
     }
     function recordTaskClaimed(p) {
-      const { meshId: meshId2, task, nodeId: nodeId2, sessionId, providerType } = p;
+      const { meshId: meshId2, task, nodeId, sessionId, providerType } = p;
       if (task.origin === "stage") notifyStageChildClaimed(meshId2, task.id);
       if (isWorkerMcpEnabled()) {
         try {
-          mintWorkerTaskToken({ meshId: meshId2, taskId: task.id, attemptId: p.attemptId, sessionId, nodeId: nodeId2 });
+          mintWorkerTaskToken({ meshId: meshId2, taskId: task.id, attemptId: p.attemptId, sessionId, nodeId });
         } catch (e) {
           LOG.warn("WorkerMcp", `Failed to mint worker task token for ${task.id}: ${e?.message || e}`);
         }
       }
       try {
         meshRecord(meshId2, "task_claimed", {
-          nodeId: nodeId2,
+          nodeId,
           sessionId,
           providerType,
           taskId: task.id,
           payload: {
             taskId: task.id,
             ...task.missionId ? { missionId: task.missionId } : {},
-            nodeId: nodeId2,
+            nodeId,
             sessionId,
             providerType,
             claimedAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -96666,7 +96666,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       } catch {
       }
     }
-    function tryAssignQueueTask(components, meshId2, nodeId2, sessionId, providerType, routingDecision, quotaClaimTrace, trigger = "queue_claim") {
+    function tryAssignQueueTask(components, meshId2, nodeId, sessionId, providerType, routingDecision, quotaClaimTrace, trigger = "queue_claim") {
       try {
         return withMaintenanceEffect(() => {
           try {
@@ -96677,29 +96677,29 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           if (isNewWorkHeld({ meshId: meshId2 })) return false;
           const turnLedger = turnLedgerOf(components);
           if (!turnLedger) {
-            LOG.warn("TurnLedger", `refusing queue claim for node ${nodeId2} (${sessionId}) in mesh ${meshId2}: no turn ledger on this daemon (claim path ${trigger}) \u2014 task left pending`);
+            LOG.warn("TurnLedger", `refusing queue claim for node ${nodeId} (${sessionId}) in mesh ${meshId2}: no turn ledger on this daemon (claim path ${trigger}) \u2014 task left pending`);
             return false;
           }
           if (typeof components.router?.getCachedInlineMesh !== "function") {
-            LOG.warn("MeshQueue", `refusing queue claim for node ${nodeId2} (${sessionId}) in mesh ${meshId2}: components carry no router inline-mesh view (claim path ${trigger}) \u2014 task left pending`);
+            LOG.warn("MeshQueue", `refusing queue claim for node ${nodeId} (${sessionId}) in mesh ${meshId2}: components carry no router inline-mesh view (claim path ${trigger}) \u2014 task left pending`);
             return false;
           }
           const mesh = getMeshWithCache(components, meshId2);
           if (!mesh) {
-            LOG.info("MeshQueue", `Deferring queue claim for node ${nodeId2} (${sessionId}): mesh ${meshId2} is not resolvable yet (claim path ${trigger}) \u2014 task left pending, claim re-fires next tick`);
-            noteClaimDeferredForNode(meshId2, nodeId2);
+            LOG.info("MeshQueue", `Deferring queue claim for node ${nodeId} (${sessionId}): mesh ${meshId2} is not resolvable yet (claim path ${trigger}) \u2014 task left pending, claim re-fires next tick`);
+            noteClaimDeferredForNode(meshId2, nodeId);
             return false;
           }
-          const node = mesh?.nodes.find((n) => meshNodeIdMatches7(n, nodeId2));
+          const node = mesh?.nodes.find((n) => meshNodeIdMatches7(n, nodeId));
           if (routingDecision?.source !== "autoLaunch") {
-            recordLastQuotaRanking(nodeId2, { decidedAt: Date.now(), winner: providerType, adopted: true });
+            recordLastQuotaRanking(nodeId, { decidedAt: Date.now(), winner: providerType, adopted: true });
           }
           if (isWorkspaceAutoFastForwardInFlight(readText(node?.workspace))) {
-            LOG.info("MeshQueue", `Deferring queue claim for node ${nodeId2} (${sessionId}): an auto fast-forward is mutating its workspace \u2014 task left pending, claim re-fires next tick`);
-            noteClaimDeferredForNode(meshId2, nodeId2);
+            LOG.info("MeshQueue", `Deferring queue claim for node ${nodeId} (${sessionId}): an auto fast-forward is mutating its workspace \u2014 task left pending, claim re-fires next tick`);
+            noteClaimDeferredForNode(meshId2, nodeId);
             return false;
           }
-          const claiming = resolveClaimingSessionState(components, nodeId2, sessionId, node);
+          const claiming = resolveClaimingSessionState(components, nodeId, sessionId, node);
           if (!claiming) return false;
           let gateModel = routingDecision?.selectedSlot?.model;
           if (!gateModel) {
@@ -96709,56 +96709,56 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
             }
           }
           const quotaOverrideOnly = { on: false };
-          if (evaluateQuotaClaimGateForAssignment({ meshId: meshId2, nodeId: nodeId2, sessionId, providerType, model: gateModel, trigger, node, mesh, providerLoader: components.providerLoader, quotaClaimTrace, quotaOverrideOnly })) {
+          if (evaluateQuotaClaimGateForAssignment({ meshId: meshId2, nodeId, sessionId, providerType, model: gateModel, trigger, node, mesh, providerLoader: components.providerLoader, quotaClaimTrace, quotaOverrideOnly })) {
             return false;
           }
-          if (isClaimGatedByWorktreeBootstrap(components, meshId2, nodeId2, sessionId, node)) return false;
+          if (isClaimGatedByWorktreeBootstrap(components, meshId2, nodeId, sessionId, node)) return false;
           if (node?.isLocalWorktree === true && isLocalAutoLaunchNode(node)) {
             const readiness = dispatchReadinessClaimVerdict(mesh, readText(node?.workspace) || void 0);
             if (readiness.defer) {
-              LOG.info("MeshQueue", `Deferring queue claim for node ${nodeId2} (${sessionId}): ${readiness.reason} \u2014 task left pending, claim re-fires next tick`);
-              noteClaimDeferredForNode(meshId2, nodeId2);
+              LOG.info("MeshQueue", `Deferring queue claim for node ${nodeId} (${sessionId}): ${readiness.reason} \u2014 task left pending, claim re-fires next tick`);
+              noteClaimDeferredForNode(meshId2, nodeId);
               return false;
             }
           }
-          assertMaintenanceNode(meshId2, nodeId2, readMeshNodeDaemonId(node ?? {}));
+          assertMaintenanceNode(meshId2, nodeId, readMeshNodeDaemonId(node ?? {}));
           try {
             supersedeAwaitingReportForPinnedFollowup(meshId2, sessionId, { sessionIdle: readText(claiming.claimState?.status).toLowerCase() === "idle" });
           } catch (e) {
             LOG.warn("MeshQueue", `pinned follow-up supersede check failed for ${sessionId}: ${e?.message || e}`);
           }
-          const claim = buildClaimOptions({ components, meshId: meshId2, nodeId: nodeId2, sessionId, providerType, node, mesh, claimState: claiming.claimState, routingDecision });
+          const claim = buildClaimOptions({ components, meshId: meshId2, nodeId, sessionId, providerType, node, mesh, claimState: claiming.claimState, routingDecision });
           const claimRefusal = {};
-          const task = claimNextTask(meshId2, nodeId2, sessionId, claim.capabilityTags, { ...claim.options, ...quotaOverrideOnly.on ? { onlyQuotaOverridden: true } : {}, outRefusal: claimRefusal });
+          const task = claimNextTask(meshId2, nodeId, sessionId, claim.capabilityTags, { ...claim.options, ...quotaOverrideOnly.on ? { onlyQuotaOverridden: true } : {}, outRefusal: claimRefusal });
           if (!task) {
             const refusalReason2 = claimRefusal.reason || "no_pending_candidates";
             noteSessionClaimRefusal(meshId2, sessionId, { reason: refusalReason2, ...claimRefusal.taskId ? { taskId: claimRefusal.taskId } : {} });
             recordClaimRefusal(meshId2, {
-              nodeId: nodeId2,
+              nodeId,
               sessionId,
               ...providerType ? { providerType } : {},
               reason: refusalReason2,
               ...claimRefusal.detail ? { detail: claimRefusal.detail } : {}
             });
-            recordLastQuotaRankingOutcome(nodeId2, "refused", refusalReason2);
-            handleClaimPathDifficultyFloorRefusal({ meshId: meshId2, nodeId: nodeId2, refusalReason: refusalReason2, claimRefusal, coordinatorDaemonId: localCoordinatorDaemonId2() });
+            recordLastQuotaRankingOutcome(nodeId, "refused", refusalReason2);
+            handleClaimPathDifficultyFloorRefusal({ meshId: meshId2, nodeId, refusalReason: refusalReason2, claimRefusal, coordinatorDaemonId: localCoordinatorDaemonId2() });
             return false;
           }
-          clearClaimRefusalState(meshId2, nodeId2, sessionId);
+          clearClaimRefusalState(meshId2, nodeId, sessionId);
           noteSessionClaimRefusal(meshId2, sessionId, null);
-          clearClaimDeferralForNode(meshId2, nodeId2);
-          recordLastQuotaRankingOutcome(nodeId2, "claimed");
+          clearClaimDeferralForNode(meshId2, nodeId);
+          recordLastQuotaRankingOutcome(nodeId, "claimed");
           if (quotaClaimTrace?.blocked.length) {
-            logQuotaClaimFallbackSuccess(quotaClaimTrace.blocked, task.id, { nodeId: nodeId2, sessionId, providerType });
+            logQuotaClaimFallbackSuccess(quotaClaimTrace.blocked, task.id, { nodeId, sessionId, providerType });
             quotaClaimTrace.blocked = [];
             quotaClaimTrace.evaluated = 0;
             quotaClaimTrace.clear = 0;
           }
-          LOG.info("MeshQueue", `Node ${nodeId2} (${sessionId}) pulled task ${task.id}`);
-          const dispatchAttemptRef = openClaimAttempt({ turnLedger, meshId: meshId2, task, nodeId: nodeId2, sessionId, providerType, mesh, assignedTranscriptProfile: claim.assignedTranscriptProfile, trigger });
+          LOG.info("MeshQueue", `Node ${nodeId} (${sessionId}) pulled task ${task.id}`);
+          const dispatchAttemptRef = openClaimAttempt({ turnLedger, meshId: meshId2, task, nodeId, sessionId, providerType, mesh, assignedTranscriptProfile: claim.assignedTranscriptProfile, trigger });
           if (!dispatchAttemptRef) return false;
-          recordTaskClaimed({ meshId: meshId2, task, nodeId: nodeId2, sessionId, providerType, attemptId: dispatchAttemptRef.attemptId });
-          const continuationNotice = noteBranchContinuationDispatch(meshId2, node, task, nodeId2, sessionId);
+          recordTaskClaimed({ meshId: meshId2, task, nodeId, sessionId, providerType, attemptId: dispatchAttemptRef.attemptId });
+          const continuationNotice = noteBranchContinuationDispatch(meshId2, node, task, nodeId, sessionId);
           const workerMcp = readSessionWorkerMcpDelivered(claiming.claimState?.settings);
           const dispatchTask = refreshInheritedInputArtifacts(meshId2, task);
           const dispatchMessage = resolveDispatchMessage2(
@@ -96773,7 +96773,7 @@ ${continuationNotice}` } : dispatchTask,
           const coordinatorSessionId = readText(task.sourceCoordinatorSessionId) || void 0;
           const meshContext = buildClaimDispatchMeshContext({
             meshId: meshId2,
-            nodeId: nodeId2,
+            nodeId,
             task,
             attemptRef: dispatchAttemptRef,
             coordinatorDaemonId,
@@ -96795,7 +96795,7 @@ ${continuationNotice}` } : dispatchTask,
           };
           const deliverContext = {
             meshId: meshId2,
-            nodeId: nodeId2,
+            nodeId,
             sessionId,
             providerType,
             task,
@@ -96823,7 +96823,7 @@ ${continuationNotice}` } : dispatchTask,
             );
             return true;
           }
-          stampLocalClaimedSession(components, { meshId: meshId2, nodeId: nodeId2, sessionId, providerType, task, mesh, node });
+          stampLocalClaimedSession(components, { meshId: meshId2, nodeId, sessionId, providerType, task, mesh, node });
           deliverTaskToSession(
             () => components.router.execute("agent_command", withMeshDirectDispatch({}, {
               ...sendChat2,
@@ -96843,14 +96843,14 @@ ${continuationNotice}` } : dispatchTask,
         throw e;
       }
     }
-    function noteBranchContinuationDispatch(meshId2, node, task, nodeId2, sessionId) {
+    function noteBranchContinuationDispatch(meshId2, node, task, nodeId, sessionId) {
       if (resolveDirtyWriteVerdict(node, task) !== "branch_continuation") return null;
       const branch = readWorktreeNodeBranch2(node) || "";
       const changedFileCount = countGitWorktreeChanges2(node?.git ?? node?.cachedStatus?.git);
-      LOG.info("MeshQueue", `Task ${task.id} continues branch ${branch} on dirty worktree node ${nodeId2} (${changedFileCount} uncommitted change(s))`);
+      LOG.info("MeshQueue", `Task ${task.id} continues branch ${branch} on dirty worktree node ${nodeId} (${changedFileCount} uncommitted change(s))`);
       try {
         meshRecord(meshId2, "dirty_workspace_dispatch", {
-          nodeId: nodeId2,
+          nodeId,
           sessionId,
           payload: { taskId: task.id, verdict: "branch_continuation", branch, changedFileCount, via: "queue" }
         }, { local: true });
@@ -96997,13 +96997,13 @@ ${continuationNotice}` } : dispatchTask,
     function readNodeSubmoduleIgnorePaths(node) {
       return Array.isArray(node?.policy?.submoduleIgnorePaths) ? node.policy.submoduleIgnorePaths.filter((value) => typeof value === "string") : void 0;
     }
-    function nodeIsAutoFastForwardEligible(components, meshId2, nodeId2, node, currentSessionId) {
+    function nodeIsAutoFastForwardEligible(components, meshId2, nodeId, node, currentSessionId) {
       if (!node) return false;
       if (node.status === "disabled" || node.status === "removed") return false;
       if (node.readOnly === true || node.policy?.readOnly === true) return false;
       if (isWorktreeBootstrapStaleRunning(node)) return false;
       if (node.worktreeBootstrap?.status === "running") return false;
-      if (nodeHasActiveMeshWork(components, meshId2, nodeId2, currentSessionId)) return false;
+      if (nodeHasActiveMeshWork(components, meshId2, nodeId, currentSessionId)) return false;
       return true;
     }
     function remoteNodeIsConnected(components, node) {
@@ -97140,8 +97140,8 @@ ${continuationNotice}` } : dispatchTask,
       if (nowMs2 - fetchedAt > AUTO_FF_GIT_PRECHECK_MAX_AGE_MS) return false;
       return git15.ahead === 0 && git15.behind === 0;
     }
-    function autoFastForwardScanCooldownKey(meshId2, nodeId2) {
-      return `${meshId2}:${nodeId2}`;
+    function autoFastForwardScanCooldownKey(meshId2, nodeId) {
+      return `${meshId2}:${nodeId}`;
     }
     function isAutoFastForwardScanBackedOff(key7, nowMs2) {
       const state2 = continuousAutoFastForwardScanState.get(key7);
@@ -97168,26 +97168,26 @@ ${continuationNotice}` } : dispatchTask,
       const now = Date.now();
       const dryRunTimeoutMs = resolveAutoFastForwardCallTimeoutMs();
       for (const node of nodes) {
-        const nodeId2 = normalizeMeshNodeId(node);
-        if (!nodeId2) continue;
+        const nodeId = normalizeMeshNodeId(node);
+        if (!nodeId) continue;
         if (node?.isLocalWorktree === true) continue;
         if (isLocalAutoLaunchNode(node)) continue;
         const workspace = readText(node?.workspace);
         if (!workspace) continue;
         const daemonId = readMeshNodeDaemonId(node ?? {});
         if (!daemonId) continue;
-        if (!nodeIsAutoFastForwardEligible(components, meshId2, nodeId2, node)) continue;
+        if (!nodeIsAutoFastForwardEligible(components, meshId2, nodeId, node)) continue;
         if (!remoteNodeIsConnected(components, node)) continue;
-        const cooldownKey = autoFastForwardScanCooldownKey(meshId2, nodeId2);
+        const cooldownKey = autoFastForwardScanCooldownKey(meshId2, nodeId);
         if (isAutoFastForwardScanBackedOff(cooldownKey, now)) continue;
-        const heldEntry = components.router?.meshNodeGitState?.get(meshId2, nodeId2);
+        const heldEntry = components.router?.meshNodeGitState?.get(meshId2, nodeId);
         const heldGit = heldEntry?.git && heldEntry.unreachableSince === null ? heldEntry.git : null;
         if (cachedGitStatusShowsNoMovement(node, now, heldGit)) {
           noteAutoFastForwardScanResult(cooldownKey, "precheck_skip", now);
-          LOG.debug("MeshFastForward", `Continuous auto-ff precheck: ${nodeId2} cached git status shows no movement \u2014 skipping dry-run`);
+          LOG.debug("MeshFastForward", `Continuous auto-ff precheck: ${nodeId} cached git status shows no movement \u2014 skipping dry-run`);
           continue;
         }
-        const result = await delegateRemoteAutoFastForward(components, { meshId: meshId2, nodeId: nodeId2, node, daemonId, workspace, policy, trigger: "reconcile_auto", dryRunTimeoutMs });
+        const result = await delegateRemoteAutoFastForward(components, { meshId: meshId2, nodeId, node, daemonId, workspace, policy, trigger: "reconcile_auto", dryRunTimeoutMs });
         noteAutoFastForwardScanResult(cooldownKey, result.outcome, Date.now());
       }
     }
@@ -97237,19 +97237,19 @@ ${continuationNotice}` } : dispatchTask,
       if (control.notices.length === 0) return;
       for (const marker2 of control.notices) {
         const meta2 = marker2.metadataEvent;
-        const nodeId2 = readText(marker2.nodeId) || readText(meta2.nodeId);
+        const nodeId = readText(marker2.nodeId) || readText(meta2.nodeId);
         const workspace = readText(marker2.workspace) || readText(meta2.workspace);
         const baseBranch = readText(meta2.baseBranch);
         if (!workspace) {
           control.take(marker2);
           continue;
         }
-        if (nodeId2 && nodeHasActiveMeshWork(components, meshId2, nodeId2)) continue;
+        if (nodeId && nodeHasActiveMeshWork(components, meshId2, nodeId)) continue;
         control.take(marker2);
         try {
           const ff = await fastForwardMeshNode({
             meshId: meshId2,
-            ...nodeId2 ? { nodeId: nodeId2 } : {},
+            ...nodeId ? { nodeId } : {},
             workspace,
             ...baseBranch ? { branch: baseBranch } : {},
             mode: "merge",
@@ -97261,9 +97261,9 @@ ${continuationNotice}` } : dispatchTask,
             trigger: "refine_post_push_catchup",
             allowAutoPublishSubmoduleMainCommits: mesh?.policy?.allowAutoPublishSubmoduleMainCommits === true
           });
-          LOG.info("MeshReconcile", `Coordinator catch-up ff for ${meshId2}/${nodeId2 || workspace}: ${ff.code} (executed=${ff.executed})`);
+          LOG.info("MeshReconcile", `Coordinator catch-up ff for ${meshId2}/${nodeId || workspace}: ${ff.code} (executed=${ff.executed})`);
         } catch (e) {
-          LOG.warn("MeshReconcile", `Coordinator catch-up ff failed for ${meshId2}/${nodeId2 || workspace}: ${e?.message || e}`);
+          LOG.warn("MeshReconcile", `Coordinator catch-up ff failed for ${meshId2}/${nodeId || workspace}: ${e?.message || e}`);
         }
       }
     }
@@ -97511,9 +97511,9 @@ ${continuationNotice}` } : dispatchTask,
       ).map((c) => c.node);
       return preferEligible2(orderedCandidateNodes, task.routingPreferences?.nodeIds, readMeshNodeId);
     }
-    function screenNodeForAutoLaunch(components, meshId2, task, node, nodeId2, launchKey, freshnessGate, markSkip) {
+    function screenNodeForAutoLaunch(components, meshId2, task, node, nodeId, launchKey, freshnessGate, markSkip) {
       if (task.reviewerWorkspace && !isLocalAutoLaunchNode(node)) {
-        markSkip(nodeId2, "review_input_unavailable");
+        markSkip(nodeId, "review_input_unavailable");
         return null;
       }
       if (task.ownershipScope) {
@@ -97528,7 +97528,7 @@ ${continuationNotice}` } : dispatchTask,
           }
         }
         if (!same) {
-          markSkip(nodeId2, "physical_context_changed");
+          markSkip(nodeId, "physical_context_changed");
           return null;
         }
       }
@@ -97536,49 +97536,49 @@ ${continuationNotice}` } : dispatchTask,
       const cooldownUntil = autoLaunchCooldownUntil.get(launchKey) || 0;
       if (cooldownUntil > 0 && now >= cooldownUntil) autoLaunchCooldownUntil.delete(launchKey);
       if (autoLaunchInProgress.has(launchKey)) {
-        markSkip(nodeId2, "auto_launch_in_progress");
+        markSkip(nodeId, "auto_launch_in_progress");
         return null;
       }
       if (now < cooldownUntil) {
-        markSkip(nodeId2, "auto_launch_cooldown");
+        markSkip(nodeId, "auto_launch_cooldown");
         return null;
       }
       const dirtyGate = readDirtyWriteGate2(node);
       if (dirtyWriteVerdict2(dirtyGate, task) === "refuse") {
-        markSkip(nodeId2, "dirty_workspace");
+        markSkip(nodeId, "dirty_workspace");
         return null;
       }
       if (!isLaunchableNode(node, { tolerateDirty: dirtyGate.dirty })) {
-        markSkip(nodeId2, "node_health_not_launchable");
+        markSkip(nodeId, "node_health_not_launchable");
         return null;
       }
       if (!isMeshNodeFreshEnoughToLaunch2(node, freshnessGate)) {
-        markSkip(nodeId2, "node_stale_behind_upstream");
+        markSkip(nodeId, "node_stale_behind_upstream");
         return null;
       }
       const launchTarget = resolveAutoLaunchTarget(components, node);
       if (launchTarget.mode === "skip") {
-        markSkip(nodeId2, launchTarget.reason || "auto_launch_unavailable");
+        markSkip(nodeId, launchTarget.reason || "auto_launch_unavailable");
         autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
         sweepExpiredCooldowns();
         return null;
       }
-      if (nodeHasLiveSessionPendingClaim(components, meshId2, nodeId2, task, node)) {
-        markSkip(nodeId2, "node_has_live_session_pending_claim");
+      if (nodeHasLiveSessionPendingClaim(components, meshId2, nodeId, task, node)) {
+        markSkip(nodeId, "node_has_live_session_pending_claim");
         return null;
       }
-      if (!isTaskReadonly3(task) && nodeHasActiveWriteAssignment(meshId2, nodeId2)) {
-        markSkip(nodeId2, "node_has_active_assignment");
+      if (!isTaskReadonly3(task) && nodeHasActiveWriteAssignment(meshId2, nodeId)) {
+        markSkip(nodeId, "node_has_active_assignment");
         return null;
       }
       const maxConcurrentSessions = resolveNodeMaxConcurrentSessions(node?.policy?.maxConcurrentSessions);
-      if (liveSessionCountForNode(components, meshId2, nodeId2) >= maxConcurrentSessions) {
-        markSkip(nodeId2, "max_concurrent_sessions_reached");
+      if (liveSessionCountForNode(components, meshId2, nodeId) >= maxConcurrentSessions) {
+        markSkip(nodeId, "max_concurrent_sessions_reached");
         return null;
       }
       return launchTarget;
     }
-    function decideAutoLaunchSlot(meshId2, mesh, task, node, nodeId2, isReadonly, resolved, requestedModel, markSkip) {
+    function decideAutoLaunchSlot(meshId2, mesh, task, node, nodeId, isReadonly, resolved, requestedModel, markSkip) {
       const allNodeSlots = resolveNodeCapabilitySlots(node, meshId2);
       const requiresFloor = taskRequiresDifficultyFloor(node, task);
       const nodeSlotAvailability = (forProviderType) => {
@@ -97590,7 +97590,7 @@ ${continuationNotice}` } : dispatchTask,
         ) : allNodeSlots;
         return targetSlots.map((slot) => ({
           slot,
-          available: slotHasCapacity(meshId2, nodeId2, node, slot, mesh?.nodes, isReadonly)
+          available: slotHasCapacity(meshId2, nodeId, node, slot, mesh?.nodes, isReadonly)
         }));
       };
       let effectiveProviderType = resolved.providerType;
@@ -97602,7 +97602,7 @@ ${continuationNotice}` } : dispatchTask,
         slots: nodeSlotAvailability(effectiveProviderType)
       });
       const primaryPostCompatModel = slotDecision.outcome === "run" ? isModelCompatibleWithProvider(slotDecision.model, effectiveProviderType) ? slotDecision.model : void 0 : void 0;
-      const primaryFailsFloor = slotDecision.outcome === "run" && task.modelSource !== "explicit" && !!launchSideDifficultyFloorMismatch(node, allNodeSlots, effectiveProviderType, primaryPostCompatModel, task, nodeId2, slotDecision.slot);
+      const primaryFailsFloor = slotDecision.outcome === "run" && task.modelSource !== "explicit" && !!launchSideDifficultyFloorMismatch(node, allNodeSlots, effectiveProviderType, primaryPostCompatModel, task, nodeId, slotDecision.slot);
       if (slotDecision.outcome === "wait" || primaryFailsFloor) {
         const canTryFallback = slotDecision.outcome === "wait" ? resolveQuotaRoutingPolicy(mesh?.policy?.quotaRouting ?? null).quotaBusyFallback : true;
         const fallback = canTryFallback ? selectQuotaBusyFallback({
@@ -97626,10 +97626,10 @@ ${continuationNotice}` } : dispatchTask,
               winningSlot: candidate.slot,
               decidedSlot: candidateDecision.slot,
               decidedModel: candidateDecision.model,
-              winningSlotHasCapacity: slotHasCapacity(meshId2, nodeId2, node, candidate.slot, mesh?.nodes, isReadonly)
+              winningSlotHasCapacity: slotHasCapacity(meshId2, nodeId, node, candidate.slot, mesh?.nodes, isReadonly)
             });
             const compatModel = isModelCompatibleWithProvider(candidateFinal.model, candidate.providerType) ? candidateFinal.model : void 0;
-            if (launchSideDifficultyFloorMismatch(node, allNodeSlots, candidate.providerType, compatModel, task, nodeId2, candidateDecision.slot)) {
+            if (launchSideDifficultyFloorMismatch(node, allNodeSlots, candidate.providerType, compatModel, task, nodeId, candidateDecision.slot)) {
               return false;
             }
             const candidateCap = effectiveSlotCap(
@@ -97638,9 +97638,9 @@ ${continuationNotice}` } : dispatchTask,
             );
             if (candidateCap !== void 0 && activeProviderAssignedCount(
               meshId2,
-              nodeId2,
+              nodeId,
               candidate.providerType,
-              resolveDaemonSiblingNodeIds(nodeId2, mesh?.nodes)
+              resolveDaemonSiblingNodeIds(nodeId, mesh?.nodes)
             ) >= candidateCap) {
               return false;
             }
@@ -97649,7 +97649,7 @@ ${continuationNotice}` } : dispatchTask,
         }) : { outcome: "exhausted", skipped: [] };
         if (fallback.outcome === "fallback") {
           const { candidate } = fallback;
-          LOG.info("MeshQueue", `QUOTA-BUSY FALLBACK: provider '${resolved.providerType}' on node ${nodeId2} is quota-clear but ${primaryFailsFloor ? "fails difficulty floor" : `saturated for model '${requestedModel}'`} (task ${task.id}); falling through to next quota-clear candidate '${candidate.providerType}'${fallback.skipped.length ? ` (also skipped: ${fallback.skipped.join(", ")})` : ""}`);
+          LOG.info("MeshQueue", `QUOTA-BUSY FALLBACK: provider '${resolved.providerType}' on node ${nodeId} is quota-clear but ${primaryFailsFloor ? "fails difficulty floor" : `saturated for model '${requestedModel}'`} (task ${task.id}); falling through to next quota-clear candidate '${candidate.providerType}'${fallback.skipped.length ? ` (also skipped: ${fallback.skipped.join(", ")})` : ""}`);
           effectiveProviderType = candidate.providerType;
           effectiveWinningSlot = candidate.slot;
           effectiveRequestedModel = resolveLaunchAxis(
@@ -97666,13 +97666,13 @@ ${continuationNotice}` } : dispatchTask,
         }
       }
       if (slotDecision.outcome === "wait") {
-        LOG.info("MeshQueue", `SLOT MODEL GUARD: model '${effectiveRequestedModel}' is declared on node ${nodeId2} for provider '${effectiveProviderType}' but every matching slot is at its maxParallel cap (task ${task.id}); leaving the task queued until a slot goes idle`);
-        markSkip(nodeId2, slotDecision.reason, { providerType: effectiveProviderType });
+        LOG.info("MeshQueue", `SLOT MODEL GUARD: model '${effectiveRequestedModel}' is declared on node ${nodeId} for provider '${effectiveProviderType}' but every matching slot is at its maxParallel cap (task ${task.id}); leaving the task queued until a slot goes idle`);
+        markSkip(nodeId, slotDecision.reason, { providerType: effectiveProviderType });
         return null;
       }
       if (slotDecision.outcome === "notify") {
-        LOG.warn("MeshQueue", `SLOT MODEL GUARD: no '${effectiveProviderType}' slot on node ${nodeId2} declares model '${effectiveRequestedModel}' (declared: ${slotDecision.declaredModels.join(", ") || "none"}) for task ${task.id}; not launching \u2014 surfacing to the coordinator to re-drive`);
-        markSkip(nodeId2, slotDecision.reason, { providerType: effectiveProviderType });
+        LOG.warn("MeshQueue", `SLOT MODEL GUARD: no '${effectiveProviderType}' slot on node ${nodeId} declares model '${effectiveRequestedModel}' (declared: ${slotDecision.declaredModels.join(", ") || "none"}) for task ${task.id}; not launching \u2014 surfacing to the coordinator to re-drive`);
+        markSkip(nodeId, slotDecision.reason, { providerType: effectiveProviderType });
         return null;
       }
       const finalization = finalizeSlotSelection({
@@ -97682,33 +97682,33 @@ ${continuationNotice}` } : dispatchTask,
         winningSlot: effectiveWinningSlot,
         decidedSlot: slotDecision.slot,
         decidedModel: slotDecision.model,
-        winningSlotHasCapacity: !!effectiveWinningSlot && slotHasCapacity(meshId2, nodeId2, node, effectiveWinningSlot, mesh?.nodes, isReadonly)
+        winningSlotHasCapacity: !!effectiveWinningSlot && slotHasCapacity(meshId2, nodeId, node, effectiveWinningSlot, mesh?.nodes, isReadonly)
       });
       return { effectiveProviderType, slot: slotDecision.slot, model: finalization.model, demotionReason: finalization.demotionReason };
     }
-    async function resolveAutoLaunchPlan(components, meshId2, mesh, task, node, nodeId2, isReadonly, skippedCandidates, markSkip) {
-      const preAdmission = evaluateTaskOwnedPathsAdmission(MeshRuntimeStore.getInstance(), meshId2, task, void 0, nodeId2);
+    async function resolveAutoLaunchPlan(components, meshId2, mesh, task, node, nodeId, isReadonly, skippedCandidates, markSkip) {
+      const preAdmission = evaluateTaskOwnedPathsAdmission(MeshRuntimeStore.getInstance(), meshId2, task, void 0, nodeId);
       if (!preAdmission.allowed) {
-        markSkip(nodeId2, "owned_paths_conflict");
+        markSkip(nodeId, "owned_paths_conflict");
         return null;
       }
-      const resolved = await resolveUsableProvider(components, nodeId2, node, meshId2, task.requiredTags, { difficulty: task.difficulty, requiredTags: task.requiredTags, routingPreferences: task.routingPreferences }, mesh?.policy?.quotaRouting ?? null, quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader), task.id, (provider) => {
+      const resolved = await resolveUsableProvider(components, nodeId, node, meshId2, task.requiredTags, { difficulty: task.difficulty, requiredTags: task.requiredTags, routingPreferences: task.routingPreferences }, mesh?.policy?.quotaRouting ?? null, quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader), task.id, (provider) => {
         const refusal2 = reviewRoutingRefusal(task, task.review ? getQueueEntryById(meshId2, task.review.sourceTaskId) : void 0, provider, isLocalAutoLaunchNode(node) ? { workspace: task.reviewerWorkspace?.path ?? node.workspace, machineId: getMachineId() ?? "" } : void 0, getQueue(meshId2, { status: [...CAPACITY_OCCUPYING_STATUSES] }));
         if (task.origin === "stage") noteReviewRefusal(task.id, refusal2);
         return refusal2;
       });
       if (!resolved.providerType) {
-        markSkip(nodeId2, resolved.reason || "provider_unusable");
+        markSkip(nodeId, resolved.reason || "provider_unusable");
         return null;
       }
-      const postProviderAdmission = evaluateTaskOwnedPathsAdmission(MeshRuntimeStore.getInstance(), meshId2, task, void 0, nodeId2);
+      const postProviderAdmission = evaluateTaskOwnedPathsAdmission(MeshRuntimeStore.getInstance(), meshId2, task, void 0, nodeId);
       if (!postProviderAdmission.allowed) {
-        markSkip(nodeId2, "owned_paths_conflict", { providerType: resolved.providerType });
+        markSkip(nodeId, "owned_paths_conflict", { providerType: resolved.providerType });
         return null;
       }
       const slotCoversDifficulty = slotCoversTaskDifficulty(resolved.slot, task.difficulty);
       const requestedModel = resolveLaunchAxis(task.model, task.modelSource, resolved.model, slotCoversDifficulty);
-      const slotChoice = decideAutoLaunchSlot(meshId2, mesh, task, node, nodeId2, isReadonly, resolved, requestedModel, markSkip);
+      const slotChoice = decideAutoLaunchSlot(meshId2, mesh, task, node, nodeId, isReadonly, resolved, requestedModel, markSkip);
       if (!slotChoice) return null;
       const { effectiveProviderType } = slotChoice;
       const rawEffectiveModel = slotChoice.model;
@@ -97736,11 +97736,11 @@ ${continuationNotice}` } : dispatchTask,
         ...launchThinkingLevelSource ? { thinkingLevelSource: launchThinkingLevelSource } : {}
       };
       if (rawEffectiveModel && effectiveModel === void 0) {
-        LOG.info("MeshQueue", `CODEX-400 GUARD: dropped incompatible launch model '${rawEffectiveModel}' for non-Anthropic provider '${effectiveProviderType}' on node ${nodeId2} (task ${task.id}); provider will use its own default model`);
+        LOG.info("MeshQueue", `CODEX-400 GUARD: dropped incompatible launch model '${rawEffectiveModel}' for non-Anthropic provider '${effectiveProviderType}' on node ${nodeId} (task ${task.id}); provider will use its own default model`);
       }
-      const floorMiss = launchSideDifficultyFloorMismatch(node, resolveNodeCapabilitySlots(node, meshId2), effectiveProviderType, effectiveModel, task, nodeId2, slotChoice.slot);
+      const floorMiss = launchSideDifficultyFloorMismatch(node, resolveNodeCapabilitySlots(node, meshId2), effectiveProviderType, effectiveModel, task, nodeId, slotChoice.slot);
       if (floorMiss) {
-        markSkip(nodeId2, floorMiss, { providerType: effectiveProviderType });
+        markSkip(nodeId, floorMiss, { providerType: effectiveProviderType });
         return null;
       }
       const providerCap = effectiveSlotCap(
@@ -97749,18 +97749,18 @@ ${continuationNotice}` } : dispatchTask,
       );
       if (providerCap !== void 0 && activeProviderAssignedCount(
         meshId2,
-        nodeId2,
+        nodeId,
         effectiveProviderType,
-        resolveDaemonSiblingNodeIds(nodeId2, mesh?.nodes)
+        resolveDaemonSiblingNodeIds(nodeId, mesh?.nodes)
       ) >= providerCap) {
-        markSkip(nodeId2, "max_provider_parallel_reached", { providerType: effectiveProviderType });
+        markSkip(nodeId, "max_provider_parallel_reached", { providerType: effectiveProviderType });
         return null;
       }
       const launchSettings = {
         // Worker launch envelope: role + mesh context so worker can route completion events.
         role: "worker",
         meshNodeFor: meshId2,
-        meshNodeId: nodeId2,
+        meshNodeId: nodeId,
         spawnedSessionVisibility: resolveMeshPolicy3(mesh?.policy).spawnedSessionVisibility || "hidden",
         ...effectiveModel ? { initialModel: effectiveModel } : {},
         // Coordinator-dispatched worker: auto-approve unless mesh/node policy
@@ -97796,18 +97796,18 @@ ${continuationNotice}` } : dispatchTask,
       });
       return { resolved, effectiveProviderType, effectiveModel, effectiveThinkingLevel, launchProvenance, launchSettings, buildRoutingDecision };
     }
-    async function launchQueueTaskOnRemoteNode(components, meshId2, task, node, nodeId2, launchKey, launchTarget, plan) {
+    async function launchQueueTaskOnRemoteNode(components, meshId2, task, node, nodeId, launchKey, launchTarget, plan) {
       const { resolved, effectiveProviderType, effectiveModel, effectiveThinkingLevel, launchProvenance, launchSettings, buildRoutingDecision } = plan;
       const remoteSettings = {
         ...launchSettings,
         meshCoordinatorDaemonId: launchTarget.coordinatorDaemonId,
-        meshCoordinatorNodeId: nodeId2
+        meshCoordinatorNodeId: nodeId
       };
-      markAutoLaunch(meshId2, task.id, { status: "started", nodeId: nodeId2, providerType: effectiveProviderType, ...effectiveModel ? { model: effectiveModel } : {}, ...effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {} });
+      markAutoLaunch(meshId2, task.id, { status: "started", nodeId, providerType: effectiveProviderType, ...effectiveModel ? { model: effectiveModel } : {}, ...effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {} });
       let launchResult;
       try {
         assertMaintenanceAdmission([meshId2]);
-        assertMaintenanceNode(meshId2, nodeId2, launchTarget.daemonId);
+        assertMaintenanceNode(meshId2, nodeId, launchTarget.daemonId);
         launchResult = await components.dispatchMeshCommand(launchTarget.daemonId, "launch_cli", withStatusProbeMarker2({
           cliType: effectiveProviderType,
           dir: node.workspace,
@@ -97822,7 +97822,7 @@ ${continuationNotice}` } : dispatchTask,
           ...launchProvenance
         }));
       } catch (e) {
-        markAutoLaunch(meshId2, task.id, { status: "failed", reason: `remote_launch_dispatch_failed: ${e?.message || String(e)}`, nodeId: nodeId2, providerType: effectiveProviderType, dispatchFailedInTransport: true });
+        markAutoLaunch(meshId2, task.id, { status: "failed", reason: `remote_launch_dispatch_failed: ${e?.message || String(e)}`, nodeId, providerType: effectiveProviderType, dispatchFailedInTransport: true });
         autoLaunchCooldownUntil.set(launchKey, resolveCooldownUntilAfterDispatchFailure(meshId2, task.id, AUTO_LAUNCH_COOLDOWN_MS, getQueueEntryById, task));
         sweepExpiredCooldowns();
         return false;
@@ -97830,26 +97830,26 @@ ${continuationNotice}` } : dispatchTask,
       const payload = launchResult && typeof launchResult === "object" && "payload" in launchResult && launchResult.payload && typeof launchResult.payload === "object" ? launchResult.payload : launchResult;
       if (!payload?.success) {
         const reason = readText(payload?.error) || "remote_launch_cli_failed";
-        markAutoLaunch(meshId2, task.id, { status: "failed", reason, nodeId: nodeId2, providerType: effectiveProviderType });
+        markAutoLaunch(meshId2, task.id, { status: "failed", reason, nodeId, providerType: effectiveProviderType });
         autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
         sweepExpiredCooldowns();
         return false;
       }
       const remoteSessionId = readText(payload.sessionId) || readText(payload.id) || readText(payload.runtimeSessionId);
-      markAutoLaunch(meshId2, task.id, { status: "completed", nodeId: nodeId2, providerType: effectiveProviderType, sessionId: remoteSessionId || void 0, ...effectiveModel ? { model: effectiveModel } : {}, ...effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}, spendSpawnBudget: true });
-      logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId2, remoteSessionId || void 0, effectiveProviderType);
+      markAutoLaunch(meshId2, task.id, { status: "completed", nodeId, providerType: effectiveProviderType, sessionId: remoteSessionId || void 0, ...effectiveModel ? { model: effectiveModel } : {}, ...effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}, spendSpawnBudget: true });
+      logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, remoteSessionId || void 0, effectiveProviderType);
       autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
       sweepExpiredCooldowns();
       if (remoteSessionId) {
         const routingDecision = buildRoutingDecision();
         rememberAutoLaunchRoutingDecision(meshId2, remoteSessionId, routingDecision);
-        await waitForRemoteSessionReady(meshId2, nodeId2, remoteSessionId, {
-          isReady: remoteSessionReadyProbe(meshId2, nodeId2, remoteSessionId)
+        await waitForRemoteSessionReady(meshId2, nodeId, remoteSessionId, {
+          isReady: remoteSessionReadyProbe(meshId2, nodeId, remoteSessionId)
         }).catch(() => false);
         claimAfterRemoteAutoLaunch(
           components,
           meshId2,
-          nodeId2,
+          nodeId,
           remoteSessionId,
           effectiveProviderType,
           (c, m, n, s2, p) => tryAssignQueueTask(c, m, n, s2, p, routingDecision, void 0, "auto_launch")
@@ -97857,7 +97857,7 @@ ${continuationNotice}` } : dispatchTask,
       }
       return true;
     }
-    async function launchQueueTaskOnLocalNode(components, meshId2, task, node, nodeId2, launchKey, plan) {
+    async function launchQueueTaskOnLocalNode(components, meshId2, task, node, nodeId, launchKey, plan) {
       const { resolved, effectiveProviderType, effectiveModel, effectiveThinkingLevel, launchProvenance, launchSettings, buildRoutingDecision } = plan;
       let workspace = node.workspace;
       if (task.reviewerWorkspace) {
@@ -97871,9 +97871,9 @@ ${continuationNotice}` } : dispatchTask,
         }
         workspace = proof.worktree;
       }
-      markAutoLaunch(meshId2, task.id, { status: "started", nodeId: nodeId2, providerType: effectiveProviderType, ...effectiveModel ? { model: effectiveModel } : {}, ...effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {} });
+      markAutoLaunch(meshId2, task.id, { status: "started", nodeId, providerType: effectiveProviderType, ...effectiveModel ? { model: effectiveModel } : {}, ...effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {} });
       assertMaintenanceAdmission([meshId2]);
-      assertMaintenanceNode(meshId2, nodeId2);
+      assertMaintenanceNode(meshId2, nodeId);
       const launchResult = await components.router.execute("launch_cli", {
         cliType: effectiveProviderType,
         dir: workspace,
@@ -97888,24 +97888,24 @@ ${continuationNotice}` } : dispatchTask,
       }, "mesh", { inProcess: true });
       if (!launchResult?.success) {
         const reason = launchResult?.error || "launch_cli_failed";
-        markAutoLaunch(meshId2, task.id, { status: "failed", reason, nodeId: nodeId2, providerType: effectiveProviderType });
+        markAutoLaunch(meshId2, task.id, { status: "failed", reason, nodeId, providerType: effectiveProviderType });
         autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
         sweepExpiredCooldowns();
         return false;
       }
       const sessionId = readText(launchResult.sessionId) || readText(launchResult.id) || readText(launchResult.runtimeSessionId);
       if (!sessionId) {
-        markAutoLaunch(meshId2, task.id, { status: "failed", reason: "launch_missing_session_id", nodeId: nodeId2, providerType: effectiveProviderType, spendSpawnBudget: true });
+        markAutoLaunch(meshId2, task.id, { status: "failed", reason: "launch_missing_session_id", nodeId, providerType: effectiveProviderType, spendSpawnBudget: true });
         autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
         sweepExpiredCooldowns();
         return false;
       }
-      markAutoLaunch(meshId2, task.id, { status: "completed", nodeId: nodeId2, providerType: effectiveProviderType, sessionId, ...effectiveModel ? { model: effectiveModel } : {}, ...effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}, spendSpawnBudget: true });
-      logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId2, sessionId, effectiveProviderType);
+      markAutoLaunch(meshId2, task.id, { status: "completed", nodeId, providerType: effectiveProviderType, sessionId, ...effectiveModel ? { model: effectiveModel } : {}, ...effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}, spendSpawnBudget: true });
+      logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, sessionId, effectiveProviderType);
       const routingDecision = buildRoutingDecision();
       rememberAutoLaunchRoutingDecision(meshId2, sessionId, routingDecision);
       await waitForLocalSessionReady(components, sessionId);
-      tryAssignQueueTask(components, meshId2, nodeId2, sessionId, effectiveProviderType, routingDecision, void 0, "auto_launch");
+      tryAssignQueueTask(components, meshId2, nodeId, sessionId, effectiveProviderType, routingDecision, void 0, "auto_launch");
       return true;
     }
     async function maybeAutoLaunchOneQueueSession(components, meshId2, mesh) {
@@ -98021,22 +98021,22 @@ ${continuationNotice}` } : dispatchTask,
             }
           };
           for (const node of orderedCandidateNodes) {
-            const nodeId2 = readMeshNodeId(node);
-            if (!nodeId2) continue;
-            const launchKey = `${meshId2}:${nodeId2}`;
-            const launchTarget = screenNodeForAutoLaunch(components, meshId2, task, node, nodeId2, launchKey, freshnessGate, markSkip);
+            const nodeId = readMeshNodeId(node);
+            if (!nodeId) continue;
+            const launchKey = `${meshId2}:${nodeId}`;
+            const launchTarget = screenNodeForAutoLaunch(components, meshId2, task, node, nodeId, launchKey, freshnessGate, markSkip);
             if (!launchTarget) continue;
             autoLaunchInProgress.add(launchKey);
             try {
-              const plan = await resolveAutoLaunchPlan(components, meshId2, mesh, task, node, nodeId2, isReadonly, skippedCandidates, markSkip);
+              const plan = await resolveAutoLaunchPlan(components, meshId2, mesh, task, node, nodeId, isReadonly, skippedCandidates, markSkip);
               if (!plan) continue;
-              const launched = launchTarget.mode === "remote" ? await launchQueueTaskOnRemoteNode(components, meshId2, task, node, nodeId2, launchKey, launchTarget, plan) : await launchQueueTaskOnLocalNode(components, meshId2, task, node, nodeId2, launchKey, plan);
+              const launched = launchTarget.mode === "remote" ? await launchQueueTaskOnRemoteNode(components, meshId2, task, node, nodeId, launchKey, launchTarget, plan) : await launchQueueTaskOnLocalNode(components, meshId2, task, node, nodeId, launchKey, plan);
               if (launched) {
                 madeProgress = true;
                 break;
               }
             } catch (e) {
-              markAutoLaunch(meshId2, task.id, { status: "failed", error: e?.message || String(e), nodeId: nodeId2 });
+              markAutoLaunch(meshId2, task.id, { status: "failed", error: e?.message || String(e), nodeId });
               autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
               continue;
             } finally {
@@ -99289,12 +99289,12 @@ ${continuationNotice}` } : dispatchTask,
     function formatOwnedPathsConflictDetail(conflicts) {
       return conflicts.length ? `owned_paths overlap with task(s): ${conflicts.map((c) => `${c.taskId} [${c.overlappingPaths.join(", ")}]`).join("; ")}` : void 0;
     }
-    function evaluateTaskOwnedPathsAdmission(host, meshId2, candidate, inFlightOwnership, nodeId2, gate = resolvePathOwnershipGate(meshId2)) {
+    function evaluateTaskOwnedPathsAdmission(host, meshId2, candidate, inFlightOwnership, nodeId, gate = resolvePathOwnershipGate(meshId2)) {
       if (!candidate || isTaskReadonly3(candidate)) {
         return { allowed: true, conflicts: [] };
       }
       const inFlight10 = inFlightOwnership ?? readInFlightOwnershipMeshWide(host, meshId2);
-      const conflicts = findTaskOwnedPathsConflicts(candidate, inFlight10, void 0, { nodeId: nodeId2, gate });
+      const conflicts = findTaskOwnedPathsConflicts(candidate, inFlight10, void 0, { nodeId, gate });
       if (conflicts.length === 0) return { allowed: true, conflicts: [] };
       return {
         allowed: false,
@@ -99310,7 +99310,7 @@ ${continuationNotice}` } : dispatchTask,
       if (!getInstance) throw new Error("ownership_store_unbound");
       return evaluateTaskOwnedPathsAdmission(getInstance(), meshId2, candidate);
     }
-    function claimNextQueueTask(host, meshId2, nodeId2, sessionId, capabilityTags = [], opts) {
+    function claimNextQueueTask(host, meshId2, nodeId, sessionId, capabilityTags = [], opts) {
       return host.transaction(() => {
         if (bridgeDispatchFrozen(host.db, meshId2) || sessionIsStopping(host.db, sessionId)) return null;
         host.ensureLegacyQueueMigrated(meshId2);
@@ -99335,15 +99335,15 @@ ${continuationNotice}` } : dispatchTask,
           }));
         }
         if (host.hasActiveSessionAssignment(meshId2, sessionId)) return refuse12("session_already_assigned");
-        const nodeWriteBusy = host.hasActiveNodeWriteAssignment(meshId2, nodeId2);
+        const nodeWriteBusy = host.hasActiveNodeWriteAssignment(meshId2, nodeId);
         const providerType = typeof opts?.providerType === "string" ? opts.providerType.trim() : "";
         const providerMaxParallel = opts?.providerMaxParallel;
         const providerCapDeclared = providerType && typeof providerMaxParallel === "number" && Number.isFinite(providerMaxParallel) && providerMaxParallel >= 0;
-        const liveProviderCount = providerCapDeclared ? host.activeProviderAssignmentCount(meshId2, nodeId2, providerType, opts?.daemonNodeIds) : 0;
+        const liveProviderCount = providerCapDeclared ? host.activeProviderAssignmentCount(meshId2, nodeId, providerType, opts?.daemonNodeIds) : 0;
         const assignedModel = typeof opts?.assignedModel === "string" ? opts.assignedModel.trim() : "";
         const slotMaxParallel = opts?.slotMaxParallel;
         const slotCapDeclared = providerType && typeof slotMaxParallel === "number" && Number.isFinite(slotMaxParallel) && slotMaxParallel >= 0;
-        const liveSlotCount = slotCapDeclared ? host.activeSlotAssignmentCount(meshId2, nodeId2, providerType, assignedModel, opts?.daemonNodeIds) : 0;
+        const liveSlotCount = slotCapDeclared ? host.activeSlotAssignmentCount(meshId2, nodeId, providerType, assignedModel, opts?.daemonNodeIds) : 0;
         const parallelCapsAllow = (candidate) => {
           const readonlyCandidate = isTaskReadonly3(candidate);
           if (providerCapDeclared) {
@@ -99356,7 +99356,7 @@ ${continuationNotice}` } : dispatchTask,
           }
           return true;
         };
-        const nodeIdForms = expandDaemonIdForms(nodeId2);
+        const nodeIdForms = expandDaemonIdForms(nodeId);
         const nodePinnedPlaceholders = nodeIdForms.map(() => "?").join(", ");
         const parseTier = (query, ...params) => {
           const tierRows = host.db.prepare(query).all(...params);
@@ -99398,7 +99398,7 @@ ${continuationNotice}` } : dispatchTask,
             const reader = JSON.parse(row2.payload);
             const scope2 = reader.reviewInputScope;
             if (!scope2) return false;
-            if (meshNodeIdMatches7({ id: scope2.nodeId }, nodeId2)) return true;
+            if (meshNodeIdMatches7({ id: scope2.nodeId }, nodeId)) return true;
             try {
               return !!opts?.physicalContext && import_node_fs24.realpathSync.native(opts.physicalContext.workspace) === scope2.worktree;
             } catch {
@@ -99427,7 +99427,7 @@ ${continuationNotice}` } : dispatchTask,
                 const attested = attestLocalOwnership2({
                   repoIdentity: ctx.repoIdentity || "",
                   machineId: ctx.machineId,
-                  nodeId: nodeId2,
+                  nodeId,
                   workspace: ctx.workspace,
                   phase,
                   paths: candidate.ownedPaths
@@ -99445,7 +99445,7 @@ ${continuationNotice}` } : dispatchTask,
         const ownedPathsConflictFor = (candidate) => {
           if (pathGate === "off") return [];
           const proof = proofFor(candidate);
-          return findTaskOwnedPathsConflicts(candidate, inFlightOwnership, proof && "scope" in proof ? proof.scope : void 0, { nodeId: nodeId2, gate: pathGate });
+          return findTaskOwnedPathsConflicts(candidate, inFlightOwnership, proof && "scope" in proof ? proof.scope : void 0, { nodeId, gate: pathGate });
         };
         const ownedPathsAllows = (candidate) => ownedPathsConflictFor(candidate).length === 0;
         const ownershipProven = (candidate) => {
@@ -99454,7 +99454,7 @@ ${continuationNotice}` } : dispatchTask,
           return !proof || !("error" in proof);
         };
         const nodeGitGate = opts?.nodeGitGate;
-        const nodeDirtyGate = nodeGitGate ? { dirty: nodeGitGate.dirty, worktreeBranch: nodeGitGate.worktreeBranch, nodeId: nodeGitGate.nodeId ?? nodeId2 } : void 0;
+        const nodeDirtyGate = nodeGitGate ? { dirty: nodeGitGate.dirty, worktreeBranch: nodeGitGate.worktreeBranch, nodeId: nodeGitGate.nodeId ?? nodeId } : void 0;
         const nodeNotDirty = (candidate) => {
           if (!nodeDirtyGate || candidate.light) return true;
           return dirtyWriteVerdict2(nodeDirtyGate, candidate) !== "refuse";
@@ -99473,7 +99473,7 @@ ${continuationNotice}` } : dispatchTask,
         };
         const physicalContextMatches = (candidate) => {
           if (candidate.ownershipScope) {
-            if (!meshNodeIdMatches7({ id: candidate.ownershipScope.nodeId }, nodeId2) || !candidate.ownedPaths || !opts?.physicalContext) return false;
+            if (!meshNodeIdMatches7({ id: candidate.ownershipScope.nodeId }, nodeId) || !candidate.ownedPaths || !opts?.physicalContext) return false;
             const proof = currentPhysicalScope(candidate.ownershipScope, candidate.ownedPaths);
             if (!proof) return false;
             if (opts.physicalContext.remoteOwnership) return isForeignPhysicalScope(proof);
@@ -99497,7 +99497,7 @@ ${continuationNotice}` } : dispatchTask,
         )) : void 0;
         const targetMatches = (candidate) => {
           if (candidate.targetSessionId && !sessionIdsEquivalent(candidate.targetSessionId, sessionId)) return false;
-          if (candidate.targetNodeId && !daemonIdsEquivalent5(candidate.targetNodeId, nodeId2) && !meshNodeIdMatches7({ id: candidate.targetNodeId }, nodeId2)) {
+          if (candidate.targetNodeId && !daemonIdsEquivalent5(candidate.targetNodeId, nodeId) && !meshNodeIdMatches7({ id: candidate.targetNodeId }, nodeId)) {
             return false;
           }
           return true;
@@ -99546,7 +99546,7 @@ ${continuationNotice}` } : dispatchTask,
               const proof = proofFor(candidate);
               return proof && "scope" in proof ? proof.scope : void 0;
             })() : void 0;
-            const context2 = queueHoldContext(candidate, gate.reason, holdBlockers, nodeId2, prospective);
+            const context2 = queueHoldContext(candidate, gate.reason, holdBlockers, nodeId, prospective);
             if (gate.reason === "ownership_unproven") {
               const proof = proofFor(candidate);
               const message = proof && "error" in proof ? proof.error : "ownership_unproven";
@@ -99557,7 +99557,7 @@ ${continuationNotice}` } : dispatchTask,
               context2.detail = { unknownField, resolution: ownershipUnprovenResolution(message) };
             }
             if (gate.reason === "dependencies_unsatisfied") context2.blockingTaskIds = (candidate.dependsOn || []).filter((id4) => depStatus.get(id4) !== "completed");
-            if (gate.reason === "node_busy_with_active_assignment" && nodeWriteBusy) context2.blockingTaskIds = host.activeNodeWriteAssignmentIds(meshId2, nodeId2);
+            if (gate.reason === "node_busy_with_active_assignment" && nodeWriteBusy) context2.blockingTaskIds = host.activeNodeWriteAssignmentIds(meshId2, nodeId);
             const previousHold = JSON.stringify(candidate.hold);
             setQueueTaskHold(candidate, gate.reason, context2);
             if (previousHold !== JSON.stringify(candidate.hold)) {
@@ -99577,10 +99577,10 @@ ${continuationNotice}` } : dispatchTask,
             return refuse12("owned_paths_conflict", formatOwnedPathsConflictDetail(conflicts), selected2.deepest);
           }
           if (selected2.reason === "dirty_workspace") {
-            return refuse12("dirty_workspace", describeDirtyWriteRefusal2(nodeDirtyGate ?? { dirty: true }, nodeId2), selected2.deepest);
+            return refuse12("dirty_workspace", describeDirtyWriteRefusal2(nodeDirtyGate ?? { dirty: true }, nodeId), selected2.deepest);
           }
           if (selected2.reason === "node_stale_behind_upstream") {
-            const behindDetail = nodeGitGate?.behind !== void 0 ? `node ${nodeId2} is ${nodeGitGate.behind} commit(s) behind upstream (max ${nodeGitGate.maxBehind ?? 0})` : `node ${nodeId2} is behind upstream beyond the configured maxBehind`;
+            const behindDetail = nodeGitGate?.behind !== void 0 ? `node ${nodeId} is ${nodeGitGate.behind} commit(s) behind upstream (max ${nodeGitGate.maxBehind ?? 0})` : `node ${nodeId} is behind upstream beyond the configured maxBehind`;
             return refuse12("node_stale_behind_upstream", behindDetail, selected2.deepest);
           }
           return refuse12(
@@ -99601,7 +99601,7 @@ ${continuationNotice}` } : dispatchTask,
           }
         }
         if (nodeGitGate && (nodeGitGate.dirty || nodeGitGate.staleBehind) && isTaskReadonly3(entry)) {
-          LOG.info("MeshQueue", `Claiming readonly task ${entry.id} for node ${nodeId2} despite git gate (${nodeGitGate.dirty ? "dirty_workspace" : ""}${nodeGitGate.dirty && nodeGitGate.staleBehind ? ", " : ""}${nodeGitGate.staleBehind ? `node_stale_behind_upstream${nodeGitGate.behind !== void 0 ? ` behind=${nodeGitGate.behind}` : ""}` : ""}) \u2014 readonly tasks are exempt from the write-gate.`);
+          LOG.info("MeshQueue", `Claiming readonly task ${entry.id} for node ${nodeId} despite git gate (${nodeGitGate.dirty ? "dirty_workspace" : ""}${nodeGitGate.dirty && nodeGitGate.staleBehind ? ", " : ""}${nodeGitGate.staleBehind ? `node_stale_behind_upstream${nodeGitGate.behind !== void 0 ? ` behind=${nodeGitGate.behind}` : ""}` : ""}) \u2014 readonly tasks are exempt from the write-gate.`);
         }
         const now = (/* @__PURE__ */ new Date()).toISOString();
         entry.status = "assigned";
@@ -99613,13 +99613,13 @@ ${continuationNotice}` } : dispatchTask,
         }
         entry.revision = (entry.revision ?? 0) + 1;
         if (entry.ownedPaths && entry.ownershipScope) {
-          const hard = new Set(findTaskOwnedPathsConflicts(entry, inFlightOwnership, void 0, { nodeId: nodeId2, gate: pathGate }).map((c) => c.taskId));
+          const hard = new Set(findTaskOwnedPathsConflicts(entry, inFlightOwnership, void 0, { nodeId, gate: pathGate }).map((c) => c.taskId));
           const warnings = findOwnershipConflicts2(entry.ownedPaths, inFlightOwnership.filter((o) => o.paths !== unknownWriterPaths)).filter((c) => !hard.has(c.taskId)).map((c) => ({ ...c, action: "serialize_integration" }));
           entry.logicalOverlapWarnings = [...new Map([...entry.logicalOverlapWarnings ?? [], ...warnings].map((c) => [c.taskId, c])).values()];
         }
         delete entry.hold;
         delete entry.holdNoticeId;
-        entry.assignedNodeId = nodeId2;
+        entry.assignedNodeId = nodeId;
         entry.assignedSessionId = sessionId;
         if (providerType) entry.assignedProviderType = providerType;
         if (assignedModel) entry.assignedModel = assignedModel;
@@ -99634,7 +99634,7 @@ ${continuationNotice}` } : dispatchTask,
                 status = 'assigned', assigned_node_id = ?, assigned_session_id = ?,
                 updated_at = ?, payload = ?
             WHERE id = ? AND mesh_id = ?
-        `).run(nodeId2, sessionId, now, JSON.stringify(entry), entry.id, meshId2);
+        `).run(nodeId, sessionId, now, JSON.stringify(entry), entry.id, meshId2);
         host.maybeCheckpointWal();
         return entry;
       });
@@ -100166,14 +100166,14 @@ ${continuationNotice}` } : dispatchTask,
             ).get(id4, meshId2);
             return row2 ? JSON.parse(row2.payload) : null;
           }
-          hasActiveAssignment(meshId2, sessionId, nodeId2) {
+          hasActiveAssignment(meshId2, sessionId, nodeId) {
             this.ensureLegacyQueueMigrated(meshId2);
             const row2 = this.db.prepare(`
             SELECT 1 FROM mesh_queue
             WHERE mesh_id = ? AND ${ACTIVE_WRITER_CLAIM_SQL}
               AND (assigned_session_id = ? OR assigned_node_id = ?)
             LIMIT 1
-        `).get(meshId2, sessionId, nodeId2);
+        `).get(meshId2, sessionId, nodeId);
             return row2 !== void 0;
           }
           /** A session may only execute one task at a time, regardless of task mode. */
@@ -100192,16 +100192,16 @@ ${continuationNotice}` } : dispatchTask,
            * bounded by the parallel caps, and auto-fast-forward has its own any-row gate
            * (nodeHasActiveAssignment).
            */
-          hasActiveNodeWriteAssignment(meshId2, nodeId2) {
-            return this.activeNodeWriteAssignmentIds(meshId2, nodeId2).length > 0;
+          hasActiveNodeWriteAssignment(meshId2, nodeId) {
+            return this.activeNodeWriteAssignmentIds(meshId2, nodeId).length > 0;
           }
           /**
            * The task ids that make a node write-busy — the exact set {@link hasActiveNodeWriteAssignment} gates on, so a
            * `node_busy_with_active_assignment` hold can always name its blockers (live 2026-11-08: a hold reported no
            * blocking task because the hold context re-derived blockers with a narrower node/readonly match).
            */
-          activeNodeWriteAssignmentIds(meshId2, nodeId2) {
-            const nodeIdForms = expandDaemonIdForms(nodeId2);
+          activeNodeWriteAssignmentIds(meshId2, nodeId) {
+            const nodeIdForms = expandDaemonIdForms(nodeId);
             if (nodeIdForms.length === 0) return [];
             const placeholders = nodeIdForms.map(() => "?").join(", ");
             const rows = this.db.prepare(`
@@ -100216,11 +100216,11 @@ ${continuationNotice}` } : dispatchTask,
            * the scheduler prefers the node with the fewest active assignments so
            * untargeted work spreads instead of piling onto whichever node asks first.
            */
-          nodeActiveAssignmentCount(meshId2, nodeId2) {
+          nodeActiveAssignmentCount(meshId2, nodeId) {
             const row2 = this.db.prepare(`
             SELECT COUNT(*) as count FROM mesh_queue
             WHERE mesh_id = ? AND ${ACTIVE_WRITER_CLAIM_SQL} AND assigned_node_id = ?
-        `).get(meshId2, nodeId2);
+        `).get(meshId2, nodeId);
             return row2?.count ?? 0;
           }
           /**
@@ -100292,8 +100292,8 @@ ${continuationNotice}` } : dispatchTask,
            * `claude-opus-4-6` and `Claude Opus 4.6 (Thinking)` are one slot rather than
            * three separate budgets (the canon-identity defect class).
            */
-          activeSlotAssignmentCount(meshId2, nodeId2, providerType, assignedModel, daemonNodeIds) {
-            const rows = this.assignedRowsForDaemon(meshId2, nodeId2, daemonNodeIds);
+          activeSlotAssignmentCount(meshId2, nodeId, providerType, assignedModel, daemonNodeIds) {
+            const rows = this.assignedRowsForDaemon(meshId2, nodeId, daemonNodeIds);
             let count2 = 0;
             for (const row2 of rows) {
               try {
@@ -100322,8 +100322,8 @@ ${continuationNotice}` } : dispatchTask,
            * Omitting `daemonNodeIds` falls back to the single node — exactly the prior
            * behavior — so a caller that cannot resolve the mesh never widens a cap.
            */
-          assignedRowsForDaemon(meshId2, nodeId2, daemonNodeIds) {
-            const scope2 = Array.isArray(daemonNodeIds) && daemonNodeIds.length > 0 ? daemonNodeIds : [nodeId2];
+          assignedRowsForDaemon(meshId2, nodeId, daemonNodeIds) {
+            const scope2 = Array.isArray(daemonNodeIds) && daemonNodeIds.length > 0 ? daemonNodeIds : [nodeId];
             const forms = expandDaemonIdForms(scope2);
             if (forms.length === 0) return [];
             const placeholders = forms.map(() => "?").join(",");
@@ -100354,8 +100354,8 @@ ${continuationNotice}` } : dispatchTask,
             WHERE mesh_id = ? AND ${ACTIVE_WRITER_CLAIM_SQL}
         `).all(meshId2);
           }
-          activeProviderAssignmentCount(meshId2, nodeId2, providerType, daemonNodeIds) {
-            const rows = this.assignedRowsForDaemon(meshId2, nodeId2, daemonNodeIds);
+          activeProviderAssignmentCount(meshId2, nodeId, providerType, daemonNodeIds) {
+            const rows = this.assignedRowsForDaemon(meshId2, nodeId, daemonNodeIds);
             let count2 = 0;
             for (const row2 of rows) {
               try {
@@ -100366,8 +100366,8 @@ ${continuationNotice}` } : dispatchTask,
             }
             return count2;
           }
-          claimNextQueueTask(meshId2, nodeId2, sessionId, capabilityTags = [], opts) {
-            return claimNextQueueTask(this, meshId2, nodeId2, sessionId, capabilityTags, opts);
+          claimNextQueueTask(meshId2, nodeId, sessionId, capabilityTags = [], opts) {
+            return claimNextQueueTask(this, meshId2, nodeId, sessionId, capabilityTags, opts);
           }
           getQueueStatsByStatus(meshId2) {
             const { counts: counts2 } = this.getQueueStatusCounts(meshId2);
@@ -100451,11 +100451,11 @@ ${continuationNotice}` } : dispatchTask,
             return selectSoleActiveDirectDispatchTaskId(this, meshId2, sessionId);
           }
           // ── Remote Idle Sessions ─────────────────────────────────────────────────
-          setRemoteIdleSession(meshId2, nodeId2, sessionId, providerType, expiresAt, metadata) {
+          setRemoteIdleSession(meshId2, nodeId, sessionId, providerType, expiresAt, metadata) {
             this.db.prepare(`
             INSERT OR REPLACE INTO remote_idle_sessions (mesh_id, node_id, session_id, provider_type, expires_at, metadata)
             VALUES (?, ?, ?, ?, ?, ?)
-        `).run(meshId2, nodeId2, sessionId, providerType, expiresAt, metadata ? JSON.stringify(metadata) : null);
+        `).run(meshId2, nodeId, sessionId, providerType, expiresAt, metadata ? JSON.stringify(metadata) : null);
           }
           getRemoteIdleSessions(meshId2) {
             const rows = this.db.prepare("SELECT node_id, session_id, provider_type, expires_at, metadata FROM remote_idle_sessions WHERE mesh_id = ? AND expires_at > ?").all(meshId2, Date.now());
@@ -100467,13 +100467,13 @@ ${continuationNotice}` } : dispatchTask,
               metadata: r.metadata ? JSON.parse(r.metadata) : void 0
             }));
           }
-          deleteRemoteIdleSession(meshId2, nodeId2, sessionId) {
-            this.db.prepare("DELETE FROM remote_idle_sessions WHERE mesh_id = ? AND node_id = ? AND session_id = ?").run(meshId2, nodeId2, sessionId);
+          deleteRemoteIdleSession(meshId2, nodeId, sessionId) {
+            this.db.prepare("DELETE FROM remote_idle_sessions WHERE mesh_id = ? AND node_id = ? AND session_id = ?").run(meshId2, nodeId, sessionId);
           }
           // CLAIM-RETRY-LOOP-LIFECYCLE: deleteRemoteIdleSession above fires only on a successful
           // claim; called from remove_mesh_node to clear a node's row on removal instead.
-          deleteRemoteIdleSessionsForNode(meshId2, nodeId2) {
-            this.db.prepare("DELETE FROM remote_idle_sessions WHERE mesh_id = ? AND node_id = ?").run(meshId2, nodeId2);
+          deleteRemoteIdleSessionsForNode(meshId2, nodeId) {
+            this.db.prepare("DELETE FROM remote_idle_sessions WHERE mesh_id = ? AND node_id = ?").run(meshId2, nodeId);
           }
           pruneExpiredRemoteIdleSessions() {
             this.db.prepare("DELETE FROM remote_idle_sessions WHERE expires_at <= ?").run(Date.now());
@@ -100932,11 +100932,11 @@ ${continuationNotice}` } : dispatchTask,
     function removeNode(...args) {
       return withMeshConfigWriteLock(() => removeNodeUnlocked(...args));
     }
-    function removeNodeUnlocked(meshId2, nodeId2) {
+    function removeNodeUnlocked(meshId2, nodeId) {
       const config = loadMeshConfig();
       const mesh = config.meshes.find((m) => m.id === meshId2);
       if (!mesh) return false;
-      const idx = mesh.nodes.findIndex((n) => n.id === nodeId2);
+      const idx = mesh.nodes.findIndex((n) => n.id === nodeId);
       if (idx === -1) return false;
       mesh.nodes.splice(idx, 1);
       mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
@@ -100946,11 +100946,11 @@ ${continuationNotice}` } : dispatchTask,
     function updateNode(...args) {
       return withMeshConfigWriteLock(() => updateNodeUnlocked(...args));
     }
-    function updateNodeUnlocked(meshId2, nodeId2, opts) {
+    function updateNodeUnlocked(meshId2, nodeId, opts) {
       const config = loadMeshConfig();
       const mesh = config.meshes.find((m) => m.id === meshId2);
       if (!mesh) return void 0;
-      const node = mesh.nodes.find((n) => n.id === nodeId2);
+      const node = mesh.nodes.find((n) => n.id === nodeId);
       if (!node) return void 0;
       if (opts.userOverrides) node.userOverrides = { ...node.userOverrides, ...opts.userOverrides };
       if (opts.reportedPlatform && opts.reportedPlatform.trim()) node.reportedPlatform = opts.reportedPlatform.trim();
@@ -100986,13 +100986,13 @@ ${continuationNotice}` } : dispatchTask,
       saveMeshConfig(config);
       return node;
     }
-    function recoverLocalNodeIdentity(meshId2, nodeId2, request2, host) {
+    function recoverLocalNodeIdentity(meshId2, nodeId, request2, host) {
       if (!request2 || typeof request2 !== "object" || Array.isArray(request2) || Object.keys(request2).some((k) => !["v", "expectedDaemonId", "expectedMachineId", "expectedWorkspace", "dryRun", "expectedFingerprint"].includes(k)) || request2.v !== 1 || typeof request2.dryRun !== "boolean" || ![request2.expectedDaemonId, request2.expectedMachineId].every((x) => x === null || typeof x === "string" && !!x.trim()) || typeof request2.expectedWorkspace !== "string" || !(0, import_node_path21.isAbsolute)(request2.expectedWorkspace) || request2.expectedFingerprint !== void 0 && !/^[a-f0-9]{64}$/.test(request2.expectedFingerprint) || !request2.dryRun && !request2.expectedFingerprint) throw new Error("invalid_node_identity_recovery");
       const store5 = MeshRuntimeStore.getInstance();
       return store5.transaction(() => withStrictMeshConfigWriteLock(() => {
         const config = readMeshConfigFromDisk();
         const mesh = config?.meshes.find((m) => m.id === meshId2);
-        const node = mesh?.nodes.find((n) => n.id === nodeId2);
+        const node = mesh?.nodes.find((n) => n.id === nodeId);
         if (!config || !mesh || !node) throw new Error("node_not_found");
         const cached5 = host.cachedNode;
         const cachedDaemonMatches = !cached5 || typeof cached5.daemonId === "undefined" && typeof node.daemonId === "undefined" || daemonIdsEquivalent5(cached5.daemonId, node.daemonId);
@@ -101019,15 +101019,15 @@ ${continuationNotice}` } : dispatchTask,
           return { path: canonical2, dev: st.dev, ino: st.ino, uid: st.uid };
         };
         const inspect = (workspace) => {
-          const root2 = owned(workspace);
-          if (root2.path !== workspace || import_node_fs25.realpathSync.native(git15(workspace, "rev-parse", "--show-toplevel")) !== workspace)
+          const root = owned(workspace);
+          if (root.path !== workspace || import_node_fs25.realpathSync.native(git15(workspace, "rev-parse", "--show-toplevel")) !== workspace)
             throw new Error("canonical_worktree_root_required");
           const gitDir = owned(git15(workspace, "rev-parse", "--absolute-git-dir"));
           const common2 = owned((0, import_node_path21.resolve)(workspace, git15(workspace, "rev-parse", "--git-common-dir")));
           const repo = normalizeRepoIdentity(git15(workspace, "remote", "get-url", "origin"));
           if (!repo || repo !== normalizeRepoIdentity(mesh.repoIdentity)) throw new Error("local_repository_mismatch");
           const head = git15(workspace, "rev-parse", "--verify", "HEAD");
-          return { root: root2, gitDir, common: common2, repo, head };
+          return { root, gitDir, common: common2, repo, head };
         };
         if (node.workspace !== request2.expectedWorkspace) throw new Error("stale_node_workspace");
         const target2 = inspect(node.workspace);
@@ -101059,7 +101059,7 @@ ${continuationNotice}` } : dispatchTask,
         })) throw new Error("ambiguous_node_workspace");
         const relatedMeshIds = config.meshes.filter((m) => normalizeRepoIdentity(m.repoIdentity) === target2.repo).map((m) => m.id);
         const sharedRoots = /* @__PURE__ */ new Set([target2.root.path, target2.common.path, ...anchors.flatMap((a) => [a.proof.root.path, a.proof.common.path])]);
-        const leased = (host.refineryLeaseRoots ?? []).some((root2) => sharedRoots.has(import_node_fs25.realpathSync.native(root2)));
+        const leased = (host.refineryLeaseRoots ?? []).some((root) => sharedRoots.has(import_node_fs25.realpathSync.native(root)));
         if (host.refineryRunning || leased || host.runningRefineMeshIds?.some((id4) => relatedMeshIds.includes(id4)) || relatedMeshIds.some((id4) => selectOpenRefineDispatches(readLocalRecords(id4, { kind: ["task_dispatched", "task_completed", "task_failed"], turnTerminals: false })).length))
           throw new Error("node_identity_refinery_active");
         if (relatedMeshIds.some((id4) => store5.assignedRowsMeshWide(id4).length || store5.turnStore().listOpenAttempts({ meshId: id4 }).length || store5.getQueueEntries(id4, ["pending"]).some((t) => pendingLaunchReservation(t))))
@@ -101094,7 +101094,7 @@ ${continuationNotice}` } : dispatchTask,
         const receipt = {
           v: 1,
           meshId: meshId2,
-          nodeId: nodeId2,
+          nodeId,
           fingerprint,
           previous: { daemonId: node.daemonId ?? null, machineId: node.machineId ?? null },
           next: { daemonId: host.actor, machineId: host.machineId },
@@ -102632,12 +102632,12 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
     function isTerminalLedgerKind(kind) {
       return kind === "task_completed" || kind === "task_blocked" || kind === "task_failed" || kind === "task_cancelled";
     }
-    function resolveNodeEvidence(nodeId2, ledgerEntries) {
+    function resolveNodeEvidence(nodeId, ledgerEntries) {
       let evidence = { available: false };
       let transcriptHandle = null;
       for (let i = ledgerEntries.length - 1; i >= 0; i--) {
         const entry = ledgerEntries[i];
-        if (!daemonIdsEquivalent5(entry.nodeId, nodeId2) || !isTerminalLedgerKind(entry.kind)) continue;
+        if (!daemonIdsEquivalent5(entry.nodeId, nodeId) || !isTerminalLedgerKind(entry.kind)) continue;
         const payload = readRecord22(entry.payload) ?? {};
         if (!evidence.available) {
           if (payload.source === "refine_mesh_node_async_job") {
@@ -102680,10 +102680,10 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
       }
       return { evidence, transcriptHandle };
     }
-    function hasBlockedReviewRefineResult(nodeId2, ledgerEntries) {
+    function hasBlockedReviewRefineResult(nodeId, ledgerEntries) {
       for (let i = ledgerEntries.length - 1; i >= 0; i--) {
         const entry = ledgerEntries[i];
-        if (!daemonIdsEquivalent5(entry.nodeId, nodeId2) || !isTerminalLedgerKind(entry.kind)) continue;
+        if (!daemonIdsEquivalent5(entry.nodeId, nodeId) || !isTerminalLedgerKind(entry.kind)) continue;
         const payload = readRecord22(entry.payload) ?? {};
         if (payload.source !== "refine_mesh_node_async_job") continue;
         const result = readRecord22(payload.result);
@@ -102697,28 +102697,28 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
       const excludedRemoteNodeIds = [];
       const refineJobs = buildMeshAsyncRefineJobs2({ ledgerEntries: args.ledgerEntries });
       for (const node of args.nodes) {
-        const nodeId2 = readString22(node.nodeId) ?? readString22(node.id);
-        if (!nodeId2) continue;
+        const nodeId = readString22(node.nodeId) ?? readString22(node.id);
+        if (!nodeId) continue;
         if (!isLocalNodeStatus(node)) {
-          excludedRemoteNodeIds.push(nodeId2);
+          excludedRemoteNodeIds.push(nodeId);
           continue;
         }
         const convergence = readNodeConvergence(node);
         if (!convergence) continue;
         if (convergence.status === "merged_to_main") continue;
         let reviewReason = null;
-        if (hasBlockedReviewRefineResult(nodeId2, args.ledgerEntries)) {
+        if (hasBlockedReviewRefineResult(nodeId, args.ledgerEntries)) {
           reviewReason = "refine_blocked_review";
         } else if (isMergeCandidate(convergence)) {
           reviewReason = "merge_candidate";
         }
         if (!reviewReason) continue;
-        const { evidence, transcriptHandle } = resolveNodeEvidence(nodeId2, args.ledgerEntries);
+        const { evidence, transcriptHandle } = resolveNodeEvidence(nodeId, args.ledgerEntries);
         const activeRefineJob = [...refineJobs].reverse().find(
-          (job) => (daemonIdsEquivalent5(job.nodeId, nodeId2) || daemonIdsEquivalent5(job.targetNodeId, nodeId2)) && (job.status === "accepted" || job.status === "running")
+          (job) => (daemonIdsEquivalent5(job.nodeId, nodeId) || daemonIdsEquivalent5(job.targetNodeId, nodeId)) && (job.status === "accepted" || job.status === "running")
         ) ?? null;
         items.push({
-          nodeId: nodeId2,
+          nodeId,
           workspace: readString22(node.workspace),
           branch: convergence.branch ?? readString22(node.worktreeBranch),
           defaultBranch: convergence.defaultBranch,
@@ -102997,8 +102997,8 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
     async function deriveLocalRepoIdentity(repoRoot) {
       const raw = await git8(repoRoot, ["rev-list", "--max-parents=0", "HEAD"], true);
       const roots = raw.split(/\r?\n/).map((line) => line.trim()).filter((line) => /^[0-9a-f]{40}$/i.test(line)).sort();
-      const root2 = roots[0];
-      return root2 ? `local/${root2.toLowerCase()}` : "";
+      const root = roots[0];
+      return root ? `local/${root.toLowerCase()}` : "";
     }
     async function resolveDefaultBranch(repoRoot, remoteName, currentBranch) {
       const symbolic = await git8(repoRoot, ["symbolic-ref", "--quiet", "--short", `refs/remotes/${remoteName}/HEAD`], true);
@@ -105017,13 +105017,13 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
       return readText(row2.assignedSessionId) || readText(row2.targetSessionId);
     }
     function resolveAssignedSessionLiveness(components, meshId2, mesh, row2) {
-      const nodeId2 = rowNodeId(row2);
+      const nodeId = rowNodeId(row2);
       const sessionId = rowSessionId(row2);
       if (!sessionId) return "not_live";
       if (!mesh) return "unknown";
-      const dead = resolveDeadTargetVerdict(components, meshId2, mesh, { ...row2, targetNodeId: nodeId2 || void 0, targetSessionId: sessionId });
+      const dead = resolveDeadTargetVerdict(components, meshId2, mesh, { ...row2, targetNodeId: nodeId || void 0, targetSessionId: sessionId });
       if (dead.nodeDead) return "not_live";
-      const node = nodeId2 && Array.isArray(mesh?.nodes) ? mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId2)) : void 0;
+      const node = nodeId && Array.isArray(mesh?.nodes) ? mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId)) : void 0;
       if (!node) return "unknown";
       if (isLocalAutoLaunchNode(node)) {
         try {
@@ -105038,7 +105038,7 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
       }
       const daemonId = readMeshNodeDaemonId(node);
       if (!daemonId) return "unknown";
-      const held = readLiveHeldRuntime(components.router?.meshNodeGitState, { meshId: meshId2, nodeId: nodeId2, daemonId });
+      const held = readLiveHeldRuntime(components.router?.meshNodeGitState, { meshId: meshId2, nodeId, daemonId });
       if (!held) return "unknown";
       const listed = held.runtime.sessions.some((s2) => [s2.id, s2.sessionId, s2.instanceId].some((id4) => !!readText(id4) && sessionIdsEquivalent(readText(id4), sessionId)));
       if (listed) return "live";
@@ -105049,10 +105049,10 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
     }
     function notifyOrphanedDispatchFailed(meshId2, row2) {
       const taskId = row2.id;
-      const nodeId2 = rowNodeId(row2);
+      const nodeId = rowNodeId(row2);
       const sessionId = rowSessionId(row2);
       const coordinatorMessage = `[System] A mesh task was stuck 'assigned' with no open delivery attempt behind it and has been marked FAILED (${ORPHANED_UNCORRELATED_DISPATCH_REASON}).
-Task ${taskId}${nodeId2 ? ` on node ${nodeId2}` : ""}${sessionId ? ` (session ${sessionId})` : ""} was recorded as dispatched, but no open turn-ledger attempt owns it, and its session is no longer live \u2014 so no completion can arrive and nothing would ever release it. While it sat 'assigned' it counted as an active assignment on its node and could block auto-launch there.
+Task ${taskId}${nodeId ? ` on node ${nodeId}` : ""}${sessionId ? ` (session ${sessionId})` : ""} was recorded as dispatched, but no open turn-ledger attempt owns it, and its session is no longer live \u2014 so no completion can arrive and nothing would ever release it. While it sat 'assigned' it counted as an active assignment on its node and could block auto-launch there.
 Check mesh_task_history / git, then use mesh_requeue_task with this task_id and force:true if recovery is needed. This preserves the original instruction, dependencies and retry history. The failed row remains the audit record.`;
       try {
         const targetCoordinatorDaemonId = readText(getMachineId());
@@ -105060,8 +105060,8 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
         notifyMeshCoordinator({
           event: "mesh:dispatch_blocked",
           meshId: meshId2,
-          nodeLabel: nodeId2 || meshId2,
-          ...nodeId2 ? { nodeId: nodeId2 } : {},
+          nodeLabel: nodeId || meshId2,
+          ...nodeId ? { nodeId } : {},
           // Stable: one notice per row, ever — a re-run of the sweep cannot double-page.
           eventId: `${ORPHANED_UNCORRELATED_DISPATCH_REASON}:${meshId2}:${taskId}`,
           metadataEvent: {
@@ -105110,11 +105110,11 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
         );
         if (!entry) continue;
         failed.push(entry);
-        const nodeId2 = rowNodeId(row2);
+        const nodeId = rowNodeId(row2);
         const sessionId = rowSessionId(row2);
         meshRecord(meshId2, "task_failed", {
           taskId: row2.id,
-          ...nodeId2 ? { nodeId: nodeId2 } : {},
+          ...nodeId ? { nodeId } : {},
           ...sessionId ? { sessionId } : {},
           payload: {
             taskId: row2.id,
@@ -105123,7 +105123,7 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
             ageMs: now - updatedMs
           }
         }, { local: true });
-        LOG.warn("MeshQueue", `ORPHANED-DISPATCH: task ${row2.id} (mesh ${meshId2}) was 'assigned' with no open turn-ledger attempt and its session ${sessionId || "(none)"} is not live on node ${nodeId2 || "(none)"}; failed it (${ORPHANED_UNCORRELATED_DISPATCH_REASON}).`);
+        LOG.warn("MeshQueue", `ORPHANED-DISPATCH: task ${row2.id} (mesh ${meshId2}) was 'assigned' with no open turn-ledger attempt and its session ${sessionId || "(none)"} is not live on node ${nodeId || "(none)"}; failed it (${ORPHANED_UNCORRELATED_DISPATCH_REASON}).`);
         notifyOrphanedDispatchFailed(meshId2, row2);
       }
       return failed;
@@ -105313,10 +105313,10 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
       const started = value ? new Date(value).getTime() : Number.NaN;
       return Number.isFinite(started) ? Math.max(0, now - started) : 0;
     }
-    function sessionStatusFromNodes(nodes, nodeId2, sessionId) {
+    function sessionStatusFromNodes(nodes, nodeId, sessionId) {
       if (!Array.isArray(nodes)) return {};
-      if (!nodeId2) return { staleReason: "direct task has no node id" };
-      const node = nodes.find((item) => meshNodeIdMatches7(item, nodeId2));
+      if (!nodeId) return { staleReason: "direct task has no node id" };
+      const node = nodes.find((item) => meshNodeIdMatches7(item, nodeId));
       if (!node) return { staleReason: "direct task node is no longer in the live mesh" };
       if (!sessionId) return {};
       const candidates = [];
@@ -105462,10 +105462,10 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
           if (!approval || approval.lifecycle !== "pending") continue;
           const evidence = session.isCached || node.health !== "online" ? "cached" : /approval/.test(raw) ? approval.evidence : "unavailable";
           if (isActionableProviderApproval({ ...approval, evidence })) continue;
-          const nodeId2 = node.nodeId || node.id;
+          const nodeId = node.nodeId || node.id;
           const sessionId = session.sessionId || session.id;
-          if (!nodeId2 || !sessionId) continue;
-          items.set(`${nodeId2}:${sessionId}`, { ...approval, nodeId: nodeId2, sessionId, evidence, actionable: false });
+          if (!nodeId || !sessionId) continue;
+          items.set(`${nodeId}:${sessionId}`, { ...approval, nodeId, sessionId, evidence, actionable: false });
         }
       }
       return [...items.values()];
@@ -106005,32 +106005,32 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
       const assignedByNode = /* @__PURE__ */ new Map();
       const providerCountByNode = /* @__PURE__ */ new Map();
       for (const task of assignedTasks) {
-        const nodeId2 = typeof task.assignedNodeId === "string" ? task.assignedNodeId.trim() : "";
-        if (!nodeId2) continue;
-        assignedByNode.set(nodeId2, (assignedByNode.get(nodeId2) ?? 0) + 1);
+        const nodeId = typeof task.assignedNodeId === "string" ? task.assignedNodeId.trim() : "";
+        if (!nodeId) continue;
+        assignedByNode.set(nodeId, (assignedByNode.get(nodeId) ?? 0) + 1);
         if (!isTaskReadonly3(task)) {
-          writeAssignedByNode.set(nodeId2, (writeAssignedByNode.get(nodeId2) ?? 0) + 1);
+          writeAssignedByNode.set(nodeId, (writeAssignedByNode.get(nodeId) ?? 0) + 1);
         }
         const provider = typeof task.assignedProviderType === "string" ? task.assignedProviderType : "";
         if (provider) {
-          let byProvider = providerCountByNode.get(nodeId2);
+          let byProvider = providerCountByNode.get(nodeId);
           if (!byProvider) {
             byProvider = /* @__PURE__ */ new Map();
-            providerCountByNode.set(nodeId2, byProvider);
+            providerCountByNode.set(nodeId, byProvider);
           }
           byProvider.set(provider, (byProvider.get(provider) ?? 0) + 1);
         }
       }
       const nodes = [];
       for (const rawNode of Array.isArray(mesh?.nodes) ? mesh.nodes : []) {
-        const nodeId2 = normalizeMeshNodeId(rawNode);
-        if (!nodeId2) continue;
+        const nodeId = normalizeMeshNodeId(rawNode);
+        if (!nodeId) continue;
         const policy = rawNode?.policy || void 0;
-        const load3 = assignedByNode.get(nodeId2) ?? 0;
+        const load3 = assignedByNode.get(nodeId) ?? 0;
         const schedulingPriority = resolveNodeSchedulingPriority(policy);
         const capReasons = [];
         if (globalWriteCapReached) capReasons.push("global_max_parallel_tasks_reached");
-        if ((writeAssignedByNode.get(nodeId2) ?? 0) > 0) capReasons.push("node_has_active_assignment");
+        if ((writeAssignedByNode.get(nodeId) ?? 0) > 0) capReasons.push("node_has_active_assignment");
         let providerRoles;
         const slots2 = resolveNodeCapabilitySlots(rawNode);
         const cappedProviders = [];
@@ -106044,7 +106044,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
           if (resolveProviderMaxParallel(slots2, providerType) !== void 0) cappedProviders.push(providerType);
         }
         if (cappedProviders.length) {
-          const byProvider = providerCountByNode.get(nodeId2);
+          const byProvider = providerCountByNode.get(nodeId);
           providerRoles = [];
           for (const providerType of cappedProviders) {
             const maxParallel = resolveProviderMaxParallel(slots2, providerType);
@@ -106062,7 +106062,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
         }
         const maxConcurrentSessions = resolveNodeMaxConcurrentSessions(policy?.maxConcurrentSessions);
         nodes.push({
-          nodeId: nodeId2,
+          nodeId,
           load: load3,
           schedulingPriority,
           maxConcurrentSessions,
@@ -106138,12 +106138,12 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
       if (!meshId2) return reject("mesh_unresolved");
       const stampedNode = runtimeNodeId ? mesh?.nodes?.find((n) => meshNodeIdMatches7(n, runtimeNodeId)) : void 0;
       const targetNode = stampedNode || mesh?.nodes?.find((n) => n.workspace === workspace);
-      const nodeId2 = runtimeNodeId || readText(targetNode?.id);
-      const nodeLabel = nodeId2 ? `Node '${nodeId2}'` : `Agent at ${workspace}`;
+      const nodeId = runtimeNodeId || readText(targetNode?.id);
+      const nodeLabel = nodeId ? `Node '${nodeId}'` : `Agent at ${workspace}`;
       return {
         isDelegate: true,
         meshId: meshId2,
-        nodeId: nodeId2,
+        nodeId,
         nodeLabel,
         coordinatorDaemonId,
         workspace,
@@ -106961,7 +106961,7 @@ ${closeSentinel}`;
       if (source2.includes("\0")) throw invalidToml("null byte in TOML input");
       const len = source2.length;
       let pos = 0;
-      const root2 = createTable();
+      const root = createTable();
       const flags = new TomlFlags();
       const inlineTables = /* @__PURE__ */ new WeakSet();
       const arrayOfTables = /* @__PURE__ */ new WeakSet();
@@ -107028,7 +107028,7 @@ ${closeSentinel}`;
         return cont;
       };
       const appendNestToList = (key7) => {
-        const cont = getOrCreateNest(root2, key7.slice(0, -1), true);
+        const cont = getOrCreateNest(root, key7.slice(0, -1), true);
         const lastKey = key7[key7.length - 1];
         if (lastKey in cont) {
           const list6 = cont[lastKey];
@@ -107345,7 +107345,7 @@ ${closeSentinel}`;
           throw invalidToml(`duplicate or conflicting table header [${headerPath.join(".")}]`);
         }
         flags.set(headerPath, FLAG_EXPLICIT_NEST, false);
-        const target2 = getOrCreateNest(root2, headerPath, true);
+        const target2 = getOrCreateNest(root, headerPath, true);
         if (Array.isArray(target2)) throw invalidToml(`conflicting table header [${headerPath.join(".")}]`);
       };
       const openListHeader = (headerPath) => {
@@ -107370,7 +107370,7 @@ ${closeSentinel}`;
         if (flags.is(absKeyParent, FLAG_FROZEN)) {
           throw invalidToml(`cannot extend inline or frozen value at ${absKeyParent.join(".")}`);
         }
-        const nest = getOrCreateNest(root2, absKeyParent, true);
+        const nest = getOrCreateNest(root, absKeyParent, true);
         if (keyStem in nest) {
           throw invalidToml(`duplicate or conflicting key ${[...sectionPath, ...keyPath].join(".")}`);
         }
@@ -107445,7 +107445,7 @@ ${closeSentinel}`;
         });
       }
       currentSection.sectionEnd = len;
-      return { root: root2, sections, inlineTables, arrayOfTables };
+      return { root, sections, inlineTables, arrayOfTables };
     }
     function parseManagedAssistantServerIdentity(entry) {
       for (const key7 of Object.keys(entry)) {
@@ -107617,9 +107617,9 @@ ${closeSentinel}`;
       }
       return out;
     }
-    function stripManagedFieldsForTreeComparison(root2, serverName) {
+    function stripManagedFieldsForTreeComparison(root, serverName) {
       const clone2 = createTable();
-      for (const [k, v] of Object.entries(root2)) {
+      for (const [k, v] of Object.entries(root)) {
         if (k !== "mcp_servers" || !isPlainTable(v)) {
           clone2[k] = v;
           continue;
@@ -108078,8 +108078,8 @@ ${closeSentinel}`;
         ASSISTANT_CLAUDE_BUILTIN_TOOLS = "Read,WebSearch,WebFetch";
       }
     });
-    function deferredRestartScheduleKey(meshId2, nodeId2) {
-      return `${meshId2}::${nodeId2}`;
+    function deferredRestartScheduleKey(meshId2, nodeId) {
+      return `${meshId2}::${nodeId}`;
     }
     function isPlainObject22(value) {
       return !!value && typeof value === "object" && !Array.isArray(value);
@@ -108184,8 +108184,8 @@ ${closeSentinel}`;
         deferredRestartSchedules: { ...state2.deferredRestartSchedules, [key7]: record8 }
       });
     }
-    function clearDeferredRestartSchedule(meshId2, nodeId2) {
-      const key7 = deferredRestartScheduleKey(meshId2, nodeId2);
+    function clearDeferredRestartSchedule(meshId2, nodeId) {
+      const key7 = deferredRestartScheduleKey(meshId2, nodeId);
       const state2 = loadState();
       if (!(key7 in state2.deferredRestartSchedules)) return;
       const next = { ...state2.deferredRestartSchedules };
@@ -110024,24 +110024,24 @@ ${cleanBody}`;
       meshByWorkspaceCache.set(workspace, { mesh, cachedAt: now });
       return mesh;
     }
-    function recoverMeshIdByNodeId(nodeId2) {
-      if (!nodeId2) return "";
+    function recoverMeshIdByNodeId(nodeId) {
+      if (!nodeId) return "";
       for (const mesh of listMeshes()) {
-        if (Array.isArray(mesh.nodes) && mesh.nodes.some((n) => meshNodeIdMatches7(n, nodeId2))) {
+        if (Array.isArray(mesh.nodes) && mesh.nodes.some((n) => meshNodeIdMatches7(n, nodeId))) {
           return readText(mesh.id);
         }
       }
       return "";
     }
-    function recoverMeshIdByCoordinatorAndNode(coordinatorDaemonId, nodeId2) {
+    function recoverMeshIdByCoordinatorAndNode(coordinatorDaemonId, nodeId) {
       if (!coordinatorDaemonId) return "";
       const hosted = listMeshes().filter((mesh) => {
         const host = resolveMeshHostStatus(mesh);
         return host.role === "host" && (!host.hostDaemonId || daemonIdsEquivalent5(host.hostDaemonId, coordinatorDaemonId));
       });
       if (hosted.length === 0) return "";
-      if (nodeId2) {
-        const byNode = hosted.find((mesh) => Array.isArray(mesh.nodes) && mesh.nodes.some((n) => meshNodeIdMatches7(n, nodeId2)));
+      if (nodeId) {
+        const byNode = hosted.find((mesh) => Array.isArray(mesh.nodes) && mesh.nodes.some((n) => meshNodeIdMatches7(n, nodeId)));
         return byNode ? readText(byNode.id) : "";
       }
       return hosted.length === 1 ? readText(hosted[0].id) : "";
@@ -110212,43 +110212,43 @@ ${cleanBody}`;
       }
       return true;
     }
-    function worktreeHasQueuedTaskFor(meshId2, nodeId2) {
+    function worktreeHasQueuedTaskFor(meshId2, nodeId) {
       try {
         const nowMs2 = Date.now();
-        return getQueue(meshId2, { status: ["pending", "assigned"] }).some((task) => bootstrapQueueTaskCountsAsHandled(task, nodeId2, nowMs2));
+        return getQueue(meshId2, { status: ["pending", "assigned"] }).some((task) => bootstrapQueueTaskCountsAsHandled(task, nodeId, nowMs2));
       } catch {
         return false;
       }
     }
     function registerIdleWorkerAndClaim(components, args) {
-      const { meshId: meshId2, nodeId: nodeId2, sessionId, providerType } = args;
+      const { meshId: meshId2, nodeId, sessionId, providerType } = args;
       if (args.falseIdle) {
-        runIdleMaintenanceThenAssignQueue(components, { meshId: meshId2, nodeId: nodeId2, sessionId, providerType });
+        runIdleMaintenanceThenAssignQueue(components, { meshId: meshId2, nodeId, sessionId, providerType });
         return;
       }
       markRemoteSessionIdle(meshId2, sessionId);
       sweepExpiredRemoteIdleSessions();
       try {
-        MeshRuntimeStore.getInstance().setRemoteIdleSession(meshId2, nodeId2, sessionId, providerType, Date.now() + REMOTE_IDLE_SESSION_TTL_MS);
+        MeshRuntimeStore.getInstance().setRemoteIdleSession(meshId2, nodeId, sessionId, providerType, Date.now() + REMOTE_IDLE_SESSION_TTL_MS);
       } catch {
       }
       setImmediate(() => {
-        maybeAutoFastForwardIdleNode(components, { meshId: meshId2, nodeId: nodeId2, sessionId, providerType }).finally(() => {
+        maybeAutoFastForwardIdleNode(components, { meshId: meshId2, nodeId, sessionId, providerType }).finally(() => {
           try {
-            const assigned = tryAssignQueueTask(components, meshId2, nodeId2, sessionId, providerType);
-            if (assigned) MeshRuntimeStore.getInstance().deleteRemoteIdleSession(meshId2, nodeId2, sessionId);
+            const assigned = tryAssignQueueTask(components, meshId2, nodeId, sessionId, providerType);
+            if (assigned) MeshRuntimeStore.getInstance().deleteRemoteIdleSession(meshId2, nodeId, sessionId);
           } catch (e) {
-            LOG.warn("MeshQueue", `Failed to assign idle queue task for ${nodeId2}: ${e?.message || e}`);
+            LOG.warn("MeshQueue", `Failed to assign idle queue task for ${nodeId}: ${e?.message || e}`);
           }
         });
       });
     }
-    function applyQueueEdges(components, meshId2, nodeId2, eventName, event, sessionId) {
+    function applyQueueEdges(components, meshId2, nodeId, eventName, event, sessionId) {
       const providerType = readText(event.providerType);
       if (eventName === "agent:generating_started" || eventName === "agent:stopped") {
-        if (sessionId && nodeId2) {
+        if (sessionId && nodeId) {
           try {
-            MeshRuntimeStore.getInstance().deleteRemoteIdleSession(meshId2, nodeId2, sessionId);
+            MeshRuntimeStore.getInstance().deleteRemoteIdleSession(meshId2, nodeId, sessionId);
           } catch {
           }
         }
@@ -110258,38 +110258,38 @@ ${cleanBody}`;
         }
         return;
       }
-      if (eventName === "agent:generating_completed" && sessionId && nodeId2 && providerType) {
-        registerIdleWorkerAndClaim(components, { meshId: meshId2, nodeId: nodeId2, sessionId, providerType, falseIdle: isFalseIdleCompletion(event) });
+      if (eventName === "agent:generating_completed" && sessionId && nodeId && providerType) {
+        registerIdleWorkerAndClaim(components, { meshId: meshId2, nodeId, sessionId, providerType, falseIdle: isFalseIdleCompletion(event) });
         return;
       }
-      if (eventName === "agent:ready" && sessionId && nodeId2 && providerType) {
+      if (eventName === "agent:ready" && sessionId && nodeId && providerType) {
         let worktreeBootstrapPending = false;
         try {
           const mesh = getMeshWithCache(components, meshId2);
-          const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId2));
+          const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
           worktreeBootstrapPending = node?.worktreeBootstrap?.status === "running";
         } catch {
         }
         if (worktreeBootstrapPending) {
           markRemoteSessionIdle(meshId2, sessionId);
           try {
-            MeshRuntimeStore.getInstance().setRemoteIdleSession(meshId2, nodeId2, sessionId, providerType, Date.now() + REMOTE_IDLE_SESSION_TTL_MS);
+            MeshRuntimeStore.getInstance().setRemoteIdleSession(meshId2, nodeId, sessionId, providerType, Date.now() + REMOTE_IDLE_SESSION_TTL_MS);
           } catch {
           }
-          LOG.info("MeshQueue", `Deferring queue claim for worktree node ${nodeId2} (${sessionId}): bootstrap still running`);
+          LOG.info("MeshQueue", `Deferring queue claim for worktree node ${nodeId} (${sessionId}): bootstrap still running`);
           return;
         }
-        registerIdleWorkerAndClaim(components, { meshId: meshId2, nodeId: nodeId2, sessionId, providerType, falseIdle: false });
+        registerIdleWorkerAndClaim(components, { meshId: meshId2, nodeId, sessionId, providerType, falseIdle: false });
       }
     }
-    function applyBootstrapTerminal(components, meshId2, nodeId2, eventName, event) {
-      if (nodeId2) {
+    function applyBootstrapTerminal(components, meshId2, nodeId, eventName, event) {
+      if (nodeId) {
         const workspace = readText(event.worktreePath) || readText(event.workspace);
         const daemonId = readText(event.originDaemonId) || readText(event.daemonId);
         const machineId = readText(event.originMachineId) || readText(event.machineId);
         components.router.markWorktreeBootstrapTerminalState(
           meshId2,
-          nodeId2,
+          nodeId,
           eventName === "worktree_bootstrap_failed" ? "failed" : "complete",
           workspace || daemonId || machineId ? { ...workspace ? { workspace } : {}, ...daemonId ? { daemonId } : {}, ...machineId ? { machineId } : {} } : void 0
         );
@@ -110301,7 +110301,7 @@ ${cleanBody}`;
       });
     }
     function consumeWorkerSessionHealth(components, input) {
-      const { eventName, event, settings: settings2, meshId: meshId2, sessionId, nodeId: nodeId2 } = input;
+      const { eventName, event, settings: settings2, meshId: meshId2, sessionId, nodeId } = input;
       if (!sessionId || !["monitor:no_progress", "worker:status_changed"].includes(eventName)) return;
       const taskId = readText(event.taskId) || readText(event.meshActiveTaskId) || readText(settings2.meshActiveTaskId);
       if (!taskId) return;
@@ -110321,7 +110321,7 @@ ${cleanBody}`;
           meshId: meshId2,
           taskId,
           sessionId,
-          nodeId: nodeId2,
+          nodeId,
           attemptId: ref2?.attemptId || readText(event.attemptId) || readText(settings2.meshActiveAttemptId),
           generation: ref2?.generation ?? (typeof settings2.meshActiveAttemptGeneration === "number" ? settings2.meshActiveAttemptGeneration : 0),
           coordinator: { daemonId: input.coordinatorDaemonId, sessionId: input.coordinatorSessionId }
@@ -110343,16 +110343,16 @@ ${cleanBody}`;
       }
     }
     function processMeshEvent(components, input) {
-      const { meshId: meshId2, eventName, event, nodeId: nodeId2, sessionId } = input;
-      const traceCtx = { taskId: event.taskId ?? event.meshActiveTaskId, sessionId, nodeId: nodeId2, meshId: meshId2, event: eventName };
+      const { meshId: meshId2, eventName, event, nodeId, sessionId } = input;
+      const traceCtx = { taskId: event.taskId ?? event.meshActiveTaskId, sessionId, nodeId, meshId: meshId2, event: eventName };
       const result = { success: true };
       try {
         if (NOTICE_EVENTS.has(eventName)) {
           if (eventName === "worktree_bootstrap_complete" || eventName === "worktree_bootstrap_failed") {
             try {
-              applyBootstrapTerminal(components, meshId2, nodeId2, eventName, event);
+              applyBootstrapTerminal(components, meshId2, nodeId, eventName, event);
             } catch (e) {
-              LOG.error("MeshQueue", `Failed to stamp terminal bootstrap state for ${nodeId2 || "-"} (mesh ${meshId2}): ${e?.message || e}`);
+              LOG.error("MeshQueue", `Failed to stamp terminal bootstrap state for ${nodeId || "-"} (mesh ${meshId2}): ${e?.message || e}`);
               result.error = e?.message || String(e);
             }
           }
@@ -110360,12 +110360,12 @@ ${cleanBody}`;
             meshId: meshId2,
             event: eventName,
             nodeLabel: input.nodeLabel,
-            ...nodeId2 ? { nodeId: nodeId2 } : {},
+            ...nodeId ? { nodeId } : {},
             ...readText(event.workspace) ? { workspace: readText(event.workspace) } : {},
             metadataEvent: event,
             ...input.coordinatorDaemonId ? { targetCoordinatorDaemonId: input.coordinatorDaemonId } : {},
             ...input.coordinatorSessionId ? { targetCoordinatorSessionId: input.coordinatorSessionId } : {},
-            ...eventName === "worktree_bootstrap_complete" && nodeId2 && worktreeHasQueuedTaskFor(meshId2, nodeId2) ? { worktreeHasQueuedTask: true } : {}
+            ...eventName === "worktree_bootstrap_complete" && nodeId && worktreeHasQueuedTaskFor(meshId2, nodeId) ? { worktreeHasQueuedTask: true } : {}
           };
           const queued = notifyMeshCoordinator(notice);
           traceMeshEventStage(queued ? "queued" : "notice_deduped", traceCtx);
@@ -110373,7 +110373,7 @@ ${cleanBody}`;
           return result;
         }
         consumeWorkerSessionHealth(components, input);
-        applyQueueEdges(components, meshId2, nodeId2, eventName, event, sessionId);
+        applyQueueEdges(components, meshId2, nodeId, eventName, event, sessionId);
       } catch (e) {
         LOG.warn("MeshEvents", `mesh event ${eventName} (mesh ${meshId2}, session ${sessionId || "-"}) failed: ${e?.message || e}`);
         result.success = false;
@@ -110382,11 +110382,11 @@ ${cleanBody}`;
       return result;
     }
     function resolveForwardedEventMeshId(payload) {
-      const nodeId2 = readText(payload.nodeId);
+      const nodeId = readText(payload.nodeId);
       const workspace = readText(payload.workspace);
-      return readText(payload.meshId) || (workspace ? readText(getCachedMeshByWorkspace(workspace)?.id) : "") || recoverMeshIdByNodeId(nodeId2) || recoverMeshIdByCoordinatorAndNode(
+      return readText(payload.meshId) || (workspace ? readText(getCachedMeshByWorkspace(workspace)?.id) : "") || recoverMeshIdByNodeId(nodeId) || recoverMeshIdByCoordinatorAndNode(
         readText(payload.meshCoordinatorDaemonId) || readText(payload.coordinatorDaemonId),
-        nodeId2
+        nodeId
       );
     }
     function handleMeshForwardEvent(components, payload) {
@@ -110394,26 +110394,26 @@ ${cleanBody}`;
       if (!isMeshCoordinatorEvent(eventName)) {
         return { success: false, error: "unsupported mesh event" };
       }
-      const nodeId2 = readText(payload.nodeId);
+      const nodeId = readText(payload.nodeId);
       const workspace = readText(payload.workspace);
       const meshId2 = resolveForwardedEventMeshId(payload);
       if (!meshId2) {
         traceMeshEventDrop("meshId_required", {
           taskId: payload.taskId,
           sessionId: readText(payload.targetSessionId) || readText(payload.sessionId),
-          nodeId: nodeId2,
+          nodeId,
           event: eventName
         }, workspace ? `workspace=${workspace} unresolved` : "no workspace/nodeId");
         return { success: false, error: "meshId required" };
       }
       const event = buildRelayMetadataEvent(payload);
-      traceMeshEventStage("received", { taskId: event.taskId, sessionId: event.targetSessionId, nodeId: nodeId2, meshId: meshId2, event: eventName });
+      traceMeshEventStage("received", { taskId: event.taskId, sessionId: event.targetSessionId, nodeId, meshId: meshId2, event: eventName });
       return processMeshEvent(components, {
         meshId: meshId2,
         eventName,
         event,
-        nodeId: nodeId2,
-        nodeLabel: nodeId2 ? `Node '${nodeId2}'` : workspace ? `Agent at ${workspace}` : "Remote agent",
+        nodeId,
+        nodeLabel: nodeId ? `Node '${nodeId}'` : workspace ? `Agent at ${workspace}` : "Remote agent",
         sessionId: readText(event.targetSessionId),
         settings: {},
         // The relayed return address (a sessionless producer — an async refine job
@@ -110494,7 +110494,7 @@ ${cleanBody}`;
         resolution: readText(payload.resolution)
       };
     }
-    function mirrorToDashboard(components, meshId2, nodeId2, eventName, event, sourceSession) {
+    function mirrorToDashboard(components, meshId2, nodeId, eventName, event, sourceSession) {
       if (!components.onMeshCoordinatorEventForwarded) return;
       try {
         const last = sourceSession ? getLastDisplayMessage(sourceSession.getState()) : null;
@@ -110503,7 +110503,7 @@ ${cleanBody}`;
         components.onMeshCoordinatorEventForwarded({
           event: eventName,
           meshId: meshId2,
-          nodeId: nodeId2 || void 0,
+          nodeId: nodeId || void 0,
           ...enriched,
           workspace: readText(event.workspace) || readText(event.workspaceName) || void 0,
           ...surfaced ? {
@@ -110583,14 +110583,14 @@ ${cleanBody}`;
           recordUnroutableDelegateEvent(routing, eventName);
           return;
         }
-        const nodeId2 = routing.nodeId || readText(event.meshNodeId) || readText(settings2.meshNodeId);
-        mirrorToDashboard(components, meshId2, nodeId2, eventName, event, sourceSession);
+        const nodeId = routing.nodeId || readText(event.meshNodeId) || readText(settings2.meshNodeId);
+        mirrorToDashboard(components, meshId2, nodeId, eventName, event, sourceSession);
         processMeshEvent(components, {
           meshId: meshId2,
           eventName,
           event,
-          nodeId: nodeId2,
-          nodeLabel: routing.nodeLabel || (nodeId2 ? `Node '${nodeId2}'` : "Worker"),
+          nodeId,
+          nodeLabel: routing.nodeLabel || (nodeId ? `Node '${nodeId}'` : "Worker"),
           sessionId: resolveEventSessionId(event, instanceId),
           settings: settings2,
           coordinatorDaemonId: routing.coordinatorDaemonId || readText(settings2.meshCoordinatorDaemonId),
@@ -111145,8 +111145,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       }
       return "";
     }
-    function defaultNodeDaemonId(meshId2, nodeId2) {
-      const node = getMesh(meshId2)?.nodes?.find((n) => n.id === nodeId2);
+    function defaultNodeDaemonId(meshId2, nodeId) {
+      const node = getMesh(meshId2)?.nodes?.find((n) => n.id === nodeId);
       return typeof node?.daemonId === "string" ? node.daemonId : void 0;
     }
     function ownedOpenDirectAttempt(ledger, meshId2, taskId, attemptId) {
@@ -111181,9 +111181,9 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         const attempt = found;
         const generation = mc?.attemptGeneration;
         if (typeof generation === "number" && generation !== attempt.generation) return no("generation_mismatch");
-        const nodeId2 = trim(mc?.nodeId);
-        if (nodeId2 && attempt.nodeId && nodeId2 !== attempt.nodeId) return no("node_mismatch");
-        const rosterNode = attempt.nodeId || nodeId2;
+        const nodeId = trim(mc?.nodeId);
+        if (nodeId && attempt.nodeId && nodeId !== attempt.nodeId) return no("node_mismatch");
+        const rosterNode = attempt.nodeId || nodeId;
         const ownerOfNode = rosterNode ? (deps.nodeDaemonId ?? defaultNodeDaemonId)(meshId2, rosterNode) : void 0;
         if (!ownerOfNode || !daemonIdsEquivalent5(ownerOfNode, relay.targetDaemonId)) return no("target_not_node_owner");
         const alreadyBound = sessionIdsEquivalent(attempt.sessionId, sessionId);
@@ -112996,19 +112996,19 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return `@${owner}-${repo}`;
     }
     function inventoryExternalSources() {
-      const root2 = externalRoot();
-      if (!fs42.existsSync(root2)) return [];
+      const root = externalRoot();
+      if (!fs42.existsSync(root)) return [];
       const out = [];
       let entries3;
       try {
-        entries3 = fs42.readdirSync(root2, { withFileTypes: true });
+        entries3 = fs42.readdirSync(root, { withFileTypes: true });
       } catch {
         return [];
       }
       for (const sourceEntry of entries3) {
         if (!sourceEntry.isDirectory()) continue;
         const sourceName = sourceEntry.name;
-        const sourceDir = path54.join(root2, sourceName);
+        const sourceDir = path54.join(root, sourceName);
         const providers = {};
         let categoryEntries;
         try {
@@ -113203,8 +113203,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     function callStackTouchesProviderRoot() {
       if (_gatedRoots.length === 0) return false;
       const stack = new Error().stack || "";
-      for (const root2 of _gatedRoots) {
-        if (stack.includes(root2.rootPath)) return true;
+      for (const root of _gatedRoots) {
+        if (stack.includes(root.rootPath)) return true;
       }
       return false;
     }
@@ -113294,9 +113294,9 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       } catch {
         normalized = callerFilename;
       }
-      for (const root2 of _gatedRoots) {
-        if (normalized === root2.rootPath) return root2;
-        if (normalized.startsWith(root2.rootPath + path56.sep)) return root2;
+      for (const root of _gatedRoots) {
+        if (normalized === root.rootPath) return root;
+        if (normalized.startsWith(root.rootPath + path56.sep)) return root;
       }
       return null;
     }
@@ -113455,11 +113455,11 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         });
       }
     });
-    function registerProviderScriptRootSafely(root2) {
-      if (!root2 || typeof root2 !== "string") return;
+    function registerProviderScriptRootSafely(root) {
+      if (!root || typeof root !== "string") return;
       try {
         const { registerProviderScriptRoot: registerProviderScriptRoot2 } = (init_require_whitelist(), __toCommonJS2(require_whitelist_exports));
-        registerProviderScriptRoot2(root2);
+        registerProviderScriptRoot2(root);
       } catch {
       }
     }
@@ -116594,9 +116594,9 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       }
       return out;
     }
-    function resolvePath(root2, path148) {
-      if (!path148) return root2;
-      let current5 = root2;
+    function resolvePath(root, path148) {
+      if (!path148) return root;
+      let current5 = root;
       for (const segment2 of path148.split(".")) {
         if (!current5 || typeof current5 !== "object") return void 0;
         current5 = current5[segment2];
@@ -116611,13 +116611,13 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return true;
     }
     function parseJsonModels(raw, parse3) {
-      let root2;
+      let root;
       try {
-        root2 = JSON.parse(raw);
+        root = JSON.parse(raw);
       } catch {
         return [];
       }
-      const items = resolvePath(root2, parse3.itemsPath);
+      const items = resolvePath(root, parse3.itemsPath);
       if (!Array.isArray(items)) return [];
       const slugField = parse3.slugField || "slug";
       const rows = [];
@@ -117209,21 +117209,21 @@ ${result.stderr}`, result.code);
     function assertWorkerBridgeLifecycleAdmission(operation, requestedConfigDir, trustedDb) {
       const current5 = getConfigDir2();
       for (const candidate of /* @__PURE__ */ new Set([current5, requestedConfigDir ?? current5])) {
-        let root2 = path80.resolve(candidate);
+        let root = path80.resolve(candidate);
         try {
           let rootStat;
           try {
-            rootStat = fs73.lstatSync(root2);
+            rootStat = fs73.lstatSync(root);
           } catch (error) {
             if (error.code !== "ENOENT") throw error;
           }
           if (rootStat) {
             if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) refuse("instance_namespace_unknown");
-            root2 = fs73.realpathSync(root2);
+            root = fs73.realpathSync(root);
           }
-          if (observedStrict.has(root2)) refuse("previously_observed_strict_instance");
+          if (observedStrict.has(root)) refuse("previously_observed_strict_instance");
           if (trustedDb && hasPolicy(trustedDb)) {
-            observedStrict.add(root2);
+            observedStrict.add(root);
             refuse(operation);
           }
           for (const name of [
@@ -117233,14 +117233,14 @@ ${result.stderr}`, result.code);
             "session-host/upgrade-lease.json"
           ]) {
             try {
-              fs73.lstatSync(path80.join(root2, name));
-              observedStrict.add(root2);
+              fs73.lstatSync(path80.join(root, name));
+              observedStrict.add(root);
               refuse("bridge_journal_present");
             } catch (error) {
               if (error.code !== "ENOENT") throw error;
             }
           }
-          const dir = path80.join(root2, "mesh-ledger");
+          const dir = path80.join(root, "mesh-ledger");
           let stat2;
           try {
             stat2 = fs73.lstatSync(dir);
@@ -117265,7 +117265,7 @@ ${result.stderr}`, result.code);
             const db3 = new Ctor(file, { readonly: true, fileMustExist: true });
             try {
               if (hasPolicy(db3)) {
-                observedStrict.add(root2);
+                observedStrict.add(root);
                 refuse(operation);
               }
             } finally {
@@ -117563,16 +117563,16 @@ ${result.stderr}`, result.code);
       }
       const nodes = nodesOf2(mesh);
       if (nodes.length === 0) return refuse2(sender, "mesh_sender_not_on_roster", `roster_unknown: this daemon holds no roster for mesh ${meshId2}`);
-      const nodeId2 = str8(args.nodeId);
+      const nodeId = str8(args.nodeId);
       const workspace = str8(args.workspace);
-      const node = nodeId2 ? nodes.find((n) => meshNodeIdMatches7(n, nodeId2)) : workspace ? nodes.find((n) => str8(n.workspace) === workspace) : void 0;
-      if (nodeId2 && !node) return refuse2(sender, "mesh_sender_not_node_owner", `node ${nodeId2} is not on the roster of mesh ${meshId2}`);
+      const node = nodeId ? nodes.find((n) => meshNodeIdMatches7(n, nodeId)) : workspace ? nodes.find((n) => str8(n.workspace) === workspace) : void 0;
+      if (nodeId && !node) return refuse2(sender, "mesh_sender_not_node_owner", `node ${nodeId} is not on the roster of mesh ${meshId2}`);
       if (node) {
         const owner = readMeshNodeDaemonId(node);
         if (!sameDaemon(owner, sender)) {
-          return refuse2(sender, "mesh_sender_not_node_owner", `node ${nodeId2 || workspace} is owned by ${owner ? owner.slice(0, 20) : "no daemon"} on mesh ${meshId2}`);
+          return refuse2(sender, "mesh_sender_not_node_owner", `node ${nodeId || workspace} is owned by ${owner ? owner.slice(0, 20) : "no daemon"} on mesh ${meshId2}`);
         }
-        return { ok: true, sender, evidence: `node_owner:${meshId2}/${nodeId2 || workspace}` };
+        return { ok: true, sender, evidence: `node_owner:${meshId2}/${nodeId || workspace}` };
       }
       if (!senderOnMesh(mesh, sender, deps.selfDaemonId)) {
         return refuse2(sender, "mesh_sender_not_on_roster", `sender is not on the roster of mesh ${meshId2}`);
@@ -120855,10 +120855,10 @@ ${body}`;
       const meta2 = yaml2.load(frontmatterRaw, { schema: yaml2.CORE_SCHEMA });
       return dumpFrontmatter({ ...meta2, description: description.trim() });
     }
-    function walkSubdir(root2, rel, depth, out, ignored) {
+    function walkSubdir(root, rel, depth, out, ignored) {
       let names;
       try {
-        names = (0, import_fs32.readdirSync)((0, import_path28.join)(root2, rel)).sort();
+        names = (0, import_fs32.readdirSync)((0, import_path28.join)(root, rel)).sort();
       } catch {
         return;
       }
@@ -120866,17 +120866,17 @@ ${body}`;
         const childRel = `${rel}/${n}`;
         let st;
         try {
-          st = (0, import_fs32.lstatSync)((0, import_path28.join)(root2, childRel));
+          st = (0, import_fs32.lstatSync)((0, import_path28.join)(root, childRel));
         } catch {
           continue;
         }
         if (st.isSymbolicLink() || !SEGMENT_RE.test(n)) {
           ignored.push(childRel);
         } else if (st.isDirectory()) {
-          if (depth < MAX_FILE_DEPTH) walkSubdir(root2, childRel, depth + 1, out, ignored);
+          if (depth < MAX_FILE_DEPTH) walkSubdir(root, childRel, depth + 1, out, ignored);
           else ignored.push(childRel);
         } else if (st.isFile() && normalizeSkillFilePath(childRel)) {
-          out.push({ path: childRel, chars: charCount((0, import_fs32.readFileSync)((0, import_path28.join)(root2, childRel), "utf-8")) });
+          out.push({ path: childRel, chars: charCount((0, import_fs32.readFileSync)((0, import_path28.join)(root, childRel), "utf-8")) });
         } else {
           ignored.push(childRel);
         }
@@ -121930,14 +121930,14 @@ ${body}`;
       }
       return out;
     }
-    function findSkillDirs(root2, dir, depth, out) {
+    function findSkillDirs(root, dir, depth, out) {
       let names;
       try {
         names = (0, import_fs37.readdirSync)(dir).sort();
       } catch {
         return;
       }
-      if (names.includes(SKILL_FILE) && dir !== root2) {
+      if (names.includes(SKILL_FILE) && dir !== root) {
         out.push(dir);
         return;
       }
@@ -121946,7 +121946,7 @@ ${body}`;
         if (n.startsWith(".")) continue;
         const p = (0, import_path32.join)(dir, n);
         try {
-          if ((0, import_fs37.lstatSync)(p).isDirectory()) findSkillDirs(root2, p, depth + 1, out);
+          if ((0, import_fs37.lstatSync)(p).isDirectory()) findSkillDirs(root, p, depth + 1, out);
         } catch {
         }
       }
@@ -121960,11 +121960,11 @@ ${body}`;
       return (0, import_path32.basename)(dir);
     }
     function scanSkills(hermesHome) {
-      const root2 = (0, import_path32.join)(hermesHome, "skills");
-      if (!(0, import_fs37.existsSync)(root2)) return [];
-      const usage = readUsage(root2);
+      const root = (0, import_path32.join)(hermesHome, "skills");
+      if (!(0, import_fs37.existsSync)(root)) return [];
+      const usage = readUsage(root);
       const dirs = [];
-      findSkillDirs(root2, root2, 0, dirs);
+      findSkillDirs(root, root, 0, dirs);
       const seen2 = /* @__PURE__ */ new Set();
       const out = [];
       for (const dir of dirs) {
@@ -121985,7 +121985,7 @@ ${body}`;
           read: read2,
           candidate: {
             name,
-            relDir: (0, import_path32.relative)(root2, dir),
+            relDir: (0, import_path32.relative)(root, dir),
             listed: usage.has(name),
             usage: usage.get(name),
             bodyChars: read2?.bodyChars ?? 0,
@@ -123177,12 +123177,12 @@ ${body}`;
           const node = raw && typeof raw === "object" ? raw : null;
           if (!node) continue;
           const daemonId = readText(node.daemonId);
-          const nodeId2 = readText(normalizeMeshNodeId(node));
+          const nodeId = readText(normalizeMeshNodeId(node));
           const workspace = readText(node.workspace);
-          if (!daemonId || !nodeId2 || !workspace || !daemonIdsEquivalent5(daemonId, self)) continue;
+          if (!daemonId || !nodeId || !workspace || !daemonIdsEquivalent5(daemonId, self)) continue;
           if (!exists(workspace)) continue;
-          if (out.some((t) => t.meshId === meshId2 && meshNodeIdMatches7({ id: t.nodeId }, nodeId2))) continue;
-          out.push({ coordinatorDaemonId: host, meshId: meshId2, nodeId: nodeId2, workspace });
+          if (out.some((t) => t.meshId === meshId2 && meshNodeIdMatches7({ id: t.nodeId }, nodeId))) continue;
+          out.push({ coordinatorDaemonId: host, meshId: meshId2, nodeId, workspace });
         }
       }
       return out;
@@ -129401,10 +129401,10 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             samples.record(elapsedMs);
           }
           detail() {
-            const stages = {};
+            const stages2 = {};
             for (const stage of TRANSCRIPT_LATENCY_STAGES) {
               const dist = this.stages.get(stage)?.distribution();
-              if (dist) stages[stage] = dist;
+              if (dist) stages2[stage] = dist;
             }
             const triggerToPublishBySource = {};
             for (const source2 of TRANSCRIPT_TRIGGER_SOURCES) {
@@ -129417,7 +129417,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             }
             return {
               bySource,
-              stages,
+              stages: stages2,
               triggerToPublishBySource,
               notMeasurable: NOT_MEASURABLE,
               since: this.since,
@@ -130850,9 +130850,9 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       const requesterTaskId = trimStr2(args?.requesterTaskId) || void 0;
       const requesterAttemptId = trimStr2(args?.requesterAttemptId) || void 0;
       const requesterGeneration = typeof args?.requesterGeneration === "number" && Number.isSafeInteger(args.requesterGeneration) ? args.requesterGeneration : void 0;
-      const nodeDaemonId = (nodeId2) => {
+      const nodeDaemonId = (nodeId) => {
         const node = nodes.find(
-          (n) => meshNodeIdMatches7(n, nodeId2) || trimStr2(n?.id) === nodeId2 || trimStr2(n?.nodeId) === nodeId2
+          (n) => meshNodeIdMatches7(n, nodeId) || trimStr2(n?.id) === nodeId || trimStr2(n?.nodeId) === nodeId
         );
         return node ? readMeshNodeDaemonId(node) || trimStr2(node?.daemonId) : void 0;
       };
@@ -131145,7 +131145,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       let nodeWorkspaceRoot = null;
       if (opts?.allowTrustedWorkerFallback) {
         const meshId2 = trimString3(opts.meshId);
-        const nodeId2 = trimString3(opts.nodeId);
+        const nodeId = trimString3(opts.nodeId);
         const taskId = trimString3(opts.taskId);
         if (meshId2) {
           try {
@@ -131164,13 +131164,13 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             }
           } catch {
           }
-          if (!nodeWorkspaceRoot && nodeId2) {
+          if (!nodeWorkspaceRoot && nodeId) {
             try {
               const cmdRes = await ctx.getMeshForCommand?.(meshId2);
               const resolvedMesh = cmdRes?.mesh ?? cmdRes ?? ctx.getCachedInlineMesh?.(meshId2);
               const nodes = Array.isArray(resolvedMesh?.nodes) ? resolvedMesh.nodes : [];
               const matchedNode = nodes.find(
-                (n) => trimString3(n?.id) === nodeId2 || trimString3(n?.nodeId) === nodeId2
+                (n) => trimString3(n?.id) === nodeId || trimString3(n?.nodeId) === nodeId
               );
               const nodeWs = trimString3(matchedNode?.workspace) || trimString3(matchedNode?.worktreePath);
               if (nodeWs) {
@@ -131303,14 +131303,14 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         const attemptId = attemptRef?.attemptId || trimString3(settings2.meshActiveAttemptId) || trimString3(settings2.meshAttemptId);
         const generation = attemptRef?.generation ?? (typeof settings2.meshActiveAttemptGeneration === "number" && Number.isSafeInteger(settings2.meshActiveAttemptGeneration) ? settings2.meshActiveAttemptGeneration : typeof settings2.meshAttemptGeneration === "number" && Number.isSafeInteger(settings2.meshAttemptGeneration) ? settings2.meshAttemptGeneration : void 0);
         const taskId = trimString3(settings2.meshActiveTaskId) || trimString3(settings2.meshTaskId);
-        const nodeId2 = trimString3(settings2.meshNodeId) || trimString3(settings2.meshLastNodeId);
+        const nodeId = trimString3(settings2.meshNodeId) || trimString3(settings2.meshLastNodeId);
         return {
           meshId: meshId2,
           ownerDaemonId,
           ...taskId ? { taskId } : {},
           ...attemptId ? { attemptId } : {},
           ...generation !== void 0 ? { generation } : {},
-          ...nodeId2 ? { nodeId: nodeId2 } : {}
+          ...nodeId ? { nodeId } : {}
         };
       } catch {
         return null;
@@ -131336,14 +131336,14 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         if (!raw || !raw.meshId || !raw.ownerDaemonId) return null;
         return raw;
       };
-      const resolveMeshHostOwner = (meshId2, sessionId, nodeId2) => {
+      const resolveMeshHostOwner = (meshId2, sessionId, nodeId) => {
         const mesh = resolvedMeshRecord ?? ctx.getCachedInlineMesh?.(meshId2);
         if (!mesh) return null;
         const hostDaemonId2 = trimString3(mesh?.meshHost?.hostDaemonId) || trimString3(mesh?.hostDaemonId);
         if (!hostDaemonId2 || daemonIdsEquivalent5(hostDaemonId2, selfDaemonId)) return null;
         const nodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
         const matchedNode = nodes.find((n) => {
-          if (nodeId2 && (meshNodeIdMatches7(n, nodeId2) || trimString3(n?.id) === nodeId2 || trimString3(n?.nodeId) === nodeId2)) {
+          if (nodeId && (meshNodeIdMatches7(n, nodeId) || trimString3(n?.id) === nodeId || trimString3(n?.nodeId) === nodeId)) {
             return true;
           }
           const activeSid = trimString3(n?.activeSessionId) || trimString3(n?.sessionId);
@@ -131352,7 +131352,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         if (!matchedNode) return null;
         const nodeDaemon = readMeshNodeDaemonId(matchedNode) || trimString3(matchedNode?.daemonId);
         if (nodeDaemon && !daemonIdsEquivalent5(nodeDaemon, selfDaemonId)) return null;
-        const resolvedNodeId = trimString3(matchedNode?.id) || trimString3(matchedNode?.nodeId) || nodeId2;
+        const resolvedNodeId = trimString3(matchedNode?.id) || trimString3(matchedNode?.nodeId) || nodeId;
         const raw = readWorkerAssignmentStamp(ctx, sessionId);
         return {
           meshId: meshId2,
@@ -131713,9 +131713,9 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
           } catch {
             nodes = [];
           }
-          const nodeDaemonId = (nodeId2) => {
+          const nodeDaemonId = (nodeId) => {
             const node = nodes.find(
-              (n) => meshNodeIdMatches7(n, nodeId2) || trimString3(n?.id) === nodeId2 || trimString3(n?.nodeId) === nodeId2
+              (n) => meshNodeIdMatches7(n, nodeId) || trimString3(n?.id) === nodeId || trimString3(n?.nodeId) === nodeId
             );
             return node ? readMeshNodeDaemonId(node) || trimString3(node?.daemonId) : void 0;
           };
@@ -133104,13 +133104,13 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         if (!meshId2 || !ownerDaemonId) return null;
         const attemptRef = currentMeshAttemptRef(settings2);
         const taskId = readNonEmpty3(settings2.meshActiveTaskId);
-        const nodeId2 = readNonEmpty3(settings2.meshNodeId) || readNonEmpty3(settings2.meshLastNodeId);
+        const nodeId = readNonEmpty3(settings2.meshNodeId) || readNonEmpty3(settings2.meshLastNodeId);
         return {
           meshId: meshId2,
           ownerDaemonId,
           ...taskId ? { taskId } : {},
           ...attemptRef ? { attemptId: attemptRef.attemptId, generation: attemptRef.generation } : {},
-          ...nodeId2 ? { nodeId: nodeId2 } : {}
+          ...nodeId ? { nodeId } : {}
         };
       };
     }
@@ -133155,8 +133155,8 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       } catch {
         nodes = [];
       }
-      return (nodeId2) => {
-        const node = nodes.find((n) => meshNodeIdMatches7(n, nodeId2));
+      return (nodeId) => {
+        const node = nodes.find((n) => meshNodeIdMatches7(n, nodeId));
         return node ? readMeshNodeDaemonId(node) : void 0;
       };
     }
@@ -134300,9 +134300,9 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
     });
     async function readDriverInputSchema(cwd, schemaPath) {
       try {
-        const root2 = await (0, import_promises11.realpath)(cwd);
-        const file = await (0, import_promises11.realpath)((0, import_node_path32.resolve)(root2, schemaPath));
-        const rel = (0, import_node_path32.relative)(root2, file);
+        const root = await (0, import_promises11.realpath)(cwd);
+        const file = await (0, import_promises11.realpath)((0, import_node_path32.resolve)(root, schemaPath));
+        const rel = (0, import_node_path32.relative)(root, file);
         if (!rel || rel === ".." || rel.startsWith("../") || rel.startsWith("..\\") || (0, import_node_path32.isAbsolute)(rel)) return null;
         const schema22 = JSON.parse(await (0, import_promises11.readFile)(file, "utf8"));
         return schema22 && typeof schema22 === "object" && !Array.isArray(schema22) ? schema22 : null;
@@ -134360,9 +134360,9 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       return { bytes, mime: declared };
     }
     function prepareDir(workspaceRoot, invocationId) {
-      const root2 = (0, import_node_fs36.realpathSync)(workspaceRoot);
+      const root = (0, import_node_fs36.realpathSync)(workspaceRoot);
       const parts = [".adhdev", "driver-results", invocationId];
-      let current5 = root2;
+      let current5 = root;
       for (const part of parts) {
         current5 = (0, import_node_path33.join)(current5, part);
         let stat2;
@@ -134374,8 +134374,8 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         if (!stat2) (0, import_node_fs36.mkdirSync)(current5, { mode: 448 });
         else if (stat2.isSymbolicLink() || !stat2.isDirectory()) return refuse3("unsafe_path", "Driver results directory is not a plain directory");
       }
-      if ((0, import_node_fs36.realpathSync)(current5) !== current5 || !current5.startsWith(root2 + import_node_path33.sep)) return refuse3("unsafe_path", "Driver results directory escapes the workspace");
-      ensureLocalGitExclude(root2, (0, import_node_path33.join)(root2, ...parts.slice(0, 2)), "driver results");
+      if ((0, import_node_fs36.realpathSync)(current5) !== current5 || !current5.startsWith(root + import_node_path33.sep)) return refuse3("unsafe_path", "Driver results directory escapes the workspace");
+      ensureLocalGitExclude(root, (0, import_node_path33.join)(root, ...parts.slice(0, 2)), "driver results");
       return { abs: current5, rel: parts.join("/") };
     }
     async function writeAndRegister(sink2, invocationId, file, bytes, spec) {
@@ -134423,8 +134423,8 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         }
         return localRoot;
       };
-      const writeLocal = (root2, file, bytes2) => {
-        const dir = prepareDir(root2, invocationId);
+      const writeLocal = (root, file, bytes2) => {
+        const dir = prepareDir(root, invocationId);
         const absPath = (0, import_node_path33.join)(dir.abs, file);
         (0, import_node_fs36.writeFileSync)(absPath, bytes2, { flag: "wx", mode: 384 });
         return { absPath, relPath: `${dir.rel}/${file}` };
@@ -134450,9 +134450,9 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
           const decoded = decodeDriverImage(b);
           const target2 = await getSink();
           if (!target2) {
-            const root2 = await getLocalRoot();
-            if (root2) {
-              const local = writeLocal(root2, `image-${++seq2}.${IMAGE_EXT[decoded.mime]}`, decoded.bytes);
+            const root = await getLocalRoot();
+            if (root) {
+              const local = writeLocal(root, `image-${++seq2}.${IMAGE_EXT[decoded.mime]}`, decoded.bytes);
               content.push({
                 type: "image",
                 localPath: local.absPath,
@@ -140329,21 +140329,21 @@ ${detail.join("\n")}` : stripped;
     }
     async function managedCheckoutPath(meshId2, identity5) {
       const config = await (0, import_promises12.realpath)(getConfigDir2());
-      const root2 = (0, import_node_path39.join)(config, "remote-projects");
+      const root = (0, import_node_path39.join)(config, "remote-projects");
       try {
-        await (0, import_promises12.mkdir)(root2);
+        await (0, import_promises12.mkdir)(root);
       } catch (e) {
         if (e.code !== "EEXIST") throw e;
       }
-      if ((await (0, import_promises12.lstat)(root2)).isSymbolicLink() || await (0, import_promises12.realpath)(root2) !== (0, import_node_path39.resolve)(root2)) throw new AttachFailure("PATH_CONFLICT", "checkout", "The managed remote-projects directory must be a real directory.");
+      if ((await (0, import_promises12.lstat)(root)).isSymbolicLink() || await (0, import_promises12.realpath)(root) !== (0, import_node_path39.resolve)(root)) throw new AttachFailure("PATH_CONFLICT", "checkout", "The managed remote-projects directory must be a real directory.");
       const key7 = remoteProjectKey(meshId2, identity5);
-      return (0, import_node_path39.join)(root2, key7);
+      return (0, import_node_path39.join)(root, key7);
     }
     async function verifyCheckout(workspace, identity5) {
       const info = await (0, import_promises12.lstat)(workspace);
       if (info.isSymbolicLink() || !info.isDirectory() || await (0, import_promises12.realpath)(workspace) !== (0, import_node_path39.resolve)(workspace)) throw new AttachFailure("PATH_CONFLICT", "checkout", "Preserve the existing path and choose a separate managed checkout.");
-      const root2 = await git9(workspace, ["rev-parse", "--show-toplevel"]);
-      if (await (0, import_promises12.realpath)(root2) !== await (0, import_promises12.realpath)(workspace)) throw new AttachFailure("PATH_CONFLICT", "checkout", "Existing path is not the repository root.");
+      const root = await git9(workspace, ["rev-parse", "--show-toplevel"]);
+      if (await (0, import_promises12.realpath)(root) !== await (0, import_promises12.realpath)(workspace)) throw new AttachFailure("PATH_CONFLICT", "checkout", "Existing path is not the repository root.");
       const remote = githubRemote(await git9(workspace, ["remote", "get-url", "origin"]));
       if (remote?.identity !== identity5) throw new AttachFailure("REMOTE_IDENTITY_MISMATCH", "checkout", "Existing checkout origin differs from the verified project. Preserve it and resolve the conflict locally.");
     }
@@ -141127,11 +141127,11 @@ ${detail.join("\n")}` : stripped;
     function restoreRefinePublicationContract(value) {
       return record4(value) ? snapshotRefinePublicationContract(value) : { approvedPublishShas: null };
     }
-    function refinePublicationAuthorityRefusal(args, nodeId2) {
+    function refinePublicationAuthorityRefusal(args, nodeId) {
       let code;
-      if (own(args, "approvedTargetShas") && (!record4(args.approvedTargetShas) || !Object.values(args.approvedTargetShas).every(sha5) || !own(args.approvedTargetShas, nodeId2))) code = "approved_target_mismatch";
+      if (own(args, "approvedTargetShas") && (!record4(args.approvedTargetShas) || !Object.values(args.approvedTargetShas).every(sha5) || !own(args.approvedTargetShas, nodeId))) code = "approved_target_mismatch";
       if (own(args, "approvedPublishShas") && !approvals(args.approvedPublishShas)) code = "publish_approval_required";
-      if (own(args, "approvedPublishShasByNode") && (!record4(args.approvedPublishShasByNode) || !Object.values(args.approvedPublishShasByNode).every(approvals) || !own(args.approvedPublishShasByNode, nodeId2))) code = "publish_approval_required";
+      if (own(args, "approvedPublishShasByNode") && (!record4(args.approvedPublishShasByNode) || !Object.values(args.approvedPublishShasByNode).every(approvals) || !own(args.approvedPublishShasByNode, nodeId))) code = "publish_approval_required";
       if (!code) return void 0;
       return {
         success: false,
@@ -141139,16 +141139,16 @@ ${detail.join("\n")}` : stripped;
         convergenceStatus: "blocked_review",
         merged: false,
         pushed: false,
-        error: `Publication approval contract is absent or invalid for node '${nodeId2}'. Supply valid exact authority for every selected node; no fallback is permitted.`
+        error: `Publication approval contract is absent or invalid for node '${nodeId}'. Supply valid exact authority for every selected node; no fallback is permitted.`
       };
     }
-    function selectRefineNodePublicationArgs(args, nodeId2) {
-      return own(args, "approvedPublishShasByNode") ? { ...args, approvedPublishShas: args.approvedPublishShasByNode[nodeId2] } : args;
+    function selectRefineNodePublicationArgs(args, nodeId) {
+      return own(args, "approvedPublishShasByNode") ? { ...args, approvedPublishShas: args.approvedPublishShasByNode[nodeId] } : args;
     }
     async function evaluateRefinePublicationRule(p) {
-      const { args, nodeId: nodeId2, branchHead, baseHead, repoRoot, execFileAsync: execFileAsync11 } = p;
+      const { args, nodeId, branchHead, baseHead, repoRoot, execFileAsync: execFileAsync11 } = p;
       const mode = args?.mergeMode;
-      const target2 = args?.approvedTargetShas?.[nodeId2];
+      const target2 = args?.approvedTargetShas?.[nodeId];
       const preserve = hasRefineApprovalContract(args);
       let code;
       if (mode !== void 0 && mode !== "merge" && mode !== "ff-only") code = "invalid_merge_mode";
@@ -141174,8 +141174,8 @@ ${detail.join("\n")}` : stripped;
       return hasRefineApprovalContract(args) || args?.mergeMode !== void 0;
     }
     async function checkRefinePublicationContract(ctx) {
-      const { args, nodeId: nodeId2, branchHead, baseHead, repoRoot, execFileAsync: execFileAsync11 } = ctx;
-      const malformed = refinePublicationAuthorityRefusal(args, nodeId2);
+      const { args, nodeId, branchHead, baseHead, repoRoot, execFileAsync: execFileAsync11 } = ctx;
+      const malformed = refinePublicationAuthorityRefusal(args, nodeId);
       if (malformed) return { kind: "terminal", result: { ...malformed, refineStages: ctx.refineStages } };
       const phase = await execFileAsync11(
         "git",
@@ -141231,12 +141231,12 @@ ${detail.join("\n")}` : stripped;
       ) : void 0;
       if (retired.stdout.trim() && !batch?.stdout.trim()) {
         try {
-          const root2 = await execFileAsync11(
+          const root = await execFileAsync11(
             "git",
             ["ls-tree", branchHead, "--", "oss"],
             { cwd: repoRoot, encoding: "utf8", windowsHide: true, env: gitChildEnv() }
           );
-          validateRetirementProof(repoRoot, root2.stdout.trim() ? "root" : "oss", { ref: branchHead });
+          validateRetirementProof(repoRoot, root.stdout.trim() ? "root" : "oss", { ref: branchHead });
         } catch (error) {
           return { kind: "terminal", result: {
             success: false,
@@ -141249,7 +141249,7 @@ ${detail.join("\n")}` : stripped;
           } };
         }
       }
-      const code = await evaluateRefinePublicationRule({ args, nodeId: nodeId2, branchHead, baseHead, repoRoot, execFileAsync: execFileAsync11 });
+      const code = await evaluateRefinePublicationRule({ args, nodeId, branchHead, baseHead, repoRoot, execFileAsync: execFileAsync11 });
       if (!code) return void 0;
       return { kind: "terminal", result: {
         success: false,
@@ -141262,7 +141262,7 @@ ${detail.join("\n")}` : stripped;
       } };
     }
     async function previewRefineNodePublication(p) {
-      const { mesh, node, nodeId: nodeId2, args } = p;
+      const { mesh, node, nodeId, args } = p;
       const run4 = p.execFileAsync ?? (0, import_node_util18.promisify)(import_node_child_process31.execFile);
       const git15 = async (cwd, gitArgs, timeout) => (await run4("git", gitArgs, { cwd, encoding: "utf8", windowsHide: true, env: gitChildEnv(), ...timeout ? { timeout } : {} })).stdout.trim();
       try {
@@ -141288,17 +141288,17 @@ ${detail.join("\n")}` : stripped;
           baseRef = "HEAD";
           baseHead = await git15(repoRoot, ["rev-parse", "HEAD"]);
         }
-        const verdict = await previewRefinePublicationContract({ args, nodeId: nodeId2, branchHead, baseHead, repoRoot, execFileAsync: run4 });
+        const verdict = await previewRefinePublicationContract({ args, nodeId, branchHead, baseHead, repoRoot, execFileAsync: run4 });
         return { ...verdict, baseRef, ...fetchWarning ? { fetchWarning } : {} };
       } catch {
         return void 0;
       }
     }
-    function refinePublicationPreviewRefusalResult(nodeId2, v, extra = {}) {
+    function refinePublicationPreviewRefusalResult(nodeId, v, extra = {}) {
       return {
         success: false,
         dryRun: true,
-        nodeId: nodeId2,
+        nodeId,
         code: v.code,
         convergenceStatus: "blocked_review",
         mergeWillRun: false,
@@ -141366,7 +141366,7 @@ ${detail.join("\n")}` : stripped;
           return "Inspect refineStages for the failing stage and retry.";
       }
     }
-    function buildRefineWorktreeMissingResult(nodeId2, workspace, refineStages) {
+    function buildRefineWorktreeMissingResult(nodeId, workspace, refineStages) {
       return {
         success: false,
         code: "worktree_missing",
@@ -141375,7 +141375,7 @@ ${detail.join("\n")}` : stripped;
         // most likely already converged.
         retryable: false,
         workspaceMissing: true,
-        error: `The worktree directory for node '${nodeId2}' no longer exists (${workspace}); nothing was merged by this run. Worktree removal is the final step of a SUCCESSFUL refine, so this node was most likely already merged and cleaned up by an earlier job \u2014 verify with 'git -C <repoRoot> log --oneline' before acting. Do NOT re-run refine to "fix" this.`,
+        error: `The worktree directory for node '${nodeId}' no longer exists (${workspace}); nothing was merged by this run. Worktree removal is the final step of a SUCCESSFUL refine, so this node was most likely already merged and cleaned up by an earlier job \u2014 verify with 'git -C <repoRoot> log --oneline' before acting. Do NOT re-run refine to "fix" this.`,
         nextStep: "Verify whether the branch already merged into the base (it most likely did). If so, treat the node as merged_to_main and remove it from the mesh; only re-clone if the work is genuinely missing.",
         refineStages,
         finalBranchConvergenceState: {
@@ -141587,11 +141587,11 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         REBASE_STDERR_EXCERPT_LIMIT = 2e3;
       }
     });
-    async function refineResolveRefsStage(self, meshId2, nodeId2, args, refineStages) {
+    async function refineResolveRefsStage(self, meshId2, nodeId, args, refineStages) {
       const meshRecord2 = await self.getMeshForCommand(meshId2, args?.inlineMesh, { preferInline: true });
       const mesh = meshRecord2?.mesh;
-      const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId2));
-      if (!node) return { kind: "terminal", result: { success: false, error: `Node '${nodeId2}' not found in mesh`, refineStages } };
+      const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
+      if (!node) return { kind: "terminal", result: { success: false, error: `Node '${nodeId}' not found in mesh`, refineStages } };
       if (!node.isLocalWorktree || !node.workspace) {
         return { kind: "terminal", result: { success: false, error: `Refinery requires a local worktree node`, refineStages } };
       }
@@ -141600,15 +141600,15 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
           workspace: node.workspace,
           workspaceMissing: true
         });
-        return { kind: "terminal", result: buildRefineWorktreeMissingResult(nodeId2, node.workspace, refineStages) };
+        return { kind: "terminal", result: buildRefineWorktreeMissingResult(nodeId, node.workspace, refineStages) };
       }
       const sourceNode = node.clonedFromNodeId ? mesh?.nodes.find((n) => meshNodeIdMatches7(n, node.clonedFromNodeId)) : mesh?.nodes.find((n) => !n.isLocalWorktree);
       const repoRoot = sourceNode?.repoRoot || sourceNode?.workspace;
-      if (!repoRoot) return { kind: "terminal", result: { success: false, code: "source_parent_not_found", nodeId: nodeId2, sourceNodeId: node.clonedFromNodeId, error: "Source node repoRoot not found. Have the Mesh Host owner inspect the explicit source binding and use mesh_reattach_source_parent dry-run with expected_old_parent_id before retrying.", refineStages } };
-      return refineResolveRefsTail(self, { meshId: meshId2, nodeId: nodeId2, args, refineStages, mesh, node, sourceNode, repoRoot });
+      if (!repoRoot) return { kind: "terminal", result: { success: false, code: "source_parent_not_found", nodeId, sourceNodeId: node.clonedFromNodeId, error: "Source node repoRoot not found. Have the Mesh Host owner inspect the explicit source binding and use mesh_reattach_source_parent dry-run with expected_old_parent_id before retrying.", refineStages } };
+      return refineResolveRefsTail(self, { meshId: meshId2, nodeId, args, refineStages, mesh, node, sourceNode, repoRoot });
     }
     async function refineResolveRefsTail(self, p) {
-      const { meshId: meshId2, nodeId: nodeId2, args, refineStages, mesh, node, sourceNode, repoRoot } = p;
+      const { meshId: meshId2, nodeId, args, refineStages, mesh, node, sourceNode, repoRoot } = p;
       const { execFile: execFile23 } = await import("child_process");
       const { promisify: promisify23 } = await import("util");
       const execFileAsync11 = promisify23(execFile23);
@@ -141672,7 +141672,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         kind: "continue",
         ctx: {
           meshId: meshId2,
-          nodeId: nodeId2,
+          nodeId,
           args,
           refineStages,
           execFileAsync: execFileAsync11,
@@ -141985,8 +141985,8 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         init_mesh_refine_rebase_failure();
       }
     });
-    async function refineResolveLightRefsStage(self, meshId2, nodeId2, args, refineStages, light) {
-      const out = await refineResolveRefsTail(self, { meshId: meshId2, nodeId: nodeId2, args, refineStages, mesh: light.mesh, node: light.node, sourceNode: light.sourceNode, repoRoot: light.repoRoot });
+    async function refineResolveLightRefsStage(self, meshId2, nodeId, args, refineStages, light) {
+      const out = await refineResolveRefsTail(self, { meshId: meshId2, nodeId, args, refineStages, mesh: light.mesh, node: light.node, sourceNode: light.sourceNode, repoRoot: light.repoRoot });
       if (out.kind === "continue") out.ctx.lightTarget = light.target;
       return out;
     }
@@ -142018,9 +142018,9 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       return slash === -1 ? path148 : path148.slice(0, slash);
     }
     async function analyzeMeshRefineNodeChangeArea(args) {
-      const { nodeId: nodeId2, workspace, branch, baseRef, branchRef, diffCwd, repoRoot, submodulePaths } = args;
+      const { nodeId, workspace, branch, baseRef, branchRef, diffCwd, repoRoot, submodulePaths } = args;
       const diagnosticInputs = {
-        nodeId: nodeId2,
+        nodeId,
         workspace,
         repoRoot: repoRoot ?? null,
         branch,
@@ -142029,7 +142029,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         submodulePaths: [...submodulePaths]
       };
       const base = {
-        nodeId: nodeId2,
+        nodeId,
         workspace,
         branch,
         changedTopLevelPaths: [],
@@ -142292,13 +142292,13 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         LOG.debug("Mesh", `[Refinery] progress event dropped (${event.phase}): ${e?.message || e}`);
       }
     }
-    function recordRefineGateProgress(context2, nodeId2, info) {
+    function recordRefineGateProgress(context2, nodeId, info) {
       try {
         meshRecord(context2.meshId, "refine_progress", {
-          ...nodeId2 ? { nodeId: nodeId2 } : {},
+          ...nodeId ? { nodeId } : {},
           payload: {
             source: "refine_mesh_node_async_job",
-            refineJob: { jobId: context2.jobId, meshId: context2.meshId, ...nodeId2 ? { nodeId: nodeId2 } : {}, status: "running" },
+            refineJob: { jobId: context2.jobId, meshId: context2.meshId, ...nodeId ? { nodeId } : {}, status: "running" },
             progress: {
               phase: "gate_started",
               gateLabel: String(info.gateLabel || "").slice(0, GATE_LABEL_MAX_CHARS),
@@ -142491,7 +142491,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       return lines.join("\n");
     }
     function buildRefineAcceptPreflightRefusal(params) {
-      const { verdict, meshId: meshId2, nodeId: nodeId2 } = params;
+      const { verdict, meshId: meshId2, nodeId } = params;
       return {
         success: false,
         code: verdict.code ?? "base_preflight_blocked",
@@ -142503,7 +142503,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
           durationMs: verdict.durationMs
         },
         meshId: meshId2,
-        ...nodeId2 ? { nodeId: nodeId2, targetNodeId: nodeId2 } : {},
+        ...nodeId ? { nodeId, targetNodeId: nodeId } : {},
         convergenceStatus: "blocked_review",
         retryable: true,
         nextStep: "Fix the base checkout as described, then re-run refine. Nothing was dispatched."
@@ -142538,15 +142538,15 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       }
     });
     function findOpenRefineDispatchForNode(args) {
-      const nodeId2 = typeof args.nodeId === "string" ? args.nodeId.trim() : "";
-      if (!nodeId2) return null;
+      const nodeId = typeof args.nodeId === "string" ? args.nodeId.trim() : "";
+      if (!nodeId) return null;
       const freshnessMs = typeof args.freshnessMs === "number" && args.freshnessMs > 0 ? args.freshnessMs : REFINE_INFLIGHT_FRESHNESS_MS;
       const open = selectOpenRefineDispatches(
         args.entries
       );
       let newest = null;
       for (const record8 of open) {
-        if (record8.nodeId !== nodeId2) continue;
+        if (record8.nodeId !== nodeId) continue;
         if (args.excludeJobId && record8.jobId === args.excludeJobId) continue;
         const dispatchedAt = Date.parse(record8.timestamp);
         if (!Number.isFinite(dispatchedAt)) continue;
@@ -142558,17 +142558,17 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       }
       return newest;
     }
-    function findOpenLedgerRefineDispatch(meshId2, nodeId2, selfJobId) {
+    function findOpenLedgerRefineDispatch(meshId2, nodeId, selfJobId) {
       try {
         const entries3 = readLocalRecords(meshId2, { kind: ["task_dispatched", "task_completed", "task_failed"], turnTerminals: false });
         return findOpenRefineDispatchForNode({
           entries: entries3,
-          nodeId: nodeId2,
+          nodeId,
           nowMs: Date.now(),
           excludeJobId: selfJobId
         });
       } catch (e) {
-        LOG.warn("Mesh", `[Refinery] Durable duplicate-dispatch check failed for node ${nodeId2} (allowing dispatch): ${e?.message || e}`);
+        LOG.warn("Mesh", `[Refinery] Durable duplicate-dispatch check failed for node ${nodeId} (allowing dispatch): ${e?.message || e}`);
         return null;
       }
     }
@@ -142581,8 +142581,8 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         workspaceMissing: true,
         vanishedMidFlight: true
       });
-      const nodeId2 = readStringValue(ctx?.node?.id) || "unknown";
-      const result = buildRefineWorktreeMissingResult(nodeId2, workspace, ctx.refineStages);
+      const nodeId = readStringValue(ctx?.node?.id) || "unknown";
+      const result = buildRefineWorktreeMissingResult(nodeId, workspace, ctx.refineStages);
       return {
         kind: "terminal",
         result: {
@@ -142637,12 +142637,12 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         note: `Refused a duplicate ${incoming.kind} terminal write for refine job ${ctx.jobId} (node ${ctx.nodeId}) from execution ${incoming.interactionId || "unknown"}: execution ${existing.interactionId || "unknown"} already wrote a ${existing.kind}${existing.completedAt ? ` at ${existing.completedAt}` : ""} for this jobId. Two executions for one jobId means a ghost dispatch ran alongside the real job \u2014 see REFINE-RESUME-LIVENESS.`
       };
     }
-    function findExistingRefineTerminal(entries3, nodeId2, jobId) {
+    function findExistingRefineTerminal(entries3, nodeId, jobId) {
       let earliest;
       let earliestMs = Number.POSITIVE_INFINITY;
       for (const e of entries3) {
         if (e.kind !== "task_completed" && e.kind !== "task_failed") continue;
-        if (e.nodeId !== nodeId2) continue;
+        if (e.nodeId !== nodeId) continue;
         const job = e.payload?.refineJob;
         if (job?.jobId !== jobId) continue;
         const ts2 = Date.parse(e.timestamp);
@@ -142681,6 +142681,22 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         "use strict";
       }
     });
+    function selectApprovedRuntimeStage(nodeId, mode, targets) {
+      const stage = stages.find((entry) => entry.nodeId === nodeId);
+      requireApproval(stage, "approval_scope_mismatch");
+      const publishRoot = mode !== void 0 || targets !== void 0;
+      requireApproval(
+        !publishRoot || mode === "ff-only" && (0, import_node_util20.isDeepStrictEqual)(targets, { [stage.nodeId]: stage.root }),
+        "private_root_contract_mismatch"
+      );
+      return { ...stage, publishRoot };
+    }
+    function requireApprovedMain(stage, rootMain, ossMain, requireOssTarget = false) {
+      requireApproval(
+        rootMain === stage.rootBase && (ossMain === stage.oss || !requireOssTarget && ossMain === stage.ossBase),
+        "approved_main_changed"
+      );
+    }
     function requireApproval(condition, reason) {
       if (!condition) throw new Error(reason);
     }
@@ -142694,8 +142710,8 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       });
       return stdout.trim();
     }
-    function requireApprovedPins(actual) {
-      requireApproval(actual.root === root && actual.oss === oss && actual.gitlink === `160000 commit ${oss}	oss`, "approved_source_changed");
+    function requireApprovedPins(actual, expected = stages[0]) {
+      requireApproval(actual.root === expected.root && actual.oss === expected.oss && actual.gitlink === `160000 commit ${expected.oss}	oss`, "approved_source_changed");
     }
     function hash22(bytes) {
       return (0, import_node_crypto57.createHash)("sha256").update(bytes).digest("hex");
@@ -142718,19 +142734,24 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
     async function resolveApprovedRefineRuntime(ctx, args) {
       const scope2 = readAuthenticatedMcpScope(args, APPROVED_RUNTIME_COMMAND);
       requireApproval(scope2?.isCoordinator && scope2.sessionId && scope2.meshId === meshId, "local_coordinator_required");
-      requireApproval(args.meshId === meshId && args.nodeId === nodeId && args.runtimeApprovalId === decisionId, "approval_scope_mismatch");
+      requireApproval(args.meshId === meshId && args.runtimeApprovalId === decisionId, "approval_scope_mismatch");
+      const stage = selectApprovedRuntimeStage(args.nodeId, args.mergeMode, args.approvedTargetShas);
+      const { nodeId, root, oss, ossBase, rootBase, publishRoot } = stage;
       const meshStore = getMeshRuntimeStore(ctx);
       const items = meshStore.missionItems();
       const store5 = getArtifactStore(ctx);
       function readDecisions() {
         const item = items.getItem(meshId, decisionId);
         const publication = items.getItem(meshId, publicationDecisionId);
-        for (const entry of [item, publication]) {
+        const incremental = stage.count === 2 ? items.getItem(meshId, incrementalDecisionId) : void 0;
+        const decisions2 = stage.count === 2 ? [item, publication, incremental] : [item, publication];
+        for (const entry of decisions2) {
           requireApproval(entry?.kind === "decision" && entry.state === "answered" && entry.decision?.answer?.by === "owner" && entry.decision.answer.optionId === "a", "owner_decision_changed");
         }
         requireApproval(item?.decision?.answerRevision === 1 && item.decision.answer?.via === "dashboard" && item.decision.answer?.at === "2026-11-26T15:20:41.346Z" && item.refs.some((ref2) => ref2.value === artifactId), "runtime_decision_changed");
         requireApproval(meshStore.getMission(meshId, item.missionId)?.status === "active", "runtime_mission_inactive");
-        return [item, publication].map((entry) => ({
+        if (stage.count === 2) requireApproval(incremental?.decision?.answerRevision === 1 && incremental.decision.answer?.at === "2026-11-27T03:38:58.306Z", "incremental_decision_changed");
+        return decisions2.map((entry) => ({
           missionId: entry?.missionId,
           refs: entry?.refs,
           machine: entry?.machine,
@@ -142772,6 +142793,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         const node = mesh?.nodes?.find((candidate) => candidate.id === nodeId);
         const host = resolveMeshHostStatus(mesh, { localDaemonId: self });
         requireApproval(self && daemonIdsEquivalent5(self, hostDaemonId) && mesh?.id === meshId && host.role === "host" && daemonIdsEquivalent5(host.hostDaemonId, self) && node?.isLocalWorktree && node.workspace && daemonIdsEquivalent5(node.daemonId, self) && (!workspace || workspace === node.workspace), "local_approved_workspace_required");
+        requireApproval(!publishRoot || !resolveMeshPolicy3(mesh.policy).requireApprovalForPush, "private_root_policy_requires_approval");
         requireApproval(mesh.policy?.refineConfig == null && mesh.policy?.worktreeBootstrapConfig == null, "persistent_override_present");
         const cwd2 = node.workspace;
         const [rootHead, ossHead, gitlink, status] = await Promise.all([
@@ -142780,7 +142802,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
           git11(cwd2, "ls-tree", "HEAD", "oss"),
           git11(cwd2, "--no-optional-locks", "status", "--porcelain", "--ignore-submodules=none", "--untracked-files=all")
         ]);
-        requireApprovedPins({ root: rootHead, oss: ossHead, gitlink });
+        requireApprovedPins({ root: rootHead, oss: ossHead, gitlink }, stage);
         requireApproval(status === "", "approved_worktree_dirty");
         for (const dir of [cwd2, (0, import_node_path41.join)(cwd2, "oss")]) {
           requireApproval(!["node", "npm", "npx"].some((bin) => (0, import_node_fs47.existsSync)((0, import_node_path41.join)(dir, "node_modules", ".bin", bin))), "unexpected_local_runtime_shim");
@@ -142792,7 +142814,26 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         checkAuthority();
         return { cwd: cwd2, bootstrap: bootstrap2 };
       }
+      async function main(workspace, identity5) {
+        const urls = (await git11(workspace, "remote", "get-url", "--all", "origin")).split("\n");
+        requireApproval(urls.length === 1 && canonicalPushIdentity(urls[0]) === identity5, "publication_destination_changed");
+        const row2 = await git11(workspace, "ls-remote", "--exit-code", "origin", "refs/heads/main");
+        return /^([a-f0-9]{40})\trefs\/heads\/main$/.exec(row2)?.[1] ?? "";
+      }
+      async function checkMain(workspace, requireOssTarget = false) {
+        const [rootMain, ossMain] = await Promise.all([
+          main(workspace, "github.com/vilmire/adhdev-cloud"),
+          main((0, import_node_path41.join)(workspace, "oss"), "github.com/vilmire/adhdev")
+        ]);
+        requireApprovedMain(stage, rootMain, ossMain, requireOssTarget);
+      }
+      async function checkPrivateDestination(workspace) {
+        const policy = await resolvePushPolicy(workspace);
+        requireApproval(!policy.isPublic && policy.keyed.length === 1 && policy.keyed[0].visibility === "private" && canonicalPushIdentity(policy.keyed[0].url) === "github.com/vilmire/adhdev-cloud", "private_root_destination_required");
+      }
       const { cwd, bootstrap } = await checkWorkspace();
+      await checkMain(cwd);
+      if (publishRoot) await checkPrivateDestination(cwd);
       const bootstrapPlan = validateMeshWorktreeBootstrapConfig(bootstrap.config, bootstrapFile);
       const proof = verifyRuntimePayload(
         bootstrap.config,
@@ -142801,7 +142842,9 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         approvedPath
       );
       const publicationShas = (await git11((0, import_node_path41.join)(cwd, "oss"), "rev-list", `${ossBase}..${oss}`)).split("\n");
-      requireApproval(publicationShas.length === 10, "approved_oss_range_changed");
+      requireApproval(publicationShas.length === stage.count && (stage.count !== 2 || (0, import_node_util20.isDeepStrictEqual)([...publicationShas].sort(), [...incrementalOss].sort())), "approved_oss_range_changed");
+      const rootShas = publishRoot ? (await git11(cwd, "rev-list", `${rootBase}..${root}`)).split("\n") : [];
+      requireApproval(!publishRoot || rootShas.length === stage.count, "approved_root_range_changed");
       const [npmBin, nodeBin] = approvedPath.split(import_node_path41.delimiter);
       const verifyTools = async () => {
         const nodePath2 = (0, import_node_path41.join)(nodeBin, "node");
@@ -142828,11 +142871,24 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       checkAuthority();
       return {
         path: approvedPath,
+        rootBase,
+        publishRoot,
+        checkRootPublication: async (workspace, target2, branch, base) => {
+          requireApproval(publishRoot && target2 === root && branch === "main" && base === rootBase, "private_root_contract_mismatch");
+          await checkWorkspace(cwd);
+          await checkMain(cwd, true);
+          await checkPrivateDestination(workspace);
+          checkAuthority();
+        },
         audit: {
           ...proof,
           worktreeBootstrapCommands: bootstrapPlan.commands.map((command) => command.displayCommand),
           decisionId,
           publicationDecisionId,
+          ...stage.count === 2 ? { incrementalDecisionId } : {},
+          rootBase,
+          ossBase,
+          publishRoot,
           revision: 1,
           checkedDecisionDigest: fingerprint,
           payloadDigest: digest5,
@@ -142843,14 +142899,17 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
           npm: "10.9.2",
           npx: "10.9.2"
         },
-        publication: { mergeMode: "ff-only", approvedTargetShas: { [nodeId]: root }, approvedPublishShas: { root: [], oss: publicationShas } },
+        publication: { mergeMode: "ff-only", approvedTargetShas: { [nodeId]: root }, approvedPublishShas: { root: rootShas, oss: publicationShas } },
         verify: async (workspace) => {
           await verifyTools();
           await checkWorkspace(workspace);
+          await checkMain(cwd);
+          checkAuthority();
         },
         checkPublication: async (workspace, commit2, branch, base) => {
           requireApproval(commit2 === oss && branch === "main" && base === ossBase, "publication_scope_changed");
           await checkWorkspace(cwd);
+          await checkMain(cwd);
           const targets = (await git11(workspace, "remote", "get-url", "--push", "--all", "origin")).split("\n");
           requireApproval(targets.length === 1 && canonicalPushIdentity(targets[0]) === "github.com/vilmire/adhdev", "publication_destination_changed");
           checkAuthority();
@@ -142875,10 +142934,11 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
     var digest5;
     var meshId;
     var hostDaemonId;
-    var nodeId;
-    var root;
-    var oss;
-    var ossBase;
+    var securityRoot;
+    var securityOss;
+    var stages;
+    var incrementalDecisionId;
+    var incrementalOss;
     var bootstrapFile;
     var refineFile;
     var exec7;
@@ -142899,6 +142959,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         init_worktree_bootstrap_config();
         init_mcp_command_ingress();
         init_artifact_runtime();
+        init_repo_mesh_types();
         APPROVED_RUNTIME_COMMAND = "refine_mesh_node_approved_runtime";
         approvedRuntime = /* @__PURE__ */ Symbol("approved refinery runtime");
         decisionId = "mi_917b95c8c342";
@@ -142907,10 +142968,28 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         digest5 = "4a070077fa1860ba7eee1c79f9279a98922ed088c673f09a4875f9632c3082a9";
         meshId = "mesh_271444af883843e9b36c67155b87b22f";
         hostDaemonId = "daemon_mach_6733c865d60f432dbeb119a6875ee303";
-        nodeId = "node_346dc118ddb04ab5841a60bd209f9bdf";
-        root = "441a8fa59dcff03cacd13a1f584af9a7ab609dab";
-        oss = "86ce8d27e2f064088a61b38bfe560a760c670c54";
-        ossBase = "6ea2081ddbdd58468904667f0cb45a79d40162e7";
+        securityRoot = "441a8fa59dcff03cacd13a1f584af9a7ab609dab";
+        securityOss = "86ce8d27e2f064088a61b38bfe560a760c670c54";
+        stages = [
+          {
+            nodeId: "node_346dc118ddb04ab5841a60bd209f9bdf",
+            root: securityRoot,
+            oss: securityOss,
+            rootBase: "50d555860be05306095f296c7418f87c454f5454",
+            ossBase: "6ea2081ddbdd58468904667f0cb45a79d40162e7",
+            count: 10
+          },
+          {
+            nodeId: "node_127a5a2ab7154904916a9356e6692ca0",
+            root: "062f2077fe9e892cefb643547482ca013dbe09ad",
+            oss: "9245cf92b4f05d2ba095f9b5e02a5a0de1aad9ac",
+            rootBase: securityRoot,
+            ossBase: securityOss,
+            count: 2
+          }
+        ];
+        incrementalDecisionId = "mi_b8876f8fedba";
+        incrementalOss = ["b10aa6348c01d324372c0c79ac26a921cb6a34d4", stages[1].oss];
         bootstrapFile = ".adhdev/worktree_bootstrap.json";
         refineFile = ".adhdev/refine.json";
         exec7 = (0, import_node_util20.promisify)(import_node_child_process33.execFile);
@@ -142966,7 +143045,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       }
     }
     function buildBranchWorktreeDirtyRefusal(params) {
-      const { meshId: meshId2, nodeId: nodeId2, workspace, branch, files, fileCount } = params;
+      const { meshId: meshId2, nodeId, workspace, branch, files, fileCount } = params;
       const shown = files.join(", ") + (fileCount > files.length ? `, \u2026 (+${fileCount - files.length} more)` : "");
       return {
         success: false,
@@ -142974,8 +143053,8 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         error: `Branch worktree for '${branch}' has ${fileCount} uncommitted change(s) (${shown}). Refine merges only commits but validates the working tree, so these would pass validation and then be left out of the merge (and deleted by the post-merge worktree cleanup). Nothing was validated or merged.`,
         branchWorktreeDirty: { workspace, branch, files, fileCount },
         meshId: meshId2,
-        nodeId: nodeId2,
-        targetNodeId: nodeId2,
+        nodeId,
+        targetNodeId: nodeId,
         convergenceStatus: "blocked_review",
         retryable: true,
         nextStep: `Get the changes committed on '${branch}' \u2014 send the worker session a delta to commit them (or discard what should not ship), or checkpoint the worktree node with mesh_checkpoint \u2014 then re-run mesh_refine_node.`
@@ -143037,8 +143116,8 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         init_mission_ref_evaluator();
       }
     });
-    function buildRefineJobKey(self, meshId2, nodeId2) {
-      return `${meshId2}:${nodeId2}`;
+    function buildRefineJobKey(self, meshId2, nodeId) {
+      return `${meshId2}:${nodeId}`;
     }
     function buildRefineJobHandle(self, args) {
       return {
@@ -143288,7 +143367,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       }
     });
     async function refinePatchEquivalenceStage(self, ctx) {
-      const { meshId: meshId2, nodeId: nodeId2, args, repoRoot, baseHead, branch, baseBranch, mesh, node, validationSummary, refineStages } = ctx;
+      const { meshId: meshId2, nodeId, args, repoRoot, baseHead, branch, baseBranch, mesh, node, validationSummary, refineStages } = ctx;
       const branchHead = ctx.branchHead;
       const patchEquivalenceStarted = Date.now();
       const patchEquivalence = await runMeshRefinePatchEquivalenceGate(repoRoot, baseHead, branchHead);
@@ -143350,7 +143429,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
           const cleanupStarted = Date.now();
           const removeResult = await self.execute("remove_mesh_node", {
             meshId: meshId2,
-            nodeId: nodeId2,
+            nodeId,
             sessionCleanupMode: "preserve",
             inlineMesh: args?.inlineMesh
           });
@@ -143362,7 +143441,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
           try {
             const { meshRecord: meshRecord2 } = await Promise.resolve().then(() => (init_mesh_record(), mesh_record_exports));
             meshRecord2(meshId2, "node_removed", {
-              nodeId: nodeId2,
+              nodeId,
               payload: { alreadyMergedViaOtherPath: true, branch, into: baseBranch, validationSummary, patchEquivalence }
             }, { local: true });
           } catch {
@@ -143406,7 +143485,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         worktreeRoot: node.workspace,
         approvedPublishShas: ctx.args?.approvedPublishShas,
         beforePublish: ctx.approvedRuntime?.checkPublication,
-        ...!ctx.approvedRuntime && !resolveMeshPolicy3(mesh?.policy).requireApprovalForPush ? { rootCommit: branchHead, rootBranch: baseBranch } : {}
+        ...(!ctx.approvedRuntime || ctx.approvedRuntime.publishRoot) && !resolveMeshPolicy3(mesh?.policy).requireApprovalForPush ? { rootCommit: branchHead, rootBranch: baseBranch } : {}
       });
       recordMeshRefineStage(refineStages, "submodule_reachability", submoduleReachability.status, submoduleReachabilityStarted, {
         checked: submoduleReachability.checked,
@@ -143799,9 +143878,9 @@ ${hintLines.join("\n")}` : "",
       }
     }
     async function refineMergeAndFinalizeStage(self, ctx) {
-      const { meshId: meshId2, nodeId: nodeId2, repoRoot, branch, baseBranch, validationSummary, patchEquivalence, submoduleReachability, refineStages } = ctx;
+      const { meshId: meshId2, nodeId, repoRoot, branch, baseBranch, validationSummary, patchEquivalence, submoduleReachability, refineStages } = ctx;
       const leaseKey = `${repoRoot}::${baseBranch}`;
-      const leaseHolder = buildRefineJobKey(self, meshId2, nodeId2);
+      const leaseHolder = buildRefineJobKey(self, meshId2, nodeId);
       const alreadyHeld = self.refineBaseLeases.get(leaseKey) === leaseHolder;
       if (!alreadyHeld && self.refineBaseLeases.has(leaseKey)) {
         recordMeshRefineStage(refineStages, "base_lease", "skipped", Date.now(), {
@@ -143838,7 +143917,7 @@ ${hintLines.join("\n")}` : "",
       }
     }
     async function runRefineMergeAndFinalizeLocked(self, ctx) {
-      const { meshId: meshId2, nodeId: nodeId2, args, repoRoot, baseHead, node, branch, baseBranch, sourceNode, validationSummary, patchEquivalence, submoduleReachability, mesh, refineStages, execFileAsync: execFileAsync11 } = ctx;
+      const { meshId: meshId2, nodeId, args, repoRoot, baseHead, node, branch, baseBranch, sourceNode, validationSummary, patchEquivalence, submoduleReachability, mesh, refineStages, execFileAsync: execFileAsync11 } = ctx;
       const casStarted = Date.now();
       const cas = await probeRefineBaseCas({
         execFileAsync: execFileAsync11,
@@ -143865,6 +143944,9 @@ ${hintLines.join("\n")}` : "",
       const contract = await checkRefinePublicationContract(ctx);
       if (contract) return contract;
       await ctx.approvedRuntime?.verify(ctx.node.workspace);
+      if (ctx.approvedRuntime?.publishRoot) {
+        await ctx.approvedRuntime.checkRootPublication(repoRoot, ctx.branchHead, baseBranch, baseHead);
+      }
       let mergeResult;
       const mergeStarted = Date.now();
       try {
@@ -143959,19 +144041,20 @@ ${e?.stderr || ""}`;
           }
         } };
       }
-      const requireApprovalForPush = Boolean(ctx.approvedRuntime) || resolveMeshPolicy3(mesh?.policy).requireApprovalForPush;
+      const requireApprovalForPush = Boolean(ctx.approvedRuntime && !ctx.approvedRuntime.publishRoot) || resolveMeshPolicy3(mesh?.policy).requireApprovalForPush;
       let pushResult;
       if (!requireApprovalForPush) {
         const pushStarted = Date.now();
         try {
           const { stdout: tip } = await execFileAsync11("git", ["--no-replace-objects", "rev-parse", `${baseBranch}^{commit}`], { cwd: repoRoot, encoding: "utf8", windowsHide: true, env: gitChildEnv() });
           const publishCommit = tip.trim();
-          const approvedTarget = args?.approvedTargetShas?.[nodeId2];
+          const approvedTarget = args?.approvedTargetShas?.[nodeId];
           if (approvedTarget !== void 0 && publishCommit !== approvedTarget) throw new Error("approved_target_mismatch: final publication target changed");
           await assertRefineryPublishApproved(repoRoot, publishCommit, baseBranch, args?.approvedPublishShas, "origin", void 0, Math.max(1, submoduleReachability?.publicRepoCount || 0), {
             integrationBase: baseHead,
             onScan: (scan2) => recordMeshRefineStage(refineStages, "integration_range", scan2.identityFindings || scan2.policy === "public" && scan2.pathFindings ? "failed" : "passed", pushStarted, scan2)
           });
+          await ctx.approvedRuntime?.checkRootPublication(repoRoot, publishCommit, baseBranch, baseHead);
           await pushRefineryPinnedCommit(repoRoot, publishCommit, baseBranch, baseHead, execFileAsync11);
           pushResult = { pushed: true, remote: "origin", branch: baseBranch, durationMs: Date.now() - pushStarted };
           recordMeshRefineStage(refineStages, "push", "passed", pushStarted, pushResult);
@@ -144077,6 +144160,33 @@ ${e?.stderr || ""}`;
           }
         } };
       }
+      if (ctx.approvedRuntime) {
+        recordMeshRefineStage(refineStages, "cleanup", "skipped", Date.now(), { reason: "approved_candidate_retained" });
+        return { kind: "terminal", result: {
+          success: true,
+          merged: true,
+          pushed: true,
+          removed: false,
+          branch,
+          into: baseBranch,
+          pushResult,
+          validationSummary,
+          patchEquivalence,
+          submoduleReachability,
+          submoduleAlignment,
+          mergeResult,
+          refineStages,
+          finalBranchConvergenceState: {
+            branch: baseBranch,
+            mergedBranch: branch,
+            baseBranch,
+            merged: true,
+            pushed: true,
+            removed: false,
+            status: "merged_pushed"
+          }
+        } };
+      }
       const cleanupStarted = Date.now();
       const explicitRefineSessionCleanupPolicy = resolveMeshPolicy3(mesh?.policy).sessionCleanupOnNodeRemove;
       const refineSessionCleanupMode = explicitRefineSessionCleanupPolicy ? self.normalizeMeshSessionCleanupMode(explicitRefineSessionCleanupPolicy) : void 0;
@@ -144089,7 +144199,7 @@ ${e?.stderr || ""}`;
             const sid = typeof record8?.sessionId === "string" ? record8.sessionId : "";
             if (!sid) return false;
             if (readStringValue(record8?.meta?.meshCoordinatorFor) === meshId2) return false;
-            const boundToNode = readStringValue(record8?.meta?.meshNodeId) === nodeId2;
+            const boundToNode = readStringValue(record8?.meta?.meshNodeId) === nodeId;
             const matchedByWorkspace = !!workspace && record8?.workspace === workspace;
             return boundToNode || matchedByWorkspace;
           }).map((record8) => String(record8.sessionId));
@@ -144099,7 +144209,7 @@ ${e?.stderr || ""}`;
       }
       const removeResult = ctx.lightTarget ? await ctx.lightTarget.cleanup() : await self.execute("remove_mesh_node", {
         meshId: meshId2,
-        nodeId: nodeId2,
+        nodeId,
         ...refineSessionCleanupMode ? { sessionCleanupMode: refineSessionCleanupMode } : {},
         ...refineSessionIds && refineSessionIds.length > 0 ? { sessionIds: refineSessionIds } : {},
         inlineMesh: args?.inlineMesh,
@@ -144123,7 +144233,7 @@ ${e?.stderr || ""}`;
       try {
         const { meshRecord: meshRecord2 } = await Promise.resolve().then(() => (init_mesh_record(), mesh_record_exports));
         meshRecord2(meshId2, "node_removed", {
-          nodeId: nodeId2,
+          nodeId,
           payload: { refined: true, mergedBranch: branch, into: baseBranch, pushed: true, validationSummary, patchEquivalence, submoduleReachability, submoduleAlignment }
         }, { local: true });
         recordMeshRefineStage(refineStages, "ledger", "passed", ledgerStarted);
@@ -144234,23 +144344,23 @@ ${e?.stderr || ""}`;
       shouldAutoRetryRefine: () => shouldAutoRetryRefine,
       startMeshRefineJob: () => startMeshRefineJob
     });
-    async function executeMeshRefineNodeSynchronously(self, meshId2, nodeId2, args, light) {
-      const refusal2 = refinePublicationAuthorityRefusal(args, nodeId2);
+    async function executeMeshRefineNodeSynchronously(self, meshId2, nodeId, args, light) {
+      const refusal2 = refinePublicationAuthorityRefusal(args, nodeId);
       if (refusal2) return refusal2;
-      args = selectRefineNodePublicationArgs(args, nodeId2);
+      args = selectRefineNodePublicationArgs(args, nodeId);
       const refineStages = [];
       try {
-        const resolved = light ? await refineResolveLightRefsStage(self, meshId2, nodeId2, args, refineStages, light) : await refineResolveRefsStage(self, meshId2, nodeId2, args, refineStages);
+        const resolved = light ? await refineResolveLightRefsStage(self, meshId2, nodeId, args, refineStages, light) : await refineResolveRefsStage(self, meshId2, nodeId, args, refineStages);
         if (resolved.kind === "terminal") return resolved.result;
         const ctx = resolved.ctx;
         ctx.approvedRuntime = args[approvedRuntime];
-        if (ctx.approvedRuntime && ctx.baseBranch !== "main") {
-          return { success: false, code: "approved_runtime_base_mismatch", error: "The approved runtime is scoped to main." };
+        if (ctx.approvedRuntime && (ctx.baseBranch !== "main" || ctx.baseHead !== ctx.approvedRuntime.rootBase)) {
+          return { success: false, code: "approved_runtime_base_mismatch", error: "The approved runtime requires this stage\u2019s exact main base." };
         }
         await ctx.approvedRuntime?.verify(ctx.node.workspace);
         if (args?.progressContext) ctx.progress = args.progressContext;
         const leaseKey = `${ctx.repoRoot}::${ctx.baseBranch}`;
-        const leaseHolder = buildRefineJobKey(self, meshId2, nodeId2);
+        const leaseHolder = buildRefineJobKey(self, meshId2, nodeId);
         if (self.refineBaseLeases.has(leaseKey) && self.refineBaseLeases.get(leaseKey) !== leaseHolder) {
           recordMeshRefineStage(refineStages, "base_lease", "skipped", Date.now(), {
             leaseKey,
@@ -144434,9 +144544,9 @@ ${tail}` : ""
       const { retryable, code } = classifyBatchNodeConvergence(result);
       return { retry: retryable && !alreadyRetried, code };
     }
-    async function runRefinePipelineOnce(self, meshId2, nodeId2, args) {
+    async function runRefinePipelineOnce(self, meshId2, nodeId, args) {
       try {
-        return await executeMeshRefineNodeSynchronously(self, meshId2, nodeId2, args);
+        return await executeMeshRefineNodeSynchronously(self, meshId2, nodeId, args);
       } catch (e) {
         return { success: false, error: e?.message || String(e) };
       }
@@ -144653,34 +144763,34 @@ ${tail}` : ""
         }
       };
     }
-    async function startMeshRefineJob(self, meshId2, nodeId2, args) {
+    async function startMeshRefineJob(self, meshId2, nodeId, args) {
       const holdEval = evaluateNewWorkHold({ meshId: meshId2 });
       if (holdEval.held) {
         return buildNewWorkHeldRefusal2(holdEval.hold, { command: "refine_mesh_node", surface: "router_command" });
       }
-      const key7 = buildRefineJobKey(self, meshId2, nodeId2);
+      const key7 = buildRefineJobKey(self, meshId2, nodeId);
       const terminal = self.terminalRefineJobs.get(key7);
       const alreadyRunning = self.runningRefineJobs.get(key7);
       if (alreadyRunning) return { ...alreadyRunning, duplicate: true };
       const jobId = typeof args?.jobId === "string" && args.jobId.trim() ? args.jobId.trim() : `refine_${createInteractionId()}`;
       const interactionId = createInteractionId();
-      const placeholder = buildRefineJobHandle(self, { meshId: meshId2, nodeId: nodeId2, jobId, interactionId, retryOfJobId: terminal?.jobId });
+      const placeholder = buildRefineJobHandle(self, { meshId: meshId2, nodeId, jobId, interactionId, retryOfJobId: terminal?.jobId });
       self.runningRefineJobs.set(key7, placeholder);
       const meshRecord2 = await self.getMeshForCommand(meshId2, args?.inlineMesh, { preferInline: true });
       const mesh = meshRecord2?.mesh;
-      const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId2));
+      const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
       if (!node) {
         self.runningRefineJobs.delete(key7);
-        return { success: false, error: `Node '${nodeId2}' not found in mesh` };
+        return { success: false, error: `Node '${nodeId}' not found in mesh` };
       }
       if (!node.isLocalWorktree || !node.workspace) {
         self.runningRefineJobs.delete(key7);
         return { success: false, error: `Refinery requires a local worktree node` };
       }
-      const duplicateDispatch = findOpenLedgerRefineDispatch(meshId2, nodeId2, jobId);
+      const duplicateDispatch = findOpenLedgerRefineDispatch(meshId2, nodeId, jobId);
       if (duplicateDispatch) {
         self.runningRefineJobs.delete(key7);
-        LOG.warn("Mesh", `[Refinery] Refusing duplicate refine dispatch for node ${nodeId2} \u2014 job ${duplicateDispatch.jobId} was dispatched ${duplicateDispatch.ageMs}ms ago and has no terminal entry.`);
+        LOG.warn("Mesh", `[Refinery] Refusing duplicate refine dispatch for node ${nodeId} \u2014 job ${duplicateDispatch.jobId} was dispatched ${duplicateDispatch.ageMs}ms ago and has no terminal entry.`);
         return {
           success: true,
           async: true,
@@ -144689,14 +144799,14 @@ ${tail}` : ""
           code: "duplicate_refine_dispatch",
           meshId: meshId2,
           jobId: duplicateDispatch.jobId,
-          targetNodeId: nodeId2,
+          targetNodeId: nodeId,
           startedAt: duplicateDispatch.timestamp,
-          note: `A refine job for node '${nodeId2}' is already in flight (jobId=${duplicateDispatch.jobId}, dispatched ${duplicateDispatch.timestamp}). This call was NOT dispatched again \u2014 a second job would race the first and fail against the worktree the first removes on success. Wait for that job's terminal event instead of re-invoking.`
+          note: `A refine job for node '${nodeId}' is already in flight (jobId=${duplicateDispatch.jobId}, dispatched ${duplicateDispatch.timestamp}). This call was NOT dispatched again \u2014 a second job would race the first and fail against the worktree the first removes on success. Wait for that job's terminal event instead of re-invoking.`
         };
       }
       const coordinatorDaemonId = typeof args?.coordinatorDaemonId === "string" && args.coordinatorDaemonId.trim() ? args.coordinatorDaemonId.trim() : self.deps.statusInstanceId || void 0;
       const coordinatorSessionId = typeof args?.coordinatorSessionId === "string" && args.coordinatorSessionId.trim() ? args.coordinatorSessionId.trim() : void 0;
-      const handle = buildRefineJobHandle(self, { meshId: meshId2, nodeId: nodeId2, node, jobId, interactionId, retryOfJobId: terminal?.jobId, coordinatorDaemonId, coordinatorSessionId });
+      const handle = buildRefineJobHandle(self, { meshId: meshId2, nodeId, node, jobId, interactionId, retryOfJobId: terminal?.jobId, coordinatorDaemonId, coordinatorSessionId });
       handle.publicationContract = snapshotRefinePublicationContract(args);
       handle.approvedRuntimeAudit = args[approvedRuntime]?.audit;
       self.runningRefineJobs.set(key7, handle);
@@ -144831,13 +144941,13 @@ ${tail}` : ""
             }
             const router = ctx.components().router;
             const sourceNode = host.mesh.nodes.find((n) => n.workspace === admission.checkoutRoot) ?? host.mesh.nodes[0];
-            const nodeId2 = `light-land-${batchId.slice(0, 8)}`;
-            const node = { id: nodeId2, workspace: prep.handle.path, isLocalWorktree: true, clonedFromNodeId: sourceNode?.id, daemonId: sourceNode?.daemonId, machineId: getMachineId() };
+            const nodeId = `light-land-${batchId.slice(0, 8)}`;
+            const node = { id: nodeId, workspace: prep.handle.path, isLocalWorktree: true, clonedFromNodeId: sourceNode?.id, daemonId: sourceNode?.daemonId, machineId: getMachineId() };
             const mesh = { ...host.mesh, nodes: [...host.mesh.nodes, node] };
             const result = await runWithRefineExecutionSlot(`light-land ${batchId.slice(0, 8)} (mesh ${meshId2})`, () => executeMeshRefineNodeSynchronously(
               router,
               meshId2,
-              nodeId2,
+              nodeId,
               { ...Array.isArray(args?.approvedPublishShas) ? { approvedPublishShas: args.approvedPublishShas } : {} },
               {
                 mesh,
@@ -145308,7 +145418,7 @@ ${tail}` : ""
     function toLedgerQueryEntry(entry) {
       if (!isEvidenceIdentifier2(entry.id) || !isEvidenceIdentifier2(entry.meshId)) return null;
       const id4 = (value) => isEvidenceIdentifier2(value) ? value : void 0;
-      const nodeId2 = id4(entry.nodeId);
+      const nodeId = id4(entry.nodeId);
       const sessionId = id4(entry.sessionId);
       const providerType = id4(entry.providerType);
       const taskId = id4(entry.taskId);
@@ -145317,7 +145427,7 @@ ${tail}` : ""
         meshId: entry.meshId,
         timestamp: entry.timestamp,
         kind: entry.kind,
-        ...nodeId2 ? { nodeId: nodeId2 } : {},
+        ...nodeId ? { nodeId } : {},
         ...sessionId ? { sessionId } : {},
         ...providerType ? { providerType } : {},
         ...taskId ? { taskId } : {},
@@ -145716,8 +145826,8 @@ ${tail}` : ""
                 const mesh = getMesh(req.meshId);
                 const self = ctx.deps.statusInstanceId;
                 const machineId = getMachineId();
-                const nodeId2 = typeof task.assignedNodeId === "string" ? task.assignedNodeId : "";
-                const node = mesh?.nodes?.find((n) => n.id === nodeId2);
+                const nodeId = typeof task.assignedNodeId === "string" ? task.assignedNodeId : "";
+                const node = mesh?.nodes?.find((n) => n.id === nodeId);
                 const workspace = typeof node?.workspace === "string" ? node.workspace : "";
                 const repoIdentity = mesh?.repoIdentity || "";
                 const declared = normalizeOwnedPaths2(task.ownedPaths);
@@ -145727,7 +145837,7 @@ ${tail}` : ""
                     ownershipScope: attestLocalOwnership2({
                       repoIdentity,
                       machineId,
-                      nodeId: nodeId2,
+                      nodeId,
                       workspace,
                       phase: "source",
                       paths: declared.declaration
@@ -145736,7 +145846,7 @@ ${tail}` : ""
                 } else if (self && repoIdentity && workspace && node?.daemonId && !daemonIdsEquivalent5(node.daemonId, self) && declared.declaration.paths.length > 0 && ctx.deps.dispatchMeshCommand) {
                   const proof = await fetchRemoteOwnership(ctx.deps.dispatchMeshCommand, {
                     meshId: req.meshId,
-                    nodeId: nodeId2,
+                    nodeId,
                     daemonId: node.daemonId,
                     workspace,
                     repoIdentity,
@@ -145798,9 +145908,9 @@ ${tail}` : ""
             if (req.nodeIds) {
               const records = recoveryContextRecords(req.meshId);
               const contexts = {};
-              for (const nodeId2 of new Set(req.nodeIds)) {
-                contexts[nodeId2] = getSessionRecoveryContext(req.meshId, {
-                  nodeId: nodeId2,
+              for (const nodeId of new Set(req.nodeIds)) {
+                contexts[nodeId] = getSessionRecoveryContext(req.meshId, {
+                  nodeId,
                   ...req.maxRetries !== void 0 ? { maxRetries: req.maxRetries } : {}
                 }, records);
               }
@@ -146892,7 +147002,7 @@ ${tail}` : ""
       if (bytes > MAX_BYTES) throw new Error("approval files exceed byte bound");
     }
     function safeDir(configDir, area, create) {
-      const root2 = (0, import_node_fs53.realpathSync)(configDir);
+      const root = (0, import_node_fs53.realpathSync)(configDir);
       for (const component of ["assistant", area]) {
         const parent = component === "assistant" ? configDir : (0, import_node_path45.join)(configDir, "assistant");
         const path148 = (0, import_node_path45.join)(parent, component);
@@ -146903,7 +147013,7 @@ ${tail}` : ""
         else return path148;
       }
       const dir = (0, import_node_path45.join)(configDir, "assistant", area);
-      const rel = (0, import_node_path45.relative)(root2, (0, import_node_fs53.realpathSync)(dir));
+      const rel = (0, import_node_path45.relative)(root, (0, import_node_fs53.realpathSync)(dir));
       if (rel === ".." || rel.startsWith(`..${import_node_path45.sep}`)) throw new Error("approval directory escaped config");
       return dir;
     }
@@ -147520,8 +147630,8 @@ ${tail}` : ""
     function retentionStatePath() {
       return (0, import_path38.join)(getLedgerDir(), "worktree-node-retention-state.json");
     }
-    function stateKey(meshId2, nodeId2) {
-      return `${meshId2}::${nodeId2}`;
+    function stateKey(meshId2, nodeId) {
+      return `${meshId2}::${nodeId}`;
     }
     function loadRetentionState() {
       try {
@@ -147599,12 +147709,12 @@ ${tail}` : ""
     function isCoordinatorIdentityNode(node) {
       return node?.coordinator === true || node?.isCoordinator === true || typeof node?.coordinatorFor === "string" || typeof node?.meshCoordinatorFor === "string" || typeof node?.meta?.meshCoordinatorFor === "string";
     }
-    function sessionMatchesNode(record8, node, nodeId2) {
+    function sessionMatchesNode(record8, node, nodeId) {
       const sessionId = typeof record8?.sessionId === "string" ? record8.sessionId : "";
       if (!sessionId) return false;
       const workspace = typeof node?.workspace === "string" ? node.workspace : "";
       if (workspace && record8?.workspace === workspace) return true;
-      if (record8?.meta?.meshNodeId === nodeId2) return true;
+      if (record8?.meta?.meshNodeId === nodeId) return true;
       return false;
     }
     function resolveSourceRepoRoot(mesh, node) {
@@ -147614,8 +147724,8 @@ ${tail}` : ""
     async function evaluateNode(deps, opts, ctx, node) {
       const mesh = opts.mesh;
       const meshId2 = ctx.meshId;
-      const nodeId2 = typeof node?.id === "string" ? node.id : String(node?.id ?? "");
-      const skip = (reasonCode, detail) => ({ nodeId: nodeId2, candidate: false, reasonCode, detail });
+      const nodeId = typeof node?.id === "string" ? node.id : String(node?.id ?? "");
+      const skip = (reasonCode, detail) => ({ nodeId, candidate: false, reasonCode, detail });
       if (ctx.graceMs === 0) {
         return skip("retention_disabled", "Worktree-node retention is disabled (grace = 0).");
       }
@@ -147640,27 +147750,27 @@ ${tail}` : ""
           return skip("process_cwd_reference", "Worktree path is (or contains) the current process working directory; an open-runtime/cwd reference blocks removal.");
         }
       }
-      const queueHit = ctx.queueEntries.some((entry) => (entry.status === "pending" || entry.status === "assigned") && (daemonIdsEquivalent5(entry.targetNodeId, nodeId2) || daemonIdsEquivalent5(entry.assignedNodeId, nodeId2)));
-      const directHit = ctx.directDispatches.some((d) => daemonIdsEquivalent5(d.nodeId ?? void 0, nodeId2));
+      const queueHit = ctx.queueEntries.some((entry) => (entry.status === "pending" || entry.status === "assigned") && (daemonIdsEquivalent5(entry.targetNodeId, nodeId) || daemonIdsEquivalent5(entry.assignedNodeId, nodeId)));
+      const directHit = ctx.directDispatches.some((d) => daemonIdsEquivalent5(d.nodeId ?? void 0, nodeId));
       if (queueHit || directHit) {
         return skip("queue_reference", "An active/pending/assigned queue task or direct dispatch still references this node.");
       }
       const refineJobs = buildMeshAsyncRefineJobs2({ meshId: meshId2, ledgerEntries: ctx.ledgerEntries });
-      const inFlight10 = refineJobs.some((job) => (job.status === "accepted" || job.status === "running") && (daemonIdsEquivalent5(job.nodeId, nodeId2) || daemonIdsEquivalent5(job.targetNodeId, nodeId2)));
+      const inFlight10 = refineJobs.some((job) => (job.status === "accepted" || job.status === "running") && (daemonIdsEquivalent5(job.nodeId, nodeId) || daemonIdsEquivalent5(job.targetNodeId, nodeId)));
       if (inFlight10) {
         return skip("review_inflight", "A Refinery job for this node is still in flight.");
       }
-      if (hasBlockedReviewRefineResult(nodeId2, ctx.ledgerEntries)) {
+      if (hasBlockedReviewRefineResult(nodeId, ctx.ledgerEntries)) {
         return skip("blocked_review", "The latest refine result for this node is blocked_review; a reviewer has not cleared it.");
       }
       if (ctx.sessions === void 0) {
         return skip("live_session", "Session inventory unavailable; refusing to plan removal without a liveness check (fail-closed).");
       }
-      const liveSession = ctx.sessions.find((record8) => sessionMatchesNode(record8, node, nodeId2) && (0, import_session_host_core5.getSessionHostSurfaceKind)(record8) === "live_runtime");
+      const liveSession = ctx.sessions.find((record8) => sessionMatchesNode(record8, node, nodeId) && (0, import_session_host_core5.getSessionHostSurfaceKind)(record8) === "live_runtime");
       if (liveSession) {
         return skip("live_session", "A live/starting/generating/waiting/idle retained session is still attached to this node.");
       }
-      const precheck = await deps.precheckLocalWorktreeRemovable({ mesh, node, nodeId: nodeId2 });
+      const precheck = await deps.precheckLocalWorktreeRemovable({ mesh, node, nodeId });
       if (precheck.ok === false) {
         return skip(precheck.code, precheck.error);
       }
@@ -147688,7 +147798,7 @@ ${tail}` : ""
       }
       if (!convergence.allow) {
         return {
-          nodeId: nodeId2,
+          nodeId,
           candidate: false,
           reasonCode: "convergence_unproven",
           detail: `Merge/push convergence is not proven (missing or stale upstream proof): ${convergence.error || convergence.status || "unknown"}`,
@@ -147696,7 +147806,7 @@ ${tail}` : ""
         };
       }
       return {
-        nodeId: nodeId2,
+        nodeId,
         candidate: true,
         reasonCode: "candidate",
         detail: `Eligible: convergence proven via ${convergence.source || "unknown"} (${convergence.status || "ok"}).`,
@@ -147777,8 +147887,8 @@ ${tail}` : ""
     async function executeNodeRemoval(deps, opts, entry, owner, leaseMs) {
       const mesh = opts.mesh;
       const meshId2 = String(mesh?.id || mesh?.name || "");
-      const nodeId2 = entry.nodeId;
-      const node = (Array.isArray(mesh?.nodes) ? mesh.nodes : []).find((n) => meshNodeIdMatches7(n, nodeId2));
+      const nodeId = entry.nodeId;
+      const node = (Array.isArray(mesh?.nodes) ? mesh.nodes : []).find((n) => meshNodeIdMatches7(n, nodeId));
       const fail17 = (code, error) => {
         entry.execution = { attempted: true, success: false, code, error };
         metrics.removalFailures++;
@@ -147787,10 +147897,10 @@ ${tail}` : ""
         entry.execution = { attempted: true, success: true, removed: true, skipped: true };
         return;
       }
-      const acquired = acquireWorktreeRetentionLease({ meshId: meshId2, nodeId: nodeId2, owner, nowMs: opts.nowMs, leaseMs });
+      const acquired = acquireWorktreeRetentionLease({ meshId: meshId2, nodeId, owner, nowMs: opts.nowMs, leaseMs });
       if (!acquired) {
         const state2 = loadRetentionState();
-        const lease = state2.nodes[stateKey(meshId2, nodeId2)]?.lease;
+        const lease = state2.nodes[stateKey(meshId2, nodeId)]?.lease;
         entry.reasonCode = "lease_held";
         entry.detail = "Another retention pass holds an unexpired removal lease for this node.";
         if (entry.auto) {
@@ -147802,7 +147912,7 @@ ${tail}` : ""
         return;
       }
       try {
-        const precheck = await deps.precheckLocalWorktreeRemovable({ mesh, node, nodeId: nodeId2 });
+        const precheck = await deps.precheckLocalWorktreeRemovable({ mesh, node, nodeId });
         if (precheck.ok === false) {
           entry.reasonCode = "execution_precheck_refused";
           fail17(precheck.code, precheck.error);
@@ -147810,11 +147920,11 @@ ${tail}` : ""
         }
         if (deps.cleanupMeshSessions) {
           try {
-            await deps.cleanupMeshSessions({ meshId: meshId2, nodeId: nodeId2, node, mode: "delete_stopped", source: "mesh_remove_node" });
+            await deps.cleanupMeshSessions({ meshId: meshId2, nodeId, node, mode: "delete_stopped", source: "mesh_remove_node" });
           } catch {
           }
         }
-        const cleanup = await deps.cleanupLocalWorktreeNode({ mesh, node, nodeId: nodeId2 });
+        const cleanup = await deps.cleanupLocalWorktreeNode({ mesh, node, nodeId });
         if (cleanup.success === false) {
           entry.reasonCode = "execution_cleanup_failed";
           fail17(cleanup.code, cleanup.error);
@@ -147823,7 +147933,7 @@ ${tail}` : ""
         if (cleanup.skipped !== true) {
           try {
             meshRecord(meshId2, "worktree_directory_removed", {
-              nodeId: nodeId2,
+              nodeId,
               payload: {
                 source: "worktree_node_retention",
                 workspace: typeof cleanup.removedPath === "string" ? cleanup.removedPath : typeof node?.workspace === "string" ? node.workspace : void 0,
@@ -147843,7 +147953,7 @@ ${tail}` : ""
         ));
         let removed = false;
         try {
-          removed = removeNodeFromMesh(meshId2, nodeId2) === true;
+          removed = removeNodeFromMesh(meshId2, nodeId) === true;
         } catch (e) {
           fail17("execution_membership_not_removed", `Membership removal threw: ${e?.message || e}`);
           return;
@@ -147851,7 +147961,7 @@ ${tail}` : ""
         try {
           const cached5 = deps.getCachedInlineMesh?.(meshId2);
           if (cached5 && deps.removeInlineMeshNode) {
-            if (deps.removeInlineMeshNode(meshId2, cached5, nodeId2)) removed = true;
+            if (deps.removeInlineMeshNode(meshId2, cached5, nodeId)) removed = true;
           }
         } catch {
         }
@@ -147866,7 +147976,7 @@ ${tail}` : ""
         }
         try {
           meshRecord(meshId2, "node_removed", {
-            nodeId: nodeId2,
+            nodeId,
             payload: {
               worktree: true,
               source: "worktree_node_retention",
@@ -147894,10 +148004,10 @@ ${tail}` : ""
         };
         metrics.removed++;
         const state2 = loadRetentionState();
-        delete state2.nodes[stateKey(meshId2, nodeId2)];
+        delete state2.nodes[stateKey(meshId2, nodeId)];
         saveRetentionState(state2);
       } finally {
-        releaseWorktreeRetentionLease({ meshId: meshId2, nodeId: nodeId2, owner });
+        releaseWorktreeRetentionLease({ meshId: meshId2, nodeId, owner });
       }
     }
     async function runWorktreeNodeRetentionTick(deps, opts) {
@@ -147920,8 +148030,8 @@ ${tail}` : ""
         let orphansPruned = 0;
         for (const key7 of Object.keys(state2.nodes)) {
           if (!key7.startsWith(meshPrefix)) continue;
-          const nodeId2 = key7.slice(meshPrefix.length);
-          if (liveNodeIds.has(nodeId2)) continue;
+          const nodeId = key7.slice(meshPrefix.length);
+          if (liveNodeIds.has(nodeId)) continue;
           const record8 = state2.nodes[key7];
           if (record8?.lease && record8.lease.expiresAt > opts.nowMs) continue;
           delete state2.nodes[key7];
@@ -148846,17 +148956,17 @@ ${tail}` : ""
       return deleted;
     }
     function pruneExpiredSessionHostRuntimes(now = Date.now()) {
-      const root2 = (0, import_path41.join)(getConfigDir2(), "session-host");
-      if (!(0, import_fs44.existsSync)(root2)) return 0;
+      const root = (0, import_path41.join)(getConfigDir2(), "session-host");
+      if (!(0, import_fs44.existsSync)(root)) return 0;
       let apps;
       try {
-        apps = (0, import_fs44.readdirSync)(root2);
+        apps = (0, import_fs44.readdirSync)(root);
       } catch {
         return 0;
       }
       const candidates = [];
       for (const app of apps) {
-        const runtimesDir = (0, import_path41.join)(root2, app, "runtimes");
+        const runtimesDir = (0, import_path41.join)(root, app, "runtimes");
         if (!(0, import_fs44.existsSync)(runtimesDir)) continue;
         for (const f of listDirFiles(runtimesDir)) {
           if (!f.path.endsWith(".json")) continue;
@@ -148924,8 +149034,8 @@ ${tail}` : ""
     function resolveLocalBaseRepoRoot(nodes) {
       for (const n of nodes) {
         if (n.isLocalWorktree) continue;
-        const root2 = n.repoRoot || n.workspace;
-        if (root2 && (0, import_fs44.existsSync)((0, import_path41.join)(root2, ".git"))) return root2;
+        const root = n.repoRoot || n.workspace;
+        if (root && (0, import_fs44.existsSync)((0, import_path41.join)(root, ".git"))) return root;
       }
       return void 0;
     }
@@ -149272,8 +149382,8 @@ ${e?.message || ""}`;
         const target2 = readStringValue2(task.targetSessionId);
         if (target2) {
           const record8 = records?.find((r) => sessionIdsEquivalent(r.sessionId, target2));
-          const nodeId2 = readStringValue2(record8?.meta?.meshNodeId);
-          if (!task.targetNodeId || !nodeId2 || meshNodeIdMatches7({ nodeId: nodeId2 }, task.targetNodeId)) ids.add(target2);
+          const nodeId = readStringValue2(record8?.meta?.meshNodeId);
+          if (!task.targetNodeId || !nodeId || meshNodeIdMatches7({ nodeId }, task.targetNodeId)) ids.add(target2);
         }
       }
       for (const dispatch2 of getActiveDirectDispatchesStrict(meshId2)) {
@@ -150424,10 +150534,10 @@ ${grant.exp}`).digest("hex");
       const coverage = [];
       const quota = [];
       for (const member of members) {
-        const nodeId2 = text7(member.id) || text7(member.nodeId);
-        if (!nodeId2) continue;
-        const node = nodes.find((n) => (text7(n.nodeId) || text7(n.id)) === nodeId2) ?? {};
-        const route = rec3(rec3(view2.routes)[nodeId2]);
+        const nodeId = text7(member.id) || text7(member.nodeId);
+        if (!nodeId) continue;
+        const node = nodes.find((n) => (text7(n.nodeId) || text7(n.id)) === nodeId) ?? {};
+        const route = rec3(rec3(view2.routes)[nodeId]);
         const owner = text7(route.ownerDaemonId) || text7(node.daemonId) || text7(member.daemonId) || (route.route === "local" ? opts.selfDaemonId : "");
         const ownershipConsistent = [node.daemonId, member.daemonId, route.ownerDaemonId].map(text7).filter(Boolean).every((id4) => daemonIdsEquivalent5(id4, owner));
         const local = ownershipConsistent && !!owner && daemonIdsEquivalent5(owner, opts.selfDaemonId);
@@ -150438,7 +150548,7 @@ ${grant.exp}`).digest("hex");
         const offline = !local && (route.route === "unreachable" || ["disconnected", "closed", "offline", "unreachable"].includes(text7(rec3(node.connection).state)));
         const freshness2 = offline ? "unreachable" : local ? opts.localStates ? "fresh" : "unknown" : !ownerMatches || source2 === "none" || observedAt === null ? "not_observed" : held.handshakePending === true ? "stale" : choice(held.freshness, freshnesses, "unknown");
         coverage.push({
-          nodeId: nodeId2,
+          nodeId,
           ownerDaemonId: owner || null,
           source: source2,
           freshness: freshness2,
@@ -150449,7 +150559,7 @@ ${grant.exp}`).digest("hex");
         if (local || ownerMatches) for (const [key7, value] of Object.entries(rec3(rec3(node.nodeFacts).quota))) {
           const q2 = rec3(value);
           quota.push({
-            nodeId: nodeId2,
+            nodeId,
             ownerDaemonId: owner,
             provider: q2.provider ?? key7,
             status: q2.status,
@@ -150457,11 +150567,11 @@ ${grant.exp}`).digest("hex");
             updatedAt: q2.updatedAt
           });
         }
-        for (const task of tasks.filter((t) => text7(t.nodeId) === nodeId2 && text7(t.taskId) && text7(t.sessionId))) {
+        for (const task of tasks.filter((t) => text7(t.nodeId) === nodeId && text7(t.taskId) && text7(t.sessionId))) {
           const sid = text7(task.sessionId);
           if (!owner || !ownershipConsistent || text7(task.ownerDaemonId) && !daemonIdsEquivalent5(owner, text7(task.ownerDaemonId))) continue;
-          const localState = local ? (opts.localStates ?? []).map(rec3).find((s2) => sessionIdsEquivalent(text7(s2.instanceId), sid) && text7(rec3(s2.settings).meshNodeFor) === opts.meshId && daemonIdsEquivalent5(text7(rec3(s2.settings).meshNodeId), nodeId2) && rec3(s2.settings).assistant !== true) : void 0;
-          const remoteState = !local && ownerMatches ? list(held.sessions).find((s2) => sessionIdsEquivalent(text7(s2.id), sid) && text7(rec3(s2.settings).meshNodeFor) === opts.meshId && daemonIdsEquivalent5(text7(rec3(s2.settings).meshNodeId), nodeId2)) : void 0;
+          const localState = local ? (opts.localStates ?? []).map(rec3).find((s2) => sessionIdsEquivalent(text7(s2.instanceId), sid) && text7(rec3(s2.settings).meshNodeFor) === opts.meshId && daemonIdsEquivalent5(text7(rec3(s2.settings).meshNodeId), nodeId) && rec3(s2.settings).assistant !== true) : void 0;
+          const remoteState = !local && ownerMatches ? list(held.sessions).find((s2) => sessionIdsEquivalent(text7(s2.id), sid) && text7(rec3(s2.settings).meshNodeFor) === opts.meshId && daemonIdsEquivalent5(text7(rec3(s2.settings).meshNodeId), nodeId)) : void 0;
           const detail = list(node.activeSessionDetails).find((s2) => sessionIdsEquivalent(text7(s2.sessionId), sid));
           const state2 = localState ? detail ?? localState : remoteState ? detail ?? remoteState : void 0;
           const attemptId = text7(task.attemptId) || null;
@@ -150496,7 +150606,7 @@ ${grant.exp}`).digest("hex");
             provider: sessionProvider(state2?.providerType ?? state2?.type ?? task.providerType),
             status: state2 && attemptMatches && freshness2 === "fresh" ? observedStatus : "unknown",
             meshId: opts.meshId,
-            nodeId: nodeId2,
+            nodeId,
             ageMs: null,
             messageCount: localState && Array.isArray(rec3(localState.activeChat).messages) ? rec3(localState.activeChat).messages.length : 0,
             workspace: null,
@@ -151534,19 +151644,19 @@ ${grant.exp}`).digest("hex");
     }
     function routingNodeRow(v, labelOf) {
       const r = rec5(v);
-      const nodeId2 = readText3(r?.nodeId);
-      if (!nodeId2) return null;
-      const stages = rec5(r?.stages) ?? {};
-      const floor = rec5(stages.difficultyFloor) ?? {};
-      const quotaStage = rec5(stages.quota) ?? {};
+      const nodeId = readText3(r?.nodeId);
+      if (!nodeId) return null;
+      const stages2 = rec5(r?.stages) ?? {};
+      const floor = rec5(stages2.difficultyFloor) ?? {};
+      const quotaStage = rec5(stages2.quota) ?? {};
       const winner = rec5(r?.predictedWinner);
       const winnerProvider = readText3(winner?.providerType);
       const winnerModel = readText3(winner?.model);
       const reason = readText3(r?.reason);
       const displaced = readText3(quotaStage.displacedFitnessWinner);
       return {
-        nodeId: nodeId2,
-        machineName: labelOf(nodeId2),
+        nodeId,
+        machineName: labelOf(nodeId),
         predictedWinner: winnerProvider ? { providerType: winnerProvider, ...winnerModel ? { model: winnerModel } : {}, fitnessScore: routingNum(winner?.fitnessScore) ?? 0 } : null,
         ...reason ? { reason } : {},
         admitted: (Array.isArray(floor.admittedSlots) ? floor.admittedSlots : []).map(routingSlot).filter((s2) => !!s2),
@@ -151562,7 +151672,7 @@ ${grant.exp}`).digest("hex");
     }
     function projectRoutingView(preview, difficulty, machineLabels = /* @__PURE__ */ new Map()) {
       const p = rec5(preview) ?? {};
-      const labelOf = (nodeId2) => machineLabels.get(nodeId2) ?? null;
+      const labelOf = (nodeId) => machineLabels.get(nodeId) ?? null;
       const winner = rec5(p.predictedWinner);
       const winnerNode = readText3(winner?.nodeId);
       const winnerProvider = readText3(winner?.providerType);
@@ -151633,15 +151743,15 @@ ${grant.exp}`).digest("hex");
     }
     function followerRoutingNodeRow(v) {
       const r = rec5(v);
-      const nodeId2 = readText3(r?.nodeId);
-      if (!nodeId2) return null;
+      const nodeId = readText3(r?.nodeId);
+      if (!nodeId) return null;
       const winner = rec5(r?.predictedWinner);
       const winnerProvider = readText3(winner?.providerType);
       const winnerModel = readText3(winner?.model);
       const reason = readText3(r?.reason);
       const displaced = readText3(r?.displacedFitnessWinner);
       return {
-        nodeId: nodeId2,
+        nodeId,
         machineName: readText3(r?.machineName) || null,
         predictedWinner: winnerProvider ? { providerType: winnerProvider, ...winnerModel ? { model: winnerModel } : {}, fitnessScore: routingNum(winner?.fitnessScore) ?? 0 } : null,
         ...reason ? { reason } : {},
@@ -153226,10 +153336,10 @@ ${b.text}`).join("\n\n");
         tracker = new SkillHintTracker();
       }
     });
-    function resolveSkillDirectory(root2, subdir) {
+    function resolveSkillDirectory(root, subdir) {
       if (!DIR_IMPORT_SUBDIRS.includes(subdir)) return null;
       try {
-        const realRoot = (0, import_fs45.realpathSync)(root2);
+        const realRoot = (0, import_fs45.realpathSync)(root);
         const dir = (0, import_path43.join)(realRoot, ...subdir.split("/"));
         if (!(0, import_fs45.existsSync)(dir)) return null;
         const realDir = (0, import_fs45.realpathSync)(dir);
@@ -153482,9 +153592,9 @@ ${b.text}`).join("\n\n");
         return { success: false, code: "invalid_args", error: `subdir must be one of ${DIR_IMPORT_SUBDIRS.join(", ")}` };
       }
       const roots = (r.mesh.nodes ?? []).map((n) => n.repoRoot || n.workspace).filter((x) => typeof x === "string" && !!x);
-      for (const root2 of roots) {
+      for (const root of roots) {
         for (const sub of wanted ? [wanted] : DIR_IMPORT_SUBDIRS) {
-          const dir = resolveSkillDirectory(root2, sub);
+          const dir = resolveSkillDirectory(root, sub);
           if (!dir) continue;
           const names = Array.isArray(args?.skills) ? args.skills.filter((s2) => typeof s2 === "string") : [];
           if (!names.length || str14(args?.action) === "scan") {
@@ -155738,7 +155848,7 @@ ${committed.block}`;
               }
             },
             getCachedInlineMesh: (meshId2) => router.getCachedInlineMesh(meshId2),
-            removeInlineMeshNode: (meshId2, mesh, nodeId2) => router.removeInlineMeshNode(meshId2, mesh, nodeId2),
+            removeInlineMeshNode: (meshId2, mesh, nodeId) => router.removeInlineMeshNode(meshId2, mesh, nodeId),
             invalidateAggregateMeshStatus: (meshId2) => router.invalidateAggregateMeshStatus(meshId2)
           };
           const tickId = `housekeeping-${nowMs2}`;
@@ -159424,8 +159534,8 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       const refusal2 = describeCanaryContract(provider, selection);
       if (refusal2) return result(false, true, "canary_contract_unsupported", refusal2);
       const spec = provider.hostHandoffCanary;
-      const root2 = (0, import_node_fs59.mkdtempSync)((0, import_node_path49.join)(options.parentDir ?? (0, import_node_os15.tmpdir)(), "adhdev-host-canary-"));
-      const config = (0, import_node_path49.join)(root2, "config"), workspace = (0, import_node_path49.join)(root2, "workspace");
+      const root = (0, import_node_fs59.mkdtempSync)((0, import_node_path49.join)(options.parentDir ?? (0, import_node_os15.tmpdir)(), "adhdev-host-canary-"));
+      const config = (0, import_node_path49.join)(root, "config"), workspace = (0, import_node_path49.join)(root, "workspace");
       (0, import_node_fs59.mkdirSync)(config, { mode: 448 });
       (0, import_node_fs59.mkdirSync)(workspace, { mode: 448 });
       let args;
@@ -159561,9 +159671,9 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args],
             { cwd: workspace, timeout: 3e3, maxBuffer: 64 * 1024, windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" } }
           );
-          const root2 = (await git15(["rev-parse", "--show-toplevel"])).stdout.trim();
+          const root = (await git15(["rev-parse", "--show-toplevel"])).stdout.trim();
           const remote = (await git15(["config", "--get", "remote.origin.url"])).stdout.trim();
-          add("repository_identity", (0, import_node_fs60.realpathSync)(root2) === workspace && !!p.mesh.repoIdentity && normalizeRepoIdentity(remote) === normalizeRepoIdentity(p.mesh.repoIdentity));
+          add("repository_identity", (0, import_node_fs60.realpathSync)(root) === workspace && !!p.mesh.repoIdentity && normalizeRepoIdentity(remote) === normalizeRepoIdentity(p.mesh.repoIdentity));
         } catch {
           add("repository_identity", false, "A registered repository with matching identity is required.");
         }
@@ -159821,14 +159931,14 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       return { success: true, enabled: hostHandoffEnabled() };
     }
     async function pairTargetWithHost(ctx, args) {
-      const meshId2 = str19(args?.meshId), token = str19(args?.token), hostDaemonId2 = str19(args?.hostDaemonId), nodeId2 = str19(args?.targetNodeId), workspace = str19(args?.workspace);
+      const meshId2 = str19(args?.meshId), token = str19(args?.token), hostDaemonId2 = str19(args?.hostDaemonId), nodeId = str19(args?.targetNodeId), workspace = str19(args?.workspace);
       const selfDaemonId = str19(ctx.deps.statusInstanceId);
-      if (!meshId2 || !token || !hostDaemonId2 || !nodeId2 || !workspace) return { success: false, code: "invalid_args", error: "meshId, token, hostDaemonId, targetNodeId and workspace are required" };
+      if (!meshId2 || !token || !hostDaemonId2 || !nodeId || !workspace) return { success: false, code: "invalid_args", error: "meshId, token, hostDaemonId, targetNodeId and workspace are required" };
       if (!ctx.deps.dispatchMeshCommand) return { success: false, code: "peer_capability_unconfirmed", error: "mesh transport unavailable" };
       const answer2 = unwrapMeshRelayResult(await ctx.deps.dispatchMeshCommand(hostDaemonId2, "apply_mesh_host_join", {
         meshId: meshId2,
         token,
-        memberNode: { id: nodeId2, workspace, daemonId: selfDaemonId, role: "member" }
+        memberNode: { id: nodeId, workspace, daemonId: selfDaemonId, role: "member" }
       }), { command: "apply_mesh_host_join", peerDaemonId: hostDaemonId2 });
       if (answer2.success !== true) return { success: false, code: str19(answer2.code) || "mesh_host_join_rejected", error: str19(answer2.error) || "The host refused the pairing." };
       const key7 = str19(answer2.originGrantPublicKey) || str19(answer2.meshHost?.originGrantPublicKey);
@@ -160052,10 +160162,10 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         const out = await exec10("stop_cli", { cliType, targetSessionId: sessionId, mode: "hard", reason: "owner_session_control" });
         return { success: out?.success !== false, ...out?.code ? { code: str20(out.code) } : {}, ...out?.error ? { error: str20(out.error) } : {} };
       };
-      const quiescenceOf = (sessionId, meshId2, nodeId2) => {
+      const quiescenceOf = (sessionId, meshId2, nodeId) => {
         if (instancesOf(ctx).getInstance(sessionId)) return "unknown";
         try {
-          if (nodeId2 && MeshRuntimeStore.getInstance().hasActiveAssignment(meshId2, sessionId, nodeId2)) return "pending";
+          if (nodeId && MeshRuntimeStore.getInstance().hasActiveAssignment(meshId2, sessionId, nodeId)) return "pending";
         } catch {
         }
         return "confirmed";
@@ -172568,8 +172678,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const read2 = (value) => typeof value === "string" ? value.trim() : "";
       const workerMeshId = read2(settings2.meshNodeFor);
       if (workerMeshId) {
-        const nodeId2 = read2(settings2.meshNodeId);
-        return { meshId: workerMeshId, ...nodeId2 ? { nodeId: nodeId2 } : {}, isCoordinator: false };
+        const nodeId = read2(settings2.meshNodeId);
+        return { meshId: workerMeshId, ...nodeId ? { nodeId } : {}, isCoordinator: false };
       }
       const coordinatorMeshId = read2(settings2.meshCoordinatorFor);
       if (coordinatorMeshId) return { meshId: coordinatorMeshId, isCoordinator: true };
@@ -173840,10 +173950,10 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         },
         // The writer's node left the mesh: nobody can be asked to confirm its stop. Unknown
         // mesh / unreadable membership is never "removed".
-        writerNodeRemoved: ({ meshId: meshId2, nodeId: nodeId2 }) => {
+        writerNodeRemoved: ({ meshId: meshId2, nodeId }) => {
           try {
             const mesh = getMeshWithCache(components, meshId2);
-            return Array.isArray(mesh?.nodes) && mesh.nodes.length > 0 && !mesh.nodes.some((n) => meshNodeIdMatches7(n, nodeId2));
+            return Array.isArray(mesh?.nodes) && mesh.nodes.length > 0 && !mesh.nodes.some((n) => meshNodeIdMatches7(n, nodeId));
           } catch {
             return false;
           }
@@ -176954,15 +177064,15 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
       const nodeBuckets = /* @__PURE__ */ new Map();
       for (const entry of sessions) {
-        const nodeId2 = entry.nodeId || "unassigned";
-        const bucket2 = nodeBuckets.get(nodeId2);
+        const nodeId = entry.nodeId || "unassigned";
+        const bucket2 = nodeBuckets.get(nodeId);
         if (bucket2) bucket2.push(entry);
-        else nodeBuckets.set(nodeId2, [entry]);
+        else nodeBuckets.set(nodeId, [entry]);
       }
-      const byNode = Array.from(nodeBuckets.entries()).map(([nodeId2, entries3]) => {
+      const byNode = Array.from(nodeBuckets.entries()).map(([nodeId, entries3]) => {
         const sum = sumSessionUsage(entries3);
         return {
-          nodeId: nodeId2,
+          nodeId,
           inputTokens: sum.inputTokens,
           outputTokens: sum.outputTokens,
           cacheReadTokens: sum.cacheReadTokens,
@@ -183157,11 +183267,11 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         }
         return null;
       };
-      for (const root2 of searchRoots) {
-        if (!fs45.existsSync(root2)) continue;
-        const candidate = ctx.getProviderDir(root2, cat, type2);
+      for (const root of searchRoots) {
+        if (!fs45.existsSync(root)) continue;
+        const candidate = ctx.getProviderDir(root, cat, type2);
         if (hasManifest(candidate)) return candidate;
-        const catDir = path58.join(root2, cat);
+        const catDir = path58.join(root, cat);
         if (fs45.existsSync(catDir)) {
           try {
             for (const entry of fs45.readdirSync(catDir, { withFileTypes: true })) {
@@ -184047,8 +184157,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       return { root: parts[0], segments: parts.slice(1) };
     }
     function expandDirGlobUncached(template) {
-      const { root: root2, segments } = splitTemplateRoot(template);
-      let dirs = [root2];
+      const { root, segments } = splitTemplateRoot(template);
+      let dirs = [root];
       for (const seg of segments) {
         if (!seg) continue;
         const next = [];
@@ -184116,16 +184226,16 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       globCache.set(key7, { dirs, expiresAtMs: now + GLOB_CACHE_TTL_MS });
       return dirs.slice();
     }
-    function walkAllDirs(root2, out) {
+    function walkAllDirs(root, out) {
       let entries3;
       try {
-        entries3 = fs48.readdirSync(root2, { withFileTypes: true });
+        entries3 = fs48.readdirSync(root, { withFileTypes: true });
       } catch {
         return;
       }
-      out.push(root2);
+      out.push(root);
       for (const e of entries3) {
-        if (e.isDirectory()) walkAllDirs(path59.join(root2, e.name), out);
+        if (e.isDirectory()) walkAllDirs(path59.join(root, e.name), out);
       }
     }
     function newestRecentFileAcrossGlob(template, pattern, windowMs, sessionFloorMs = 0) {
@@ -184456,10 +184566,10 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       return process.platform === "win32" ? path59.win32.normalize(resolved).replace(/^\\\\\?\\/, "").replace(/(?<![A-Za-z]:)[\\/]+$/, "").toLowerCase() : resolved;
     }
     async function expandDirGlobAsync(template, revisions) {
-      const { root: root2, segments } = splitTemplateRoot(template);
+      const { root, segments } = splitTemplateRoot(template);
       const firstGlob = segments.findIndex((seg) => /[*?]/.test(seg));
       const fixed = firstGlob < 0 ? segments : segments.slice(0, firstGlob);
-      const base = path59.join(root2, ...fixed);
+      const base = path59.join(root, ...fixed);
       let existing = base;
       while (await sourceRevisionAsync(existing) === "missing") {
         revisions.set(existing, "missing");
@@ -187875,8 +187985,8 @@ ${output}` : "";
     function conversationsRoot() {
       return path67.join(antigravityRoot(), "conversations");
     }
-    function resolvePathInside(root2, ...segments) {
-      const rootPath = path67.resolve(root2);
+    function resolvePathInside(root, ...segments) {
+      const rootPath = path67.resolve(root);
       const targetPath = path67.resolve(rootPath, ...segments);
       if (targetPath !== rootPath && !targetPath.startsWith(rootPath + path67.sep)) return null;
       return targetPath;
@@ -188198,22 +188308,22 @@ ${output}` : "";
     }
     function resolveGrokPath(workspace, sessionId) {
       if (!sessionId || !isUuidLike2(sessionId)) return null;
-      const root2 = grokSessionsRoot();
-      if (!fs62.existsSync(root2)) return null;
+      const root = grokSessionsRoot();
+      if (!fs62.existsSync(root)) return null;
       for (const candidate of workspaceCandidates(workspace || "")) {
         if (!candidate) continue;
-        const file = path68.join(root2, encodeWorkspaceDir(candidate), sessionId, "chat_history.jsonl");
+        const file = path68.join(root, encodeWorkspaceDir(candidate), sessionId, "chat_history.jsonl");
         if (fs62.existsSync(file)) return file;
       }
       let entries3 = [];
       try {
-        entries3 = fs62.readdirSync(root2, { withFileTypes: true });
+        entries3 = fs62.readdirSync(root, { withFileTypes: true });
       } catch {
         return null;
       }
       for (const entry of entries3) {
         if (!entry.isDirectory()) continue;
-        const file = path68.join(root2, entry.name, sessionId, "chat_history.jsonl");
+        const file = path68.join(root, entry.name, sessionId, "chat_history.jsonl");
         if (fs62.existsSync(file)) return file;
       }
       return null;
@@ -188418,12 +188528,12 @@ ${output}` : "";
       };
     }
     function listSessions2(workspace, limit = 50) {
-      const root2 = grokSessionsRoot();
-      if (!fs62.existsSync(root2)) return [];
+      const root = grokSessionsRoot();
+      if (!fs62.existsSync(root)) return [];
       const dirs = [];
       for (const candidate of workspaceCandidates(workspace || "")) {
         if (!candidate) continue;
-        const dir = path68.join(root2, encodeWorkspaceDir(candidate));
+        const dir = path68.join(root, encodeWorkspaceDir(candidate));
         if (fs62.existsSync(dir)) dirs.push(dir);
       }
       if (dirs.length === 0) return [];
@@ -188467,11 +188577,11 @@ ${output}` : "";
       return out.slice(0, limit);
     }
     function listSessionsAllWorkspaces(limit = 50) {
-      const root2 = grokSessionsRoot();
-      if (!fs62.existsSync(root2)) return [];
+      const root = grokSessionsRoot();
+      if (!fs62.existsSync(root)) return [];
       let dirs = [];
       try {
-        dirs = fs62.readdirSync(root2, { withFileTypes: true });
+        dirs = fs62.readdirSync(root, { withFileTypes: true });
       } catch {
         return [];
       }
@@ -188557,9 +188667,9 @@ ${output}` : "";
       return null;
     }
     function listAntigravityCliSessionsSync(limit = 50) {
-      const root2 = agyRoot();
-      const convRoot = path69.join(root2, "conversations");
-      const summariesPath = path69.join(root2, "conversation_summaries.db");
+      const root = agyRoot();
+      const convRoot = path69.join(root, "conversations");
+      const summariesPath = path69.join(root, "conversation_summaries.db");
       const historyRows = readHistoryRows();
       const firstPromptAt = /* @__PURE__ */ new Map();
       const historyWorkspace = /* @__PURE__ */ new Map();
@@ -188752,12 +188862,12 @@ ${output}` : "";
       return `${resolveRealPath(workspace)}::${sessionStartedAtMs}`;
     }
     function resolveCodexPath(workspace, sessionId, sessionStartedAtMs, instanceId = "", homeDir2, acknowledgedInputDigest) {
-      const root2 = homeDir2 ? path70.join(homeDir2, ".codex", "sessions") : codexSessionsRoot();
+      const root = homeDir2 ? path70.join(homeDir2, ".codex", "sessions") : codexSessionsRoot();
       if (sessionId && isUuidLike(sessionId)) {
-        return findCodexPathBySessionId(root2, sessionId);
+        return findCodexPathBySessionId(root, sessionId);
       }
       const baseKey = codexRuntimeBindingKey(workspace, sessionStartedAtMs);
-      const key7 = baseKey ? [root2, instanceId, baseKey].join("\0") : null;
+      const key7 = baseKey ? [root, instanceId, baseKey].join("\0") : null;
       if (key7) {
         const pinned = codexRuntimeBindings.get(key7);
         if (pinned) {
@@ -188765,15 +188875,15 @@ ${output}` : "";
           codexRuntimeBindings.delete(key7);
         }
       }
-      const resolved = findCodexPathByRuntime(root2, workspace, sessionStartedAtMs, instanceId, acknowledgedInputDigest);
+      const resolved = findCodexPathByRuntime(root, workspace, sessionStartedAtMs, instanceId, acknowledgedInputDigest);
       if (resolved && key7) codexRuntimeBindings.set(key7, resolved);
       return resolved;
     }
-    function findCodexPathBySessionId(root2, sessionId) {
-      if (!fs64.existsSync(root2)) return null;
+    function findCodexPathBySessionId(root, sessionId) {
+      if (!fs64.existsSync(root)) return null;
       const needle = sessionId.toLowerCase();
       const matches = [];
-      const stack = [root2];
+      const stack = [root];
       while (stack.length > 0) {
         const current5 = stack.pop();
         let entries3 = [];
@@ -188797,12 +188907,12 @@ ${output}` : "";
       matches.sort((a, b) => b.mtime - a.mtime);
       return matches[0]?.p ?? null;
     }
-    function findCodexPathByRuntime(root2, workspace, sessionStartedAtMs, instanceId, acknowledgedInputDigest) {
-      if (!fs64.existsSync(root2) || !workspace) return null;
+    function findCodexPathByRuntime(root, workspace, sessionStartedAtMs, instanceId, acknowledgedInputDigest) {
+      if (!fs64.existsSync(root) || !workspace) return null;
       const workspaceResolved = resolveRealPath(workspace);
       const cutoff = Date.now() - RECENT_WINDOW_MS;
       const matches = [];
-      const stack = [root2];
+      const stack = [root];
       while (stack.length > 0) {
         const current5 = stack.pop();
         let entries3 = [];
@@ -188896,9 +189006,9 @@ ${output}` : "";
         paths.push(sourcePath);
         candidates.set(uuid, paths);
       };
-      const entries3 = (root2) => {
+      const entries3 = (root) => {
         try {
-          return fs64.readdirSync(root2, { withFileTypes: true });
+          return fs64.readdirSync(root, { withFileTypes: true });
         } catch {
           return [];
         }
@@ -190601,8 +190711,8 @@ ${output}` : "";
       isOverriddenOutsideChannel(type2) {
         const dir = this.host.providerSourceDir(type2);
         if (!dir || !this.store) return false;
-        const inside3 = (root2) => {
-          const rel = path74.relative(root2, dir);
+        const inside3 = (root) => {
+          const rel = path74.relative(root, dir);
           return rel === "" || !rel.startsWith("..") && !path74.isAbsolute(rel);
         };
         return !inside3(this.store.rootDir) && !inside3(this.host.upstreamDir);
@@ -191653,8 +191763,8 @@ ${output}` : "";
       /**
       * Canonical provider directory shape for a given root.
       */
-      getProviderDir(root2, category, type2) {
-        return path78.join(root2, category, type2);
+      getProviderDir(root, category, type2) {
+        return path78.join(root, category, type2);
       }
       /**
       * Canonical user override directory for a provider.
@@ -192124,7 +192234,7 @@ ${output}` : "";
           {
             providers: this.providers,
             getProviderRoots: () => this.getProviderRoots(),
-            getProviderDir: (root2, category, type_) => this.getProviderDir(root2, category, type_)
+            getProviderDir: (root, category, type_) => this.getProviderDir(root, category, type_)
           },
           type2
         );
@@ -192892,13 +193002,13 @@ ${output}` : "";
       for (const node of nodes) {
         if (!node || typeof node !== "object") continue;
         if (!isRemoteMeshNodeForState(node, args.locality)) continue;
-        const nodeId2 = normalizeMeshNodeId(node) ?? "";
-        if (!nodeId2) continue;
-        const entry = args.store.get(args.meshId, nodeId2);
+        const nodeId = normalizeMeshNodeId(node) ?? "";
+        if (!nodeId) continue;
+        const entry = args.store.get(args.meshId, nodeId);
         if (!entry?.git || entry.observedAt === null) continue;
         node.lastGit = heldLastGit(entry);
         node.last_git = node.lastGit;
-        hydrated3.add(nodeId2);
+        hydrated3.add(nodeId);
       }
       return hydrated3;
     }
@@ -192908,10 +193018,10 @@ ${output}` : "";
       let replaced = false;
       const nodes = args.mesh.nodes.map((node) => {
         if (!node || typeof node !== "object" || !isForeignDaemonMeshNode(node, args.locality)) return node;
-        const nodeId2 = normalizeMeshNodeId(node) ?? "";
+        const nodeId = normalizeMeshNodeId(node) ?? "";
         const view2 = { ...node };
         for (const key7 of ECHOED_TRANSIENT_NODE_KEYS) delete view2[key7];
-        const entry = nodeId2 ? args.store.get(args.meshId, nodeId2) : void 0;
+        const entry = nodeId ? args.store.get(args.meshId, nodeId) : void 0;
         if (entry?.git && entry.observedAt !== null && isRemoteMeshNodeForState(node, args.locality)) {
           view2.lastGit = heldLastGit(entry);
           view2.last_git = view2.lastGit;
@@ -192930,12 +193040,12 @@ ${output}` : "";
       for (const node of nodes) {
         if (!node || typeof node !== "object") continue;
         if (!isForeignDaemonMeshNode(node, args.locality)) continue;
-        const nodeId2 = normalizeMeshNodeId(node) ?? "";
+        const nodeId = normalizeMeshNodeId(node) ?? "";
         const daemonId = readText(node.daemonId);
         const workspace = readText(node.workspace);
-        if (!nodeId2 || !daemonId || !workspace) continue;
-        const entry = args.store.get(args.meshId, nodeId2);
-        const target2 = { meshId: args.meshId, nodeId: nodeId2, daemonId, workspace };
+        if (!nodeId || !daemonId || !workspace) continue;
+        const entry = args.store.get(args.meshId, nodeId);
+        const target2 = { meshId: args.meshId, nodeId, daemonId, workspace };
         if (args.refresher.firstContact(target2)) {
           started += 1;
           continue;
@@ -192957,12 +193067,12 @@ ${output}` : "";
         const daemonId = readText(node.daemonId);
         if (!daemonId || !daemonIdsEquivalent5(daemonId, wanted)) continue;
         if (!isForeignDaemonMeshNode(node, args.locality)) continue;
-        const nodeId2 = normalizeMeshNodeId(node) ?? "";
+        const nodeId = normalizeMeshNodeId(node) ?? "";
         const workspace = readText(node.workspace);
-        if (!nodeId2 || !workspace || !args.store.get(args.meshId, nodeId2)) continue;
+        if (!nodeId || !workspace || !args.store.get(args.meshId, nodeId)) continue;
         out.push({
           meshId: args.meshId,
-          nodeId: nodeId2,
+          nodeId,
           daemonId,
           workspace,
           ...isRemoteMeshNodeForState(node, args.locality) ? {} : { runtimeOnly: true }
@@ -192977,10 +193087,10 @@ ${output}` : "";
     function toIso(value) {
       return typeof value === "number" && Number.isFinite(value) && value > 0 ? new Date(value).toISOString() : null;
     }
-    function heldSessionBelongsToNode(session, meshId2, nodeId2, isCoordinatorNode) {
+    function heldSessionBelongsToNode(session, meshId2, nodeId, isCoordinatorNode) {
       const settings2 = session.settings ?? {};
       const sessionMesh = settings2.meshNodeFor;
-      if (settings2.meshNodeId && (!sessionMesh || sessionMesh === meshId2) && (daemonIdsEquivalent5(settings2.meshNodeId, nodeId2) || meshNodeIdMatches7({ id: nodeId2 }, settings2.meshNodeId))) {
+      if (settings2.meshNodeId && (!sessionMesh || sessionMesh === meshId2) && (daemonIdsEquivalent5(settings2.meshNodeId, nodeId) || meshNodeIdMatches7({ id: nodeId }, settings2.meshNodeId))) {
         return true;
       }
       return isCoordinatorNode && (settings2.meshCoordinatorFor === meshId2 || session.coordinator?.meshId === meshId2);
@@ -193057,7 +193167,7 @@ ${output}` : "";
       for (const status of snapshot.nodes) {
         if (!status || typeof status !== "object") continue;
         applyMeshNodeLinkPresence(status);
-        const nodeId2 = readText(status.nodeId);
+        const nodeId = readText(status.nodeId);
         const daemonId = readText(status.daemonId);
         const ownsQuota = args.locality && (status.connection?.state === "self" || !!daemonId && !isForeignDaemonMeshNode(status, args.locality));
         if (ownsQuota && localQuota) {
@@ -193066,12 +193176,12 @@ ${output}` : "";
         if (args.locality && status.connection?.state !== "self" && isForeignDaemonMeshNode(status, args.locality)) {
           overlayHeldRuntime(
             status,
-            nodeId2 ? args.store.get(args.meshId, nodeId2) : void 0,
+            nodeId ? args.store.get(args.meshId, nodeId) : void 0,
             daemonId ? args.refresher.isRuntimeRefreshing(args.meshId, daemonId) : false,
             {
               meshId: args.meshId,
-              nodeId: nodeId2,
-              isCoordinatorNode: !!nodeId2 && !!args.coordinatorNodeId && nodeId2 === args.coordinatorNodeId,
+              nodeId,
+              isCoordinatorNode: !!nodeId && !!args.coordinatorNodeId && nodeId === args.coordinatorNodeId,
               renderSessions: args.heldSessions === true
             }
           );
@@ -193091,8 +193201,8 @@ ${output}` : "";
           };
           continue;
         }
-        const entry = nodeId2 ? args.store.get(args.meshId, nodeId2) : void 0;
-        const refreshing = nodeId2 ? args.refresher.isRefreshing(args.meshId, nodeId2) : false;
+        const entry = nodeId ? args.store.get(args.meshId, nodeId) : void 0;
+        const refreshing = nodeId ? args.refresher.isRefreshing(args.meshId, nodeId) : false;
         const observation = {
           source: entry?.source ?? "none",
           observedAt: entry?.observedAt ?? null,
@@ -193239,22 +193349,22 @@ ${output}` : "";
       },
       mesh_dispatch_route: async (ctx, args) => {
         const meshId2 = readText(args?.meshId);
-        const nodeId2 = readText(args?.nodeId);
-        if (!meshId2 || !nodeId2) return { success: false, error: "meshId and nodeId required" };
+        const nodeId = readText(args?.nodeId);
+        if (!meshId2 || !nodeId) return { success: false, error: "meshId and nodeId required" };
         const record8 = await ctx.getMeshForCommand(meshId2, void 0, { preferInline: true });
-        const rostered = Array.isArray(record8?.mesh?.nodes) ? record8.mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId2)) : void 0;
+        const rostered = Array.isArray(record8?.mesh?.nodes) ? record8.mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId)) : void 0;
         let node = rostered;
         if (!node) {
           const described = readOptionalRecord2(args?.node);
-          const claimedOwner = described && meshNodeIdMatches7(described, nodeId2) ? readText(described.daemonId) : "";
-          const adopted = claimedOwner && ctx.adoptWorktreeNodeFromOwner ? await ctx.adoptWorktreeNodeFromOwner(meshId2, nodeId2, claimedOwner).catch(() => null) : null;
+          const claimedOwner = described && meshNodeIdMatches7(described, nodeId) ? readText(described.daemonId) : "";
+          const adopted = claimedOwner && ctx.adoptWorktreeNodeFromOwner ? await ctx.adoptWorktreeNodeFromOwner(meshId2, nodeId, claimedOwner).catch(() => null) : null;
           if (adopted?.adopted) {
             node = adopted.node;
           } else {
             return {
               success: false,
               code: "mesh_node_unknown",
-              error: `Node ${nodeId2} is not on mesh ${meshId2}'s roster on the coordinator daemon` + (adopted ? ` and its claimed owner could not be adopted from (${adopted.reason}).` : "."),
+              error: `Node ${nodeId} is not on mesh ${meshId2}'s roster on the coordinator daemon` + (adopted ? ` and its claimed owner could not be adopted from (${adopted.reason}).` : "."),
               action: "Run mesh_status to see the roster. If the node was just cloned, retry mesh_clone_node or wait for its owning daemon to report it; do not keep dispatching to it."
             };
           }
@@ -193264,7 +193374,7 @@ ${output}` : "";
         if (callerDaemonId && selfId && !daemonIdsEquivalent5(callerDaemonId, selfId)) {
           return { success: false, code: "mesh_dispatch_route_wrong_daemon", error: `This is daemon ${selfId}, not ${callerDaemonId}` };
         }
-        return { success: true, meshId: meshId2, nodeId: readText(node.id) || nodeId2, ...decideDispatchRoute(node, {
+        return { success: true, meshId: meshId2, nodeId: readText(node.id) || nodeId, ...decideDispatchRoute(node, {
           localDaemonId: ctx.deps.statusInstanceId,
           localMachineId: getMachineId() || "",
           hasMeshTransport: typeof ctx.deps.dispatchMeshCommand === "function",
@@ -193280,8 +193390,8 @@ ${output}` : "";
        */
       mesh_resolve_launch_provider: async (ctx, args) => {
         const meshId2 = readText(args?.meshId);
-        const nodeId2 = readText(args?.nodeId);
-        if (!meshId2 || !nodeId2) return { success: false, error: "meshId and nodeId required" };
+        const nodeId = readText(args?.nodeId);
+        if (!meshId2 || !nodeId) return { success: false, error: "meshId and nodeId required" };
         const callerDaemonId = readText(args?.callerDaemonId);
         const selfId = readText(ctx.deps.statusInstanceId);
         if (callerDaemonId && selfId && !daemonIdsEquivalent5(callerDaemonId, selfId)) {
@@ -193289,12 +193399,12 @@ ${output}` : "";
         }
         const record8 = await ctx.getMeshForCommand(meshId2, void 0, { preferInline: true });
         const mesh = record8?.mesh;
-        const node = Array.isArray(mesh?.nodes) ? mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId2)) : void 0;
-        if (!node) return { success: false, code: "mesh_node_unknown", error: `Node ${nodeId2} is not on mesh ${meshId2}` };
+        const node = Array.isArray(mesh?.nodes) ? mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId)) : void 0;
+        if (!node) return { success: false, code: "mesh_node_unknown", error: `Node ${nodeId} is not on mesh ${meshId2}` };
         const components = ctx.components();
         const resolved = await resolveUsableProvider(
           components,
-          readText(node.id) || nodeId2,
+          readText(node.id) || nodeId,
           node,
           meshId2,
           void 0,
@@ -193303,12 +193413,12 @@ ${output}` : "";
           quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader)
         );
         if (!resolved.providerType) {
-          return { success: false, code: "mesh_launch_provider_unresolved", meshId: meshId2, nodeId: nodeId2, reason: resolved.reason || "provider_unusable", error: `No launchable provider for node ${nodeId2}: ${resolved.reason || "provider_unusable"}` };
+          return { success: false, code: "mesh_launch_provider_unresolved", meshId: meshId2, nodeId, reason: resolved.reason || "provider_unusable", error: `No launchable provider for node ${nodeId}: ${resolved.reason || "provider_unusable"}` };
         }
         return {
           success: true,
           meshId: meshId2,
-          nodeId: nodeId2,
+          nodeId,
           providerType: resolved.providerType,
           ...resolved.model ? { model: resolved.model } : {},
           ...resolved.thinkingLevel ? { thinkingLevel: resolved.thinkingLevel } : {},
@@ -193423,12 +193533,12 @@ ${output}` : "";
       if (!birth) throw Error("lifecycle_birth_unknown");
       return { pid: process.pid, birth, bootNonce: MAINTENANCE_BOOT_NONCE, nodePath: nodePath2, nodeSha256: sha4(fs76.readFileSync(nodePath2)), entryPath, entrySha256: sha4(fs76.readFileSync(entryPath)) };
     }
-    function directory(root2, create = false) {
-      root2 = fs76.realpathSync(root2);
-      const dir = path81.join(root2, "cooperative-lifecycle-source");
+    function directory(root, create = false) {
+      root = fs76.realpathSync(root);
+      const dir = path81.join(root, "cooperative-lifecycle-source");
       if (create) {
         fs76.mkdirSync(dir, { mode: 448 });
-        const parent = fs76.openSync(root2, "r");
+        const parent = fs76.openSync(root, "r");
         try {
           fs76.fsyncSync(parent);
         } finally {
@@ -193439,12 +193549,12 @@ ${output}` : "";
       if (!s2.isDirectory() || s2.isSymbolicLink() || s2.mode & 63 || s2.uid !== process.getuid?.() || fs76.realpathSync(dir) !== dir) throw Error("lifecycle_source_directory_untrusted");
       return dir;
     }
-    function ensureDirectory(root2) {
+    function ensureDirectory(root) {
       try {
-        return directory(root2);
+        return directory(root);
       } catch (e) {
         if (e.code !== "ENOENT") throw e;
-        return directory(root2, true);
+        return directory(root, true);
       }
     }
     function read(file) {
@@ -193484,30 +193594,30 @@ ${output}` : "";
       }
       return out;
     }
-    function beginLifecycleSource(kind, fields, root2 = getConfigDir2()) {
-      const dir = ensureDirectory(root2), operationId = (0, import_node_crypto33.randomUUID)();
+    function beginLifecycleSource(kind, fields, root = getConfigDir2()) {
+      const dir = ensureDirectory(root), operationId = (0, import_node_crypto33.randomUUID)();
       const r = { schema: 1, operationId, kind, owner: lifecycleProcessIdentity(), state: "intent", revision: 1, updatedAt: Date.now(), ...omitBlankLifecycleFields(fields) };
       durable(path81.join(dir, operationId + ".json"), r);
       return operationId;
     }
-    function advanceLifecycleSource(operationId, state2, fields = {}, root2 = getConfigDir2()) {
+    function advanceLifecycleSource(operationId, state2, fields = {}, root = getConfigDir2()) {
       if (!/^[-a-f0-9]{36}$/.test(operationId)) throw Error("lifecycle_operation_invalid");
-      const file = path81.join(directory(root2), operationId + ".json"), r = read(file);
+      const file = path81.join(directory(root), operationId + ".json"), r = read(file);
       if (state2 === "scheduled" && r.state !== "intent") return;
       if (fields.helper && r.helper && JSON.stringify(fields.helper) !== JSON.stringify(r.helper)) throw Error("lifecycle_helper_incarnation_conflict");
       if (r.kind === "controller" && (r.owner.pid !== process.pid || r.owner.bootNonce !== MAINTENANCE_BOOT_NONCE)) throw Error("lifecycle_controller_owner_changed");
       if (state2 === "completed" && (!r.helper || r.helper.pid !== process.pid || r.helper.bootNonce !== MAINTENANCE_BOOT_NONCE)) throw Error("lifecycle_helper_completion_owner_changed");
-      if (state2 === "completed" && JSON.stringify(read(path81.join(directory(root2), operationId + ".claim.json")).helper) !== JSON.stringify(r.helper)) throw Error("lifecycle_helper_claim_changed");
+      if (state2 === "completed" && JSON.stringify(read(path81.join(directory(root), operationId + ".claim.json")).helper) !== JSON.stringify(r.helper)) throw Error("lifecycle_helper_claim_changed");
       durable(file, { ...r, ...fields, state: state2, revision: r.revision + 1, updatedAt: Date.now() });
     }
-    function claimLifecycleHelper(operationId, expected, root2 = getConfigDir2()) {
+    function claimLifecycleHelper(operationId, expected, root = getConfigDir2()) {
       if (!/^[-a-f0-9]{36}$/.test(operationId)) throw Error("lifecycle_operation_invalid");
-      const r = read(path81.join(directory(root2), operationId + ".json"));
+      const r = read(path81.join(directory(root), operationId + ".json"));
       const want = omitBlankLifecycleFields(expected);
       if (r.kind !== "helper" || ["targetVersion", "packageName", "parentPid"].some((k) => r[k] !== want[k])) throw Error("lifecycle_helper_target_changed");
       const helper = lifecycleProcessIdentity();
       if (["entryPath", "entrySha256", "nodePath", "nodeSha256"].some((k) => r.owner[k] !== helper[k])) throw Error("lifecycle_helper_executable_changed");
-      const dir = directory(root2), claim = path81.join(dir, operationId + ".claim.json");
+      const dir = directory(root), claim = path81.join(dir, operationId + ".claim.json");
       const fd = fs76.openSync(claim, "wx", 384);
       try {
         fs76.writeFileSync(fd, JSON.stringify({ ...r, state: "executing", helper }));
@@ -193521,12 +193631,12 @@ ${output}` : "";
       } finally {
         fs76.closeSync(parent);
       }
-      advanceLifecycleSource(operationId, "executing", { helper }, root2);
+      advanceLifecycleSource(operationId, "executing", { helper }, root);
     }
-    function collectLifecycleSource(root2 = getConfigDir2()) {
+    function collectLifecycleSource(root = getConfigDir2()) {
       let dir;
       try {
-        dir = directory(root2);
+        dir = directory(root);
       } catch (e) {
         if (e.code === "ENOENT") return { schema: 1, observed: false, reason: "lifecycle_source_not_enrolled", rows: [], pending: [], nativeCensusRequired: true };
         throw e;
@@ -194442,8 +194552,8 @@ ${marker2}`,
     }
     function spawnDetachedDaemonUpgradeHelper(payload) {
       assertWorkerBridgeLifecycleAdmission("helper_schedule", payload.configDir);
-      const root2 = payload.configDir || getConfigDir2();
-      const operationId = process.platform === "win32" ? void 0 : beginLifecycleSource("helper", { targetVersion: payload.targetVersion, packageName: payload.packageName, parentPid: payload.parentPid }, root2);
+      const root = payload.configDir || getConfigDir2();
+      const operationId = process.platform === "win32" ? void 0 : beginLifecycleSource("helper", { targetVersion: payload.targetVersion, packageName: payload.packageName, parentPid: payload.parentPid }, root);
       const env2 = buildUpgradeHelperChildEnv({ ...payload, ...operationId ? { maintenanceOperationId: operationId } : {} });
       const { fd: outFd, close: closeOutFd } = openCaptureLogFd();
       let child;
@@ -194459,10 +194569,10 @@ ${marker2}`,
         closeOutFd();
       }
       if (operationId) {
-        advanceLifecycleSource(operationId, "scheduled", { childPid: child.pid }, root2);
+        advanceLifecycleSource(operationId, "scheduled", { childPid: child.pid }, root);
         child.once("error", () => {
           try {
-            advanceLifecycleSource(operationId, "failed", {}, root2);
+            advanceLifecycleSource(operationId, "failed", {}, root);
           } catch {
           }
         });
@@ -195222,14 +195332,14 @@ ${marker2}`,
         } : {}
       };
     }
-    function scheduleDeferredRestart(deps, args, meshId2, nodeId2) {
-      const key7 = deferredRestartScheduleKey(meshId2, nodeId2);
+    function scheduleDeferredRestart(deps, args, meshId2, nodeId) {
+      const key7 = deferredRestartScheduleKey(meshId2, nodeId);
       clearPendingDeferredRestart(key7);
       const requestedTimeout = typeof args?.timeoutMs === "number" && Number.isFinite(args.timeoutMs) ? args.timeoutMs : DEFERRED_RESTART_DEFAULT_TIMEOUT_MS;
       const timeoutMs = Math.min(Math.max(requestedTimeout, DEFERRED_RESTART_POLL_MS), DEFERRED_RESTART_MAX_TIMEOUT_MS);
       const record8 = {
         meshId: meshId2,
-        nodeId: nodeId2,
+        nodeId,
         mode: normalizeRestartMode(args?.mode),
         killSessionHost: args?.killSessionHost === true,
         upgradeOptions: readUpgradeOptions(args),
@@ -195252,9 +195362,9 @@ ${marker2}`,
           expiresAt: record8.expiresAt
         });
       } catch (e) {
-        LOG.warn("MeshRestart", `Failed to persist deferred restart for node ${nodeId2} \u2014 it will NOT survive a daemon restart: ${e?.message || String(e)}`);
+        LOG.warn("MeshRestart", `Failed to persist deferred restart for node ${nodeId} \u2014 it will NOT survive a daemon restart: ${e?.message || String(e)}`);
       }
-      LOG.info("MeshRestart", `Deferred restart scheduled for node ${nodeId2} (mode=${record8.mode}${record8.upgradeOptions.allowDowngrade ? ", allowDowngrade" : ""}, expires in ${Math.round(timeoutMs / 6e4)}min)`);
+      LOG.info("MeshRestart", `Deferred restart scheduled for node ${nodeId} (mode=${record8.mode}${record8.upgradeOptions.allowDowngrade ? ", allowDowngrade" : ""}, expires in ${Math.round(timeoutMs / 6e4)}min)`);
       return {
         success: true,
         restarted: false,
@@ -195349,13 +195459,13 @@ ${marker2}`,
           return { success: false, error: "strict_bridge_lifecycle_authority_unavailable" };
         }
         const meshId2 = typeof args?.meshId === "string" ? args.meshId.trim() : "";
-        const nodeId2 = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
+        const nodeId = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
         let nodeDaemonId;
         let resolvedMesh;
-        if (meshId2 && nodeId2) {
+        if (meshId2 && nodeId) {
           const meshRecord2 = await ctx.getMeshForCommand(meshId2, args?.inlineMesh, { preferInline: true });
           resolvedMesh = meshRecord2?.mesh;
-          const node = meshRecord2?.mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId2));
+          const node = meshRecord2?.mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
           nodeDaemonId = typeof node?.daemonId === "string" ? node.daemonId.trim() : void 0;
         }
         const selfDaemonId = ctx.deps.statusInstanceId;
@@ -195375,7 +195485,7 @@ ${marker2}`,
           }
           return result;
         }
-        const scheduleKey = deferredRestartScheduleKey(meshId2, nodeId2);
+        const scheduleKey = deferredRestartScheduleKey(meshId2, nodeId);
         if (args?.cancelWhenIdle === true) {
           const had = pendingDeferredRestarts.has(scheduleKey);
           clearPendingDeferredRestart(scheduleKey);
@@ -195396,7 +195506,7 @@ ${marker2}`,
             return finishHere(await executeRestart(ctx.deps, args, { forced: false }));
           }
           if (args?.whenIdle === true) {
-            return finishHere(scheduleDeferredRestart(ctx.deps, args, meshId2, nodeId2));
+            return finishHere(scheduleDeferredRestart(ctx.deps, args, meshId2, nodeId));
           }
           return finishHere({
             success: false,
@@ -200220,8 +200330,8 @@ ${marker2}`,
         return p;
       }
     }
-    function isWithinRoot(root2, target2) {
-      const rel = path100.relative(root2, target2);
+    function isWithinRoot(root, target2) {
+      const rel = path100.relative(root, target2);
       if (rel === "") return true;
       if (path100.isAbsolute(rel)) return false;
       if (rel === ".." || rel.startsWith(`..${path100.sep}`)) return false;
@@ -200271,7 +200381,7 @@ ${marker2}`,
       }
       const target2 = path100.resolve(resolvedPath);
       const lexicalOk = roots.some(
-        (root2) => isWithinRoot(normalizeForCompare2(root2), normalizeForCompare2(target2))
+        (root) => isWithinRoot(normalizeForCompare2(root), normalizeForCompare2(target2))
       );
       if (!lexicalOk) {
         return { ok: false, error: `refusing file access outside allowed workspace roots: ${target2}` };
@@ -200285,7 +200395,7 @@ ${marker2}`,
       const realExisting = realpathOrSelf(existing);
       const realTarget = path100.resolve(realExisting, path100.relative(existing, target2));
       const realOk = roots.some(
-        (root2) => isWithinRoot(normalizeForCompare2(realpathOrSelf(root2)), normalizeForCompare2(realTarget))
+        (root) => isWithinRoot(normalizeForCompare2(realpathOrSelf(root)), normalizeForCompare2(realTarget))
       );
       if (!realOk) {
         return {
@@ -200600,11 +200710,11 @@ ${marker2}`,
       const drives = [];
       for (let code = 65; code <= 90; code += 1) {
         const letter = String.fromCharCode(code);
-        const root2 = `${letter}:\\`;
+        const root = `${letter}:\\`;
         try {
-          if (!fs95.existsSync(root2)) continue;
-          if (excluded && root2.toLowerCase() === excluded) continue;
-          drives.push({ name: `${letter}:`, type: "directory", path: root2 });
+          if (!fs95.existsSync(root)) continue;
+          if (excluded && root.toLowerCase() === excluded) continue;
+          drives.push({ name: `${letter}:`, type: "directory", path: root });
         } catch {
         }
       }
@@ -202543,24 +202653,24 @@ ${marker2}`,
       const record8 = meshId2 ? readMeshHostRecord(meshId2) : null;
       if (!record8) return [];
       if (viaDaemonId && !daemonIdsEquivalent5(viaDaemonId, record8.hostDaemonId)) return [];
-      let root2;
+      let root;
       try {
         const st = fs99.lstatSync(path103.join(getConfigDir2(), "remote-projects"));
         if (st.isSymbolicLink() || !st.isDirectory()) return [];
-        root2 = path103.join(fs99.realpathSync(getConfigDir2()), "remote-projects");
+        root = path103.join(fs99.realpathSync(getConfigDir2()), "remote-projects");
       } catch {
         return [];
       }
       let names;
       try {
-        names = fs99.readdirSync(root2);
+        names = fs99.readdirSync(root);
       } catch {
         return [];
       }
       const out = [];
       for (const key7 of names) {
         if (!REMOTE_PROJECT_KEY_RE.test(key7)) continue;
-        const dir = path103.join(root2, key7);
+        const dir = path103.join(root, key7);
         try {
           const st = fs99.lstatSync(dir);
           if (st.isSymbolicLink() || !st.isDirectory()) continue;
@@ -202585,8 +202695,8 @@ ${marker2}`,
       return null;
     }
     var MESH_NODE_WORKSPACE_PREFIX = "mesh-node:";
-    function meshNodeWorkspaceId(meshId2, nodeId2) {
-      return `${MESH_NODE_WORKSPACE_PREFIX}${meshId2}:${nodeId2}`;
+    function meshNodeWorkspaceId(meshId2, nodeId) {
+      return `${MESH_NODE_WORKSPACE_PREFIX}${meshId2}:${nodeId}`;
     }
     var rec2 = (v) => v && typeof v === "object" ? v : null;
     function meshScopeFromEntry(mesh, machineDaemonId, viaDaemonId) {
@@ -204264,7 +204374,7 @@ ${marker2}`,
       }
     }
     function browseDirectory(rootPath, relDir) {
-      const root2 = openRoot(rootPath);
+      const root = openRoot(rootPath);
       try {
         const abs = relDir ? path110.join(rootPath, ...relDir.split("/")) : rootPath;
         let dirHandle = null;
@@ -204272,7 +204382,7 @@ ${marker2}`,
         try {
           if (relDir) {
             for (const seg of splitPortableRelativePath(relDir)) {
-              dirHandle = walkDir(dirHandle ?? root2, seg);
+              dirHandle = walkDir(dirHandle ?? root, seg);
               held.push(dirHandle);
             }
           }
@@ -204284,12 +204394,12 @@ ${marker2}`,
             let kind = "other";
             let size;
             try {
-              const dh = walkDir(dirHandle ?? root2, name, { allowProtectedMetadata: true });
+              const dh = walkDir(dirHandle ?? root, name, { allowProtectedMetadata: true });
               close(dh);
               kind = "dir";
             } catch {
               try {
-                const fh = openFileRead(dirHandle ?? root2, name, { allowProtectedMetadata: true });
+                const fh = openFileRead(dirHandle ?? root, name, { allowProtectedMetadata: true });
                 try {
                   size = Number(getIdentity(fh).size);
                   kind = "file";
@@ -204307,11 +204417,11 @@ ${marker2}`,
           for (let i = held.length - 1; i >= 0; i--) safeClose2(held[i]);
         }
       } finally {
-        safeClose2(root2);
+        safeClose2(root);
       }
     }
     function scanSelection(rootPath, selected2) {
-      const root2 = openRoot(rootPath);
+      const root = openRoot(rootPath);
       const entries3 = /* @__PURE__ */ new Map();
       const excluded = [];
       let totalBytes = 0;
@@ -204343,7 +204453,7 @@ ${marker2}`,
         }
         let chain2;
         try {
-          chain2 = resolveParentDirHandle(root2, rel, { createDirs: false });
+          chain2 = resolveParentDirHandle(root, rel, { createDirs: false });
         } catch (err2) {
           excluded.push({ path: rel, reason: classifyOpenError(err2) });
           return;
@@ -204413,7 +204523,7 @@ ${marker2}`,
       try {
         for (const rel of selected2) visit(rel, 0);
       } finally {
-        safeClose2(root2);
+        safeClose2(root);
       }
       return { entries: [...entries3.values()], excluded };
     }
@@ -204443,7 +204553,7 @@ ${marker2}`,
       requireFreeDisk(spoolDir, selectionTotalBytes(selection));
       fs105.mkdirSync(spoolDir, { recursive: true, mode: 448 });
       fs105.chmodSync(spoolDir, 448);
-      const root2 = openRoot(opts.rootPath);
+      const root = openRoot(opts.rootPath);
       const files = [];
       try {
         const list5 = selectionFiles(selection);
@@ -204452,7 +204562,7 @@ ${marker2}`,
           if (opts.isCancelled?.()) throw new ManifestError("CANCELLED", "cancelled while freezing");
           let src;
           try {
-            src = openSourceFile(root2, entry.path);
+            src = openSourceFile(root, entry.path);
           } catch {
             throw new ManifestError("SOURCE_CHANGED", "a selected file is no longer readable as a regular file");
           }
@@ -204497,7 +204607,7 @@ ${marker2}`,
         throw err2;
       } finally {
         try {
-          close(root2);
+          close(root);
         } catch {
         }
       }
@@ -204909,11 +205019,11 @@ ${marker2}`,
       }
     };
     function removeStagingFor(rootPath, transferId) {
-      let root2 = null;
+      let root = null;
       let parent = null;
       try {
-        root2 = openRoot(rootPath);
-        parent = walkDir(root2, STAGING_DIR_NAME, { allowProtectedMetadata: true });
+        root = openRoot(rootPath);
+        parent = walkDir(root, STAGING_DIR_NAME, { allowProtectedMetadata: true });
         const rm4 = (p, name, abs) => {
           let dh = null;
           try {
@@ -204939,13 +205049,13 @@ ${marker2}`,
         safeClose3(parent);
         parent = null;
         try {
-          unlinkAt(root2, STAGING_DIR_NAME, true, { allowProtectedMetadata: true });
+          unlinkAt(root, STAGING_DIR_NAME, true, { allowProtectedMetadata: true });
         } catch {
         }
       } catch {
       } finally {
         safeClose3(parent);
-        safeClose3(root2);
+        safeClose3(root);
       }
     }
     function safeTransferCode(value, fallback = "PEER_ERROR") {
@@ -205328,12 +205438,12 @@ ${marker2}`,
       scanTarget(selection) {
         const ws = this.ports.resolveWorkspace(selection.targetWorkspaceId);
         if (!ws) throw new OverwriteError("TARGET_DIR_MISSING", "target workspace is not registered");
-        const root2 = openRoot(ws.path);
+        const root = openRoot(ws.path);
         try {
-          return scanOverwriteTargets(root2, selection);
+          return scanOverwriteTargets(root, selection);
         } finally {
           try {
-            close(root2);
+            close(root);
           } catch {
           }
         }
@@ -205677,14 +205787,14 @@ ${marker2}`,
         const ws = this.ports.resolveWorkspace(rec8.selection.targetWorkspaceId);
         if (!ws) return fail3("WORKSPACE_NOT_REGISTERED");
         let result;
-        const root2 = openRoot(ws.path);
+        const root = openRoot(ws.path);
         try {
-          result = revertOverwrite(root2, rec8.selection, this.store.backupDir(rec8.id));
+          result = revertOverwrite(root, rec8.selection, this.store.backupDir(rec8.id));
         } catch (e) {
           return fail3(e instanceof OverwriteError ? e.code : "REVERT_FAILED");
         } finally {
           try {
-            close(root2);
+            close(root);
           } catch {
           }
         }
@@ -207185,13 +207295,13 @@ ${marker2}`,
       },
       get_mesh_node_logs: async (ctx, args) => {
         const meshId2 = typeof args?.meshId === "string" ? args.meshId.trim() : "";
-        const nodeId2 = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
+        const nodeId = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
         let nodeDaemonId;
         let resolvedMesh;
-        if (meshId2 && nodeId2 && ctx.getMeshForCommand) {
+        if (meshId2 && nodeId && ctx.getMeshForCommand) {
           const meshRecord2 = await ctx.getMeshForCommand(meshId2, args?.inlineMesh, { preferInline: true });
           resolvedMesh = meshRecord2?.mesh;
-          const node = meshRecord2?.mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId2));
+          const node = meshRecord2?.mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
           nodeDaemonId = typeof node?.daemonId === "string" ? node.daemonId.trim() : void 0;
         }
         const selfDaemonId = ctx.deps.statusInstanceId;
@@ -207207,7 +207317,7 @@ ${marker2}`,
             ]);
             return unwrapMeshRelayResult(forwarded2, { command: "get_mesh_node_logs", peerDaemonId: nodeDaemonId });
           } catch (error) {
-            return { success: false, code: "mesh_node_unreachable", error: error?.message || "get_mesh_node_logs forward failed", nodeId: nodeId2 };
+            return { success: false, code: "mesh_node_unreachable", error: error?.message || "get_mesh_node_logs forward failed", nodeId };
           } finally {
             if (timer) clearTimeout(timer);
           }
@@ -207217,12 +207327,12 @@ ${marker2}`,
           return {
             success: false,
             error: `grep pattern too long (max ${MAX_GREP_PATTERN_LENGTH} chars)`,
-            nodeId: nodeId2
+            nodeId
           };
         }
         const source2 = args?.source === void 0 ? "daemon" : args.source;
         if (source2 !== "daemon" && source2 !== "upgrade") {
-          return { success: false, error: `unknown log source: ${String(source2).slice(0, 40)} (expected daemon or upgrade)`, nodeId: nodeId2 };
+          return { success: false, error: `unknown log source: ${String(source2).slice(0, 40)} (expected daemon or upgrade)`, nodeId };
         }
         const rawTailBytes = Number(args?.tailBytes);
         const tailBytes = Number.isFinite(rawTailBytes) && rawTailBytes > 0 ? Math.min(rawTailBytes, MAX_TAIL_BYTES2) : void 0;
@@ -207237,7 +207347,7 @@ ${marker2}`,
           return {
             success: false,
             error: tail.error || "failed to read daemon log tail",
-            nodeId: nodeId2,
+            nodeId,
             logPath: tail.logPath,
             platform: tail.platform
           };
@@ -207245,7 +207355,7 @@ ${marker2}`,
         const redactedLines = redactLogLines(tail.lines);
         return {
           success: true,
-          nodeId: nodeId2,
+          nodeId,
           daemonId: selfDaemonId,
           logPath: tail.logPath,
           platform: tail.platform,
@@ -207309,23 +207419,23 @@ ${marker2}`,
       if (!hostDaemonId2 || !daemonIdsEquivalent5(hostDaemonId2, sender)) {
         return refuse6("not_mesh_host", `Only the host of mesh ${meshId2} known to this machine may ask for an ownership attestation`);
       }
-      const nodeId2 = text5(args?.nodeId);
+      const nodeId = text5(args?.nodeId);
       const workspace = text5(args?.workspace);
       const repoIdentity = text5(args?.repoIdentity);
       const phase = args?.phase === "integration" ? "integration" : "source";
       const { list: list5, declaration } = declarationOf(args?.ownedPaths);
-      if (!nodeId2 || !repoIdentity || !path116.isAbsolute(workspace)) return refuse6("invalid_arguments", "nodeId, repoIdentity and an absolute workspace are required");
+      if (!nodeId || !repoIdentity || !path116.isAbsolute(workspace)) return refuse6("invalid_arguments", "nodeId, repoIdentity and an absolute workspace are required");
       if (!declaration.paths.length || JSON.stringify(declaration.paths) !== JSON.stringify(list5)) {
         return refuse6("invalid_arguments", "ownedPaths must be a non-empty normalized declaration");
       }
-      const localNode = getMesh(meshId2)?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId2));
+      const localNode = getMesh(meshId2)?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
       if (localNode && typeof localNode.workspace === "string" && localNode.workspace && localNode.workspace !== workspace) {
-        return refuse6("workspace_mismatch", `Node ${nodeId2} is registered on this machine at a different workspace`);
+        return refuse6("workspace_mismatch", `Node ${nodeId} is registered on this machine at a different workspace`);
       }
       if (localNode) {
         const own2 = readMeshNodeDaemonId(localNode);
         const self = text5(ctx.deps.statusInstanceId);
-        if (own2 && self && !daemonIdsEquivalent5(own2, self)) return refuse6("node_not_local", `Node ${nodeId2} is not on this machine`);
+        if (own2 && self && !daemonIdsEquivalent5(own2, self)) return refuse6("node_not_local", `Node ${nodeId} is not on this machine`);
       }
       const machineId = getMachineId();
       if (!machineId) return refuse6("machine_identity_unavailable", "This machine has no machineId to attest with");
@@ -207341,7 +207451,7 @@ ${marker2}`,
             return refuse6("active_workspace_unproven", `Session ${sessionId} is not running in the node checkout`);
           }
         }
-        const scope2 = attestLocalOwnership2({ repoIdentity, machineId, nodeId: nodeId2, workspace, phase, paths: declaration });
+        const scope2 = attestLocalOwnership2({ repoIdentity, machineId, nodeId, workspace, phase, paths: declaration });
         return { success: true, scope: scope2 };
       } catch (e) {
         return refuse6("ownership_unproven", typeof e?.message === "string" ? e.message : String(e));
@@ -207349,22 +207459,22 @@ ${marker2}`,
     };
     var attestRemoteOwnership = async (ctx, args) => {
       const meshId2 = text5(args?.meshId);
-      const nodeId2 = text5(args?.nodeId);
-      if (!meshId2 || !nodeId2) return refuse6("invalid_arguments", "meshId and nodeId are required");
+      const nodeId = text5(args?.nodeId);
+      if (!meshId2 || !nodeId) return refuse6("invalid_arguments", "meshId and nodeId are required");
       const resolved = await ctx.getMeshForCommand?.(meshId2, void 0, { preferInline: true }).catch(() => null);
       const mesh = resolved?.mesh ?? getMesh(meshId2);
-      const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId2));
-      if (!node) return refuse6("node_not_found", `Node ${nodeId2} is not in mesh ${meshId2}`);
+      const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
+      if (!node) return refuse6("node_not_found", `Node ${nodeId} is not in mesh ${meshId2}`);
       const daemonId = readMeshNodeDaemonId(node) || "";
       const self = text5(ctx.deps.statusInstanceId);
-      if (!daemonId || !self || daemonIdsEquivalent5(daemonId, self)) return refuse6("node_not_remote", `Node ${nodeId2} is on this machine; attest it locally`);
+      if (!daemonId || !self || daemonIdsEquivalent5(daemonId, self)) return refuse6("node_not_remote", `Node ${nodeId} is on this machine; attest it locally`);
       const dispatch2 = ctx.deps.dispatchMeshCommand;
       if (!dispatch2) return refuse6("mesh_transport_unavailable", "No mesh transport to reach the remote machine");
       const { declaration } = declarationOf(args?.ownedPaths);
       if (!declaration.paths.length) return refuse6("ownership_unproven", "ownership_unproven: ownedPaths");
       const proof = await fetchRemoteOwnership(dispatch2, {
         meshId: meshId2,
-        nodeId: nodeId2,
+        nodeId,
         daemonId,
         workspace: text5(node.workspace),
         repoIdentity: text5(mesh?.repoIdentity),
@@ -207439,8 +207549,8 @@ ${marker2}`,
         const native = (await ctx.getMeshForCommand?.(args.meshId, void 0, { preferInline: true }))?.mesh;
         const policy = readBridgePolicy(MeshRuntimeStore.getInstance().db, args.meshId);
         const mesh = native ?? { nodes: policy?.roster?.map((node) => ({ id: node.nodeId, daemonId: node.daemonId })) };
-        const nodeOwner = (nodeId2) => {
-          const node = mesh?.nodes?.find((candidate) => meshNodeIdMatches7(candidate, nodeId2));
+        const nodeOwner = (nodeId) => {
+          const node = mesh?.nodes?.find((candidate) => meshNodeIdMatches7(candidate, nodeId));
           return node ? readMeshNodeDaemonId(node) : void 0;
         };
         return receiveBridgeDelivery(
@@ -207547,10 +207657,10 @@ ${marker2}`,
       const coordinatorInventory = freshCoordinators(state2);
       return records.map((r) => {
         if (!text6(r.sessionId) || !text6(r.providerType) || !text6(r.workspace) || !r.meta || !Number.isSafeInteger(r.startedAt) || !r.startedAt || r.startedAt > Date.now() || !Number.isSafeInteger(r.osPid) || r.osPid <= 0 || r.category !== "cli" || r.lifecycle !== "running" || !text6(r.meta.providerSessionId)) throw new Error("maintenance_runtime_inventory_incomplete");
-        const meshId2 = text6(r.meta.meshNodeFor), nodeId2 = text6(r.meta.meshNodeId);
+        const meshId2 = text6(r.meta.meshNodeFor), nodeId = text6(r.meta.meshNodeId);
         const runtimeOwner = text6(r.meta.daemonId);
         if (runtimeOwner && !daemonIdsEquivalent5(runtimeOwner, state2.daemonId)) throw new Error("maintenance_unknown_runtime_owner");
-        if ((meshId2 || nodeId2) && !state2.nodeRoster.some((n) => n.meshId === meshId2 && n.nodeId === nodeId2 && n.daemonId === state2.daemonId)) throw new Error("maintenance_unknown_runtime_owner");
+        if ((meshId2 || nodeId) && !state2.nodeRoster.some((n) => n.meshId === meshId2 && n.nodeId === nodeId && n.daemonId === state2.daemonId)) throw new Error("maintenance_unknown_runtime_owner");
         const entry = coordinatorInventory.find((e) => e.sessionId === r.sessionId);
         const coordinatorMeshId = text6(entry?.meshId);
         if (!text6(r.meta.daemonId) && !meshId2 && !coordinatorMeshId) throw new Error("maintenance_unknown_runtime_owner");
@@ -207567,7 +207677,7 @@ ${marker2}`,
           pid: r.osPid,
           daemonId: state2.daemonId,
           meshId: meshId2,
-          nodeId: nodeId2,
+          nodeId,
           coordinatorMeshId,
           coordinatorRegisteredAt: entry?.startedAt ?? null,
           workOwner,
@@ -207743,12 +207853,12 @@ ${marker2}`,
       return JSON.stringify([r.schema, r.operation, r.daemonId, r.planDigest, r.epoch, r.nonce, r.sentAt, r.configSha256, ...r.bodyDigest === void 0 ? [] : [r.bodyDigest]]);
     }
     function authorizeMaintenanceCollection(request2, operation, { allowOpen = false } = {}) {
-      const state2 = readCooperativeMaintenance2(), root2 = fs113.realpathSync(getConfigDir2());
+      const state2 = readCooperativeMaintenance2(), root = fs113.realpathSync(getConfigDir2());
       if (!state2?.actorConfigSha256 || !allowOpen && !maintenanceHeld()) throw new Error("maintenance_actor_enrollment_required");
-      const bytes = privateFile(path118.join(root2, ACTOR_CONFIG_FILE));
+      const bytes = privateFile(path118.join(root, ACTOR_CONFIG_FILE));
       if (hash3(bytes) !== state2.actorConfigSha256 || request2?.configSha256 !== state2.actorConfigSha256) throw new Error("maintenance_actor_config_changed");
       const config = JSON.parse(bytes.toString("utf8"));
-      if (config.schema !== 1 || config.daemonId !== state2.daemonId || config.rolloutId !== state2.rolloutId || config.configDir !== root2) throw new Error("maintenance_actor_scope_changed");
+      if (config.schema !== 1 || config.daemonId !== state2.daemonId || config.rolloutId !== state2.rolloutId || config.configDir !== root) throw new Error("maintenance_actor_scope_changed");
       const key7 = privateFile(config.observationKey?.path);
       if (key7.length !== 32 || hash3(key7) !== config.observationKey?.sha256) throw new Error("maintenance_actor_key_changed");
       if (request2.schema !== 1 || request2.operation !== operation || request2.daemonId !== state2.daemonId || request2.planDigest !== state2.planDigest || request2.epoch !== state2.epoch || !/^[a-f0-9-]{36}$/.test(request2.nonce) || !Number.isSafeInteger(request2.sentAt) || Math.abs(Date.now() - request2.sentAt) > 1e4 || !/^[a-f0-9]{64}$/.test(request2.mac)) throw new Error("maintenance_actor_challenge_invalid");
@@ -207756,11 +207866,11 @@ ${marker2}`,
       const expected = (0, import_node_crypto60.createHmac)("sha256", key7).update(actorObservationChallengeBytes(request2)).digest();
       if (!(0, import_node_crypto60.timingSafeEqual)(expected, Buffer.from(request2.mac, "hex"))) throw new Error("maintenance_actor_authentication_required");
       for (const [nonce, at] of used) if (Date.now() - at > 2e4) used.delete(nonce);
-      const replayKey = `${root2}:${request2.nonce}`;
+      const replayKey = `${root}:${request2.nonce}`;
       if (used.has(replayKey) || used.size >= 4096) throw new Error("maintenance_actor_challenge_replayed");
       used.set(replayKey, Date.now());
-      return { state: state2, config, root: root2, reply(fields, expectedState = state2) {
-        if (hash3(privateFile(config.observationKey.path)) !== config.observationKey.sha256 || hash3(privateFile(path118.join(root2, ACTOR_CONFIG_FILE))) !== request2.configSha256 || JSON.stringify(readCooperativeMaintenance2()) !== JSON.stringify(expectedState)) throw new Error("maintenance_actor_scope_changed");
+      return { state: state2, config, root, reply(fields, expectedState = state2) {
+        if (hash3(privateFile(config.observationKey.path)) !== config.observationKey.sha256 || hash3(privateFile(path118.join(root, ACTOR_CONFIG_FILE))) !== request2.configSha256 || JSON.stringify(readCooperativeMaintenance2()) !== JSON.stringify(expectedState)) throw new Error("maintenance_actor_scope_changed");
         const reply2 = {
           ...fields,
           schema: 1,
@@ -207791,8 +207901,8 @@ ${marker2}`,
       return { pid: value.pid, bootNonce: value.bootNonce, birth: value.birth, startedAt: value.startedAt, entryPath: value.entryPath, entrySha256: value.entrySha256, nodePath: value.nodePath, nodeSha256: value.nodeSha256 };
     }
     var key6 = (r) => `${r.pid}-${r.bootNonce}`;
-    function mcpMarkerDirectory(root2) {
-      return path119.join(root2, "cooperative-maintenance-mcp");
+    function mcpMarkerDirectory(root) {
+      return path119.join(root, "cooperative-maintenance-mcp");
     }
     var waiting = /* @__PURE__ */ new Map();
     function mcpCollectionPoll(request2) {
@@ -207843,8 +207953,8 @@ ${marker2}`,
       w.resolve({ identity: identity5, observed: true, observedAt: Date.now(), challenge: w.nonce, inventory: inventory2 });
       return reply2;
     }
-    async function collectMcpInventories(root2, state2, deadlineMs = 2e3) {
-      const dir = mcpMarkerDirectory(root2);
+    async function collectMcpInventories(root, state2, deadlineMs = 2e3) {
+      const dir = mcpMarkerDirectory(root);
       let names;
       try {
         const s2 = fs114.lstatSync(dir);
@@ -207865,7 +207975,7 @@ ${marker2}`,
       const records = readRecords3();
       if (new Set(records.map((r) => r.pid)).size !== records.length) throw new Error("maintenance_mcp_pid_incarnation_ambiguous");
       const membershipDigest = sha6(records), members = await Promise.all(records.map((identity5) => new Promise((resolve82) => {
-        const name = `${root2}:${key6(identity5)}`;
+        const name = `${root}:${key6(identity5)}`;
         if (waiting.has(name)) throw new Error("maintenance_mcp_collection_in_flight");
         const nonce = (0, import_node_crypto61.randomUUID)(), timer = setTimeout(() => {
           waiting.delete(name);
@@ -207881,7 +207991,7 @@ ${marker2}`,
     var MAINTENANCE_DRAIN_CHANNELS = ["runnableQueue", "claims", "launches", "submits", "attempts", "corrections", "livenessHolds", "reportOutboxes", "progressOutboxes", "unreadableOutboxes", "temporaryOutboxes", "memoryOnlyOutboxes", "coordinatorNotices", "pendingNotifications", "adapterOutbound", "adapterSubmit", "turnEvents", "deferredLifecycle", "refineJobs"];
     var MAINTENANCE_BLACKOUT_SOURCES = ["queue", "autoLaunch", "direct", "sessionInput", "nativeOwnerInput", "deferredLifecycle", "reconnect", "newMembership"];
     var digest7 = (v) => (0, import_node_crypto62.createHash)("sha256").update(JSON.stringify(v)).digest("hex");
-    function census(components, state2, root2, nonce) {
+    function census(components, state2, root, nonce) {
       const identity5 = { daemonId: state2.daemonId, pid: process.pid, bootNonce: MAINTENANCE_BOOT_NONCE, planDigest: state2.planDigest, epoch: state2.epoch, nonce };
       const channels = {};
       const set2 = (name, source2, inventory2, pending, reason) => channels[name] = { observed: !reason, source: source2, inventoryDigest: digest7(inventory2), pending, ...reason ? { reason } : {}, identity: identity5 };
@@ -207894,7 +208004,7 @@ ${marker2}`,
       };
       let db3 = components.turnLedger?.store.db;
       try {
-        if (!daemonIdsEquivalent5(components.turnLedger?.selfDaemonId, state2.daemonId) || !fs115.realpathSync(db3?.name).startsWith(root2 + path120.sep)) db3 = void 0;
+        if (!daemonIdsEquivalent5(components.turnLedger?.selfDaemonId, state2.daemonId) || !fs115.realpathSync(db3?.name).startsWith(root + path120.sep)) db3 = void 0;
       } catch {
         db3 = void 0;
       }
@@ -207982,7 +208092,7 @@ ${marker2}`,
       read2(["deferredLifecycle"], "state.json + live mesh restart timers", () => {
         let persisted = { deferredRestartSchedules: {} };
         try {
-          const file = path120.join(root2, "state.json"), s2 = fs115.lstatSync(file);
+          const file = path120.join(root, "state.json"), s2 = fs115.lstatSync(file);
           if (!s2.isFile() || s2.isSymbolicLink() || s2.size > 8 * 1024 * 1024) throw new Error("unknown");
           persisted = JSON.parse(fs115.readFileSync(file, "utf8"));
         } catch (e) {
@@ -207990,7 +208100,7 @@ ${marker2}`,
         }
         if (!persisted.deferredRestartSchedules || typeof persisted.deferredRestartSchedules !== "object" || Array.isArray(persisted.deferredRestartSchedules)) throw new Error("unknown");
         const timers = maintenanceDeferredRestarts(), schedules = Object.keys(persisted.deferredRestartSchedules).sort();
-        const helpers = collectLifecycleSource(root2);
+        const helpers = collectLifecycleSource(root);
         const outer = components.maintenanceLifecycleInventory?.();
         const current5 = outer?.rows.find((r) => r.operationId === outer.currentOperationId);
         const complete = helpers.observed && outer?.observed === true && current5?.owner.pid === process.pid && current5?.owner.bootNonce === MAINTENANCE_BOOT_NONCE && digest7(helpers.rows) === digest7(outer.rows);
@@ -208043,17 +208153,17 @@ ${marker2}`,
       const stableChannels = Object.fromEntries(Object.entries(channels).map(([name, { identity: _identity, ...value }]) => [name, value]));
       return { identity: identity5, channels, revision, receipts, receiptsObserved, digest: digest7({ channels: stableChannels, receipts, receiptsObserved }) };
     }
-    async function collectTargetDrain(components, state2, root2, nonce, deadlineMs = 2e3) {
-      const before = census(components, state2, root2, nonce);
+    async function collectTargetDrain(components, state2, root, nonce, deadlineMs = 2e3) {
+      const before = census(components, state2, root, nonce);
       let mcp;
       try {
-        mcp = await collectMcpInventories(root2, state2, deadlineMs);
+        mcp = await collectMcpInventories(root, state2, deadlineMs);
       } catch {
         mcp = { observed: false, reason: "mcp_registry_unknown_or_changed", members: [], nativeCensusRequired: true };
       }
       let confirmed;
       try {
-        confirmed = await collectMcpInventories(root2, state2, deadlineMs);
+        confirmed = await collectMcpInventories(root, state2, deadlineMs);
       } catch {
         confirmed = { observed: false, reason: "mcp_registry_unknown_or_changed", members: [], nativeCensusRequired: true };
       }
@@ -208061,7 +208171,7 @@ ${marker2}`,
       const mcpStable = digest7(select(mcp)) === digest7(select(confirmed));
       if (!mcp.observed || !mcpStable || !confirmed.observed || mcp.membershipDigest !== confirmed.membershipDigest) mcp = { ...confirmed, observed: false, reason: confirmed.reason || mcp.reason || "mcp_inventory_changed_during_collection" };
       else mcp = confirmed;
-      const after = census(components, state2, root2, nonce), channels = after.channels;
+      const after = census(components, state2, root, nonce), channels = after.channels;
       const members = mcp.members.filter((m) => m.observed), incomplete = !mcp.observed || members.length !== mcp.members.length;
       const mcpChannel = (name, pending, reason) => channels[name] = { observed: !reason && !incomplete, source: "fresh challenged target MCP adapters + worker_bridge_delivery", pending, inventoryDigest: digest7({ members, receipts: after.receipts }), identity: after.identity, ...reason || incomplete ? { reason: reason || mcp.reason || "mcp_inventory_unknown" } : {} };
       const matchesAck = (r, ack) => ack.proof === "receipt" && r.kind === ack.kind && r.receipt_protocol === 1 && r.receipt_delivery_id === r.delivery_id && r.sender_id === ack.senderDaemonId && r.envelope_sender === ack.senderDaemonId && r.envelope_owner === ack.ownerDaemonId && r.envelope_task === ack.taskId && r.envelope_attempt === ack.attemptId && r.envelope_generation === ack.generation && r.envelope_session === ack.sessionId && r.state === "receipted" && r.delivery_id === ack.id && r.digest === ack.digest && r.receipt_digest === r.digest && ["ownerDaemonId", "senderDaemonId", "taskId", "attemptId", "generation", "sessionId"].every((k) => r[k] === ack[k]);
@@ -208925,12 +209035,12 @@ ${marker2}`,
       const coordinatorDaemonId = readText(settings2.meshCoordinatorDaemonId);
       const meshId2 = readText(settings2.meshNodeFor);
       if (!coordinatorDaemonId || !meshId2) return "skipped";
-      const nodeId2 = readText(settings2.meshNodeId) || readText(settings2.meshLastNodeId);
+      const nodeId = readText(settings2.meshNodeId) || readText(settings2.meshLastNodeId);
       const payload = {
         event: "session:settings_changed",
         meshId: meshId2,
         targetSessionId: sessionId,
-        ...nodeId2 ? { nodeId: nodeId2 } : {},
+        ...nodeId ? { nodeId } : {},
         sessionSettings: { ...patch }
       };
       const selfDaemonId = readText(ctx.deps.statusInstanceId);
@@ -209236,8 +209346,8 @@ ${marker2}`,
       requireProof(identity5 && normalizeRepoIdentity(git12(base, "remote", "get-url", "origin")) === identity5 && normalizeRepoIdentity(git12(workspace, "remote", "get-url", "origin")) === identity5, "source_parent_repo_identity_mismatch");
     }
     async function reattachMeshSourceParent(ctx, args) {
-      const { meshId: meshId2, nodeId: nodeId2, parentNodeId, expectedOldParentId } = args || {};
-      if (![meshId2, nodeId2, parentNodeId, expectedOldParentId].every((v) => typeof v === "string" && v.trim() === v && v.length)) {
+      const { meshId: meshId2, nodeId, parentNodeId, expectedOldParentId } = args || {};
+      if (![meshId2, nodeId, parentNodeId, expectedOldParentId].every((v) => typeof v === "string" && v.trim() === v && v.length)) {
         return { success: false, code: "source_parent_arguments_required", error: "meshId, nodeId, parentNodeId and explicit expectedOldParentId are required." };
       }
       const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId2, args.inlineMesh, "source-parent reattachment");
@@ -209252,7 +209362,7 @@ ${marker2}`,
           requireProof(mesh, "source_parent_durable_mesh_required");
           const host = resolveMeshHostStatus(mesh, { localDaemonId: ctx.deps.statusInstanceId });
           requireProof(host.canOwnCoordinator && host.canOwnQueue && host.hostDaemonId && daemonIdsEquivalent5(host.hostDaemonId, ctx.deps.statusInstanceId), "source_parent_host_ownership_changed");
-          const node = mesh.nodes.find((n) => n.id === nodeId2);
+          const node = mesh.nodes.find((n) => n.id === nodeId);
           const parent = mesh.nodes.find((n) => n.id === parentNodeId);
           requireProof(node && parent, "source_parent_node_not_found");
           const current5 = node.clonedFromNodeId;
@@ -209297,12 +209407,12 @@ ${marker2}`,
     init_repo_mesh_types();
     init_mesh_node_limit();
     init_mesh_node_identity();
-    function findNode2(nodes, nodeId2) {
-      return Array.isArray(nodes) ? nodes.find((node) => meshNodeIdMatches7(node, nodeId2)) : void 0;
+    function findNode2(nodes, nodeId) {
+      return Array.isArray(nodes) ? nodes.find((node) => meshNodeIdMatches7(node, nodeId)) : void 0;
     }
-    function judgeWorktree(nodeId2, evidence) {
-      const configNode = findNode2(evidence.configMesh?.nodes, nodeId2);
-      const heldNode = findNode2(evidence.inlineNodes, nodeId2) ?? configNode;
+    function judgeWorktree(nodeId, evidence) {
+      const configNode = findNode2(evidence.configMesh?.nodes, nodeId);
+      const heldNode = findNode2(evidence.inlineNodes, nodeId) ?? configNode;
       const git15 = heldNode ? buildInlineMeshTransitGitStatus(heldNode) : void 0;
       if (git15) {
         const status = { git: git15 };
@@ -209373,7 +209483,7 @@ ${marker2}`,
       const derived = deriveProviderPriorityFromSlots2(slots2);
       if (derived.length) policy.providerPriority = derived;
     }
-    function refuseCoordinatorBaseNodeRemoval(ctx, node, nodeId2, args) {
+    function refuseCoordinatorBaseNodeRemoval(ctx, node, nodeId, args) {
       if (!node || readMeshDirectDispatchFlag(args) || node.isLocalWorktree === true || args?.force === true) return null;
       const nodeDaemonId = typeof node.daemonId === "string" ? node.daemonId.trim() : "";
       const nodeMachineId = readMeshNodeMachineId(node) || "";
@@ -209391,7 +209501,7 @@ ${marker2}`,
         success: false,
         removed: false,
         code: "mesh_remove_coordinator_base_node_protected",
-        error: `Refusing to remove the coordinator's own base node '${typeof node.workspace === "string" ? node.workspace : nodeId2}'. It is the local non-worktree node bound to this coordinator daemon; removing it breaks live mesh membership and forces a restart.`,
+        error: `Refusing to remove the coordinator's own base node '${typeof node.workspace === "string" ? node.workspace : nodeId}'. It is the local non-worktree node bound to this coordinator daemon; removing it breaks live mesh membership and forces a restart.`,
         recoveryHint: "Remove worktree clone nodes instead, or pass force:true only if you are intentionally tearing down this mesh and accept that the coordinator must be re-registered/restarted."
       };
     }
@@ -209400,7 +209510,7 @@ ${marker2}`,
       return nodeDaemonId && !daemonIdsEquivalent5(nodeDaemonId, ctx.deps.statusInstanceId) && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args) ? nodeDaemonId : void 0;
     }
     async function removeNodeWorktree(ctx, p) {
-      const { mesh, node, nodeId: nodeId2, args } = p;
+      const { mesh, node, nodeId, args } = p;
       let worktreeCleanup;
       let remoteForwardedResult;
       const remoteOwner = remoteWorktreeOwner(ctx, node, args);
@@ -209412,7 +209522,7 @@ ${marker2}`,
         remoteForwardedResult = forwardedResult;
         worktreeCleanup = forwardedResult.worktreeCleanup !== null && typeof forwardedResult.worktreeCleanup === "object" ? forwardedResult.worktreeCleanup : void 0;
       }
-      const cleanupResult = await ctx.cleanupLocalWorktreeNode({ mesh, node, nodeId: nodeId2, force: args?.force === true });
+      const cleanupResult = await ctx.cleanupLocalWorktreeNode({ mesh, node, nodeId, force: args?.force === true });
       if (cleanupResult.success === false) {
         return {
           refusal: {
@@ -209429,15 +209539,15 @@ ${marker2}`,
       worktreeCleanup = cleanupResult;
       return { worktreeCleanup, ...remoteForwardedResult ? { remoteForwardedResult } : {} };
     }
-    async function removeNodeMembership(ctx, meshId2, meshRecord2, mesh, node, nodeId2) {
+    async function removeNodeMembership(ctx, meshId2, meshRecord2, mesh, node, nodeId) {
       let removed = false;
       if (meshRecord2?.inline) {
-        removed = ctx.removeInlineMeshNode(meshId2, mesh, nodeId2);
+        removed = ctx.removeInlineMeshNode(meshId2, mesh, nodeId);
         if (removed) ctx.invalidateAggregateMeshStatus(meshId2);
         try {
           const { getMesh: getMesh2, removeNode: removeNode3 } = await Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports));
           const fileMesh = getMesh2(meshId2);
-          const fileNode = fileMesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId2));
+          const fileNode = fileMesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
           if (fileNode?.id) {
             const fileRemoved = removeNode3(meshId2, fileNode.id);
             if (fileRemoved) {
@@ -209451,22 +209561,22 @@ ${marker2}`,
         return removed;
       }
       const { removeNode: removeNode2 } = await Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports));
-      removed = removeNode2(meshId2, nodeId2);
+      removed = removeNode2(meshId2, nodeId);
       if (!removed && !node) removed = true;
       if (removed) {
         ctx.invalidateAggregateMeshStatus(meshId2);
         const cachedMesh = ctx.getCachedInlineMesh(meshId2);
-        if (cachedMesh) ctx.removeInlineMeshNode(meshId2, cachedMesh, nodeId2);
-        ctx.tombstoneRemovedMeshNode(meshId2, nodeId2);
+        if (cachedMesh) ctx.removeInlineMeshNode(meshId2, cachedMesh, nodeId);
+        ctx.tombstoneRemovedMeshNode(meshId2, nodeId);
       }
       return removed;
     }
     async function recordNodeRemoval(p) {
-      const { meshId: meshId2, nodeId: nodeId2, node, removed, worktreeCleanup, remoteForwardedResult } = p;
+      const { meshId: meshId2, nodeId, node, removed, worktreeCleanup, remoteForwardedResult } = p;
       if (removed) {
         try {
           const { MeshRuntimeStore: MeshRuntimeStore2 } = await Promise.resolve().then(() => (init_mesh_runtime_store(), mesh_runtime_store_exports));
-          MeshRuntimeStore2.getInstance().deleteRemoteIdleSessionsForNode(meshId2, nodeId2);
+          MeshRuntimeStore2.getInstance().deleteRemoteIdleSessionsForNode(meshId2, nodeId);
         } catch {
         }
       }
@@ -209474,7 +209584,7 @@ ${marker2}`,
         try {
           const { meshRecord: meshRecord2 } = await Promise.resolve().then(() => (init_mesh_record(), mesh_record_exports));
           meshRecord2(meshId2, "worktree_directory_removed", {
-            nodeId: nodeId2,
+            nodeId,
             payload: {
               workspace: typeof worktreeCleanup.removedPath === "string" ? worktreeCleanup.removedPath : typeof node?.workspace === "string" ? node.workspace : void 0,
               worktreeBranch: typeof node?.worktreeBranch === "string" ? node.worktreeBranch : void 0,
@@ -209496,7 +209606,7 @@ ${marker2}`,
       try {
         const { meshRecord: meshRecord2 } = await Promise.resolve().then(() => (init_mesh_record(), mesh_record_exports));
         meshRecord2(meshId2, "node_removed", {
-          nodeId: nodeId2,
+          nodeId,
           payload: {
             worktree: !!node?.isLocalWorktree,
             // Distinguish a removal executed by a remote owning daemon (this entry
@@ -209538,19 +209648,19 @@ ${marker2}`,
     }
     async function removeMeshNode(ctx, args) {
       const meshId2 = typeof args?.meshId === "string" ? args.meshId.trim() : "";
-      const nodeId2 = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
-      if (!meshId2 || !nodeId2) return { success: false, error: "meshId and nodeId required" };
+      const nodeId = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
+      if (!meshId2 || !nodeId) return { success: false, error: "meshId and nodeId required" };
       try {
         const meshRecord2 = await ctx.getMeshForCommand(meshId2, args?.inlineMesh, { preferInline: true });
         const mesh = meshRecord2?.mesh;
-        const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId2));
-        const baseRefusal = refuseCoordinatorBaseNodeRemoval(ctx, node, nodeId2, args);
+        const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
+        const baseRefusal = refuseCoordinatorBaseNodeRemoval(ctx, node, nodeId, args);
         if (baseRefusal) return baseRefusal;
         if (args?.rosterOnly === true) {
-          const removed2 = await removeNodeMembership(ctx, meshId2, meshRecord2, mesh, node, nodeId2);
+          const removed2 = await removeNodeMembership(ctx, meshId2, meshRecord2, mesh, node, nodeId);
           await recordNodeRemoval({
             meshId: meshId2,
-            nodeId: nodeId2,
+            nodeId,
             node,
             removed: removed2,
             args,
@@ -209575,7 +209685,7 @@ ${marker2}`,
         );
         const explicitSessionIds = Array.isArray(args?.sessionIds) ? args.sessionIds.filter((v) => typeof v === "string" && v.trim().length > 0).map((v) => v.trim()) : void 0;
         if (node?.isLocalWorktree && !remoteWorktreeOwner(ctx, node, args)) {
-          const precheck = await ctx.precheckLocalWorktreeRemovable({ mesh, node, nodeId: nodeId2, force: args?.force === true });
+          const precheck = await ctx.precheckLocalWorktreeRemovable({ mesh, node, nodeId, force: args?.force === true });
           if (precheck.ok === false) {
             return {
               success: false,
@@ -209593,7 +209703,7 @@ ${marker2}`,
         if (node && sessionCleanupMode !== "preserve") {
           sessionCleanup = await ctx.cleanupMeshSessions({
             meshId: meshId2,
-            nodeId: nodeId2,
+            nodeId,
             node,
             mode: sessionCleanupMode,
             ...explicitSessionIds && explicitSessionIds.length > 0 ? { sessionIds: explicitSessionIds } : {},
@@ -209604,12 +209714,12 @@ ${marker2}`,
         let worktreeCleanup;
         let remoteForwardedResult;
         if (node?.isLocalWorktree) {
-          const worktree = await removeNodeWorktree(ctx, { mesh, node, nodeId: nodeId2, args, sessionCleanup });
+          const worktree = await removeNodeWorktree(ctx, { mesh, node, nodeId, args, sessionCleanup });
           if ("refusal" in worktree) return worktree.refusal;
           ({ worktreeCleanup, remoteForwardedResult } = worktree);
         }
-        const removed = await removeNodeMembership(ctx, meshId2, meshRecord2, mesh, node, nodeId2);
-        await recordNodeRemoval({ meshId: meshId2, nodeId: nodeId2, node, removed, args, sessionCleanupMode, worktreeCleanup, remoteForwardedResult });
+        const removed = await removeNodeMembership(ctx, meshId2, meshRecord2, mesh, node, nodeId);
+        await recordNodeRemoval({ meshId: meshId2, nodeId, node, removed, args, sessionCleanupMode, worktreeCleanup, remoteForwardedResult });
         return buildRemoveNodeResponse({ removed, sessionCleanup, worktreeCleanup, remoteForwardedResult });
       } catch (e) {
         return { success: false, error: e.message };
@@ -209618,8 +209728,8 @@ ${marker2}`,
     var meshNodeLifecycleHandlers = {
       recover_mesh_node_identity: async (ctx, args) => {
         const meshId2 = typeof args?.meshId === "string" ? args.meshId.trim() : "";
-        const nodeId2 = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
-        if (!meshId2 || !nodeId2) return { success: false, error: "meshId and nodeId required" };
+        const nodeId = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
+        if (!meshId2 || !nodeId) return { success: false, error: "meshId and nodeId required" };
         const denied = await ctx.requireMeshHostMutationOwner(meshId2, void 0, "node identity recovery");
         if (denied) return denied;
         try {
@@ -209627,11 +209737,11 @@ ${marker2}`,
           const { recoverLocalNodeIdentity: recoverLocalNodeIdentity2 } = await Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports));
           await ctx.getMeshForCommand(meshId2, void 0);
           const cached5 = ctx.getCachedInlineMesh(meshId2);
-          const cachedNode = cached5?.nodes?.find((n) => n.id === nodeId2);
+          const cachedNode = cached5?.nodes?.find((n) => n.id === nodeId);
           if (cached5 && !cachedNode) throw new Error("node_identity_cache_conflict");
           const router = ctx.components().router;
           if (args.identityRecovery?.dryRun === false) ctx.invalidateAggregateMeshStatus(meshId2);
-          const result = recoverLocalNodeIdentity2(meshId2, nodeId2, args.identityRecovery, {
+          const result = recoverLocalNodeIdentity2(meshId2, nodeId, args.identityRecovery, {
             actor: ctx.deps.statusInstanceId || "",
             machineId: getMachineId() || "",
             cachedNode,
@@ -209640,7 +209750,7 @@ ${marker2}`,
             refineryRunning: router.runningRefineBatchJobs.has(meshId2) || [...router.runningRefineJobs.keys()].some((k) => k.startsWith(`${meshId2}:`))
           });
           if (!result.dryRun && result.node && cached5) {
-            router.inlineMeshCache.set(meshId2, { ...cached5, nodes: cached5.nodes.map((n) => n.id === nodeId2 ? {
+            router.inlineMeshCache.set(meshId2, { ...cached5, nodes: cached5.nodes.map((n) => n.id === nodeId ? {
               ...n,
               daemonId: result.node.daemonId,
               machineId: result.node.machineId,
@@ -209711,8 +209821,8 @@ ${marker2}`,
       },
       update_mesh_node: async (ctx, args) => {
         const meshId2 = typeof args?.meshId === "string" ? args.meshId.trim() : "";
-        const nodeId2 = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
-        if (!meshId2 || !nodeId2) return { success: false, error: "meshId and nodeId required" };
+        const nodeId = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
+        if (!meshId2 || !nodeId) return { success: false, error: "meshId and nodeId required" };
         const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId2, args?.inlineMesh, "node update", "member", args);
         if (ownerFailure) return ownerFailure;
         try {
@@ -209734,7 +209844,7 @@ ${marker2}`,
             else delete policy.providerRoles;
           }
           migrateProviderRolesToSlots2(policy);
-          const finalSlots = Object.prototype.hasOwnProperty.call(policy, "slots") ? policy.slots : getMesh2(meshId2)?.nodes.find((n) => n.id === nodeId2)?.policy?.slots;
+          const finalSlots = Object.prototype.hasOwnProperty.call(policy, "slots") ? policy.slots : getMesh2(meshId2)?.nodes.find((n) => n.id === nodeId)?.policy?.slots;
           syncProviderPriorityFromSlots(policy, finalSlots);
           const patch = { policy };
           if (typeof args?.systemPrompt === "string") {
@@ -209746,10 +209856,10 @@ ${marker2}`,
           if (Array.isArray(args?.capabilities)) {
             patch.capabilities = args.capabilities.map((t) => typeof t === "string" ? t.trim() : "").filter(Boolean);
           }
-          const node = updateNode2(meshId2, nodeId2, patch);
+          const node = updateNode2(meshId2, nodeId, patch);
           if (node) {
             const cached5 = await ctx.getMeshForCommand(meshId2, void 0, { preferInline: true });
-            const cachedNode = cached5?.inline && Array.isArray(cached5.mesh?.nodes) ? cached5.mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId2)) : void 0;
+            const cachedNode = cached5?.inline && Array.isArray(cached5.mesh?.nodes) ? cached5.mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId)) : void 0;
             if (cachedNode) {
               cachedNode.policy = node.policy;
               if (node.systemPrompt) cachedNode.systemPrompt = node.systemPrompt;
@@ -209764,7 +209874,7 @@ ${marker2}`,
           const meshRecord2 = await ctx.getMeshForCommand(meshId2, args?.inlineMesh, { preferInline: true });
           const mesh = meshRecord2?.mesh;
           if (!mesh) return { success: false, error: "Mesh not found" };
-          const inlineNode = Array.isArray(mesh.nodes) ? mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId2)) : void 0;
+          const inlineNode = Array.isArray(mesh.nodes) ? mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId)) : void 0;
           if (!inlineNode) return { success: false, error: "Mesh node not found" };
           inlineNode.policy = {
             ...inlineNode.policy && typeof inlineNode.policy === "object" && !Array.isArray(inlineNode.policy) ? inlineNode.policy : {},
@@ -209789,23 +209899,23 @@ ${marker2}`,
       },
       cleanup_mesh_sessions: async (ctx, args) => {
         const meshId2 = typeof args?.meshId === "string" ? args.meshId.trim() : "";
-        const nodeId2 = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
-        if (!meshId2 || !nodeId2) return { success: false, error: "meshId and nodeId required" };
+        const nodeId = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
+        if (!meshId2 || !nodeId) return { success: false, error: "meshId and nodeId required" };
         const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId2, args?.inlineMesh, "node removal", "member", args);
         if (ownerFailure) return ownerFailure;
         try {
           const meshRecord2 = await ctx.getMeshForCommand(meshId2, args?.inlineMesh, { preferInline: true });
           const mesh = meshRecord2?.mesh;
           if (!mesh) return { success: false, error: "Mesh not found" };
-          const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId2));
-          if (!node) return { success: false, error: `Node '${nodeId2}' not found in mesh` };
+          const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
+          if (!node) return { success: false, error: `Node '${nodeId}' not found in mesh` };
           const mode = ctx.normalizeMeshSessionCleanupMode(args?.mode ?? resolveMeshPolicy3(mesh?.policy).sessionCleanupOnNodeRemove);
           const sessionIds = Array.isArray(args?.sessionIds) ? args.sessionIds.map((id4) => typeof id4 === "string" ? id4.trim() : "").filter(Boolean) : void 0;
           const reclaimOrphans = args?.reclaimOrphans === true;
           const liveMeshNodeIds = Array.isArray(mesh?.nodes) ? mesh.nodes.map((n) => normalizeMeshNodeId(n)).filter(Boolean) : [];
           const result = await ctx.cleanupMeshSessions({
             meshId: meshId2,
-            nodeId: nodeId2,
+            nodeId,
             node,
             mode,
             sessionIds,
@@ -210081,9 +210191,9 @@ ${marker2}`,
     async function appendCloneLedger(target2, sourceNodeId, branch, submodulesInitialized, bootstrapState, extraPayload) {
       try {
         const { meshRecord: meshRecord2 } = await Promise.resolve().then(() => (init_mesh_record(), mesh_record_exports));
-        const nodeId2 = typeof target2.node?.id === "string" && target2.node.id.trim() ? target2.node.id.trim() : void 0;
+        const nodeId = typeof target2.node?.id === "string" && target2.node.id.trim() ? target2.node.id.trim() : void 0;
         meshRecord2(target2.meshId, "node_cloned", {
-          ...nodeId2 ? { nodeId: nodeId2 } : {},
+          ...nodeId ? { nodeId } : {},
           payload: {
             sourceNodeId,
             branch,
@@ -210475,17 +210585,17 @@ ${marker2}`,
       },
       retry_mesh_node_bootstrap: async (ctx, args) => {
         const meshId2 = typeof args?.meshId === "string" ? args.meshId.trim() : "";
-        const nodeId2 = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
+        const nodeId = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
         if (!meshId2) return { success: false, error: "meshId required" };
-        if (!nodeId2) return { success: false, error: "nodeId required" };
+        if (!nodeId) return { success: false, error: "nodeId required" };
         const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId2, args?.inlineMesh, "bootstrap retry", "member", args);
         if (ownerFailure) return ownerFailure;
         try {
           const meshRecord2 = await ctx.getMeshForCommand(meshId2, args?.inlineMesh, { preferInline: true });
           const mesh = meshRecord2?.mesh;
           if (!mesh) return { success: false, error: "Mesh not found" };
-          const node = mesh.nodes?.find((n) => meshNodeIdMatches7(n, nodeId2));
-          if (!node) return { success: false, error: `Node '${nodeId2}' not found in mesh` };
+          const node = mesh.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
+          if (!node) return { success: false, error: `Node '${nodeId}' not found in mesh` };
           if (!node.isLocalWorktree) return { success: false, error: "Node is not a local worktree node" };
           const nodeDaemonId = typeof node.daemonId === "string" ? node.daemonId.trim() : void 0;
           if (nodeDaemonId && !daemonIdsEquivalent5(nodeDaemonId, ctx.deps.statusInstanceId) && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args)) {
@@ -211097,7 +211207,7 @@ ${marker2}`,
     init_command_registry();
     init_daemon_components_port();
     async function stopCancelledTaskWorker(ctx, meshId2, prior) {
-      const { sessionId, nodeId: nodeId2, providerType } = prior;
+      const { sessionId, nodeId, providerType } = prior;
       const stopArgs = {
         targetSessionId: sessionId,
         ...providerType ? { cliType: providerType } : {},
@@ -211117,7 +211227,7 @@ ${marker2}`,
         }
         const dispatch2 = ctx.deps.dispatchMeshCommand;
         let daemonId;
-        if (nodeId2) {
+        if (nodeId) {
           try {
             const [{ getMesh: getMesh2 }, { meshNodeIdMatches: meshNodeIdMatches22 }, { readMeshNodeDaemonId: readMeshNodeDaemonId2 }] = await Promise.all([
               Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports)),
@@ -211125,7 +211235,7 @@ ${marker2}`,
               Promise.resolve().then(() => (init_mesh_node_identity(), mesh_node_identity_exports))
             ]);
             const mesh = getMesh2(meshId2);
-            const node = mesh?.nodes?.find((n) => meshNodeIdMatches22(n, nodeId2));
+            const node = mesh?.nodes?.find((n) => meshNodeIdMatches22(n, nodeId));
             daemonId = node ? readMeshNodeDaemonId2(node) || void 0 : void 0;
           } catch {
           }
@@ -211133,7 +211243,7 @@ ${marker2}`,
         if (daemonId && dispatch2) {
           await Promise.resolve(dispatch2(daemonId, "stop_cli", stopArgs)).catch((e) => LOG.warn("MeshQueue", `Remote stop of cancelled worker ${sessionId} on daemon ${daemonId} failed: ${e?.message || e}`));
         } else {
-          LOG.warn("MeshQueue", `Cannot stop cancelled worker ${sessionId}: no local adapter and no resolvable remote daemon id (node ${nodeId2 ?? "?"}). Row is already terminal; if the worker completes it strand-fails harmlessly.`);
+          LOG.warn("MeshQueue", `Cannot stop cancelled worker ${sessionId}: no local adapter and no resolvable remote daemon id (node ${nodeId ?? "?"}). Row is already terminal; if the worker completes it strand-fails harmlessly.`);
         }
       } catch (e) {
         LOG.warn("MeshQueue", `stopCancelledTaskWorker error for ${sessionId}: ${e?.message || e}`);
@@ -211318,8 +211428,8 @@ ${marker2}`,
             for (const inst of sorted) {
               const state2 = inst.getState();
               const settings2 = state2.settings || {};
-              const nodeId2 = readStringValue(settings2.meshNodeId, settings2.nodeId);
-              if (!nodeId2 || nodeId2 !== preferredNodeId) continue;
+              const nodeId = readStringValue(settings2.meshNodeId, settings2.nodeId);
+              if (!nodeId || nodeId !== preferredNodeId) continue;
               const meshNodeFor = readStringValue(settings2.meshNodeFor);
               if (meshNodeFor !== meshId2) continue;
               const status = (readStringValue(state2.status) || "").toLowerCase();
@@ -211327,7 +211437,7 @@ ${marker2}`,
               const sessionId = typeof state2.instanceId === "string" ? state2.instanceId : "";
               const providerType = readStringValue(state2.type, settings2.providerType) || "";
               if (sessionId && providerType) {
-                tryAssignQueueTask2(components, meshId2, nodeId2, sessionId, providerType, void 0, void 0, "ipc_trigger_preferred_node");
+                tryAssignQueueTask2(components, meshId2, nodeId, sessionId, providerType, void 0, void 0, "ipc_trigger_preferred_node");
                 break;
               }
             }
@@ -211587,17 +211697,17 @@ ${marker2}`,
       },
       plan_mesh_refine_node: async (ctx, args) => {
         const meshId2 = typeof args?.meshId === "string" ? args.meshId.trim() : "";
-        const nodeId2 = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
-        if (!meshId2 || !nodeId2) return { success: false, error: "meshId and nodeId required" };
+        const nodeId = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
+        if (!meshId2 || !nodeId) return { success: false, error: "meshId and nodeId required" };
         const meshRecord2 = await ctx.getMeshForCommand(meshId2, args?.inlineMesh, { preferInline: true });
         const mesh = meshRecord2?.mesh;
-        const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId2));
-        if (!node?.workspace) return { success: false, error: `Node '${nodeId2}' workspace not found` };
+        const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
+        if (!node?.workspace) return { success: false, error: `Node '${nodeId}' workspace not found` };
         const submoduleReachabilityPreflight = await planMeshRefineNodeSubmodulePreflight({ mesh, node }).catch(() => void 0);
         return {
           success: true,
           dryRun: true,
-          nodeId: nodeId2,
+          nodeId,
           workspace: node.workspace,
           validationPlan: buildMeshRefineValidationPlan(mesh, node.workspace, { baseRefs: resolveMeshRefineConfigBaseRefs(mesh, node) }),
           mergeWillRun: false,
@@ -211611,17 +211721,17 @@ ${marker2}`,
         const nodeIdForError = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
         try {
           const meshId2 = meshIdForError;
-          const nodeId2 = nodeIdForError;
+          const nodeId = nodeIdForError;
           let workspace = workspaceForError;
           let submoduleIgnorePaths = Array.isArray(args?.submoduleIgnorePaths) ? args.submoduleIgnorePaths.filter((value) => typeof value === "string") : void 0;
           let nodeDaemonId;
           let allowAutoPublishSubmoduleMainCommits = false;
           let resolvedMesh;
-          if (meshId2 && nodeId2) {
+          if (meshId2 && nodeId) {
             const meshRecord2 = await ctx.getMeshForCommand(meshId2, args?.inlineMesh, { preferInline: true });
             const mesh = meshRecord2?.mesh;
             resolvedMesh = mesh;
-            const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId2));
+            const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
             if (!workspace) {
               workspace = typeof node?.workspace === "string" ? node.workspace.trim() : "";
             }
@@ -211639,7 +211749,7 @@ ${marker2}`,
           }
           const result = await fastForwardMeshNode({
             meshId: meshId2 || void 0,
-            nodeId: nodeId2 || void 0,
+            nodeId: nodeId || void 0,
             workspace,
             branch: typeof args?.branch === "string" ? args.branch : void 0,
             execute: args?.execute === true,
@@ -211673,7 +211783,7 @@ ${marker2}`,
         }
       },
       [APPROVED_RUNTIME_COMMAND]: async (ctx, args) => {
-        const allowed = /* @__PURE__ */ new Set(["meshId", "nodeId", "runtimeApprovalId", "execute", "dryRun"]);
+        const allowed = /* @__PURE__ */ new Set(["meshId", "nodeId", "runtimeApprovalId", "execute", "dryRun", "mergeMode", "approvedTargetShas"]);
         const payload = stripRouterInternalArgs(args);
         if (Object.keys(payload).some((key7) => !allowed.has(key7)) || [args.execute, args.dryRun].some((value) => value !== void 0 && typeof value !== "boolean")) {
           return { success: false, code: "invalid_runtime_approval_request" };
@@ -211708,11 +211818,11 @@ ${marker2}`,
       },
       refine_mesh_node: async (ctx, args) => {
         const meshId2 = typeof args?.meshId === "string" ? args.meshId.trim() : "";
-        const nodeId2 = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
-        if (!meshId2 || !nodeId2) return { success: false, error: "meshId and nodeId required" };
+        const nodeId = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
+        if (!meshId2 || !nodeId) return { success: false, error: "meshId and nodeId required" };
         {
           const meshRecordForForward = await ctx.getMeshForCommand(meshId2, args?.inlineMesh, { preferInline: true });
-          const forwardNode = meshRecordForForward?.mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId2));
+          const forwardNode = meshRecordForForward?.mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
           const nodeDaemonId = typeof forwardNode?.daemonId === "string" ? forwardNode.daemonId.trim() : void 0;
           const selfDaemonId = ctx.deps.statusInstanceId;
           const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent5(nodeDaemonId, selfDaemonId);
@@ -211730,30 +211840,30 @@ ${marker2}`,
           return {
             success: false,
             code: dryRunVeto.code,
-            nodeId: nodeId2,
+            nodeId,
             meshId: meshId2,
             allowed: false,
             willRun: false,
             executed: false,
             blockingReasons: [dryRunVeto.code],
             error: dryRunVeto.error,
-            nextAction: `Re-run refine_mesh_node(meshId: "${meshId2}", nodeId: "${nodeId2}", execute: true) to apply, or omit dry_run to preview.`
+            nextAction: `Re-run refine_mesh_node(meshId: "${meshId2}", nodeId: "${nodeId}", execute: true) to apply, or omit dry_run to preview.`
           };
         }
         if (dryRunVeto.isDryRun) {
           const meshRecord2 = await ctx.getMeshForCommand(meshId2, args?.inlineMesh, { preferInline: true });
           const mesh = meshRecord2?.mesh;
-          const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId2));
-          if (!node?.workspace) return { success: false, error: `Node '${nodeId2}' workspace not found` };
+          const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
+          if (!node?.workspace) return { success: false, error: `Node '${nodeId}' workspace not found` };
           const submoduleReachabilityPreflight = await planMeshRefineNodeSubmodulePreflight({ mesh, node }).catch(() => void 0);
-          const publication = refineArgsCarryPublicationContract(args) ? await previewRefineNodePublication({ mesh, node, nodeId: nodeId2, args }) : void 0;
+          const publication = refineArgsCarryPublicationContract(args) ? await previewRefineNodePublication({ mesh, node, nodeId, args }) : void 0;
           if (publication && !publication.ok) {
-            return refinePublicationPreviewRefusalResult(nodeId2, publication, { workspace: node.workspace });
+            return refinePublicationPreviewRefusalResult(nodeId, publication, { workspace: node.workspace });
           }
           return {
             success: true,
             dryRun: true,
-            nodeId: nodeId2,
+            nodeId,
             workspace: node.workspace,
             ...publication ? { publicationContract: { ok: true, branchHead: publication.branchHead, baseHead: publication.baseHead, baseRef: publication.baseRef, ...publication.fetchWarning ? { fetchWarning: publication.fetchWarning } : {} } } : {},
             validationPlan: buildMeshRefineValidationPlan(mesh, node.workspace, { baseRefs: resolveMeshRefineConfigBaseRefs(mesh, node) }),
@@ -211763,7 +211873,7 @@ ${marker2}`,
             hint: "Dry-run only \u2014 no merge/push/cleanup performed. Re-invoke with execute:true to converge this node."
           };
         }
-        return ctx.startMeshRefineJob(meshId2, nodeId2, args);
+        return ctx.startMeshRefineJob(meshId2, nodeId, args);
       },
       batch_refine_mesh_nodes: async (ctx, args) => {
         const meshId2 = typeof args?.meshId === "string" ? args.meshId.trim() : "";
@@ -211843,7 +211953,7 @@ ${marker2}`,
           }
         },
         getCachedInlineMesh: (meshId2) => ctx.getCachedInlineMesh(meshId2),
-        removeInlineMeshNode: (meshId2, mesh, nodeId2) => ctx.removeInlineMeshNode(meshId2, mesh, nodeId2),
+        removeInlineMeshNode: (meshId2, mesh, nodeId) => ctx.removeInlineMeshNode(meshId2, mesh, nodeId),
         invalidateAggregateMeshStatus: (meshId2) => ctx.invalidateAggregateMeshStatus(meshId2)
       };
     }
@@ -211856,7 +211966,7 @@ ${marker2}`,
           const mesh = meshRecord2?.mesh;
           if (!mesh) return { success: false, error: `mesh '${meshId2}' not found` };
           const dryRun = args?.dryRun !== false && args?.dry_run !== false;
-          const nodeId2 = typeof args?.nodeId === "string" && args.nodeId.trim() ? args.nodeId.trim() : void 0;
+          const nodeId = typeof args?.nodeId === "string" && args.nodeId.trim() ? args.nodeId.trim() : void 0;
           const nowMs2 = Date.now();
           const result = await runWorktreeNodeRetentionTick(buildRetentionDeps(ctx), {
             mesh,
@@ -211870,7 +211980,7 @@ ${marker2}`,
             // A dry-run is purely observational — it must NOT advance the
             // durable two-pass proof it reports on.
             recordPasses: !dryRun,
-            ...nodeId2 ? { onlyNodeId: nodeId2 } : {}
+            ...nodeId ? { onlyNodeId: nodeId } : {}
           });
           return {
             success: true,
@@ -212320,14 +212430,14 @@ ${marker2}`,
         const { setMeshHostPin: setMeshHostPin2 } = await Promise.resolve().then(() => (init_mesh_config_host_pairing(), mesh_config_host_pairing_exports));
         if (!getMesh2(opts.meshId)) return;
         const nodeDaemonId = typeof opts.coordinatorNode?.daemonId === "string" && opts.coordinatorNode.daemonId.trim() ? opts.coordinatorNode.daemonId.trim() : typeof opts.coordinatorNode?.daemon_id === "string" && opts.coordinatorNode.daemon_id.trim() ? opts.coordinatorNode.daemon_id.trim() : opts.localDaemonId || "";
-        const nodeId2 = String(normalizeMeshNodeId(opts.coordinatorNode) || "");
-        if (!nodeDaemonId && !nodeId2) return;
+        const nodeId = String(normalizeMeshNodeId(opts.coordinatorNode) || "");
+        if (!nodeDaemonId && !nodeId) return;
         const result = setMeshHostPin2(opts.meshId, {
           ...nodeDaemonId ? { hostDaemonId: nodeDaemonId } : {},
-          ...nodeId2 ? { hostNodeId: nodeId2 } : {}
+          ...nodeId ? { hostNodeId: nodeId } : {}
         });
         if (result?.applied) {
-          LOG.info("MeshCoordinator", `Pinned mesh ${opts.meshId} host to ${result.hostDaemonId || nodeDaemonId} (node ${result.hostNodeId || nodeId2}) after coordinator launch`);
+          LOG.info("MeshCoordinator", `Pinned mesh ${opts.meshId} host to ${result.hostDaemonId || nodeDaemonId} (node ${result.hostNodeId || nodeId}) after coordinator launch`);
         }
       } catch (error) {
         LOG.warn("MeshCoordinator", `Host pin backfill skipped for mesh ${opts.meshId}: ${error?.message || String(error)}`);
@@ -213329,17 +213439,17 @@ ${ptyResult.output.slice(-2e3)}`);
           const inlineCoordinatorNodeId = meshRecord2?.inline && Array.isArray(mesh.nodes) ? selectedCoordinatorNodeId : void 0;
           const refreshedAt = (/* @__PURE__ */ new Date()).toISOString();
           const renderMeshNode = async (nodeIndex, node) => {
-            const nodeId2 = normalizeMeshNodeId(node) ?? "";
+            const nodeId = normalizeMeshNodeId(node) ?? "";
             const daemonId = readStringValue(node.daemonId);
             const nodeMachineId = readMeshNodeMachineId(node);
             const nodeHostname = readMeshNodeHostname(node);
             const providerPriority = readProviderPriorityFromPolicy(node.policy);
             const configuredCoordinatorNode = Boolean(
-              nodeId2 && selectedCoordinatorNodeId && nodeId2 === selectedCoordinatorNodeId
+              nodeId && selectedCoordinatorNodeId && nodeId === selectedCoordinatorNodeId
             );
             const sparseConfiguredCoordinatorNode = configuredCoordinatorNode && !daemonId && !nodeMachineId && !nodeHostname;
             const isSelfNode = Boolean(
-              nodeId2 && inlineCoordinatorNodeId && nodeId2 === inlineCoordinatorNodeId
+              nodeId && inlineCoordinatorNodeId && nodeId === inlineCoordinatorNodeId
             ) || Boolean(
               daemonId && (daemonIdsEquivalent5(daemonId, localMachineId) || daemonIdsEquivalent5(daemonId, ctx.deps.statusInstanceId))
             ) || Boolean(meshRecord2?.inline && nodeIndex === 0) || sparseConfiguredCoordinatorNode;
@@ -213356,18 +213466,18 @@ ${ptyResult.output.slice(-2e3)}`);
               isSelfNode
             });
             const status = {
-              nodeId: nodeId2,
+              nodeId,
               // machineLabel is MACHINE-axis only (owner axiom 2026-08-24):
               // identical across every checkout this machine hosts. The
               // checkout identity travels in nodeLabel/worktreeBranch.
-              machineLabel: buildMeshNodeMachineLabel(node, nodeId2),
-              nodeLabel: buildMeshNodeCheckoutLabel(node, nodeId2),
+              machineLabel: buildMeshNodeMachineLabel(node, nodeId),
+              nodeLabel: buildMeshNodeCheckoutLabel(node, nodeId),
               labelSource: readStringValue(node.machineLabel, node.machine_label, node.machineNickname, node.machine_nickname, node.alias) ? "explicit_metadata" : "machine_identity",
               workspace: node.workspace,
               repoRoot: node.repoRoot,
               isLocalWorktree: node.isLocalWorktree,
               worktreeBranch: node.worktreeBranch,
-              role: normalizeMeshDaemonRole(node.role) || (meshHost.hostNodeId && nodeId2 === meshHost.hostNodeId ? "host" : void 0),
+              role: normalizeMeshDaemonRole(node.role) || (meshHost.hostNodeId && nodeId === meshHost.hostNodeId ? "host" : void 0),
               daemonId,
               // A node hosted by THIS machine (the self/base node or a local
               // worktree) must carry the local machine identity even when the
@@ -213400,7 +213510,7 @@ ${ptyResult.output.slice(-2e3)}`);
               activeSessionDetails: [],
               launchReady: false
             };
-            const nodeScheduling = schedulingByNode.get(nodeId2);
+            const nodeScheduling = schedulingByNode.get(nodeId);
             if (nodeScheduling) {
               const { nodeId: _omitNodeId, ...nodeSchedulingRest } = nodeScheduling;
               status.scheduling = nodeSchedulingRest;
@@ -213438,15 +213548,15 @@ ${ptyResult.output.slice(-2e3)}`);
             const matchedLiveSessionRecords = collectLiveMeshSessionRecords({
               meshId: meshId2,
               node,
-              nodeId: nodeId2,
+              nodeId,
               liveSessionRecords: liveMeshSessions,
-              allowCoordinatorSession: nodeId2 === selectedCoordinatorNodeId
+              allowCoordinatorSession: nodeId === selectedCoordinatorNodeId
             });
             const workspace = readLiveMeshNodeWorkspace({
               meshId: meshId2,
-              nodeId: nodeId2,
+              nodeId,
               liveSessionRecords: matchedLiveSessionRecords,
-              allowCoordinatorSession: nodeId2 === selectedCoordinatorNodeId
+              allowCoordinatorSession: nodeId === selectedCoordinatorNodeId
             }) || (typeof node.workspace === "string" ? node.workspace : "");
             status.workspace = workspace || node.workspace;
             if (matchedLiveSessionRecords.length > 0) {
@@ -213483,12 +213593,12 @@ ${ptyResult.output.slice(-2e3)}`);
                     pendingPeerGitProbe ? { skipGit: true, skipError: true, skipHealth: true } : void 0
                   )) {
                     applyInlineMeshBranchConvergence(mesh, node, status);
-                    finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode, directTruthUnavailable: directTruthUnavailableNodeIds.has(nodeId2) });
+                    finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode, directTruthUnavailable: directTruthUnavailableNodeIds.has(nodeId) });
                     return status;
                   }
                   if (meshRecord2?.source === "inline_cache" && !isSelfNode) {
                     applyInlineMeshBranchConvergence(mesh, node, status);
-                    finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode, directTruthUnavailable: directTruthUnavailableNodeIds.has(nodeId2) });
+                    finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode, directTruthUnavailable: directTruthUnavailableNodeIds.has(nodeId) });
                     return status;
                   }
                 }
@@ -213503,7 +213613,7 @@ ${ptyResult.output.slice(-2e3)}`);
                   status.git = gitStatus2;
                   status[MESH_NODE_LIVE_TRUTH_MARKER] = true;
                   const reporter = recordInlineMeshDirectGitTruth(node, gitStatus2, "selected_coordinator_local_git");
-                  persistNodeReporterPlatform(meshRecord2.source, mesh, nodeId2, reporter);
+                  persistNodeReporterPlatform(meshRecord2.source, mesh, nodeId, reporter);
                   if (gitStatus2.isGitRepo) {
                     status.health = deriveMeshNodeHealthFromGit(gitStatus2);
                   } else {
@@ -213520,7 +213630,7 @@ ${ptyResult.output.slice(-2e3)}`);
               applyCachedInlineMeshNodeStatus(status, node);
             }
             applyInlineMeshBranchConvergence(mesh, node, status);
-            finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode, directTruthUnavailable: directTruthUnavailableNodeIds.has(nodeId2) });
+            finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode, directTruthUnavailable: directTruthUnavailableNodeIds.has(nodeId) });
             if (node.reportedProviderVersions && typeof node.reportedProviderVersions === "object") {
               status.providerVersions = node.reportedProviderVersions;
             }
@@ -213536,12 +213646,12 @@ ${ptyResult.output.slice(-2e3)}`);
           const nodeStatuses = settledNodeStatuses.map((settled, i) => {
             if (settled.status === "fulfilled") return settled.value;
             const [, node] = meshNodeEntries[i];
-            const nodeId2 = normalizeMeshNodeId(node) ?? "";
+            const nodeId = normalizeMeshNodeId(node) ?? "";
             const daemonId = readStringValue(node.daemonId);
             const fallback = {
-              nodeId: nodeId2,
-              machineLabel: buildMeshNodeMachineLabel(node, nodeId2),
-              nodeLabel: buildMeshNodeCheckoutLabel(node, nodeId2),
+              nodeId,
+              machineLabel: buildMeshNodeMachineLabel(node, nodeId),
+              nodeLabel: buildMeshNodeCheckoutLabel(node, nodeId),
               labelSource: readStringValue(node.machineLabel, node.machine_label, node.machineNickname, node.machine_nickname, node.alias) ? "explicit_metadata" : "machine_identity",
               workspace: node.workspace,
               repoRoot: node.repoRoot,
@@ -213558,7 +213668,7 @@ ${ptyResult.output.slice(-2e3)}`);
             };
             applyCachedInlineMeshNodeStatus(fallback, node);
             applyInlineMeshBranchConvergence(mesh, node, fallback);
-            finalizeMeshNodeStatus({ status: fallback, node, daemonId, isSelfNode: false, directTruthUnavailable: directTruthUnavailableNodeIds.has(nodeId2) });
+            finalizeMeshNodeStatus({ status: fallback, node, daemonId, isSelfNode: false, directTruthUnavailable: directTruthUnavailableNodeIds.has(nodeId) });
             return fallback;
           });
           const cachedProjectionNodeIds = nodeStatuses.filter((status) => status?.dataFreshness?.projection === "cached" && status?.dataFreshness?.directPeerTruthSatisfied === false).map((status) => readStringValue(status?.nodeId)).filter(Boolean);
@@ -213750,26 +213860,26 @@ ${ptyResult.output.slice(-2e3)}`);
     init_mesh_relay_result();
     init_mesh_sender();
     var MESH_NODE_GIT_LOG_TIMEOUT_MS = 15e3;
-    async function resolveMeshNode(ctx, meshId2, nodeId2) {
+    async function resolveMeshNode(ctx, meshId2, nodeId) {
       const record8 = await ctx.getMeshForCommand(meshId2, void 0, { preferInline: true });
       const mesh = record8?.mesh;
       if (!mesh) return { ok: false, result: { success: false, code: "mesh_not_found", error: "Mesh not found", accepted: false } };
-      const node = Array.isArray(mesh.nodes) ? mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId2)) : void 0;
-      if (!node) return { ok: false, result: { success: false, code: "mesh_node_unknown", error: `Node ${nodeId2} is not on mesh ${meshId2}`, accepted: false } };
+      const node = Array.isArray(mesh.nodes) ? mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId)) : void 0;
+      if (!node) return { ok: false, result: { success: false, code: "mesh_node_unknown", error: `Node ${nodeId} is not on mesh ${meshId2}`, accepted: false } };
       return { ok: true, mesh, node };
     }
     var meshNodeStateHandlers = {
       mesh_node_git_report: async (ctx, args) => {
         const meshId2 = readText(args?.meshId);
-        const nodeId2 = readText(args?.nodeId);
-        if (!meshId2 || !nodeId2) return { success: false, error: "meshId and nodeId required" };
+        const nodeId = readText(args?.nodeId);
+        if (!meshId2 || !nodeId) return { success: false, error: "meshId and nodeId required" };
         const git15 = readOptionalRecord2(args?.git);
         const runtime2 = readOptionalRecord2(args?.runtime);
         const runtimeSignature = !runtime2 ? readText(args?.runtimeSignature) : "";
         const hasGit = !!git15 && typeof git15.isGitRepo === "boolean";
         const gitSignature = !hasGit ? readText(args?.gitSignature) : "";
         if (!hasGit && !runtime2 && !gitSignature) return { success: false, error: "git status required" };
-        const resolved = await resolveMeshNode(ctx, meshId2, nodeId2);
+        const resolved = await resolveMeshNode(ctx, meshId2, nodeId);
         if (!resolved.ok) return resolved.result;
         const nodeWorkspace = readText(resolved.node.workspace);
         const reportedWorkspace = readText(args?.workspace);
@@ -213778,11 +213888,11 @@ ${ptyResult.output.slice(-2e3)}`);
         }
         const observedAt = typeof args?.observedAt === "number" && Number.isFinite(args.observedAt) ? args.observedAt : void 0;
         const workspace = nodeWorkspace || reportedWorkspace;
-        let changed = hasGit ? ctx.meshNodeGitState.recordObservation({ meshId: meshId2, nodeId: nodeId2, workspace, git: git15, source: "member_push", observedAt }).changed : false;
+        let changed = hasGit ? ctx.meshNodeGitState.recordObservation({ meshId: meshId2, nodeId, workspace, git: git15, source: "member_push", observedAt }).changed : false;
         let gitHeld;
         if (gitSignature) {
           const upstreamFetchedAt2 = typeof args?.upstreamFetchedAt === "number" && Number.isFinite(args.upstreamFetchedAt) ? args.upstreamFetchedAt : void 0;
-          const confirmed = ctx.meshNodeGitState.confirmObservation({ meshId: meshId2, nodeId: nodeId2, signature: gitSignature, observedAt, upstreamFetchedAt: upstreamFetchedAt2 });
+          const confirmed = ctx.meshNodeGitState.confirmObservation({ meshId: meshId2, nodeId, signature: gitSignature, observedAt, upstreamFetchedAt: upstreamFetchedAt2 });
           gitHeld = confirmed.held;
           changed = changed || confirmed.changed;
         }
@@ -213795,7 +213905,7 @@ ${ptyResult.output.slice(-2e3)}`);
           const ownerDaemonId = readMeshNodeDaemonId(resolved.node) ?? "";
           const recorded = ctx.meshNodeGitState.recordRuntimeObservation({
             meshId: meshId2,
-            nodeId: nodeId2,
+            nodeId,
             workspace,
             runtime: runtime2,
             source: "member_push",
@@ -213812,9 +213922,9 @@ ${ptyResult.output.slice(-2e3)}`);
             } catch {
             }
           };
-          if (recorded.factsChanged && recorded.entry?.runtime?.nodeFacts) heal(nodeId2, recorded.entry.runtime.nodeFacts);
+          if (recorded.factsChanged && recorded.entry?.runtime?.nodeFacts) heal(nodeId, recorded.entry.runtime.nodeFacts);
           for (const sibling of Array.isArray(resolved.mesh.nodes) ? resolved.mesh.nodes : []) {
-            if (!sibling || sibling === resolved.node || meshNodeIdMatches7(sibling, nodeId2)) continue;
+            if (!sibling || sibling === resolved.node || meshNodeIdMatches7(sibling, nodeId)) continue;
             const siblingDaemonId = readMeshNodeDaemonId(sibling) ?? "";
             const siblingId = readText(sibling.id);
             if (!ownerDaemonId || !siblingId || !siblingDaemonId || !daemonIdsEquivalent5(siblingDaemonId, ownerDaemonId)) continue;
@@ -213836,11 +213946,11 @@ ${ptyResult.output.slice(-2e3)}`);
         let runtimeHeld;
         if (runtimeSignature) {
           const runtimeObservedAt = typeof args?.runtimeObservedAt === "number" && Number.isFinite(args.runtimeObservedAt) ? args.runtimeObservedAt : void 0;
-          runtimeHeld = ctx.meshNodeGitState.confirmRuntime(meshId2, nodeId2, runtimeSignature, runtimeObservedAt);
+          runtimeHeld = ctx.meshNodeGitState.confirmRuntime(meshId2, nodeId, runtimeSignature, runtimeObservedAt);
           const ownerDaemonId = readMeshNodeDaemonId(resolved.node) ?? "";
           if (runtimeHeld && ownerDaemonId) {
             for (const sibling of Array.isArray(resolved.mesh.nodes) ? resolved.mesh.nodes : []) {
-              if (!sibling || sibling === resolved.node || meshNodeIdMatches7(sibling, nodeId2)) continue;
+              if (!sibling || sibling === resolved.node || meshNodeIdMatches7(sibling, nodeId)) continue;
               const siblingDaemonId = readMeshNodeDaemonId(sibling) ?? "";
               const siblingId = readText(sibling.id);
               if (!siblingId || !siblingDaemonId || !daemonIdsEquivalent5(siblingDaemonId, ownerDaemonId)) continue;
@@ -213879,10 +213989,10 @@ ${ptyResult.output.slice(-2e3)}`);
       },
       mesh_node_state_nudge: async (ctx, args) => {
         const meshId2 = readText(args?.meshId);
-        const nodeId2 = readText(args?.nodeId);
-        if (!meshId2 || !nodeId2) return { success: false, error: "meshId and nodeId required" };
+        const nodeId = readText(args?.nodeId);
+        if (!meshId2 || !nodeId) return { success: false, error: "meshId and nodeId required" };
         const coordinatorDaemonId = readMeshSender(args);
-        const subscribed = !!coordinatorDaemonId && ctx.meshNodeStatePusher?.nudge(coordinatorDaemonId, meshId2, nodeId2, readText(args?.workspace)) === true;
+        const subscribed = !!coordinatorDaemonId && ctx.meshNodeStatePusher?.nudge(coordinatorDaemonId, meshId2, nodeId, readText(args?.workspace)) === true;
         return { success: true, subscribed };
       },
       /**
@@ -213904,22 +214014,22 @@ ${ptyResult.output.slice(-2e3)}`);
        */
       mesh_adopt_member_worktree: async (ctx, args) => {
         const meshId2 = readText(args?.meshId);
-        const nodeId2 = readText(args?.nodeId);
+        const nodeId = readText(args?.nodeId);
         const ownerDaemonId = readText(args?.ownerDaemonId);
-        if (!meshId2 || !nodeId2 || !ownerDaemonId) return { success: false, error: "meshId, nodeId and ownerDaemonId required" };
+        if (!meshId2 || !nodeId || !ownerDaemonId) return { success: false, error: "meshId, nodeId and ownerDaemonId required" };
         if (!ctx.adoptWorktreeNodeFromOwner) return { success: false, error: "adoption unavailable" };
-        const outcome = await ctx.adoptWorktreeNodeFromOwner(meshId2, nodeId2, ownerDaemonId);
-        return outcome.adopted ? { success: true, adopted: true, nodeId: outcome.nodeId } : { success: false, adopted: false, code: "mesh_node_adopt_refused", reason: outcome.reason, error: `Node ${nodeId2} was not adopted onto mesh ${meshId2}: ${outcome.reason}` };
+        const outcome = await ctx.adoptWorktreeNodeFromOwner(meshId2, nodeId, ownerDaemonId);
+        return outcome.adopted ? { success: true, adopted: true, nodeId: outcome.nodeId } : { success: false, adopted: false, code: "mesh_node_adopt_refused", reason: outcome.reason, error: `Node ${nodeId} was not adopted onto mesh ${meshId2}: ${outcome.reason}` };
       },
       mesh_node_git_log: async (ctx, args) => {
         const meshId2 = readText(args?.meshId);
-        const nodeId2 = readText(args?.nodeId);
-        if (!meshId2 || !nodeId2) return { success: false, error: "meshId and nodeId required" };
+        const nodeId = readText(args?.nodeId);
+        if (!meshId2 || !nodeId) return { success: false, error: "meshId and nodeId required" };
         const limit = typeof args?.limit === "number" && Number.isFinite(args.limit) ? Math.max(1, Math.min(50, Math.floor(args.limit))) : 5;
-        const resolved = await resolveMeshNode(ctx, meshId2, nodeId2);
+        const resolved = await resolveMeshNode(ctx, meshId2, nodeId);
         if (!resolved.ok) return resolved.result;
         const workspace = readText(resolved.node.workspace);
-        if (!workspace) return { success: false, error: `Node ${nodeId2} has no workspace` };
+        if (!workspace) return { success: false, error: `Node ${nodeId} has no workspace` };
         const nodeDaemonId = readMeshNodeDaemonId(resolved.node) ?? "";
         const selfDaemonId = ctx.deps.statusInstanceId ?? "";
         const isRemote = !!nodeDaemonId && !(selfDaemonId && daemonIdsEquivalent5(nodeDaemonId, selfDaemonId)) && !fs122.existsSync(workspace);
@@ -214007,8 +214117,8 @@ ${ptyResult.output.slice(-2e3)}`);
       return `sha256:${hash4.digest("hex")}`;
     }
     function readDriverPackageDir(dir) {
-      const root2 = (0, import_node_fs61.lstatSync)(dir);
-      if (!root2.isDirectory() || root2.isSymbolicLink()) throw new DriverPackageError("invalid_directory", "Driver package must be a real directory");
+      const root = (0, import_node_fs61.lstatSync)(dir);
+      if (!root.isDirectory() || root.isSymbolicLink()) throw new DriverPackageError("invalid_directory", "Driver package must be a real directory");
       const out = [];
       const walk = (sub) => {
         for (const entry of (0, import_node_fs61.readdirSync)((0, import_node_path50.join)(dir, sub), { withFileTypes: true })) {
@@ -214153,8 +214263,8 @@ ${lines.join("\n")}
     }
     var INSTALL_SOURCE_NAME = "adhdev-installed";
     var LEGACY_CATEGORIES = /* @__PURE__ */ new Set(["cli", "ide", "extension", "driver"]);
-    function within(root2, target2) {
-      const rel = (0, import_node_path51.relative)((0, import_node_path51.resolve)(root2), (0, import_node_path51.resolve)(target2));
+    function within(root, target2) {
+      const rel = (0, import_node_path51.relative)((0, import_node_path51.resolve)(root), (0, import_node_path51.resolve)(target2));
       return !!rel && !rel.startsWith("..") && !(0, import_node_path51.isAbsolute)(rel);
     }
     function resolveInstallDest(configDir, type2, existing) {
@@ -214204,10 +214314,10 @@ ${lines.join("\n")}
     }
     var fail13 = (code, error) => ({ success: false, code, error });
     var asFailure = (error) => error instanceof DriverPackageError ? fail13(error.code, error.message) : fail13("driver_authoring_failed", error instanceof Error ? error.message : String(error));
-    function resolveInsideWorkspace(root2, rel) {
+    function resolveInsideWorkspace(root, rel) {
       if (typeof rel !== "string" || !rel.trim() || rel.includes("\0") || (0, import_node_path52.isAbsolute)(rel)) throw new DriverPackageError("invalid_path", "A workspace-relative path is required");
-      const full = (0, import_node_path52.resolve)(root2, rel);
-      const lexical = (0, import_node_path52.relative)(root2, full);
+      const full = (0, import_node_path52.resolve)(root, rel);
+      const lexical = (0, import_node_path52.relative)(root, full);
       if (!lexical || lexical.startsWith("..") || (0, import_node_path52.isAbsolute)(lexical)) throw new DriverPackageError("path_outside_workspace", "Path escapes the workspace");
       let probe = full;
       for (; ; ) {
@@ -214221,7 +214331,7 @@ ${lines.join("\n")}
           probe = parent;
         }
       }
-      const real3 = (0, import_node_path52.relative)(root2, (0, import_node_fs63.realpathSync)(probe));
+      const real3 = (0, import_node_path52.relative)(root, (0, import_node_fs63.realpathSync)(probe));
       if (real3.startsWith("..") || (0, import_node_path52.isAbsolute)(real3)) throw new DriverPackageError("path_outside_workspace", "Path resolves outside the workspace");
       return full;
     }
@@ -217026,9 +217136,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       return { abort: false };
     }
     function buildSkippedChainNodeOutcome(params) {
-      const { nodeId: nodeId2, workspace, precursorNodeId, decision } = params;
+      const { nodeId, workspace, precursorNodeId, decision } = params;
       return {
-        nodeId: nodeId2,
+        nodeId,
         workspace,
         convergence: "skipped_chain_abort",
         chainSkipped: true,
@@ -217062,14 +217172,14 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         targetNodes = [];
         const missing = [];
         const nonWorktree = [];
-        for (const nodeId2 of requestedNodeIds) {
-          const node = allNodes.find((n) => meshNodeIdMatches7(n, nodeId2));
+        for (const nodeId of requestedNodeIds) {
+          const node = allNodes.find((n) => meshNodeIdMatches7(n, nodeId));
           if (!node) {
-            missing.push(nodeId2);
+            missing.push(nodeId);
             continue;
           }
           if (!isConvergeable(node)) {
-            nonWorktree.push(nodeId2);
+            nonWorktree.push(nodeId);
             continue;
           }
           targetNodes.push(node);
@@ -217196,7 +217306,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         })
       );
       const ordering = orderMeshRefineBatchNodes(changeAreas);
-      const orderedNodes = ordering.order.map((nodeId2) => targetNodes.find((n) => meshNodeIdMatches7(n, nodeId2))).filter((n) => !!n);
+      const orderedNodes = ordering.order.map((nodeId) => targetNodes.find((n) => meshNodeIdMatches7(n, nodeId))).filter((n) => !!n);
       const dryRunVeto = resolveDryRunVeto(args);
       if (dryRunVeto.refused) {
         return {
@@ -217737,7 +217847,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
               return [];
             }
           })();
-          const nodeExists = (nodeId2) => meshNodes.length === 0 || meshNodes.some((n) => meshNodeIdMatches7(n, nodeId2));
+          const nodeExists = (nodeId) => meshNodes.length === 0 || meshNodes.some((n) => meshNodeIdMatches7(n, nodeId));
           const openDispatches = selectOpenRefineDispatches2(entries3);
           for (const record8 of openDispatches) {
             const decision = classifyRefineDispatch2(record8, {
@@ -217745,7 +217855,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
               graceMs: dispatchGraceMs,
               zombieCutoffMs,
               nodeExists,
-              isRunning: (nodeId3) => self.runningRefineJobs.has(buildRefineJobKey(self, meshId2, nodeId3)),
+              isRunning: (nodeId2) => self.runningRefineJobs.has(buildRefineJobKey(self, meshId2, nodeId2)),
               // ★REFINE-RESUME-LIVENESS: the cross-process half of `isRunning`.
               // The map `isRunning` reads is empty on every boot by construction,
               // so it can never see the execution this scan actually races — the
@@ -217753,26 +217863,26 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
               executorLiveness: (r) => evaluateRefineExecutorLiveness(r.executor).liveness
             });
             if (!decision) continue;
-            const { nodeId: nodeId2, jobId, ageMs: ageMs2 } = decision;
-            const sourceEntry = entries3.find((e) => e.kind === "task_dispatched" && meshNodeIdMatches7({ nodeId: e.nodeId }, nodeId2) && e.payload?.refineJob?.jobId === jobId);
+            const { nodeId, jobId, ageMs: ageMs2 } = decision;
+            const sourceEntry = entries3.find((e) => e.kind === "task_dispatched" && meshNodeIdMatches7({ nodeId: e.nodeId }, nodeId) && e.payload?.refineJob?.jobId === jobId);
             const node = sourceEntry?.payload?.refineJob;
             const coordinatorDaemonId = node?.targetCoordinatorDaemonId;
             const coordinatorSessionId = node?.targetCoordinatorSessionId;
             const dispatchedAt = sourceEntry?.timestamp ?? record8.timestamp;
             if (decision.disposition === "defer_executor_alive") {
               const detail = evaluateRefineExecutorLiveness(record8.executor);
-              LOG.info("Mesh", `[Refinery] Deferring resume of refine job for node ${nodeId2} (jobId=${jobId}) \u2014 the dispatching process is still alive (${detail.reason}); dispatched ${ageMs2}ms ago. Not resuming: a second execution of one jobId is a ghost dispatch.`);
+              LOG.info("Mesh", `[Refinery] Deferring resume of refine job for node ${nodeId} (jobId=${jobId}) \u2014 the dispatching process is still alive (${detail.reason}); dispatched ${ageMs2}ms ago. Not resuming: a second execution of one jobId is a ghost dispatch.`);
               continue;
             }
             if (decision.disposition === "defer_grace") {
-              LOG.info("Mesh", `[Refinery] Deferring resume of refine job for node ${nodeId2} (jobId=${jobId}) \u2014 dispatched ${ageMs2}ms ago, within the ${dispatchGraceMs}ms grace window; may still be running.`);
+              LOG.info("Mesh", `[Refinery] Deferring resume of refine job for node ${nodeId} (jobId=${jobId}) \u2014 dispatched ${ageMs2}ms ago, within the ${dispatchGraceMs}ms grace window; may still be running.`);
               continue;
             }
             if (node?.approvedRuntimeAudit || decision.disposition === "close_removed_node" || decision.disposition === "close_stale") {
               const removedNode = decision.disposition === "close_removed_node";
               const zombieHandle = buildRefineJobHandle(self, {
                 meshId: meshId2,
-                nodeId: nodeId2,
+                nodeId,
                 jobId,
                 interactionId: typeof node?.interactionId === "string" ? node.interactionId : void 0,
                 status: "failed",
@@ -217785,24 +217895,24 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
               const zombieResult = node?.approvedRuntimeAudit ? { success: false, code: "approved_runtime_interrupted", error: "Restart closed the runtime-scoped job. Revalidate through the approved runtime command." } : removedNode ? {
                 success: false,
                 code: "resume_abandoned_removed_node",
-                error: `Refine job dispatched at ${dispatchedAt} targets node ${nodeId2}, which is no longer a member of mesh ${meshId2}; closed out without resuming.`
+                error: `Refine job dispatched at ${dispatchedAt} targets node ${nodeId}, which is no longer a member of mesh ${meshId2}; closed out without resuming.`
               } : {
                 success: false,
                 code: "resume_abandoned_stale_dispatch",
                 error: `Refine job dispatched at ${dispatchedAt} has no terminal entry in the live ledger and exceeded the ${zombieCutoffMs}ms zombie cutoff on daemon restart; closed out without resuming.`
               };
-              LOG.warn("Mesh", removedNode ? `[Refinery] Closing out refine job for removed node ${nodeId2} (jobId=${jobId}) as failed \u2014 node is no longer in mesh ${meshId2}; not resuming.` : `[Refinery] Closing out stale refine job for node ${nodeId2} (jobId=${jobId}) as failed \u2014 dispatched ${ageMs2}ms ago, past the ${zombieCutoffMs}ms zombie cutoff with no terminal entry in the live ledger; not resuming.`);
+              LOG.warn("Mesh", removedNode ? `[Refinery] Closing out refine job for removed node ${nodeId} (jobId=${jobId}) as failed \u2014 node is no longer in mesh ${meshId2}; not resuming.` : `[Refinery] Closing out stale refine job for node ${nodeId} (jobId=${jobId}) as failed \u2014 dispatched ${ageMs2}ms ago, past the ${zombieCutoffMs}ms zombie cutoff with no terminal entry in the live ledger; not resuming.`);
               await appendRefineJobLedger(self, "task_failed", zombieHandle, zombieResult);
               if (shouldNotifyRefineCloseOut2(decision, notifyHorizonMs)) {
                 queueRefineJobEvent(self, "refine:failed", zombieHandle, zombieResult);
               } else {
-                LOG.info("Mesh", `[Refinery] Suppressed refine:failed close-out notification for node ${nodeId2} (jobId=${jobId}, disposition=${decision.disposition}, ageMs=${ageMs2 ?? "unknown"}, notifyHorizonMs=${notifyHorizonMs}) \u2014 ledger entry was still written; only the coordinator push was skipped.`);
+                LOG.info("Mesh", `[Refinery] Suppressed refine:failed close-out notification for node ${nodeId} (jobId=${jobId}, disposition=${decision.disposition}, ageMs=${ageMs2 ?? "unknown"}, notifyHorizonMs=${notifyHorizonMs}) \u2014 ledger entry was still written; only the coordinator push was skipped.`);
               }
               continue;
             }
-            LOG.info("Mesh", `[Refinery] Auto-resuming interrupted refine job for node ${nodeId2} (jobId=${jobId})`);
+            LOG.info("Mesh", `[Refinery] Auto-resuming interrupted refine job for node ${nodeId} (jobId=${jobId})`);
             const { startMeshRefineJob: startMeshRefineJob2 } = await Promise.resolve().then(() => (init_router_refine(), router_refine_exports));
-            void startMeshRefineJob2(self, meshId2, nodeId2, {
+            void startMeshRefineJob2(self, meshId2, nodeId, {
               ...Object.prototype.hasOwnProperty.call(node || {}, "publicationContract") ? restoreRefinePublicationContract(node.publicationContract) : {},
               jobId,
               coordinatorDaemonId,
@@ -217996,7 +218106,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const legacyHint = looksLikeCrossTrackWorktreePath(actualPath, normalizePath2) ? " This path matches the layout used before worktree paths became build-track-aware (oss c24ae254) and is likely a legacy worktree from an older daemon version \u2014 mesh_remove_node will not remove it automatically. To clean it up: run `git worktree remove --force '" + actualPath + "'` directly, then retry mesh_remove_node so it can drop the now-missing-path node from the mesh registry." : "";
       return base + legacyHint + suffix;
     }
-    async function findLiveSessionOnWorktree(self, node, nodeId2) {
+    async function findLiveSessionOnWorktree(self, node, nodeId) {
       const control = self.deps.sessionHostControl;
       if (!control) return { state: "unknown", error: "session host control unavailable" };
       let sessions;
@@ -218007,7 +218117,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       }
       if (!Array.isArray(sessions)) return { state: "unknown", error: "session inventory was not a list" };
       for (const record8 of sessions) {
-        if (!sessionMatchesMeshNode(self, record8, node, nodeId2)) continue;
+        if (!sessionMatchesMeshNode(self, record8, node, nodeId)) continue;
         if ((0, import_session_host_core5.getSessionHostSurfaceKind)(record8) !== "live_runtime") continue;
         return { state: "occupied", sessionId: String(record8?.sessionId || "") };
       }
@@ -218036,13 +218146,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         return { unpushed: false };
       }
     }
-    function sessionMatchesMeshNode(self, record8, node, nodeId2, sessionIds) {
+    function sessionMatchesMeshNode(self, record8, node, nodeId, sessionIds) {
       const sessionId = typeof record8?.sessionId === "string" ? record8.sessionId : "";
       if (!sessionId) return false;
       if (sessionIds?.size) return sessionIds.has(sessionId);
       const workspace = typeof node?.workspace === "string" ? node.workspace : "";
       if (workspace && record8?.workspace === workspace) return true;
-      if (record8?.meta?.meshNodeId === nodeId2) return true;
+      if (record8?.meta?.meshNodeId === nodeId) return true;
       return false;
     }
     async function bestEffortRemoveWorktreeDir(self, dir) {
@@ -218823,13 +218933,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       if (!mesh || typeof mesh !== "object" || !Array.isArray(mesh.nodes) || !Array.isArray(snapshot?.nodes)) return snapshot;
       const recordsById = /* @__PURE__ */ new Map();
       for (const node of mesh.nodes) {
-        const nodeId2 = readInlineMeshNodeId(node);
-        if (nodeId2) recordsById.set(nodeId2, node);
+        const nodeId = readInlineMeshNodeId(node);
+        if (nodeId) recordsById.set(nodeId, node);
       }
       let changed = false;
       const nodes = snapshot.nodes.map((statusNode) => {
-        const nodeId2 = normalizeMeshNodeId(statusNode);
-        const record8 = nodeId2 ? recordsById.get(nodeId2) : void 0;
+        const nodeId = normalizeMeshNodeId(statusNode);
+        const record8 = nodeId ? recordsById.get(nodeId) : void 0;
         const facts = record8?.nodeFacts;
         if (!facts || typeof facts !== "object") return statusNode;
         const recordAt = typeof facts.reportedAt === "number" ? facts.reportedAt : 0;
@@ -218849,8 +218959,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       if (!mesh || typeof mesh !== "object" || !Array.isArray(mesh.nodes) || !Array.isArray(snapshot?.nodes)) return snapshot;
       const inlineNodesById = /* @__PURE__ */ new Map();
       for (const node of mesh.nodes) {
-        const nodeId2 = readInlineMeshNodeId(node);
-        if (nodeId2) inlineNodesById.set(nodeId2, node);
+        const nodeId = readInlineMeshNodeId(node);
+        if (nodeId) inlineNodesById.set(nodeId, node);
       }
       if (!inlineNodesById.size) return snapshot;
       let changed = false;
@@ -218865,18 +218975,18 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       }
       let droppedDeadUnavailable = false;
       for (const entry of Array.isArray(directPeerTruth.unavailableNodeIds) ? directPeerTruth.unavailableNodeIds : []) {
-        const nodeId2 = readStringValue(entry);
-        if (!nodeId2) continue;
-        if (deadNodeIds.has(nodeId2)) {
+        const nodeId = readStringValue(entry);
+        if (!nodeId) continue;
+        if (deadNodeIds.has(nodeId)) {
           droppedDeadUnavailable = true;
           continue;
         }
-        unavailableNodeIds.add(nodeId2);
+        unavailableNodeIds.add(nodeId);
       }
       if (droppedDeadUnavailable) changed = true;
       const nodes = snapshot.nodes.map((statusNode) => {
-        const nodeId2 = normalizeMeshNodeId(statusNode);
-        const inlineNode = nodeId2 ? inlineNodesById.get(nodeId2) : void 0;
+        const nodeId = normalizeMeshNodeId(statusNode);
+        const inlineNode = nodeId ? inlineNodesById.get(nodeId) : void 0;
         if (!inlineNode) return statusNode;
         const liveGit = buildInlineMeshTransitGitStatus(inlineNode);
         if (!liveGit) return statusNode;
@@ -218895,7 +219005,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         const error = readStringValue(nextStatus.error);
         if (error && /pending_git|git probe|live peer git snapshot|no peer git snapshot/i.test(error)) delete nextStatus.error;
         if (!readStringValue(nextStatus.machineStatus)) nextStatus.machineStatus = "online";
-        if (nodeId2) unavailableNodeIds.delete(nodeId2);
+        if (nodeId) unavailableNodeIds.delete(nodeId);
         changed = true;
         return nextStatus;
       });
@@ -219203,21 +219313,21 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       host.inlineMeshCache.set(meshId2, mesh);
       host.invalidateAggregateMeshStatus(meshId2);
     }
-    function removeInlineMeshNode(host, meshId2, mesh, nodeId2) {
+    function removeInlineMeshNode(host, meshId2, mesh, nodeId) {
       if (!mesh || !Array.isArray(mesh.nodes)) return false;
-      const idx = mesh.nodes.findIndex((entry) => meshNodeIdMatches7(entry, nodeId2));
+      const idx = mesh.nodes.findIndex((entry) => meshNodeIdMatches7(entry, nodeId));
       if (idx === -1) return false;
-      const canonicalNodeId = readInlineMeshNodeId(mesh.nodes[idx]) || nodeId2;
+      const canonicalNodeId = readInlineMeshNodeId(mesh.nodes[idx]) || nodeId;
       mesh.nodes.splice(idx, 1);
       mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
       host.inlineMeshCache.set(meshId2, mesh);
       tombstoneRemovedInlineMeshNode(host, meshId2, canonicalNodeId);
-      if (canonicalNodeId !== nodeId2) tombstoneRemovedInlineMeshNode(host, meshId2, nodeId2);
+      if (canonicalNodeId !== nodeId) tombstoneRemovedInlineMeshNode(host, meshId2, nodeId);
       host.invalidateAggregateMeshStatus(meshId2);
       return true;
     }
-    function markWorktreeBootstrapTerminalState(host, meshId2, nodeId2, status, opts) {
-      if (!meshId2 || !nodeId2) return;
+    function markWorktreeBootstrapTerminalState(host, meshId2, nodeId, status, opts) {
+      if (!meshId2 || !nodeId) return;
       const terminalBootstrap = (prev) => ({
         ...prev && typeof prev === "object" ? prev : {},
         status,
@@ -219225,7 +219335,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       });
       const stamp2 = (mesh) => {
         if (!mesh || !Array.isArray(mesh.nodes)) return false;
-        const node = mesh.nodes.find((entry) => meshNodeIdMatches7(entry, nodeId2));
+        const node = mesh.nodes.find((entry) => meshNodeIdMatches7(entry, nodeId));
         if (!node) return false;
         const prev = node.worktreeBootstrap && typeof node.worktreeBootstrap === "object" ? node.worktreeBootstrap : {};
         if (prev.status === status) return false;
@@ -219239,12 +219349,12 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           cached5.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
           host.inlineMeshCache.set(meshId2, cached5);
           changed = true;
-        } else if (!cached5 || !(Array.isArray(cached5.nodes) && cached5.nodes.some((entry) => meshNodeIdMatches7(entry, nodeId2)))) {
+        } else if (!cached5 || !(Array.isArray(cached5.nodes) && cached5.nodes.some((entry) => meshNodeIdMatches7(entry, nodeId)))) {
           const shell = cached5 && typeof cached5 === "object" ? cached5 : { id: meshId2, nodes: [], updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
           if (!Array.isArray(shell.nodes)) shell.nodes = [];
           const hydratedNode = {
-            id: nodeId2,
-            nodeId: nodeId2,
+            id: nodeId,
+            nodeId,
             isLocalWorktree: true,
             ...opts?.workspace ? { workspace: opts.workspace } : {},
             // Origin identity from the worker's bootstrap event: without
@@ -219263,7 +219373,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       void Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports)).then(({ getMesh: getMesh2, updateNode: updateNode2 }) => {
         const local = getMesh2(meshId2);
         if (local && stamp2(local)) {
-          const node = local.nodes.find((entry) => meshNodeIdMatches7(entry, nodeId2));
+          const node = local.nodes.find((entry) => meshNodeIdMatches7(entry, nodeId));
           if (node) updateNode2(meshId2, node.id, { worktreeBootstrap: node.worktreeBootstrap });
           host.invalidateAggregateMeshStatus(meshId2);
         }
@@ -219272,13 +219382,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     }
     function seedRemoteClonedWorktreeNode(host, meshId2, node) {
       if (!meshId2 || !node || typeof node !== "object") return false;
-      const nodeId2 = normalizeMeshNodeId(node);
-      if (!nodeId2) return false;
+      const nodeId = normalizeMeshNodeId(node);
+      if (!nodeId) return false;
       try {
         const cached5 = getCachedInlineMesh(host, meshId2);
         const shell = cached5 && typeof cached5 === "object" ? cached5 : { id: meshId2, nodes: [], updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
         if (!Array.isArray(shell.nodes)) shell.nodes = [];
-        const existing = shell.nodes.find((entry) => meshNodeIdMatches7(entry, nodeId2));
+        const existing = shell.nodes.find((entry) => meshNodeIdMatches7(entry, nodeId));
         const merged = { ...existing && typeof existing === "object" ? existing : {}, ...node };
         const existingBootstrapStatus = readStringValue(existing?.worktreeBootstrap?.status);
         if (existingBootstrapStatus === "complete" || existingBootstrapStatus === "failed") {
@@ -219291,9 +219401,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       }
     }
     async function persistRemoteClonedWorktreeNode(host, meshId2, node) {
-      const nodeId2 = normalizeMeshNodeId(node);
-      if (!meshId2 || !nodeId2) return "invalid";
-      if (isInlineMeshNodeTombstoned(host, meshId2, nodeId2, node)) return "tombstoned";
+      const nodeId = normalizeMeshNodeId(node);
+      if (!meshId2 || !nodeId) return "invalid";
+      if (isInlineMeshNodeTombstoned(host, meshId2, nodeId, node)) return "tombstoned";
       const outcome = await persistRemoteWorktreeNodeToConfig(meshId2, node);
       if (outcome === "persisted") host.invalidateAggregateMeshStatus(meshId2);
       return outcome;
@@ -219351,10 +219461,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       return result;
     }
     var ADOPT_FROM_OWNER_TIMEOUT_MS = 15e3;
-    async function adoptWorktreeNodeFromOwner(host, meshId2, nodeId2, ownerDaemonId, opts = {}) {
+    async function adoptWorktreeNodeFromOwner(host, meshId2, nodeId, ownerDaemonId, opts = {}) {
       const no = (reason) => ({ adopted: false, reason });
       const owner = readStringValue(ownerDaemonId);
-      if (!meshId2 || !nodeId2 || !owner) return no("invalid_request");
+      if (!meshId2 || !nodeId || !owner) return no("invalid_request");
       const dispatch2 = host.deps.dispatchMeshCommand;
       if (typeof dispatch2 !== "function") return no("no_mesh_transport");
       const self = readStringValue(host.deps.statusInstanceId);
@@ -219388,7 +219498,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (timer) clearTimeout(timer);
       }
       if (answer2.success !== true) return no("owner_cannot_answer");
-      const claimed = sanitizeMemberWorktreeNodes(answer2.nodes).find((n) => meshNodeIdMatches7(n, nodeId2));
+      const claimed = sanitizeMemberWorktreeNodes(answer2.nodes).find((n) => meshNodeIdMatches7(n, nodeId));
       if (!claimed) return no("owner_does_not_own_node");
       const result = await adoptMemberWorktreeNodes(host, meshId2, { reported: [claimed], senderDaemonId: owner, ownerDaemonId: owner });
       if (result.adopted.includes(claimed.id)) {
@@ -219398,25 +219508,25 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const rejected = result.rejected.find((r) => meshNodeIdMatches7(r, claimed.id));
       return no(rejected ? rejected.reason : "already_on_roster");
     }
-    function tombstoneRemovedMeshNode(host, meshId2, nodeId2) {
-      if (!meshId2 || !nodeId2) return;
-      tombstoneRemovedInlineMeshNode(host, meshId2, nodeId2);
+    function tombstoneRemovedMeshNode(host, meshId2, nodeId) {
+      if (!meshId2 || !nodeId) return;
+      tombstoneRemovedInlineMeshNode(host, meshId2, nodeId);
     }
-    function tombstoneRemovedInlineMeshNode(host, meshId2, nodeId2) {
-      if (!nodeId2) return;
+    function tombstoneRemovedInlineMeshNode(host, meshId2, nodeId) {
+      if (!nodeId) return;
       let set2 = host.removedInlineMeshNodeIds.get(meshId2);
       if (!set2) {
         set2 = /* @__PURE__ */ new Set();
         host.removedInlineMeshNodeIds.set(meshId2, set2);
       }
-      set2.add(nodeId2);
+      set2.add(nodeId);
     }
-    function isInlineMeshNodeTombstoned(host, meshId2, nodeId2, node) {
+    function isInlineMeshNodeTombstoned(host, meshId2, nodeId, node) {
       const tombstones = host.removedInlineMeshNodeIds.get(meshId2);
-      if (!tombstones?.size || !tombstones.has(nodeId2)) return false;
+      if (!tombstones?.size || !tombstones.has(nodeId)) return false;
       const workspace = readStringValue(node?.workspace);
       if (workspace && fs128.existsSync(workspace)) {
-        tombstones.delete(nodeId2);
+        tombstones.delete(nodeId);
         if (tombstones.size === 0) host.removedInlineMeshNodeIds.delete(meshId2);
         return false;
       }
@@ -219429,11 +219539,11 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       }
       let dropped = false;
       const nodes = incoming.nodes.filter((node) => {
-        const nodeId2 = readInlineMeshNodeId(node);
-        if (!nodeId2 || !tombstones.has(nodeId2)) return true;
+        const nodeId = readInlineMeshNodeId(node);
+        if (!nodeId || !tombstones.has(nodeId)) return true;
         const workspace = readStringValue(node?.workspace);
         if (workspace && fs128.existsSync(workspace)) {
-          tombstones.delete(nodeId2);
+          tombstones.delete(nodeId);
           return true;
         }
         dropped = true;
@@ -219454,7 +219564,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const source2 = explicit || configured;
       const workspace = typeof source2?.workspace === "string" && source2.workspace.trim() ? source2.workspace.trim() : typeof args?.workspace === "string" && args.workspace.trim() ? args.workspace.trim() : process.cwd();
       if (!workspace) return null;
-      const nodeId2 = typeof source2?.id === "string" && source2.id.trim() ? source2.id.trim() : typeof source2?.nodeId === "string" && source2.nodeId.trim() ? source2.nodeId.trim() : void 0;
+      const nodeId = typeof source2?.id === "string" && source2.id.trim() ? source2.id.trim() : typeof source2?.nodeId === "string" && source2.nodeId.trim() ? source2.nodeId.trim() : void 0;
       const baseOverrides = source2?.userOverrides && typeof source2.userOverrides === "object" && !Array.isArray(source2.userOverrides) ? source2.userOverrides : {};
       const userOverrides = {
         ...baseOverrides,
@@ -219462,7 +219572,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         ...typeof baseOverrides.arch === "string" && baseOverrides.arch.trim() ? {} : { arch: process.arch }
       };
       return {
-        ...nodeId2 ? { id: nodeId2 } : {},
+        ...nodeId ? { id: nodeId } : {},
         workspace,
         ...typeof source2?.repoRoot === "string" && source2.repoRoot.trim() ? { repoRoot: source2.repoRoot.trim() } : {},
         ...typeof source2?.daemonId === "string" && source2.daemonId.trim() ? { daemonId: source2.daemonId.trim() } : fallbackDaemonId ? { daemonId: fallbackDaemonId } : {},
@@ -219492,18 +219602,18 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       return base;
     }
     function meshIdsRevealedByCommandArgs(args) {
-      const root2 = readObjectRecord(args);
-      const meshContext = readObjectRecord(root2.meshContext);
-      const inlineMesh = readObjectRecord(root2.inlineMesh);
-      const settings2 = readObjectRecord(root2.settings);
+      const root = readObjectRecord(args);
+      const meshContext = readObjectRecord(root.meshContext);
+      const inlineMesh = readObjectRecord(root.inlineMesh);
+      const settings2 = readObjectRecord(root.settings);
       const ids = [
-        readStringValue(root2.meshId),
-        readStringValue(root2.meshNodeFor),
+        readStringValue(root.meshId),
+        readStringValue(root.meshNodeFor),
         readStringValue(meshContext.meshId),
         readStringValue(inlineMesh.id),
         readStringValue(settings2.meshNodeFor),
         readStringValue(settings2.meshCoordinatorFor),
-        readStringValue(root2.meshCoordinatorFor)
+        readStringValue(root.meshCoordinatorFor)
       ].filter((value) => value !== void 0);
       return [...new Set(ids)];
     }
@@ -219636,13 +219746,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         setMissionChangeListener((meshId2) => this.invalidateAggregateMeshStatus(meshId2));
       }
       /** Config self-heal (platform / nickname / versions / facts) from a member-pushed facts bundle. */
-      async selfHealNodeFromFacts(meshId2, nodeId2, nodeFacts) {
+      async selfHealNodeFromFacts(meshId2, nodeId, nodeFacts) {
         try {
           const record8 = await this.getMeshForCommand(meshId2, void 0, { preferInline: true });
-          const node = record8?.mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId2));
+          const node = record8?.mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
           if (!record8 || !node) return;
           const reporter = recordReportedNodeFacts(node, nodeFacts);
-          if (reporter) persistNodeReporterPlatform(record8.source, record8.mesh, nodeId2, reporter);
+          if (reporter) persistNodeReporterPlatform(record8.source, record8.mesh, nodeId, reporter);
         } catch {
         }
       }
@@ -219777,8 +219887,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           adoptMemberWorktreeNodes: this.adoptMemberWorktreeNodes.bind(this),
           adoptWorktreeNodeFromOwner: this.adoptWorktreeNodeFromOwner.bind(this),
           readOwnWorktreeNodes: this.readOwnWorktreeNodes.bind(this),
-          selfHealNodeFromFacts: (meshId2, nodeId2, nodeFacts) => {
-            void this.selfHealNodeFromFacts(meshId2, nodeId2, nodeFacts);
+          selfHealNodeFromFacts: (meshId2, nodeId, nodeFacts) => {
+            void this.selfHealNodeFromFacts(meshId2, nodeId, nodeFacts);
           },
           invalidateAggregateMeshStatus: this.invalidateAggregateMeshStatus.bind(this)
         };
@@ -219799,11 +219909,11 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       updateInlineMeshNode(meshId2, mesh, node) {
         updateInlineMeshNode(this, meshId2, mesh, node);
       }
-      removeInlineMeshNode(meshId2, mesh, nodeId2) {
-        return removeInlineMeshNode(this, meshId2, mesh, nodeId2);
+      removeInlineMeshNode(meshId2, mesh, nodeId) {
+        return removeInlineMeshNode(this, meshId2, mesh, nodeId);
       }
-      markWorktreeBootstrapTerminalState(meshId2, nodeId2, status, opts) {
-        markWorktreeBootstrapTerminalState(this, meshId2, nodeId2, status, opts);
+      markWorktreeBootstrapTerminalState(meshId2, nodeId, status, opts) {
+        markWorktreeBootstrapTerminalState(this, meshId2, nodeId, status, opts);
       }
       seedRemoteClonedWorktreeNode(meshId2, node) {
         return seedRemoteClonedWorktreeNode(this, meshId2, node);
@@ -219814,8 +219924,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       adoptMemberWorktreeNodes(meshId2, input) {
         return adoptMemberWorktreeNodes(this, meshId2, input);
       }
-      adoptWorktreeNodeFromOwner(meshId2, nodeId2, ownerDaemonId) {
-        return adoptWorktreeNodeFromOwner(this, meshId2, nodeId2, ownerDaemonId);
+      adoptWorktreeNodeFromOwner(meshId2, nodeId, ownerDaemonId) {
+        return adoptWorktreeNodeFromOwner(this, meshId2, nodeId, ownerDaemonId);
       }
       /** The worktree nodes THIS daemon owns on `meshId` (inline view ∪ config). */
       async readOwnWorktreeNodes(meshId2) {
@@ -219830,8 +219940,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }
         return collectMemberWorktreeNodes(nodes, this.deps.statusInstanceId);
       }
-      tombstoneRemovedMeshNode(meshId2, nodeId2) {
-        tombstoneRemovedMeshNode(this, meshId2, nodeId2);
+      tombstoneRemovedMeshNode(meshId2, nodeId) {
+        tombstoneRemovedMeshNode(this, meshId2, nodeId);
       }
       normalizeMeshSessionCleanupMode(value) {
         return value === "stop" || value === "delete_stopped" || value === "stop_and_delete" || value === "preserve" ? value : "preserve";
@@ -219842,8 +219952,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       // cleanupLocalWorktreeNode / precheckLocalWorktreeRemovable are bound into
       // MedFamilyContext; bestEffortRemoveWorktreeDir is overridden on the instance
       // by a unit test, so callers reach these via `self.` for correct dispatch.
-      sessionMatchesMeshNode(record8, node, nodeId2, sessionIds) {
-        return sessionMatchesMeshNode(this, record8, node, nodeId2, sessionIds);
+      sessionMatchesMeshNode(record8, node, nodeId, sessionIds) {
+        return sessionMatchesMeshNode(this, record8, node, nodeId, sessionIds);
       }
       async bestEffortRemoveWorktreeDir(dir) {
         return bestEffortRemoveWorktreeDir(this, dir);
@@ -220205,8 +220315,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       async startMeshRefineBatchJob(meshId2, requestedNodeIds, args) {
         return startMeshRefineBatchJob(this, meshId2, requestedNodeIds, args);
       }
-      async startMeshRefineJob(meshId2, nodeId2, args) {
-        return startMeshRefineJob(this, meshId2, nodeId2, args);
+      async startMeshRefineJob(meshId2, nodeId, args) {
+        return startMeshRefineJob(this, meshId2, nodeId, args);
       }
       // ─── Remote mesh worker session-scoped command forward ───────────────────
       /**
@@ -223787,8 +223897,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       }
     }
     var WRITER_STOP_NEVER_ATTEMPTED = "exact_stop_never_attempted";
-    var inWriterGroup = (p, root2) => root2.pgid !== null && p.pgid === root2.pgid;
-    var birthToleranceMs = (root2) => root2.pgid === null ? 5e3 : 1e3;
+    var inWriterGroup = (p, root) => root.pgid !== null && p.pgid === root.pgid;
+    var birthToleranceMs = (root) => root.pgid === null ? 5e3 : 1e3;
     function nativeProcessesFromWindowsTable(rows) {
       if (!rows?.length) return null;
       const out = [];
@@ -223910,19 +224020,19 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (!unbound && !await adapter.verifyRuntimeMeta?.(assignmentMeta)) return pending("native_ownership_unconfirmed");
         if (!current5()) return pending("native_ownership_unconfirmed");
         const before = await ports.read();
-        const root2 = before?.find((p) => p.pid === captured.osPid);
-        if (!before || !root2 || root2.pgid !== null && root2.pgid !== root2.pid || Math.abs(Date.parse(root2.birth) - captured.startedAt) > birthToleranceMs(root2) || !current5()) return pending("native_identity_drift");
-        const tree = /* @__PURE__ */ new Set([root2.pid]);
+        const root = before?.find((p) => p.pid === captured.osPid);
+        if (!before || !root || root.pgid !== null && root.pgid !== root.pid || Math.abs(Date.parse(root.birth) - captured.startedAt) > birthToleranceMs(root) || !current5()) return pending("native_identity_drift");
+        const tree = /* @__PURE__ */ new Set([root.pid]);
         for (let pass = 0; pass < before.length; pass++) {
           const old = tree.size;
-          for (const p of before) if (tree.has(p.ppid) && (root2.pgid !== null || Date.parse(p.birth) >= Date.parse(before.find((x) => x.pid === p.ppid).birth))) tree.add(p.pid);
+          for (const p of before) if (tree.has(p.ppid) && (root.pgid !== null || Date.parse(p.birth) >= Date.parse(before.find((x) => x.pid === p.ppid).birth))) tree.add(p.pid);
           if (old === tree.size) break;
         }
-        if (root2.pgid !== null && before.some((p) => tree.has(p.pid) && p.uid !== root2.uid || p.pgid === root2.pgid && !tree.has(p.pid))) return pending("ambiguous_worker_tree");
-        const detachedGroups = root2.pgid === null ? [] : [...new Set(before.filter((p) => tree.has(p.pid) && p.pgid !== null && p.pgid !== root2.pgid).map((p) => p.pgid))];
+        if (root.pgid !== null && before.some((p) => tree.has(p.pid) && p.uid !== root.uid || p.pgid === root.pgid && !tree.has(p.pid))) return pending("ambiguous_worker_tree");
+        const detachedGroups = root.pgid === null ? [] : [...new Set(before.filter((p) => tree.has(p.pid) && p.pgid !== null && p.pgid !== root.pgid).map((p) => p.pgid))];
         if (detachedGroups.some((g3) => before.some((p) => p.pgid === g3 && !tree.has(p.pid)))) return pending("ambiguous_worker_tree");
         const held = before.filter((p) => tree.has(p.pid));
-        const capture = captureWriterStop(request2, root2, held, captured.runtimeKey, captured.startedAt);
+        const capture = captureWriterStop(request2, root, held, captured.runtimeKey, captured.startedAt);
         if (!current5()) return pending("claim_changed");
         const stopped = unbound ? await stopUnboundWriter(host.deps.idleSessionLifetimeControl, request2.sessionId, captured.runtimeKey, captured.startedAt) : await adapter.stopMeshWriter?.({
           runtimeKey: captured.runtimeKey,
@@ -223943,7 +224053,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             if (!alive || leader && !after.some((p) => p.pid === g3 && p.birth === leader.birth) && after.some((p) => p.pid === g3)) continue;
             ports.signalGroup?.(g3, pass < 3 ? "SIGTERM" : "SIGKILL");
           }
-          if (!after.some((p) => inWriterGroup(p, root2) || tree.has(p.pid))) {
+          if (!after.some((p) => inWriterGroup(p, root) || tree.has(p.pid))) {
             markWriterStopQuiescent(request2);
             return {
               ...request2,
@@ -225465,13 +225575,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       return false;
     }
     function planGrokTrustAppend(existing, roots, decidedAt = Math.floor(Date.now() / 1e3)) {
-      if (roots.some((root2) => hasDistrustEntry(existing, root2))) return { refused: true };
-      const missing = [...new Set(roots)].filter((root2) => !hasTrustEntry(existing, root2));
+      if (roots.some((root) => hasDistrustEntry(existing, root))) return { refused: true };
+      const missing = [...new Set(roots)].filter((root) => !hasTrustEntry(existing, root));
       if (!missing.length) return { refused: false, append: null };
       const separator = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
       return {
         refused: false,
-        append: `${separator}${missing.map((root2) => serializeGrokWorkspaceTrust(root2, decidedAt)).join("")}`
+        append: `${separator}${missing.map((root) => serializeGrokWorkspaceTrust(root, decidedAt)).join("")}`
       };
     }
     function serializeGrokWorkspaceTrust(real3, decidedAt = Math.floor(Date.now() / 1e3)) {
@@ -225608,8 +225718,8 @@ trust_level = "trusted"
       const storePath = claudeTrustStorePath(env2, platform10);
       const key7 = claudeProjectKey(real3, platform10);
       try {
-        const root2 = readJsonObject(storePath);
-        const projectsRaw = root2.projects;
+        const root = readJsonObject(storePath);
+        const projectsRaw = root.projects;
         const projects2 = projectsRaw && typeof projectsRaw === "object" && !Array.isArray(projectsRaw) ? projectsRaw : {};
         const existingRaw = projects2[key7];
         const existing = existingRaw && typeof existingRaw === "object" && !Array.isArray(existingRaw) ? existingRaw : {};
@@ -225618,8 +225728,8 @@ trust_level = "trusted"
           return null;
         }
         projects2[key7] = { ...existing, hasTrustDialogAccepted: true };
-        root2.projects = projects2;
-        writeJsonObjectAtomic(storePath, root2);
+        root.projects = projects2;
+        writeJsonObjectAtomic(storePath, root);
         LOG.info("claude-workspace-trust", `pre-trusted workspace ${real3}`);
         return real3;
       } catch (err2) {
@@ -225648,8 +225758,8 @@ trust_level = "trusted"
           }
           if (trust.scheme === "grok_toml_file") {
             const configRoot = path136.dirname(settingsPath);
-            const root2 = plan.authorizedRepoRoot?.realpath;
-            const roots = [real3, ...root2 && root2 !== real3 ? [root2] : []];
+            const root = plan.authorizedRepoRoot?.realpath;
+            const roots = [real3, ...root && root !== real3 ? [root] : []];
             if (roots.some((candidate) => !path136.isAbsolute(candidate) || isOverBroadTrustRoot(candidate, configRoot))) {
               LOG.warn("pre-launch-trust", `refusing grok trust plan with an over-broad root in ${settingsPath}`);
               return null;
@@ -225679,7 +225789,7 @@ trust_level = "trusted"
             }
             fs140.mkdirSync(configRoot, { recursive: true });
             fs140.appendFileSync(settingsPath, decision.append, { encoding: "utf8", mode: 384 });
-            LOG.info("pre-launch-trust", `materialized ${plan.origin} grok folder trust in ${settingsPath}` + (root2 && root2 !== real3 ? " (with owner-registered repository root)" : ""));
+            LOG.info("pre-launch-trust", `materialized ${plan.origin} grok folder trust in ${settingsPath}` + (root && root !== real3 ? " (with owner-registered repository root)" : ""));
             return real3;
           }
           if (trust.scheme === "codex_toml_file") {
@@ -225705,19 +225815,19 @@ trust_level = "trusted"
             return real3;
           }
           if (trust.scheme === "claude_json_projects") {
-            let root2 = {};
+            let root = {};
             try {
               const text11 = fs140.readFileSync(settingsPath, "utf8");
               if (text11.trim().length > 0) {
                 const parsed2 = JSON.parse(text11);
                 if (parsed2 && typeof parsed2 === "object" && !Array.isArray(parsed2)) {
-                  root2 = parsed2;
+                  root = parsed2;
                 }
               }
             } catch (err2) {
               if (err2?.code !== "ENOENT") throw err2;
             }
-            const projectsRaw = root2.projects;
+            const projectsRaw = root.projects;
             const projects2 = projectsRaw && typeof projectsRaw === "object" && !Array.isArray(projectsRaw) ? projectsRaw : {};
             const projectKey = claudeProjectKey(real3);
             const existingRaw = projects2[projectKey];
@@ -225727,10 +225837,10 @@ trust_level = "trusted"
               return null;
             }
             projects2[projectKey] = { ...existing2, hasTrustDialogAccepted: true };
-            root2.projects = projects2;
+            root.projects = projects2;
             fs140.mkdirSync(path136.dirname(settingsPath), { recursive: true });
             const tmp = `${settingsPath}.${process.pid}.${Date.now()}.tmp`;
-            fs140.writeFileSync(tmp, `${JSON.stringify(root2, null, 2)}
+            fs140.writeFileSync(tmp, `${JSON.stringify(root, null, 2)}
 `, "utf8");
             fs140.renameSync(tmp, settingsPath);
             LOG.info("pre-launch-trust", `materialized ${plan.origin} claude project trust in ${settingsPath}`);
@@ -230097,12 +230207,12 @@ ${text11}` : text11;
           const read2 = (v) => typeof v === "string" ? v.trim() : "";
           const meshId2 = read2(settings2?.meshNodeFor) || read2(settings2?.meshCoordinatorFor);
           const isCoordinator = !read2(settings2?.meshNodeFor) && !!read2(settings2?.meshCoordinatorFor);
-          const nodeId2 = read2(settings2?.meshNodeId);
+          const nodeId = read2(settings2?.meshNodeId);
           const parts = [
             `session=${this.owningSessionId || "unknown"}`,
             `provider=${this.cliType}`,
             ...meshId2 ? [`mesh=${meshId2}`] : [],
-            ...nodeId2 ? [`node=${nodeId2}`] : [],
+            ...nodeId ? [`node=${nodeId}`] : [],
             `coordinatorSession=${isCoordinator}`
           ];
           LOG.info("SessionLifecycle", `Session STARTED \u2014 ${parts.join(" ")}`);
@@ -239088,7 +239198,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
        * worktree-targeted task on the base session. Returns null when no session
        * is bound to this node so the caller fails closed.
        */
-      findMeshNodeAdapter(agentType, nodeId2, dir) {
+      findMeshNodeAdapter(agentType, nodeId, dir) {
         const instanceManager = this.deps.getInstanceManager();
         const targetDir = normalizeDirForCompare(dir);
         let workspaceMatch = null;
@@ -239096,7 +239206,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           if (a.cliType !== agentType) continue;
           const settings2 = instanceManager?.getInstance(k)?.getState?.()?.settings;
           const boundNodeId = typeof settings2?.meshNodeId === "string" && settings2.meshNodeId.trim() ? settings2.meshNodeId.trim() : typeof settings2?.meshLastNodeId === "string" ? settings2.meshLastNodeId.trim() : "";
-          if (boundNodeId && boundNodeId === nodeId2) return { adapter: a, key: k };
+          if (boundNodeId && boundNodeId === nodeId) return { adapter: a, key: k };
           if (!workspaceMatch && targetDir && normalizeDirForCompare(a.workingDir) === targetDir) {
             workspaceMatch = { adapter: a, key: k };
           }
@@ -246909,16 +247019,16 @@ ${notice.notice}${supersededHint}`;
         LOG.warn("Shutdown", `${name} teardown failed (continuing): ${e?.message || e}`);
       }
     }
-    async function bootDaemonRuntime(cfg, stages = DEFAULT_DAEMON_BOOT_STAGES) {
+    async function bootDaemonRuntime(cfg, stages2 = DEFAULT_DAEMON_BOOT_STAGES) {
       readCooperativeMaintenance2();
-      const s1 = await stages.bootPlatform(cfg);
-      const s2 = await stages.bootProviders(s1);
-      const s3 = await stages.bootSessionCore(s2);
-      const s4 = stages.bootSeqscribeNode(s3);
-      const s5 = stages.bootCommandPlane(s4);
-      const s6 = stages.armSeqscribeProjections(s5);
-      const s7 = stages.bootMeshRuntime(s6);
-      const disposeLoops = await stages.startLoops(s7);
+      const s1 = await stages2.bootPlatform(cfg);
+      const s2 = await stages2.bootProviders(s1);
+      const s3 = await stages2.bootSessionCore(s2);
+      const s4 = stages2.bootSeqscribeNode(s3);
+      const s5 = stages2.bootCommandPlane(s4);
+      const s6 = stages2.armSeqscribeProjections(s5);
+      const s7 = stages2.bootMeshRuntime(s6);
+      const disposeLoops = await stages2.startLoops(s7);
       let shutdownPromise = null;
       const shutdown = () => {
         if (shutdownPromise) return shutdownPromise;
@@ -246943,9 +247053,9 @@ ${notice.notice}${supersededHint}`;
           const seqscribeDbPath = s4.seqscribe?.node?.dbPath ?? null;
           await s4.seqscribe?.close();
           s3.bus.close();
-          stages.vacuum();
-          if (seqscribeDbPath && stages.vacuumSeqscribe) {
-            runDisposer("seqscribe compaction", () => stages.vacuumSeqscribe(seqscribeDbPath));
+          stages2.vacuum();
+          if (seqscribeDbPath && stages2.vacuumSeqscribe) {
+            runDisposer("seqscribe compaction", () => stages2.vacuumSeqscribe(seqscribeDbPath));
           }
         })();
         return shutdownPromise;
@@ -262203,7 +262313,7 @@ async function meshRefineNode(ctx, args) {
   }
   const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
   if (args.runtime_approval_id !== void 0) {
-    const allowed = /* @__PURE__ */ new Set(["node_id", "execute", "dry_run", "runtime_approval_id"]);
+    const allowed = /* @__PURE__ */ new Set(["node_id", "execute", "dry_run", "runtime_approval_id", "merge_mode", "approved_target_shas"]);
     if (Object.keys(args).some((key) => !allowed.has(key)) || !/^mi_[0-9a-f]{12}$/.test(args.runtime_approval_id)) {
       return JSON.stringify({ success: false, code: "invalid_runtime_approval_request" });
     }
@@ -262211,6 +262321,8 @@ async function meshRefineNode(ctx, args) {
       meshId: ctx.mesh.id,
       nodeId: args.node_id,
       runtimeApprovalId: args.runtime_approval_id,
+      ...args.merge_mode !== void 0 ? { mergeMode: args.merge_mode } : {},
+      ...Object.hasOwn(args, "approved_target_shas") ? { approvedTargetShas: args.approved_target_shas ?? null } : {},
       execute: args.execute,
       dryRun: args.dry_run
     });

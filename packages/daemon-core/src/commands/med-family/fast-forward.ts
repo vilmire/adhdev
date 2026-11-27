@@ -153,7 +153,7 @@ export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
     },
 
     [APPROVED_RUNTIME_COMMAND]: async (ctx, args) => {
-        const allowed = new Set(['meshId', 'nodeId', 'runtimeApprovalId', 'execute', 'dryRun']);
+        const allowed = new Set(['meshId', 'nodeId', 'runtimeApprovalId', 'execute', 'dryRun', 'mergeMode', 'approvedTargetShas']);
         const payload = stripRouterInternalArgs(args);
         if (Object.keys(payload).some(key => !allowed.has(key))
             || [args.execute, args.dryRun].some(value => value !== undefined && typeof value !== 'boolean')) {

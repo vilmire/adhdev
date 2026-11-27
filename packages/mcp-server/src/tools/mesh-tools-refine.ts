@@ -266,7 +266,7 @@ export async function meshRefineNode(
     // the match. Absent (legacy ctx) → daemon-level delivery, unchanged.
     const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
     if (args.runtime_approval_id !== undefined) {
-        const allowed = new Set(['node_id', 'execute', 'dry_run', 'runtime_approval_id']);
+        const allowed = new Set(['node_id', 'execute', 'dry_run', 'runtime_approval_id', 'merge_mode', 'approved_target_shas']);
         if (Object.keys(args).some(key => !allowed.has(key)) || !/^mi_[0-9a-f]{12}$/.test(args.runtime_approval_id)) {
             return JSON.stringify({ success: false, code: 'invalid_runtime_approval_request' });
         }
@@ -274,6 +274,8 @@ export async function meshRefineNode(
             meshId: ctx.mesh.id,
             nodeId: args.node_id,
             runtimeApprovalId: args.runtime_approval_id,
+            ...(args.merge_mode !== undefined ? { mergeMode: args.merge_mode } : {}),
+            ...(Object.hasOwn(args, 'approved_target_shas') ? { approvedTargetShas: args.approved_target_shas ?? null } : {}),
             execute: args.execute,
             dryRun: args.dry_run,
         });

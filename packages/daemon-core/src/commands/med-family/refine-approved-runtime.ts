@@ -5,16 +5,17 @@ import { isDeepStrictEqual, promisify } from 'node:util';
 import { delimiter, join } from 'node:path';
 import { devNull } from 'node:os';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
-import { canonicalPushIdentity } from '../../git/public-push-guard.mjs';
+import { canonicalPushIdentity, resolvePushPolicy } from '../../git/public-push-guard.mjs';
 import { gitChildEnv } from '../../git/git-locale.js';
 import { resolveMeshHostStatus } from '../../mesh/mesh-host-ownership.js';
 import { resolveMeshRefineValidationPlan } from '../../mesh/refine-config.js';
 import { loadMeshWorktreeBootstrapConfig, validateMeshWorktreeBootstrapConfig } from '../../mesh/worktree-bootstrap-config.js';
 import { readAuthenticatedMcpScope } from '../mcp-command-ingress.js';
 import { getArtifactStore, getMeshRuntimeStore } from './artifact-runtime.js';
+import { resolveMeshPolicy } from '../../repo-mesh-types.js';
 import type { MedFamilyContext } from './types.js';
 
-// A release-specific migration of one existing owner decision. A caller cannot
+// Two explicitly pinned stages of one approved release. A caller cannot
 // register a grant, pick an artifact, or supply executable environment values.
 export const APPROVED_RUNTIME_COMMAND = 'refine_mesh_node_approved_runtime';
 export const approvedRuntime = Symbol('approved refinery runtime');
@@ -24,10 +25,36 @@ const artifactId = 'art_8e90c58cbd79f9af';
 const digest = '4a070077fa1860ba7eee1c79f9279a98922ed088c673f09a4875f9632c3082a9';
 const meshId = 'mesh_271444af883843e9b36c67155b87b22f';
 const hostDaemonId = 'daemon_mach_6733c865d60f432dbeb119a6875ee303';
-const nodeId = 'node_346dc118ddb04ab5841a60bd209f9bdf';
-const root = '441a8fa59dcff03cacd13a1f584af9a7ab609dab';
-const oss = '86ce8d27e2f064088a61b38bfe560a760c670c54';
-const ossBase = '6ea2081ddbdd58468904667f0cb45a79d40162e7';
+const securityRoot = '441a8fa59dcff03cacd13a1f584af9a7ab609dab';
+const securityOss = '86ce8d27e2f064088a61b38bfe560a760c670c54';
+const stages = [
+    {
+        nodeId: 'node_346dc118ddb04ab5841a60bd209f9bdf', root: securityRoot, oss: securityOss,
+        rootBase: '50d555860be05306095f296c7418f87c454f5454', ossBase: '6ea2081ddbdd58468904667f0cb45a79d40162e7',
+        count: 10,
+    },
+    {
+        nodeId: 'node_127a5a2ab7154904916a9356e6692ca0',
+        root: '062f2077fe9e892cefb643547482ca013dbe09ad', oss: '9245cf92b4f05d2ba095f9b5e02a5a0de1aad9ac',
+        rootBase: securityRoot, ossBase: securityOss, count: 2,
+    },
+] as const;
+const incrementalDecisionId = 'mi_b8876f8fedba';
+const incrementalOss = ['b10aa6348c01d324372c0c79ac26a921cb6a34d4', stages[1].oss];
+
+export function selectApprovedRuntimeStage(nodeId: unknown, mode: unknown, targets: unknown) {
+    const stage = stages.find(entry => entry.nodeId === nodeId);
+    requireApproval(stage, 'approval_scope_mismatch');
+    const publishRoot = mode !== undefined || targets !== undefined;
+    requireApproval(!publishRoot || (mode === 'ff-only' && isDeepStrictEqual(targets, { [stage.nodeId]: stage.root })),
+        'private_root_contract_mismatch');
+    return { ...stage, publishRoot };
+}
+
+export function requireApprovedMain(stage: typeof stages[number], rootMain: string, ossMain: string, requireOssTarget = false) {
+    requireApproval(rootMain === stage.rootBase && (ossMain === stage.oss || (!requireOssTarget && ossMain === stage.ossBase)),
+        'approved_main_changed');
+}
 const bootstrapFile = '.adhdev/worktree_bootstrap.json';
 const refineFile = '.adhdev/refine.json';
 
@@ -44,9 +71,9 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
     return stdout.trim();
 }
 
-export function requireApprovedPins(actual: { root: string; oss: string; gitlink: string }) {
-    requireApproval(actual.root === root && actual.oss === oss
-        && actual.gitlink === `160000 commit ${oss}\toss`, 'approved_source_changed');
+export function requireApprovedPins(actual: { root: string; oss: string; gitlink: string }, expected: { root: string; oss: string } = stages[0]) {
+    requireApproval(actual.root === expected.root && actual.oss === expected.oss
+        && actual.gitlink === `160000 commit ${expected.oss}\toss`, 'approved_source_changed');
 }
 
 function hash(bytes: Buffer): string {
@@ -73,6 +100,9 @@ export function verifyRuntimePayload(
 
 export interface ApprovedRefineRuntime {
     path: string;
+    rootBase: string;
+    publishRoot: boolean;
+    checkRootPublication: (workspace: string, target: string, branch: string, base: string) => Promise<void>;
     audit: Record<string, unknown>;
     publication: { mergeMode: 'ff-only'; approvedTargetShas: Record<string, string>; approvedPublishShas: Record<string, string[]> };
     verify: (workspace: string) => Promise<void>;
@@ -83,15 +113,19 @@ export interface ApprovedRefineRuntime {
 export async function resolveApprovedRefineRuntime(ctx: MedFamilyContext, args: any): Promise<ApprovedRefineRuntime> {
     const scope = readAuthenticatedMcpScope(args, APPROVED_RUNTIME_COMMAND);
     requireApproval(scope?.isCoordinator && scope.sessionId && scope.meshId === meshId, 'local_coordinator_required');
-    requireApproval(args.meshId === meshId && args.nodeId === nodeId && args.runtimeApprovalId === decisionId, 'approval_scope_mismatch');
+    requireApproval(args.meshId === meshId && args.runtimeApprovalId === decisionId, 'approval_scope_mismatch');
 
+    const stage = selectApprovedRuntimeStage(args.nodeId, args.mergeMode, args.approvedTargetShas);
+    const { nodeId, root, oss, ossBase, rootBase, publishRoot } = stage;
     const meshStore = getMeshRuntimeStore(ctx);
     const items = meshStore.missionItems();
     const store = getArtifactStore(ctx);
     function readDecisions() {
         const item = items.getItem(meshId, decisionId);
         const publication = items.getItem(meshId, publicationDecisionId);
-        for (const entry of [item, publication]) {
+        const incremental = stage.count === 2 ? items.getItem(meshId, incrementalDecisionId) : undefined;
+        const decisions = stage.count === 2 ? [item, publication, incremental] : [item, publication];
+        for (const entry of decisions) {
             requireApproval(entry?.kind === 'decision' && entry.state === 'answered'
                 && entry.decision?.answer?.by === 'owner'
                 && entry.decision.answer.optionId === 'a', 'owner_decision_changed');
@@ -100,7 +134,9 @@ export async function resolveApprovedRefineRuntime(ctx: MedFamilyContext, args: 
             && item.decision.answer?.at === '2026-11-26T15:20:41.346Z'
             && item.refs.some(ref => ref.value === artifactId), 'runtime_decision_changed');
         requireApproval(meshStore.getMission(meshId, item.missionId)?.status === 'active', 'runtime_mission_inactive');
-        return [item, publication].map(entry => ({
+        if (stage.count === 2) requireApproval(incremental?.decision?.answerRevision === 1
+            && incremental.decision.answer?.at === '2026-11-27T03:38:58.306Z', 'incremental_decision_changed');
+        return decisions.map(entry => ({
             missionId: entry?.missionId, refs: entry?.refs, machine: entry?.machine,
             context: entry?.decision?.context, question: entry?.decision?.question,
             options: entry?.decision?.options, answer: entry?.decision?.answer, revision: entry?.decision?.answerRevision,
@@ -147,13 +183,14 @@ export async function resolveApprovedRefineRuntime(ctx: MedFamilyContext, args: 
             && daemonIdsEquivalent(host.hostDaemonId, self)
             && node?.isLocalWorktree && node.workspace && daemonIdsEquivalent(node.daemonId, self)
             && (!workspace || workspace === node.workspace), 'local_approved_workspace_required');
+        requireApproval(!publishRoot || !resolveMeshPolicy(mesh.policy).requireApprovalForPush, 'private_root_policy_requires_approval');
         requireApproval(mesh.policy?.refineConfig == null && mesh.policy?.worktreeBootstrapConfig == null, 'persistent_override_present');
         const cwd = node.workspace;
         const [rootHead, ossHead, gitlink, status] = await Promise.all([
             git(cwd, 'rev-parse', 'HEAD'), git(join(cwd, 'oss'), 'rev-parse', 'HEAD'),
             git(cwd, 'ls-tree', 'HEAD', 'oss'), git(cwd, '--no-optional-locks', 'status', '--porcelain', '--ignore-submodules=none', '--untracked-files=all'),
         ]);
-        requireApprovedPins({ root: rootHead, oss: ossHead, gitlink });
+        requireApprovedPins({ root: rootHead, oss: ossHead, gitlink }, stage);
         requireApproval(status === '', 'approved_worktree_dirty');
         for (const dir of [cwd, join(cwd, 'oss')]) {
             requireApproval(!['node', 'npm', 'npx'].some(bin => existsSync(join(dir, 'node_modules', '.bin', bin))), 'unexpected_local_runtime_shim');
@@ -168,12 +205,36 @@ export async function resolveApprovedRefineRuntime(ctx: MedFamilyContext, args: 
         return { cwd, bootstrap };
     }
 
+    async function main(workspace: string, identity: string) {
+        const urls = (await git(workspace, 'remote', 'get-url', '--all', 'origin')).split('\n');
+        requireApproval(urls.length === 1 && canonicalPushIdentity(urls[0]) === identity, 'publication_destination_changed');
+        const row = await git(workspace, 'ls-remote', '--exit-code', 'origin', 'refs/heads/main');
+        return /^([a-f0-9]{40})\trefs\/heads\/main$/.exec(row)?.[1] ?? '';
+    }
+    async function checkMain(workspace: string, requireOssTarget = false) {
+        const [rootMain, ossMain] = await Promise.all([
+            main(workspace, 'github.com/vilmire/adhdev-cloud'), main(join(workspace, 'oss'), 'github.com/vilmire/adhdev'),
+        ]);
+        requireApprovedMain(stage, rootMain, ossMain, requireOssTarget);
+    }
+    async function checkPrivateDestination(workspace: string) {
+        const policy = await resolvePushPolicy(workspace);
+        requireApproval(!policy.isPublic && policy.keyed.length === 1
+            && policy.keyed[0].visibility === 'private'
+            && canonicalPushIdentity(policy.keyed[0].url) === 'github.com/vilmire/adhdev-cloud', 'private_root_destination_required');
+    }
+
     const { cwd, bootstrap } = await checkWorkspace();
+    await checkMain(cwd);
+    if (publishRoot) await checkPrivateDestination(cwd);
     const bootstrapPlan = validateMeshWorktreeBootstrapConfig(bootstrap.config, bootstrapFile);
     const proof = verifyRuntimePayload(bootstrap.config, JSON.parse(readFileSync(join(cwd, refineFile), 'utf8')),
         proposal.applyAfterSeparateAuthorization.args.policy, approvedPath);
     const publicationShas = (await git(join(cwd, 'oss'), 'rev-list', `${ossBase}..${oss}`)).split('\n');
-    requireApproval(publicationShas.length === 10, 'approved_oss_range_changed');
+    requireApproval(publicationShas.length === stage.count && (stage.count !== 2
+        || isDeepStrictEqual([...publicationShas].sort(), [...incrementalOss].sort())), 'approved_oss_range_changed');
+    const rootShas = publishRoot ? (await git(cwd, 'rev-list', `${rootBase}..${root}`)).split('\n') : [];
+    requireApproval(!publishRoot || rootShas.length === stage.count, 'approved_root_range_changed');
     const [npmBin, nodeBin] = approvedPath.split(delimiter);
     const verifyTools = async () => {
         const nodePath = join(nodeBin, 'node');
@@ -195,13 +256,22 @@ export async function resolveApprovedRefineRuntime(ctx: MedFamilyContext, args: 
     checkAuthority();
     return {
         path: approvedPath,
-        audit: { ...proof, worktreeBootstrapCommands: bootstrapPlan.commands.map(command => command.displayCommand), decisionId, publicationDecisionId, revision: 1, checkedDecisionDigest: fingerprint, payloadDigest: digest,
+        rootBase, publishRoot,
+        checkRootPublication: async (workspace, target, branch, base) => {
+            requireApproval(publishRoot && target === root && branch === 'main' && base === rootBase, 'private_root_contract_mismatch');
+            await checkWorkspace(cwd);
+            await checkMain(cwd, true);
+            await checkPrivateDestination(workspace);
+            checkAuthority();
+        },
+        audit: { ...proof, worktreeBootstrapCommands: bootstrapPlan.commands.map(command => command.displayCommand), decisionId, publicationDecisionId, ...(stage.count === 2 ? { incrementalDecisionId } : {}), rootBase, ossBase, publishRoot, revision: 1, checkedDecisionDigest: fingerprint, payloadDigest: digest,
             root, oss, node: '22.22.0', abi: '127', npm: '10.9.2', npx: '10.9.2' },
-        publication: { mergeMode: 'ff-only', approvedTargetShas: { [nodeId]: root }, approvedPublishShas: { root: [], oss: publicationShas } },
-        verify: async workspace => { await verifyTools(); await checkWorkspace(workspace); },
+        publication: { mergeMode: 'ff-only', approvedTargetShas: { [nodeId]: root }, approvedPublishShas: { root: rootShas, oss: publicationShas } },
+        verify: async workspace => { await verifyTools(); await checkWorkspace(workspace); await checkMain(cwd); checkAuthority(); },
         checkPublication: async (workspace, commit, branch, base) => {
             requireApproval(commit === oss && branch === 'main' && base === ossBase, 'publication_scope_changed');
             await checkWorkspace(cwd);
+            await checkMain(cwd);
             const targets = (await git(workspace, 'remote', 'get-url', '--push', '--all', 'origin')).split('\n');
             requireApproval(targets.length === 1 && canonicalPushIdentity(targets[0]) === 'github.com/vilmire/adhdev', 'publication_destination_changed');
             checkAuthority();

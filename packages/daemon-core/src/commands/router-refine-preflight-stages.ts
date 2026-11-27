@@ -170,7 +170,7 @@ export async function refineSubmoduleReachabilityStage(self: DaemonCommandRouter
                 worktreeRoot: node.workspace,
                 approvedPublishShas: ctx.args?.approvedPublishShas,
                 beforePublish: ctx.approvedRuntime?.checkPublication,
-                ...(!ctx.approvedRuntime && !resolveMeshPolicy((mesh as any)?.policy).requireApprovalForPush ? { rootCommit: branchHead, rootBranch: baseBranch } : {}),
+                ...((!ctx.approvedRuntime || ctx.approvedRuntime.publishRoot) && !resolveMeshPolicy((mesh as any)?.policy).requireApprovalForPush ? { rootCommit: branchHead, rootBranch: baseBranch } : {}),
             });
             recordMeshRefineStage(refineStages, 'submodule_reachability', submoduleReachability.status, submoduleReachabilityStarted, {
                 checked: submoduleReachability.checked,

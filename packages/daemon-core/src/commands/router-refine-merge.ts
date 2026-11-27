@@ -211,6 +211,9 @@ export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter,
             if (contract) return contract;
 
             await ctx.approvedRuntime?.verify(ctx.node.workspace);
+            if (ctx.approvedRuntime?.publishRoot) {
+                await ctx.approvedRuntime.checkRootPublication(repoRoot, ctx.branchHead, baseBranch, baseHead);
+            }
             let mergeResult: Record<string, unknown> | undefined;
             const mergeStarted = Date.now();
             try {
@@ -328,7 +331,7 @@ export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter,
             // destructive worktree/branch cleanup once the push is proven — a push failure
             // must leave the worktree + branch ref intact so a retry can re-push without
             // reconstructing anything, and the batch must NOT count the node as merged.
-            const requireApprovalForPush: boolean = Boolean(ctx.approvedRuntime) || resolveMeshPolicy((mesh as any)?.policy).requireApprovalForPush;
+            const requireApprovalForPush: boolean = Boolean(ctx.approvedRuntime && !ctx.approvedRuntime.publishRoot) || resolveMeshPolicy((mesh as any)?.policy).requireApprovalForPush;
 
             let pushResult: Record<string, unknown> | undefined;
             if (!requireApprovalForPush) {
@@ -346,6 +349,7 @@ export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter,
                         onScan: scan => recordMeshRefineStage(refineStages, 'integration_range', scan.identityFindings || (scan.policy === 'public' && scan.pathFindings) ? 'failed' : 'passed', pushStarted, scan),
                     });
                     // Push exactly what was approved/scanned, even if the branch moves.
+                    await ctx.approvedRuntime?.checkRootPublication(repoRoot, publishCommit, baseBranch, baseHead);
                     await pushRefineryPinnedCommit(repoRoot, publishCommit, baseBranch, baseHead, execFileAsync);
                     pushResult = { pushed: true, remote: 'origin', branch: baseBranch, durationMs: Date.now() - pushStarted };
                     recordMeshRefineStage(refineStages, 'push', 'passed', pushStarted, pushResult);
@@ -450,6 +454,17 @@ export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter,
                         status: 'merged_local_pending_push',
                         nextStep: `Approve and run the push (git -C ${repoRoot} push origin ${baseBranch}); the worktree is retained until then.`,
                     },
+                } };
+            }
+
+            if (ctx.approvedRuntime) {
+                recordMeshRefineStage(refineStages, 'cleanup', 'skipped', Date.now(), { reason: 'approved_candidate_retained' });
+                return { kind: 'terminal', result: {
+                    success: true, merged: true, pushed: true, removed: false, branch, into: baseBranch,
+                    pushResult, validationSummary, patchEquivalence, submoduleReachability, submoduleAlignment,
+                    mergeResult, refineStages,
+                    finalBranchConvergenceState: { branch: baseBranch, mergedBranch: branch, baseBranch,
+                        merged: true, pushed: true, removed: false, status: 'merged_pushed' },
                 } };
             }
 

@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { delimiter, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fastForwardHandlers } from '../../src/commands/med-family/fast-forward.js';
-import { APPROVED_RUNTIME_COMMAND, requireApprovedPins, verifyRuntimePayload } from '../../src/commands/med-family/refine-approved-runtime.js';
+import { APPROVED_RUNTIME_COMMAND, requireApprovedMain, requireApprovedPins, selectApprovedRuntimeStage, verifyRuntimePayload } from '../../src/commands/med-family/refine-approved-runtime.js';
 import { attachAuthenticatedMcpCommand } from '../../src/commands/mcp-command-ingress.js';
 import { setArtifactCommandRuntimeForDeps } from '../../src/commands/med-family/artifact-runtime.js';
 import { registerMeshCoordinator, unregisterMeshCoordinator } from '../../src/mesh/coordinator-registry.js';
@@ -31,6 +31,23 @@ describe('owner-approved Refinery runtime', () => {
         expect(() => requireApprovedPins({ root, oss: root, gitlink })).toThrow('approved_source_changed');
     });
 
+    it('requires an exact opt-in for private Root and refuses a moved or out-of-order main', () => {
+        const first = selectApprovedRuntimeStage('node_346dc118ddb04ab5841a60bd209f9bdf', undefined, undefined);
+        const node = 'node_127a5a2ab7154904916a9356e6692ca0';
+        const second = selectApprovedRuntimeStage(node, undefined, undefined);
+        expect(second.publishRoot).toBe(false);
+        expect(second.count).toBe(2);
+        expect(() => selectApprovedRuntimeStage(node, 'ff-only', { [node]: first.root })).toThrow('private_root_contract_mismatch');
+        expect(() => selectApprovedRuntimeStage(node, 'ff-only', { [node]: second.root, [first.nodeId]: first.root })).toThrow('private_root_contract_mismatch');
+        expect(selectApprovedRuntimeStage(node, 'ff-only', { [node]: second.root }).publishRoot).toBe(true);
+        expect(() => requireApprovedMain(second, first.rootBase, first.ossBase)).toThrow('approved_main_changed');
+        expect(() => requireApprovedMain(second, first.root, first.ossBase)).toThrow('approved_main_changed');
+        expect(() => requireApprovedMain(second, first.root, first.oss)).not.toThrow();
+        expect(() => requireApprovedMain(second, first.root, first.oss, true)).toThrow('approved_main_changed');
+        expect(() => requireApprovedMain(second, first.root, second.oss, true)).not.toThrow();
+        expect(() => requireApprovedMain(first, second.rootBase, second.oss)).toThrow('approved_main_changed');
+    });
+
     it('rejects an envelope without coordinator authority or with extra input', async () => {
         const handler = fastForwardHandlers[APPROVED_RUNTIME_COMMAND];
         const args = { meshId: 'fixture', nodeId: 'fixture', runtimeApprovalId: 'mi_917b95c8c342' };
@@ -46,12 +63,14 @@ describe('owner-approved Refinery runtime', () => {
         const args = { meshId, nodeId: 'node_346dc118ddb04ab5841a60bd209f9bdf', runtimeApprovalId: 'mi_917b95c8c342' };
         const answer = { by: 'owner', via: 'dashboard', optionId: 'a', at: '2026-11-26T15:20:41.346Z' };
         const record = { kind: 'decision', state: 'answered', missionId, decision: { answer, answerRevision: 1 }, refs: [{ value: artifactId }] };
+        const incremental = structuredClone(record);
+        incremental.decision.answer.at = '2026-11-27T03:38:58.306Z';
         const deps = {};
         registerMeshCoordinator({ sessionId, meshId } as never);
         setArtifactCommandRuntimeForDeps(deps as never, {
             meshRuntimeStore: {
                 getMission: () => ({ status: 'active' }),
-                missionItems: () => ({ getItem: (_mesh: string, id: string) => ['mi_917b95c8c342', 'mi_729d08b91f11'].includes(id) ? record : undefined }),
+                missionItems: () => ({ getItem: (_mesh: string, id: string) => id === 'mi_b8876f8fedba' ? incremental : ['mi_917b95c8c342', 'mi_729d08b91f11'].includes(id) ? record : undefined }),
             } as never,
             artifactStore: {
                 get: () => ({ meshId, missionId, kind: 'json', originDaemonId: 'daemon_mach_6733c865d60f432dbeb119a6875ee303',
@@ -63,6 +82,15 @@ describe('owner-approved Refinery runtime', () => {
         const envelope = attachAuthenticatedMcpCommand(args, APPROVED_RUNTIME_COMMAND, () => live, { sessionId, meshId, isCoordinator: true });
         const call = () => fastForwardHandlers[APPROVED_RUNTIME_COMMAND]({ deps } as never, envelope);
         try {
+            expect(await call()).toMatchObject({ error: 'artifact_content_changed' });
+            const secondEnvelope = attachAuthenticatedMcpCommand(
+                { ...args, nodeId: 'node_127a5a2ab7154904916a9356e6692ca0' },
+                APPROVED_RUNTIME_COMMAND, () => live, { sessionId, meshId, isCoordinator: true },
+            );
+            const callSecond = () => fastForwardHandlers[APPROVED_RUNTIME_COMMAND]({ deps } as never, secondEnvelope);
+            expect(await callSecond()).toMatchObject({ error: 'artifact_content_changed' });
+            incremental.decision.answerRevision++;
+            expect(await callSecond()).toMatchObject({ error: 'incremental_decision_changed' });
             expect(await call()).toMatchObject({ error: 'artifact_content_changed' });
             answer.by = 'auto_recommended';
             expect(await call()).toMatchObject({ error: 'owner_decision_changed' });
@@ -94,6 +122,9 @@ describe('owner-approved Refinery runtime', () => {
             payload: { meshId: 'mesh-test', nodeId: 'node-test', runtimeApprovalId: args.runtime_approval_id, execute: true, dryRun: undefined },
         }]);
         expect(JSON.parse(await meshRefineNode(ctx, { ...args, env: { PATH: '/fixture' } } as never))).toMatchObject({ code: 'invalid_runtime_approval_request' });
+        await meshRefineNode(ctx, { ...args, merge_mode: 'ff-only', approved_target_shas: { [args.node_id]: 'a'.repeat(40) } });
+        expect(calls.at(-1)?.payload).toMatchObject({ mergeMode: 'ff-only', approvedTargetShas: { [args.node_id]: 'a'.repeat(40) } });
+        expect(JSON.parse(await meshRefineNode(ctx, { ...args, approved_publish_shas: ['a'.repeat(40)] }))).toMatchObject({ code: 'invalid_runtime_approval_request' });
     });
 
     const originalPath = process.env.PATH;
