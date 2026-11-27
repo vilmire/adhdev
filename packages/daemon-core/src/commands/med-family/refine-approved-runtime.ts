@@ -51,9 +51,19 @@ export function selectApprovedRuntimeStage(nodeId: unknown, mode: unknown, targe
     return { ...stage, publishRoot };
 }
 
-export function requireApprovedMain(stage: typeof stages[number], rootMain: string, ossMain: string, requireOssTarget = false) {
-    requireApproval(rootMain === stage.rootBase && (ossMain === stage.oss || (!requireOssTarget && ossMain === stage.ossBase)),
-        'approved_main_changed');
+export function requireApprovedMain(
+    stage: typeof stages[number],
+    rootMain: string,
+    ossMain: string,
+    requireOssTarget = false,
+    incrementalReachable = false,
+) {
+    const exactStage2Descendant = stage.count === 10 && ossMain === stages[1].oss && incrementalReachable;
+    requireApproval(
+        rootMain === stage.rootBase
+            && (ossMain === stage.oss || (!requireOssTarget && ossMain === stage.ossBase) || exactStage2Descendant),
+        'approved_main_changed',
+    );
 }
 const bootstrapFile = '.adhdev/worktree_bootstrap.json';
 const refineFile = '.adhdev/refine.json';
@@ -123,8 +133,9 @@ export async function resolveApprovedRefineRuntime(ctx: MedFamilyContext, args: 
     function readDecisions() {
         const item = items.getItem(meshId, decisionId);
         const publication = items.getItem(meshId, publicationDecisionId);
-        const incremental = stage.count === 2 ? items.getItem(meshId, incrementalDecisionId) : undefined;
-        const decisions = stage.count === 2 ? [item, publication, incremental] : [item, publication];
+        const incremental = items.getItem(meshId, incrementalDecisionId);
+        const requireIncremental = stage.count === 2 || incremental?.state === 'answered';
+        const decisions = requireIncremental ? [item, publication, incremental] : [item, publication];
         for (const entry of decisions) {
             requireApproval(entry?.kind === 'decision' && entry.state === 'answered'
                 && entry.decision?.answer?.by === 'owner'
@@ -134,7 +145,7 @@ export async function resolveApprovedRefineRuntime(ctx: MedFamilyContext, args: 
             && item.decision.answer?.at === '2026-11-26T15:20:41.346Z'
             && item.refs.some(ref => ref.value === artifactId), 'runtime_decision_changed');
         requireApproval(meshStore.getMission(meshId, item.missionId)?.status === 'active', 'runtime_mission_inactive');
-        if (stage.count === 2) requireApproval(incremental?.decision?.answerRevision === 1
+        if (requireIncremental) requireApproval(incremental?.decision?.answerRevision === 1
             && incremental.decision.answer?.at === '2026-11-27T03:38:58.306Z', 'incremental_decision_changed');
         return decisions.map(entry => ({
             missionId: entry?.missionId, refs: entry?.refs, machine: entry?.machine,
@@ -215,7 +226,26 @@ export async function resolveApprovedRefineRuntime(ctx: MedFamilyContext, args: 
         const [rootMain, ossMain] = await Promise.all([
             main(workspace, 'github.com/vilmire/adhdev-cloud'), main(join(workspace, 'oss'), 'github.com/vilmire/adhdev'),
         ]);
-        requireApprovedMain(stage, rootMain, ossMain, requireOssTarget);
+        let incrementalReachable = false;
+        if (stage.count === 10 && ossMain === stages[1].oss) {
+            const incItem = items.getItem(meshId, incrementalDecisionId);
+            requireApproval(incItem?.kind === 'decision' && incItem.state === 'answered'
+                && incItem.decision?.answer?.by === 'owner' && incItem.decision.answer.optionId === 'a'
+                && incItem.decision?.answerRevision === 1 && incItem.decision.answer?.at === '2026-11-27T03:38:58.306Z',
+                'incremental_decision_changed');
+            const ossDir = join(workspace, 'oss');
+            await git(ossDir, 'merge-base', '--is-ancestor', stage.oss, ossMain);
+            const aheadShas = (await git(ossDir, 'rev-list', `${stage.oss}..${ossMain}`)).split('\n').filter(Boolean);
+            const totalShas = (await git(ossDir, 'rev-list', `${stage.ossBase}..${ossMain}`)).split('\n').filter(Boolean);
+            requireApproval(
+                aheadShas.length === stages[1].count
+                    && isDeepStrictEqual([...aheadShas].sort(), [...incrementalOss].sort())
+                    && totalShas.length === stages[0].count + stages[1].count,
+                'approved_oss_range_changed',
+            );
+            incrementalReachable = true;
+        }
+        requireApprovedMain(stage, rootMain, ossMain, requireOssTarget, incrementalReachable);
     }
     async function checkPrivateDestination(workspace: string) {
         const policy = await resolvePushPolicy(workspace);

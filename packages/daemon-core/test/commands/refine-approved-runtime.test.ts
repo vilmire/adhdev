@@ -46,6 +46,13 @@ describe('owner-approved Refinery runtime', () => {
         expect(() => requireApprovedMain(second, first.root, first.oss, true)).toThrow('approved_main_changed');
         expect(() => requireApprovedMain(second, first.root, second.oss, true)).not.toThrow();
         expect(() => requireApprovedMain(first, second.rootBase, second.oss)).toThrow('approved_main_changed');
+        // Stage 1 accepts canonical OSS main at stage2.oss (9245) ONLY when proven incrementalReachable=true (exact 2 incremental approved commits above 86ce), and rejects unapproved descendants (e.g. 4d319d05) or unproven reachability
+        expect(() => requireApprovedMain(first, first.rootBase, second.oss, false, false)).toThrow('approved_main_changed');
+        expect(() => requireApprovedMain(first, first.rootBase, second.oss, true, false)).toThrow('approved_main_changed');
+        expect(() => requireApprovedMain(first, first.rootBase, second.oss, false, true)).not.toThrow();
+        expect(() => requireApprovedMain(first, first.rootBase, second.oss, true, true)).not.toThrow();
+        expect(() => requireApprovedMain(first, first.rootBase, '4d319d05bc33ee0adc1b4410a3385f0b6ef346d4', false, true)).toThrow('approved_main_changed');
+        expect(() => requireApprovedMain(second, second.rootBase, '4d319d05bc33ee0adc1b4410a3385f0b6ef346d4', false, true)).toThrow('approved_main_changed');
     });
 
     it('rejects an envelope without coordinator authority or with extra input', async () => {
@@ -91,6 +98,8 @@ describe('owner-approved Refinery runtime', () => {
             expect(await callSecond()).toMatchObject({ error: 'artifact_content_changed' });
             incremental.decision.answerRevision++;
             expect(await callSecond()).toMatchObject({ error: 'incremental_decision_changed' });
+            expect(await call()).toMatchObject({ error: 'incremental_decision_changed' });
+            incremental.decision.answerRevision = 1;
             expect(await call()).toMatchObject({ error: 'artifact_content_changed' });
             answer.by = 'auto_recommended';
             expect(await call()).toMatchObject({ error: 'owner_decision_changed' });
