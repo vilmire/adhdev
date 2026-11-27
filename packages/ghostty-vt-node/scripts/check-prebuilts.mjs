@@ -30,6 +30,12 @@ import { printVerifyReport, verifyPrebuilt } from './verify-prebuilt.mjs';
 
 const WORKFLOW_DIR = join(PACKAGE_DIR, '..', '..', '.github', 'workflows');
 
+function workflowJob(workflow, name) {
+    const normalized = workflow.replace(/\r\n/g, '\n');
+    const jobs = normalized.match(/^jobs:[ \t]*\n([\s\S]*?)(?=^\w|$(?![\s\S]))/m)?.[1] ?? '';
+    return jobs.match(new RegExp(`^  ${name}:[ \\t]*\\n([\\s\\S]*?)(?=^  \\S|$(?![\\s\\S]))`, 'm'))?.[1] ?? '';
+}
+
 function checkExactHostPrebuilt() {
     const triplet = shippedTripletFor();
     if (!triplet) {
@@ -71,7 +77,29 @@ export function nativeCiFindings(workflowDir = WORKFLOW_DIR, packageDir = PACKAG
     findings.push(['native build forces a compile', forced, buildStep ? buildText.trim().replace(/\s+/g, ' ') : 'no "Build ghostty-vt-node" step']);
     findings.push(['native build verifies the exact staged artifact', /scripts\/verify-prebuilt\.mjs "?dist-prebuilt\//.test(native), 'verify-prebuilt.mjs on dist-prebuilt/<triplet>']);
     findings.push(['native build stamps a manifest from the built binary', /scripts\/prebuilt-manifest\.mjs write "?dist-prebuilt\//.test(native), 'prebuilt-manifest.mjs write dist-prebuilt/<triplet>']);
-    findings.push(['release gate checks committed prebuilts', /scripts\/check-release-prebuilts\.sh/.test(ci), 'ci.yml runs check-release-prebuilts.sh']);
+    const publish = workflowJob(ci, 'publish');
+    const gate = '        run: bash packages/ghostty-vt-node/scripts/check-release-prebuilts.sh';
+    const publishLines = publish.split('\n').filter((line) => !/^\s*#/.test(line));
+    const publishSteps = publishLines.join('\n').split(/^      - /m).slice(1);
+    const downloadSteps = publishSteps.filter((step) => /uses:\s*actions\/download-artifact@/.test(step));
+    findings.push(['release gate checks committed prebuilts', publishLines.includes(gate), 'publish runs check-release-prebuilts.sh']);
+    const replacesPrebuilts = publishLines.some((line) => line !== gate
+        && !/^\s*- name:/.test(line)
+        && /prebuilt|\bgh\s+run\s+download\b|\bgh\s+api\b/i.test(line));
+    const onlyDistDownload = downloadSteps.length === 1
+        && /^        with:\n          name: publish-artifacts\n          path: packages\s*$/m.test(downloadSteps[0])
+        && !/^          (?:pattern|run-id|artifact-ids|github-token|repository):/m.test(downloadSteps[0]);
+    const build = workflowJob(ci, 'build');
+    const uploadPaths = build.match(/^          path: \|\r?\n((?: {12}\S[^\n]*\n)+)/m)?.[1] ?? '';
+    const distPaths = ['session-host-core', 'session-host-daemon', 'mcp-server', 'daemon-core', 'daemon-standalone', 'web-standalone']
+        .map((name) => `packages/${name}/dist`).sort().join('\n');
+    findings.push(['publish downloads only build dist', !replacesPrebuilts && onlyDistDownload
+        && uploadPaths.trim().split(/\n/).map((line) => line.trim()).sort().join('\n') === distPaths,
+    'publish-artifacts is same-run dist only; no Ghostty replacement']);
+    const windows = workflowJob(native, 'native-build').split(/^          - runner: /m).slice(1)
+        .filter((entry) => /^            platform: win32\s*$/m.test(entry));
+    findings.push(['Windows native build uses windows-2022', windows.length === 1 && windows[0].startsWith('windows-2022\n'),
+        'Windows x64 must use the VS 2022 runner']);
 
     const plan = spawnSync(process.execPath, [join(packageDir, 'scripts', 'build-or-use-prebuilt.mjs'), '--plan'], {
         cwd: packageDir,

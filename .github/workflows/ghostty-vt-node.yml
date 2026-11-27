@@ -25,6 +25,7 @@ concurrency:
 
 jobs:
   release-load:
+    if: github.event_name == 'workflow_dispatch' && inputs.release_load_only
     runs-on: ubuntu-26.04
     permissions:
       contents: read

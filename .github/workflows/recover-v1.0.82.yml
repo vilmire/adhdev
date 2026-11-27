@@ -1,0 +1,185 @@
+name: Recover OSS npm v1.0.82
+
+on:
+  workflow_dispatch:
+    inputs:
+      workflow_sha:
+        description: Independently reviewed main commit SHA
+        required: true
+        type: string
+      native_run_id:
+        description: Successful Ghostty VT Native dispatch ID for that commit
+        required: true
+        type: string
+      publish:
+        description: Request protected environment approval to publish the prepared bundle
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: npm-v1.0.82-recovery
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  TAG_SHA: 4c6dd8e9a0186e2dd6367bb530307ccca6f1d17a
+  NODE_VERSION: 22.23.5
+
+jobs:
+  prepare:
+    if: >-
+      github.repository == 'vilmire/adhdev' && github.ref == 'refs/heads/main' &&
+      github.actor_id == '5513793' && github.triggering_actor == 'vilmire' &&
+      inputs.workflow_sha == github.sha
+    runs-on: ubuntu-26.04
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      manifest_sha: ${{ steps.pack.outputs.manifest_sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - name: Verify tag, successful source jobs and pinned build archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NATIVE_RUN_ID: ${{ inputs.native_run_id }}
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          flags=()
+          if [[ "$PUBLISH" == true ]]; then flags+=(--publish); fi
+          python3 control/.github/scripts/recover-v1.0.82.py provenance "$NATIVE_RUN_ID" "$GITHUB_SHA" "$RUNNER_TEMP/tag-dist.zip" "${flags[@]}"
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG_SHA }}
+          path: source
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Verify approved workflow and immutable source
+        run: |
+          test "$(git -C control rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C source rev-parse HEAD)" = "$TAG_SHA"
+          git -C control fetch --no-tags ../source "$TAG_SHA"
+          python3 control/.github/scripts/recover-v1.0.82.py verify-control control "$GITHUB_SHA"
+          node --input-type=module -e '
+            import { nativeCiFindings } from "./control/packages/ghostty-vt-node/scripts/check-prebuilts.mjs";
+            const findings = nativeCiFindings();
+            for (const finding of findings) console.log(...finding);
+            if (findings.some(([, passed]) => !passed)) process.exit(1);
+          '
+      - name: Verify lockfile and install the original dependencies
+        working-directory: source
+        env:
+          ADHDEV_SKIP_GHOSTTY_VT_BUILD: '1'
+        run: |
+          npm install --package-lock-only --ignore-scripts
+          git diff --exit-code HEAD -- package-lock.json
+          npm ci
+      - name: Verify exact tag Ghostty on Linux x64 without AVX-512
+        working-directory: source
+        run: bash ../control/packages/ghostty-vt-node/scripts/check-release-prebuilts.sh
+      - name: Restore verified tag build outputs
+        run: python3 control/.github/scripts/recover-v1.0.82.py extract-dist "$RUNNER_TEMP/tag-dist.zip" source
+      - name: Prepare the original publish payload
+        working-directory: source
+        run: |
+          npm run bundle:web -w packages/daemon-standalone
+          npm run bundle:vendor -w packages/daemon-standalone
+          npm run build -w packages/mesh-shared
+          target=packages/daemon-core/node_modules/@adhdev/session-host-core
+          rm -rf "$target"
+          mkdir -p "$target"
+          cp packages/session-host-core/package.json "$target/"
+          cp -R packages/session-host-core/dist "$target/dist"
+      - name: Pack and verify six OSS packages against the seven-package reference
+        id: pack
+        env:
+          NATIVE_RUN_ID: ${{ inputs.native_run_id }}
+        run: python3 control/.github/scripts/recover-v1.0.82.py pack source "$RUNNER_TEMP/npm-release" "$NATIVE_RUN_ID" "$GITHUB_SHA"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: npm-v1.0.82-prepared
+          path: ${{ runner.temp }}/npm-release
+          if-no-files-found: error
+          retention-days: 7
+
+  committed-host-load:
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2022
+            host: win32-x64
+          - runner: macos-15
+            host: darwin-arm64
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Exercise the exact committed Ghostty on its supported host
+        env:
+          EXPECTED_HOST: ${{ matrix.host }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$TAG_SHA"
+          test "$(node -p 'process.platform + "-" + process.arch')" = "$EXPECTED_HOST"
+          changes=$(git status --porcelain --untracked-files=all --ignored -- packages/ghostty-vt-node/prebuilt)
+          test -z "$changes"
+          node packages/ghostty-vt-node/scripts/prebuilt-manifest.mjs check --all-present
+          node packages/ghostty-vt-node/scripts/ensure-prebuilt-sonames.mjs --check --load
+          node packages/ghostty-vt-node/scripts/check-prebuilts.mjs --all-present
+
+  publish:
+    if: inputs.publish
+    needs: [prepare, committed-host-load]
+    runs-on: ubuntu-26.04
+    environment: npm-v1.0.82-recovery
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Recheck the immutable tag and environment after approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 control/.github/scripts/recover-v1.0.82.py verify-tag
+          python3 control/.github/scripts/recover-v1.0.82.py verify-environment
+      - uses: actions/download-artifact@v8
+        with:
+          name: npm-v1.0.82-prepared
+          path: ${{ runner.temp }}/npm-release
+      - name: Publish only the reviewed tarballs and verify registry integrity
+        env:
+          MANIFEST_SHA: ${{ needs.prepare.outputs.manifest_sha }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: python3 control/.github/scripts/recover-v1.0.82.py publish "$RUNNER_TEMP/npm-release" "$MANIFEST_SHA" "$GITHUB_SHA"

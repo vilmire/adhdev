@@ -1,0 +1,153 @@
+{
+  "mesh-shared": {
+    "package": {
+      "name": "@adhdev/mesh-shared",
+      "version": "1.0.82",
+      "dependencies": {}
+    },
+    "reference": {
+      "sha256": "c6b858e7499e7cef2e2d02940c5b42b213294cc9bb271c643c2d69bc69eaface",
+      "integrity": "sha512-gwilFYP6goFbOaNz5uyfg+0hun9mexUSbXIicZYHKXc+BVSEGPgZsqhfa40d0QoKIcUFNoR6T3zhvu4n/3jkeA==",
+      "size": 631420
+    }
+  },
+  "session-host-core": {
+    "package": {
+      "name": "@adhdev/session-host-core",
+      "version": "1.0.82"
+    },
+    "reference": {
+      "sha256": "d03be22db70566ae02a9383aa03cfa5f8b84935629bd2e1f1998c99abdddb196",
+      "integrity": "sha512-oxsV5Yq3xC2PnLorzzNpmrRvRSQXSPs1b3f9B4T6Rxf99O4mddjT/m3FOsWOOq9eCRpVNmwahZ3TmH+jwA7ILQ==",
+      "size": 175685
+    }
+  },
+  "ghostty-vt-node": {
+    "package": {
+      "name": "@adhdev/ghostty-vt-node",
+      "version": "1.0.82",
+      "dependencies": {
+        "node-addon-api": "^8.7.0"
+      }
+    },
+    "reference": {
+      "sha256": "2c4d1de43102e95fe4ac689c867daa33747e43cc381dc93db310ecad9153bb36",
+      "integrity": "sha512-N/sPy5h3bDNjcUoDP/wqvmc2qnK7m7O43JtgJwMFcZA8KNmg4HwFoc26kBN+XyDwgHnao0Ey2zxvF/ISbHaKuA==",
+      "size": 7855026
+    }
+  },
+  "mcp-server": {
+    "package": {
+      "name": "@adhdev/mcp-server",
+      "version": "1.0.82",
+      "dependencies": {
+        "@modelcontextprotocol/sdk": "^1.30.0"
+      },
+      "publishConfig": {
+        "access": "public"
+      }
+    },
+    "reference": {
+      "sha256": "607ab44342177e1c0845e0d6dd6f77e0ff4f4d56b343ddd4d3e87369bda8e131",
+      "integrity": "sha512-w3OeytcfeQn6FdatHFBzCjqzRQK2D/eXIHYaEKjfV57X4+KsY8W/N+8/ESOgDAIUmtsiw/4+clUyGuMu6MbWkw==",
+      "size": 9958639
+    }
+  },
+  "daemon-core": {
+    "package": {
+      "name": "@adhdev/daemon-core",
+      "version": "1.0.82",
+      "dependencies": {
+        "@adhdev/mesh-shared": "*",
+        "@adhdev/session-host-core": "*",
+        "@agentclientprotocol/sdk": "^0.16.1",
+        "@modelcontextprotocol/sdk": "^1.30.0",
+        "ajv": "^8.20.0",
+        "ajv-formats": "^3.0.1",
+        "better-sqlite3": "^12.10.0",
+        "chalk": "^5.3.0",
+        "chokidar": "^4.0.3",
+        "conf": "^13.0.0",
+        "js-yaml": "^4.1.1",
+        "node-pty": "^1.2.0-beta.18",
+        "tar-fs": "^3.1.0",
+        "ws": "^8.19.0"
+      },
+      "optionalDependencies": {
+        "@adhdev/ghostty-vt-node": "*"
+      }
+    },
+    "reference": {
+      "sha256": "820d7b7b0ffe43aeea9954fecf4f4565c0432240c1476cfda0f947b7daed43b6",
+      "integrity": "sha512-aa3Gaw+joojX0kOOfUIKlPXpf68yDDvy0tmuz2ZaRXOqFVWM0tHpEVpSlLPiDZSMkAriSm9TmiPj4+3zEuy5YQ==",
+      "size": 23353812
+    }
+  },
+  "daemon-standalone": {
+    "package": {
+      "name": "@adhdev/daemon-standalone",
+      "version": "1.0.82",
+      "dependencies": {
+        "@adhdev/ghostty-vt-node": "*",
+        "@adhdev/session-host-core": "*",
+        "@modelcontextprotocol/sdk": "^1.30.0",
+        "@xterm/addon-serialize": "^0.14.0",
+        "@xterm/xterm": "^6.0.0",
+        "chalk": "^5.3.0",
+        "conf": "^13.0.0",
+        "node-pty": "^1.2.0-beta.18",
+        "open": "^10.1.0",
+        "ws": "^8.19.0"
+      },
+      "optionalDependencies": {
+        "better-sqlite3": "^12.10.0"
+      },
+      "publishConfig": {
+        "access": "public"
+      }
+    },
+    "reference": {
+      "sha256": "5c4a12dae68b1285754d69250915847c1bb72645fbbb1a852b1081dc21022eea",
+      "integrity": "sha512-ldF3DbU73yYX04zViQ8sylCPlZE54cJl+jbTm2Mh2Nk9u0iv4GirB5dhYyupPLmYjS41srHfsFEP72OF03GPwA==",
+      "size": 23125120
+    }
+  },
+  "adhdev": {
+    "package": {
+      "name": "adhdev",
+      "version": "1.0.82",
+      "dependencies": {
+        "@adhdev/ghostty-vt-node": "*",
+        "@modelcontextprotocol/sdk": "^1.30.0",
+        "@xterm/addon-serialize": "^0.14.0",
+        "@xterm/xterm": "^6.0.0",
+        "chalk": "^5.3.0",
+        "commander": "^12.1.0",
+        "conf": "^13.0.0",
+        "inquirer": "^9.3.0",
+        "better-sqlite3": "^12.10.0",
+        "node-datachannel": "^0.32.1",
+        "node-pty": "1.2.0-beta.18",
+        "open": "^10.1.0",
+        "ora": "^8.0.0",
+        "ws": "^8.19.0"
+      },
+      "optionalDependencies": {
+        "sharp": "^0.34.5",
+        "@img/sharp-win32-x64": "^0.34.5",
+        "@img/sharp-darwin-arm64": "^0.34.5",
+        "@img/sharp-darwin-x64": "^0.34.5",
+        "@img/sharp-linux-x64": "^0.34.5",
+        "@img/sharp-linux-arm64": "^0.34.5"
+      },
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "reference": {
+      "sha256": "ad99d24a6e8a96282cb1c19356cb18380fd1a07cc00812bfa6472725e82a063e",
+      "integrity": "sha512-yiHlGF0sn5XjSGUdvTNgNt3OSbPqkbne8nO7sBGcNdajx7oYsejk9ftkdXBSJP64dp5n+BmUrBYvYaNGBZwOpw==",
+      "size": 42053744
+    }
+  }
+}

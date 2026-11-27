@@ -62,7 +62,26 @@ it('parses the native CI workflow with CRLF line endings (Windows checkout)', ()
         }
         const findings = nativeCiFindings(dir, packageDir);
         assert.deepEqual(findings.filter(([, ok]) => !ok), []);
-        assert.equal(findings.length, 7);
+        assert.equal(findings.length, 9);
+        const ciPath = join(dir, 'ci.yml');
+        const ci = readFileSync(ciPath, 'utf8');
+        const broken = (body) => {
+            writeFileSync(ciPath, body);
+            return nativeCiFindings(dir, packageDir).filter(([, ok]) => !ok).map(([name]) => name);
+        };
+        const download = '      - name: Download publish artifacts';
+        for (const command of [
+            'gh run download 123 --name ghostty-vt-node-linux-x64-node137',
+            'rm -rf packages/ghostty-vt-node/prebuilt/linux-x64-node137',
+        ]) {
+            assert.deepEqual(broken(ci.replace(download, `      - run: ${command}\r\n${download}`)), ['publish downloads only build dist']);
+        }
+        assert.deepEqual(broken(ci.replace('packages/web-standalone/dist', 'packages/ghostty-vt-node/prebuilt')), ['publish downloads only build dist']);
+        assert.deepEqual(broken(ci.replace('          path: packages\r\n', '          path: packages/ghostty-vt-node/prebuilt\r\n')), ['publish downloads only build dist']);
+        assert.deepEqual(broken(ci), []);
+        const nativePath = join(dir, 'ghostty-vt-node.yml');
+        writeFileSync(nativePath, readFileSync(nativePath, 'utf8').replace('runner: windows-2022', 'runner: windows-latest'));
+        assert.deepEqual(broken(ci), ['Windows native build uses windows-2022']);
     } finally {
         rmSync(dir, { recursive: true, force: true });
     }
