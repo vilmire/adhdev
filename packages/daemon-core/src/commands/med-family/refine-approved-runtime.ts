@@ -229,11 +229,12 @@ export async function resolveApprovedRefineRuntime(ctx: MedFamilyContext, args: 
         let incrementalReachable = false;
         if (stage.count === 10 && ossMain === stages[1].oss) {
             if (!requireIncremental) {
+                requireApproval(hash(Buffer.from(JSON.stringify(readDecisions()))) === fingerprint, 'approval_changed_during_job');
                 requireIncremental = true;
                 decisions = readDecisions();
                 fingerprint = hash(Buffer.from(JSON.stringify(decisions)));
             } else {
-                readDecisions();
+                checkAuthority();
             }
             const ossDir = join(workspace, 'oss');
             await git(ossDir, 'merge-base', '--is-ancestor', stage.oss, ossMain);

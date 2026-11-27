@@ -142830,11 +142830,12 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         let incrementalReachable = false;
         if (stage.count === 10 && ossMain === stages[1].oss) {
           if (!requireIncremental) {
+            requireApproval(hash22(Buffer.from(JSON.stringify(readDecisions()))) === fingerprint, "approval_changed_during_job");
             requireIncremental = true;
             decisions = readDecisions();
             fingerprint = hash22(Buffer.from(JSON.stringify(decisions)));
           } else {
-            readDecisions();
+            checkAuthority();
           }
           const ossDir = (0, import_node_path41.join)(workspace, "oss");
           await git11(ossDir, "merge-base", "--is-ancestor", stage.oss, ossMain);
