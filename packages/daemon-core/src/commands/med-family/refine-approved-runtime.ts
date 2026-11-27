@@ -130,11 +130,11 @@ export async function resolveApprovedRefineRuntime(ctx: MedFamilyContext, args: 
     const meshStore = getMeshRuntimeStore(ctx);
     const items = meshStore.missionItems();
     const store = getArtifactStore(ctx);
+    let requireIncremental = stage.count === 2;
     function readDecisions() {
         const item = items.getItem(meshId, decisionId);
         const publication = items.getItem(meshId, publicationDecisionId);
-        const incremental = items.getItem(meshId, incrementalDecisionId);
-        const requireIncremental = stage.count === 2 || incremental?.state === 'answered';
+        const incremental = requireIncremental ? items.getItem(meshId, incrementalDecisionId) : undefined;
         const decisions = requireIncremental ? [item, publication, incremental] : [item, publication];
         for (const entry of decisions) {
             requireApproval(entry?.kind === 'decision' && entry.state === 'answered'
@@ -153,10 +153,10 @@ export async function resolveApprovedRefineRuntime(ctx: MedFamilyContext, args: 
             options: entry?.decision?.options, answer: entry?.decision?.answer, revision: entry?.decision?.answerRevision,
         }));
     }
-    const decisions = readDecisions();
+    let decisions = readDecisions();
     // This is a CAS snapshot of the current authority. It is not an
     // approval-time signature or a retrospective digest.
-    const fingerprint = hash(Buffer.from(JSON.stringify(decisions)));
+    let fingerprint = hash(Buffer.from(JSON.stringify(decisions)));
     function readProposal() {
         const meta = store.get(artifactId);
         requireApproval(meta?.meshId === meshId && meta.missionId === decisions[0].missionId && daemonIdsEquivalent(meta.originDaemonId, hostDaemonId) && meta.kind === 'json' && meta.sha256 === digest, 'artifact_scope_or_digest_mismatch');
@@ -228,11 +228,13 @@ export async function resolveApprovedRefineRuntime(ctx: MedFamilyContext, args: 
         ]);
         let incrementalReachable = false;
         if (stage.count === 10 && ossMain === stages[1].oss) {
-            const incItem = items.getItem(meshId, incrementalDecisionId);
-            requireApproval(incItem?.kind === 'decision' && incItem.state === 'answered'
-                && incItem.decision?.answer?.by === 'owner' && incItem.decision.answer.optionId === 'a'
-                && incItem.decision?.answerRevision === 1 && incItem.decision.answer?.at === '2026-11-27T03:38:58.306Z',
-                'incremental_decision_changed');
+            if (!requireIncremental) {
+                requireIncremental = true;
+                decisions = readDecisions();
+                fingerprint = hash(Buffer.from(JSON.stringify(decisions)));
+            } else {
+                readDecisions();
+            }
             const ossDir = join(workspace, 'oss');
             await git(ossDir, 'merge-base', '--is-ancestor', stage.oss, ossMain);
             const aheadShas = (await git(ossDir, 'rev-list', `${stage.oss}..${ossMain}`)).split('\n').filter(Boolean);
@@ -294,7 +296,7 @@ export async function resolveApprovedRefineRuntime(ctx: MedFamilyContext, args: 
             await checkPrivateDestination(workspace);
             checkAuthority();
         },
-        audit: { ...proof, worktreeBootstrapCommands: bootstrapPlan.commands.map(command => command.displayCommand), decisionId, publicationDecisionId, ...(stage.count === 2 ? { incrementalDecisionId } : {}), rootBase, ossBase, publishRoot, revision: 1, checkedDecisionDigest: fingerprint, payloadDigest: digest,
+        audit: { ...proof, worktreeBootstrapCommands: bootstrapPlan.commands.map(command => command.displayCommand), decisionId, publicationDecisionId, ...(requireIncremental ? { incrementalDecisionId } : {}), rootBase, ossBase, publishRoot, revision: 1, checkedDecisionDigest: fingerprint, payloadDigest: digest,
             root, oss, node: '22.22.0', abi: '127', npm: '10.9.2', npx: '10.9.2' },
         publication: { mergeMode: 'ff-only', approvedTargetShas: { [nodeId]: root }, approvedPublishShas: { root: rootShas, oss: publicationShas } },
         verify: async workspace => { await verifyTools(); await checkWorkspace(workspace); await checkMain(cwd); checkAuthority(); },

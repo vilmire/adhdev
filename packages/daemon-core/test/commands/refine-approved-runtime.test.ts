@@ -98,7 +98,7 @@ describe('owner-approved Refinery runtime', () => {
             expect(await callSecond()).toMatchObject({ error: 'artifact_content_changed' });
             incremental.decision.answerRevision++;
             expect(await callSecond()).toMatchObject({ error: 'incremental_decision_changed' });
-            expect(await call()).toMatchObject({ error: 'incremental_decision_changed' });
+            expect(await call()).toMatchObject({ error: 'artifact_content_changed' });
             incremental.decision.answerRevision = 1;
             expect(await call()).toMatchObject({ error: 'artifact_content_changed' });
             answer.by = 'auto_recommended';

@@ -142741,11 +142741,11 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       const meshStore = getMeshRuntimeStore(ctx);
       const items = meshStore.missionItems();
       const store5 = getArtifactStore(ctx);
+      let requireIncremental = stage.count === 2;
       function readDecisions() {
         const item = items.getItem(meshId, decisionId);
         const publication = items.getItem(meshId, publicationDecisionId);
-        const incremental = items.getItem(meshId, incrementalDecisionId);
-        const requireIncremental = stage.count === 2 || incremental?.state === "answered";
+        const incremental = requireIncremental ? items.getItem(meshId, incrementalDecisionId) : void 0;
         const decisions2 = requireIncremental ? [item, publication, incremental] : [item, publication];
         for (const entry of decisions2) {
           requireApproval(entry?.kind === "decision" && entry.state === "answered" && entry.decision?.answer?.by === "owner" && entry.decision.answer.optionId === "a", "owner_decision_changed");
@@ -142764,8 +142764,8 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
           revision: entry?.decision?.answerRevision
         }));
       }
-      const decisions = readDecisions();
-      const fingerprint = hash22(Buffer.from(JSON.stringify(decisions)));
+      let decisions = readDecisions();
+      let fingerprint = hash22(Buffer.from(JSON.stringify(decisions)));
       function readProposal2() {
         const meta2 = store5.get(artifactId);
         requireApproval(meta2?.meshId === meshId && meta2.missionId === decisions[0].missionId && daemonIdsEquivalent5(meta2.originDaemonId, hostDaemonId) && meta2.kind === "json" && meta2.sha256 === digest5, "artifact_scope_or_digest_mismatch");
@@ -142829,11 +142829,13 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         ]);
         let incrementalReachable = false;
         if (stage.count === 10 && ossMain === stages[1].oss) {
-          const incItem = items.getItem(meshId, incrementalDecisionId);
-          requireApproval(
-            incItem?.kind === "decision" && incItem.state === "answered" && incItem.decision?.answer?.by === "owner" && incItem.decision.answer.optionId === "a" && incItem.decision?.answerRevision === 1 && incItem.decision.answer?.at === "2026-11-27T03:38:58.306Z",
-            "incremental_decision_changed"
-          );
+          if (!requireIncremental) {
+            requireIncremental = true;
+            decisions = readDecisions();
+            fingerprint = hash22(Buffer.from(JSON.stringify(decisions)));
+          } else {
+            readDecisions();
+          }
           const ossDir = (0, import_node_path41.join)(workspace, "oss");
           await git11(ossDir, "merge-base", "--is-ancestor", stage.oss, ossMain);
           const aheadShas = (await git11(ossDir, "rev-list", `${stage.oss}..${ossMain}`)).split("\n").filter(Boolean);
@@ -142904,7 +142906,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
           worktreeBootstrapCommands: bootstrapPlan.commands.map((command) => command.displayCommand),
           decisionId,
           publicationDecisionId,
-          ...stage.count === 2 ? { incrementalDecisionId } : {},
+          ...requireIncremental ? { incrementalDecisionId } : {},
           rootBase,
           ossBase,
           publishRoot,
