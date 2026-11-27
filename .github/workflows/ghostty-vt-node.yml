@@ -7,6 +7,11 @@ on:
       - 'packages/ghostty-vt-node/**'
       - '.github/workflows/ghostty-vt-node.yml'
   workflow_dispatch:
+    inputs:
+      release_load_only:
+        description: Verify committed release prebuilts on Linux
+        type: boolean
+        default: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -19,7 +24,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  release-load:
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Verify committed Ghostty prebuilts (release gate)
+        run: bash packages/ghostty-vt-node/scripts/check-release-prebuilts.sh
+
   native-build:
+    if: github.event_name != 'workflow_dispatch' || !inputs.release_load_only
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -62,18 +82,10 @@ jobs:
             platform: darwin
             arch: arm64
             node-version: 25
-          # win32 builds on node 22 only. Node 20 was dropped because its
-          # `npm ci` fails on windows-latest: better-sqlite3 (a daemon-core
-          # dependency, unrelated to ghostty) ships no prebuilt for node 20's
-          # ABI, so npm falls back to a node-gyp source build and the runner
-          # has no Visual Studio C++ toolchain. node 22 gets a prebuilt and
-          # installs fine on the same runner.
-          #
-          # Dropping it loses no coverage: the loader's tier-4 fallback accepts
-          # ANY prebuilt for the same platform-arch (the .node files are
-          # byte-identical per platform/arch), so the win32-x64 artifact built
-          # here serves every Node ABI on Windows. Node 20 is also EOL.
-          - runner: windows-latest
+          # Zig 0.15.2 cannot compile against the VS 2026 STL (STL1000).
+          # windows-2022 provides VS 2022 and its v143 toolset.
+          # One Windows x64 N-API binary serves every Node ABI.
+          - runner: windows-2022
             platform: win32
             arch: x64
             node-version: 22

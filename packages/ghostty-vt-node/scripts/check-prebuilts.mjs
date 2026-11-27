@@ -13,7 +13,7 @@
 //                  (loading alone proves nothing: a stale binary loads fine).
 //   (c) native-ci  the native CI build compiles from source instead of copying
 //                  the tracked prebuilt, and verifies + stamps what it built;
-//                  the release job checks every prebuilt it is about to publish.
+//                  the release job checks every committed prebuilt it is about to publish.
 //   (d) host-paths every shipped native file is free of absolute home-directory
 //                  paths (ASCII and UTF-16LE), see scripts/host-path-scan.mjs.
 //
@@ -71,7 +71,7 @@ export function nativeCiFindings(workflowDir = WORKFLOW_DIR, packageDir = PACKAG
     findings.push(['native build forces a compile', forced, buildStep ? buildText.trim().replace(/\s+/g, ' ') : 'no "Build ghostty-vt-node" step']);
     findings.push(['native build verifies the exact staged artifact', /scripts\/verify-prebuilt\.mjs "?dist-prebuilt\//.test(native), 'verify-prebuilt.mjs on dist-prebuilt/<triplet>']);
     findings.push(['native build stamps a manifest from the built binary', /scripts\/prebuilt-manifest\.mjs write "?dist-prebuilt\//.test(native), 'prebuilt-manifest.mjs write dist-prebuilt/<triplet>']);
-    findings.push(['release gate checks every downloaded prebuilt', /scripts\/check-prebuilts\.mjs --all-present/.test(ci), 'ci.yml runs check-prebuilts.mjs --all-present']);
+    findings.push(['release gate checks committed prebuilts', /scripts\/check-release-prebuilts\.sh/.test(ci), 'ci.yml runs check-release-prebuilts.sh']);
 
     const plan = spawnSync(process.execPath, [join(packageDir, 'scripts', 'build-or-use-prebuilt.mjs'), '--plan'], {
         cwd: packageDir,

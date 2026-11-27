@@ -275,7 +275,7 @@ jobs:
   publish:
     needs: [build, test]
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     env:
       ADHDEV_SKIP_GHOSTTY_VT_BUILD: '1'
 
@@ -313,84 +313,9 @@ jobs:
             echo "Ghostty package version ${package_version} is unpublished; running ghostty release work."
           fi
 
-      - name: Download release ghostty prebuilt artifacts
+      - name: Verify committed Ghostty prebuilts (release gate)
         if: steps.ghostty_release.outputs.publish == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          run_id=""
-          for attempt in $(seq 1 30); do
-            run_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ghostty-vt-node.yml/runs?per_page=30" --jq '.workflow_runs[] | select(.head_sha == "'"${GITHUB_SHA}"'" and .conclusion == "success") | .id' | head -n 1 || true)"
-            if [ -n "${run_id}" ]; then
-              break
-            fi
-            pending_run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ghostty-vt-node.yml/runs?per_page=30" --jq '.workflow_runs[] | select(.head_sha == "'"${GITHUB_SHA}"'" and (.status == "queued" or .status == "in_progress" or .status == "pending" or .status == "waiting")) | .id' | head -n 1 || true)"
-            if [ -z "${pending_run}" ]; then
-              echo "No Ghostty VT Native run queued for ${GITHUB_SHA}; falling back to main."
-              break
-            fi
-            echo "Waiting for Ghostty VT Native run ${pending_run} to finish..."
-            sleep 10
-          done
-          # Fall back to the newest successful run on main. The Ghostty VT Native
-          # workflow only triggers on packages/ghostty-vt-node/** changes, so a
-          # release commit that merely bumps versions has no run of its own —
-          # while "Check ghostty release need" still reports publish=true until
-          # the ghostty package version reaches npm. Requiring a run for the exact
-          # release SHA therefore deadlocks: publishing needs the gate, and the
-          # gate needs a run that only a ghostty source change would create.
-          # The non-release paths above already resolve prebuilts this way.
-          if [ -z "${run_id}" ]; then
-            run_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ghostty-vt-node.yml/runs?branch=main&event=push&per_page=30" --jq '.workflow_runs[] | select(.conclusion == "success") | .id' | head -n 1 || true)"
-            if [ -n "${run_id}" ]; then
-              echo "No Ghostty VT Native run for ${GITHUB_SHA}; using newest successful main run ${run_id}."
-            fi
-          fi
-          if [ -z "${run_id}" ]; then
-            echo "No successful Ghostty VT Native run found for ${GITHUB_SHA} or on main."
-            exit 1
-          fi
-          artifact_names="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" --jq '.artifacts[] | select(.expired == false and (.name | startswith("ghostty-vt-node-"))) | .name')"
-          if [ -z "${artifact_names}" ]; then
-            echo "No ghostty native artifacts found for run ${run_id}."
-            exit 1
-          fi
-          while IFS= read -r artifact_name; do
-            [ -n "${artifact_name}" ] || continue
-            triplet="${artifact_name#ghostty-vt-node-}"
-            # Replace, don't merge. Some triplets (currently the node137 set) are
-            # committed to the repo, so checkout leaves those files on disk and
-            # `gh run download` aborts with "file exists" rather than overwriting.
-            # The freshly built artifact is the one we want to publish, so clear
-            # the destination first.
-            rm -rf "packages/ghostty-vt-node/prebuilt/${triplet}"
-            mkdir -p "packages/ghostty-vt-node/prebuilt/${triplet}"
-            gh run download "${run_id}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --name "${artifact_name}" \
-              --dir "packages/ghostty-vt-node/prebuilt/${triplet}"
-            find "packages/ghostty-vt-node/prebuilt/${triplet}" -mindepth 2 -maxdepth 2 -type f -exec mv {} "packages/ghostty-vt-node/prebuilt/${triplet}/" \;
-            find "packages/ghostty-vt-node/prebuilt/${triplet}" -mindepth 1 -type d -empty -delete
-          done <<< "${artifact_names}"
-          # Artifacts drop symlinks, so the Linux SONAME file (libghostty-vt.so.0,
-          # what ghostty_vt_node.node actually asks the loader for) never arrives.
-          # v1.0.77 shipped without it and every Linux CLI launch failed with
-          # "libghostty-vt.so.0: cannot open shared object file". Materialize it.
-          node packages/ghostty-vt-node/scripts/ensure-prebuilt-sonames.mjs
-          find packages/ghostty-vt-node/prebuilt -maxdepth 2 -type f -print | sort
-
-      - name: Verify ghostty prebuilts load (release gate)
-        if: steps.ghostty_release.outputs.publish == 'true'
-        run: node packages/ghostty-vt-node/scripts/ensure-prebuilt-sonames.mjs --check --load
-
-      # Loading is not enough: a prebuilt built from older binding sources (e.g.
-      # the newest-main-run fallback above) loads fine and lacks the current
-      # API. Every prebuilt about to be published must carry a manifest that
-      # matches these sources, and the Linux one is exercised by path.
-      - name: Verify ghostty prebuilts match the binding sources (release gate)
-        if: steps.ghostty_release.outputs.publish == 'true'
-        run: node packages/ghostty-vt-node/scripts/check-prebuilts.mjs --all-present
+        run: bash packages/ghostty-vt-node/scripts/check-release-prebuilts.sh
 
       - name: Download publish artifacts
         uses: actions/download-artifact@v8
