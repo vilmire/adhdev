@@ -43,7 +43,8 @@ const incrementalDecisionId = 'mi_b8876f8fedba';
 const incrementalOss = ['b10aa6348c01d324372c0c79ac26a921cb6a34d4', stages[1].oss];
 
 export function selectApprovedRuntimeStage(nodeId: unknown, mode: unknown, targets: unknown) {
-    const stage = stages.find(entry => entry.nodeId === nodeId);
+    // Approval pins the exact node ID, including its namespace prefix.
+    const stage = stages.find(({ nodeId: approvedNodeId }) => approvedNodeId === nodeId);
     requireApproval(stage, 'approval_scope_mismatch');
     const publishRoot = mode !== undefined || targets !== undefined;
     requireApproval(!publishRoot || (mode === 'ff-only' && isDeepStrictEqual(targets, { [stage.nodeId]: stage.root })),

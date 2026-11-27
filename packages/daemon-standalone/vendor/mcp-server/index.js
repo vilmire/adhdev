@@ -142685,7 +142685,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       }
     });
     function selectApprovedRuntimeStage(nodeId, mode, targets) {
-      const stage = stages.find((entry) => entry.nodeId === nodeId);
+      const stage = stages.find(({ nodeId: approvedNodeId }) => approvedNodeId === nodeId);
       requireApproval(stage, "approval_scope_mismatch");
       const publishRoot = mode !== void 0 || targets !== void 0;
       requireApproval(

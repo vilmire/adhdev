@@ -37,6 +37,8 @@ describe('owner-approved Refinery runtime', () => {
         const second = selectApprovedRuntimeStage(node, undefined, undefined);
         expect(second.publishRoot).toBe(false);
         expect(second.count).toBe(2);
+        expect(() => selectApprovedRuntimeStage(node.slice('node_'.length), undefined, undefined)).toThrow('approval_scope_mismatch');
+        expect(() => selectApprovedRuntimeStage(new String(node), undefined, undefined)).toThrow('approval_scope_mismatch');
         expect(() => selectApprovedRuntimeStage(node, 'ff-only', { [node]: first.root })).toThrow('private_root_contract_mismatch');
         expect(() => selectApprovedRuntimeStage(node, 'ff-only', { [node]: second.root, [first.nodeId]: first.root })).toThrow('private_root_contract_mismatch');
         expect(selectApprovedRuntimeStage(node, 'ff-only', { [node]: second.root }).publishRoot).toBe(true);
