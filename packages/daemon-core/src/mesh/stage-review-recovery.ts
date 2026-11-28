@@ -273,7 +273,7 @@ export async function recoverPendingStageReview(request: StageReviewRecoveryRequ
         const proof = attestStageReviewCheckoutForRecovery(prepared, host, grants);
         if (proof.checkout.worktree !== r.expectedWorkspace) throw new Error('review_workspace_mismatch');
         const claims = store.assignedRowsMeshWide(r.meshId).map(row => ({ ...JSON.parse(row.payload), status: 'assigned' } as MeshWorkQueueEntry));
-        if (reviewInputBusy(parent, proof.checkout, [...claims, ...store.getQueueEntries(r.meshId, ['pending'])], true)) throw new Error('review_input_busy');
+        if (reviewInputBusy(parent, proof.checkout, [...claims, ...store.getQueueEntries(r.meshId, ['pending'])], true, store)) throw new Error('review_input_busy');
         return { parent, child, prepared, ids, proof, artifactDigest };
     };
     // No lock is held during the potentially expensive fingerprint; every predicate is checked again inside CAS.
@@ -365,7 +365,7 @@ async function recoverTerminalStageReview(
     };
     const assertNotBusy = (parent: MeshWorkQueueEntry, source: StageReviewSourceProvenance, checkout: import('@adhdev/mesh-shared').PhysicalOwnershipScope) => {
         const claims = store.assignedRowsMeshWide(r.meshId).map(row => ({ ...JSON.parse(row.payload), status: 'assigned' } as MeshWorkQueueEntry));
-        if (reviewInputBusy(parent, checkout, [...claims, ...store.getQueueEntries(r.meshId, ['pending'])], true)) throw new Error('review_input_busy');
+        if (reviewInputBusy(parent, checkout, [...claims, ...store.getQueueEntries(r.meshId, ['pending'])], true, store)) throw new Error('review_input_busy');
         const openAttempt = store.db.prepare(
             'SELECT task_id FROM turn_attempts WHERE mesh_id = ? AND node_id = ? AND terminal_outcome IS NULL LIMIT 1',
         ).get(r.meshId, source.nodeId) as { task_id: string | null } | undefined;

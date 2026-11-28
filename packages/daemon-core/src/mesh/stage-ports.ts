@@ -100,6 +100,9 @@ export interface StageQueuePort {
     listStageParents(): MeshWorkQueueEntry[];
     /** Revalidate read evidence before accepting a verdict (production read lease). */
     reviewReplacementReady?(parent: MeshWorkQueueEntry): boolean;
+    reviewDiffCurrent?(parent: MeshWorkQueueEntry): boolean;
+    validateReviewCapture?(parent: MeshWorkQueueEntry): void;
+    reviewWriterSettled?(parent: MeshWorkQueueEntry): boolean;
     requiresDetachedReview?(parent: MeshWorkQueueEntry): boolean;
     reviewInputValid?(parent: MeshWorkQueueEntry, child: MeshWorkQueueEntry): boolean;
     enqueueReviewChild(parent: MeshWorkQueueEntry, spec: {

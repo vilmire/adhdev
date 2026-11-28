@@ -53,11 +53,12 @@ import { runMeshRefineValidationProfile } from './refine-profile-run.js';
 import { prepareLightWorkspace, removeLightWorkspace } from './light-workspace.js';
 import { loadLightWorkspaceConfig } from './light-workspace-config.js';
 import { getLightWorkspace } from './mesh-light-workspace-store.js';
-import { attestStageReviewInput, stageReviewArtifactGrants, stageReviewArtifactGrantsWithheld, currentStageReviewScope, validateCurrentDiff, validateStageReviewRetainedGrants, readStageReviewArtifact } from './stage-review-input.js';
-import { streamStageGit, hashStageGit } from './stage-diff-stream.js';
+import { attestStageReviewInput, retainedStageDiff, stageReviewArtifactGrants, stageReviewArtifactGrantsWithheld, currentStageReviewScope, validateCurrentDiff, validateStageReviewRetainedGrants, readStageReviewArtifact } from './stage-review-input.js';
+import { streamStageGit, hashStageGit, stageDiffSources, singleStageDiff } from './stage-diff-stream.js';
 import { assertStageDiffRetentionGrowth } from './stage-diff-retention.js';
 import { StageDiffBlocked } from './stage-diff-manifest.js';
-import { reviewInputBusy } from './mesh-task-routing-contract.js';
+import { resolveSessionBusyVerdict } from './mesh-candidacy-predicates.js';
+import { reviewInputBusy, stageReviewWriterSettled } from './mesh-task-routing-contract.js';
 import { daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import { allowedClassifiedDifficultiesForSession, readSessionModel, taskMeetsSessionDifficultyFloor } from './mesh-difficulty-floor.js';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
@@ -84,7 +85,7 @@ export const defaultStageGit: StageGitPort = {
         return null;
     },
     async headSha(workspace) { try { return (await git(workspace, ['rev-parse', 'HEAD'])).trim() || null; } catch { return null; } },
-    async diff(workspace, base, head) { return git(workspace, ['diff', '--no-color', `${base}..${head}`], 16 * 1024 * 1024); },
+    diff: singleStageDiff,
     diffStream: streamStageGit,
     /**
      * Content-based checkout fingerprint (review-in-task §11). Covers: HEAD; porcelain status incl. untracked entries;
@@ -254,6 +255,7 @@ function stageArtifactDir(taskId: string): string {
 
 export function createProductionStagePorts(components: Pick<DaemonComponents, 'sessionRegistry' | 'instanceManager' | 'statusInstanceId'>): StageRuntimePorts {
     const store = () => MeshRuntimeStore.getInstance();
+    const writerActivity = (sessionId: string) => resolveSessionBusyVerdict(components, sessionId);
     setDefaultStageGeneratedRecipe(createHostStageVendorRecipe(() => path.join(getConfigDir(), 'stage-vendor-replay')));
     setStageGeneratedRetention(({ taskId, operationKey, index, sha256, bytes }) => {
         const file = path.join(stageArtifactDir(taskId), '.recovery', `${operationKey}-${index}.${sha256.slice(0, 12)}.bin`);
@@ -537,11 +539,34 @@ export function createProductionStagePorts(components: Pick<DaemonComponents, 's
         },
         queue: {
             reviewReplacementReady,
+            reviewWriterSettled: parent => stageReviewWriterSettled(store(), parent, writerActivity),
+            validateReviewCapture(parent) {
+                const st = parent.stageState!;
+                if (st.selfCheck !== 'passed') return;
+                const id = st.artifacts.selfCheck.at(-1);
+                const record = store().db.prepare(`SELECT task_id, mesh_id, session_id, producer_role, origin_daemon_id
+                    FROM session_artifacts WHERE artifact_id = ?`).get(id ?? '') as {
+                    task_id: string; mesh_id: string; session_id: string; producer_role: string; origin_daemon_id: string;
+                } | undefined;
+                if (!id || record?.task_id !== parent.id || record.mesh_id !== parent.meshId
+                    || record.session_id !== `stage:${parent.id}` || record.producer_role !== 'pipeline'
+                    || !components.statusInstanceId || !daemonIdsEquivalent(record.origin_daemon_id, components.statusInstanceId)) {
+                    throw new StageDiffBlocked('review_self_check_evidence_missing', {});
+                }
+                const evidence = readStageReviewArtifact(stageReviewArtifactGrants(store(), parent, [id])[0]);
+                if (!evidence.toString('utf8').startsWith('# Self-check (passed)\n\n')) {
+                    throw new StageDiffBlocked('review_self_check_evidence_missing', {});
+                }
+            },
+            reviewDiffCurrent(parent) {
+                const st = parent.stageState!;
+                const manifest = retainedStageDiff(store(), parent);
+                return manifest?.scope.round === st.round && manifest.scope.headSha === st.stageHeads.at(-1)?.rootSha
+                    && manifest.scope.baseSha === st.baseSha;
+            },
             requiresDetachedReview(parent) {
-                const id = parent.stageState?.artifacts?.diff?.at(-1);
-                if (!id) return false;
-                const grant = stageReviewArtifactGrants(store(), parent, [id])[0];
-                return !!grant && !!decodeStageSourceGenerated(readStageReviewArtifact(grant));
+                const manifest = retainedStageDiff(store(), parent);
+                return !!manifest && 'sourceChunks' in manifest;
             },
             reviewInputValid: (parent, child) => {
                 try {
@@ -579,6 +604,11 @@ export function createProductionStagePorts(components: Pick<DaemonComponents, 's
                         .find(c => c?.stageRound === spec.round && (c.status === 'pending' || c.status === 'assigned'));
                     if (existing && (existing.status === 'assigned' || existing.assignedSessionId || existing.attemptId || existing.autoLaunch?.sessionId)) throw new Error('stage_review_already_started');
                     if (existing) return existing;
+                    if (current.stageState.stageHeads.at(-1)?.rootSha !== parent.stageState?.stageHeads.at(-1)?.rootSha
+                        || current.stageState.baseSha !== parent.stageState?.baseSha || current.attemptId !== parent.attemptId
+                        || current.assignedSessionId !== parent.assignedSessionId || current.assignedNodeId !== parent.assignedNodeId
+                        || JSON.stringify(current.ownershipScope) !== JSON.stringify(parent.ownershipScope)) throw new Error('stage_review_stale_parent');
+                    if (current.attemptId && !stageReviewWriterSettled(store(), current, writerActivity)) throw new Error('review_input_busy: source writer settlement pending');
                     if (!reviewReplacementReady(current)) throw new Error('stage_review_writer_checkpoint_pending');
                     let proof;
                     let message = spec.message;
@@ -613,8 +643,15 @@ export function createProductionStagePorts(components: Pick<DaemonComponents, 's
                         // An artifact the implementer only cited may have changed after it was registered: withhold
                         // it (and say so) rather than failing the review; the pipeline's own evidence stays required.
                         proof = attestStageReviewInput(current, { repoIdentity: mesh.repoIdentity, machineId, nodeId, workspace: spec.reviewerWorkspace?.path ?? node.workspace }, grants);
-                        if (sourceGenerated && proof.checkout.worktree === fs.realpathSync.native(node.workspace)) throw new Error('review_detached_checkout_required');
-                        if (reviewInputBusy(current, proof.checkout, store().getQueueEntries(current.meshId, ['assigned', 'pending']), true)) throw new Error('review_input_busy');
+                        if (sourceGenerated) {
+                            if (proof.checkout.worktree === fs.realpathSync.native(node.workspace)) throw new Error('review_detached_checkout_required');
+                            const original = stageDiffSources(node.workspace, sourceGenerated.scope.baseSha, sourceGenerated.scope.headSha, defaultStageGit);
+                            if (JSON.stringify(original.checkout) !== JSON.stringify(sourceGenerated.scope.checkout)
+                                || JSON.stringify(original.gitlinks) !== JSON.stringify(sourceGenerated.scope.gitlinks)) {
+                                throw new Error('review_input_head_changed');
+                            }
+                        }
+                        if (reviewInputBusy(current, proof.checkout, store().getQueueEntries(current.meshId, ['assigned', 'pending']), true, store(), writerActivity)) throw new Error('review_input_busy');
                     }
                     const child = enqueueTask(parent.meshId, message, {
                         stageChild: { parentTaskId: parent.id, round: spec.round, review: { sourceTaskId: parent.id, independence: spec.independence }, ...(spec.reviewerWorkspace ? { reviewerWorkspace: spec.reviewerWorkspace } : {}) },

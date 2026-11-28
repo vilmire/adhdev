@@ -32,6 +32,8 @@ import { stashStageReport } from '../../src/mesh/stage-report-stash.js';
 import { initialStageState } from '../../src/mesh/stage-state.js';
 import { createProductionStagePorts } from '../../src/mesh/stage-ports-default.js';
 
+import { seedMeshAttempt } from '../helpers/turn-attempt-seed.js';
+
 const dirs: string[] = [];
 let currentMesh: string | undefined;
 afterEach(() => {
@@ -71,7 +73,7 @@ const spec = { round: 1, message: 'review', inputArtifactIds: ['art_evidence'], 
 const ctx = (workspace: string) => ({ workspace, machineId: 'test-machine' });
 
 describe('stage readonly input attestation', () => {
-    it('runs normal production stage enqueue with worker, diff and self-check grants bound atomically', async () => {
+    it.each([false, true])('handles production stage diff registration (failure=%s)', async failRegistration => {
         const { ws, ports, store, source, g } = setup();
         fs.appendFileSync(path.join(ws, '.git/info/exclude'), '\nevidence.md\nart_generated_*.md\n');
         meshConfigMocks.listMeshes.mockReturnValue([meshConfigMocks.getMesh()]);
@@ -79,26 +81,52 @@ describe('stage readonly input attestation', () => {
         parent.stageState = initialStageState(new Date().toISOString());
         parent.stageState.workerArtifactIds = ['art_evidence'];
         store.updateQueueEntry(parent);
+        const attempt = seedMeshAttempt({ meshId: parent.meshId, taskId: parent.id, stage: 'completed',
+            nodeId: 'node_a', sessionId: 'sess-impl', providerType: 'claude-cli', attemptId: 'completed-attempt' });
+        store.turnStore().upsertAttempt({ ...attempt, ownerDaemonId: 'test-machine' }, Date.now());
+        parent.attemptId = attempt.attemptId;
+        store.updateQueueEntry(parent);
         const base = g('rev-parse', 'HEAD');
         g('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'continuation');
         ports.git = { ...ports.git, baseSha: async () => base, fingerprint: async () => 'stable-checkout' };
         ports.selfCheck = { run: async () => ({ status: 'passed', log: 'fixture' }) };
         let n = 0;
         ports.artifacts.register = input => {
+            if (failRegistration && input.kind === 'diff') return {
+                ok: false, code: 'artifact_storage_unavailable', message: 'fixture spool failed', retryable: true,
+            };
             const id = `art_generated_${++n}`;
             const rel = `${id}.md`; fs.writeFileSync(path.join(ws, rel), input.content);
-            store.db.prepare(`INSERT INTO session_artifacts (artifact_id,session_id,task_id,mesh_id,producer_role,workspace_root,rel_path,kind,mime,title,size_bytes,sha256,created_at,updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, `stage:${parent.id}`, parent.id, parent.meshId, 'pipeline', ws, rel, 'markdown', 'text/markdown', input.title, Buffer.byteLength(input.content), createHash('sha256').update(input.content).digest('hex'), 1, 1);
+            store.db.prepare(`INSERT INTO session_artifacts (artifact_id,session_id,task_id,mesh_id,producer_role,workspace_root,rel_path,kind,mime,title,size_bytes,sha256,created_at,updated_at,origin_daemon_id)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, `stage:${parent.id}`, parent.id, parent.meshId, 'pipeline', ws, rel, 'markdown', 'text/markdown', input.title, Buffer.byteLength(input.content), createHash('sha256').update(input.content).digest('hex'), 1, 1, 'test-machine');
             return { ok: true as const, artifactId: id };
         };
+        const notices: string[] = [];
+        const notify = ports.events.notifyParentTerminal;
+        ports.events.notifyParentTerminal = (row, status, report) => { notices.push(report); notify(row, status, report); };
         const runtime = new StagePipelineRuntime(ports);
         await runtime.onImplCompleted(parent.meshId, parent.id, 'completed-attempt');
         const stored = source();
+        if (failRegistration) {
+            expect(stored.status).toBe('blocked');
+            expect(stored.stageState).toMatchObject({
+                blockedReason: 'review_unavailable', blockedDetail: expect.stringContaining('artifact_storage_unavailable'), reviewTaskIds: [],
+            });
+            expect(stored.stageState!.artifacts.diff).toEqual([]);
+            expect(stored.stageState!.selfCheck).toBe('passed');
+            expect(notices).toHaveLength(1);
+            expect(notices[0]).toContain('artifact_storage_unavailable');
+            expect(notices[0]).toContain('request rereview');
+            return;
+        }
+        const restarted = new StagePipelineRuntime(ports);
+        await restarted.tick();
+        await restarted.idle();
         expect(stored.stageState!.phase).toBe('awaiting_review');
         expect(stored.stageState!.reviewFingerprint).toBe('stable-checkout');
         expect(stored.stageState!.reviewTaskIds).toHaveLength(1);
         const child = store.findQueueEntryById(parent.meshId, stored.stageState!.reviewTaskIds[0])!;
-        expect(child.inputArtifactIds).toEqual(['art_generated_1', 'art_generated_2', 'art_evidence']);
+        expect(child.inputArtifactIds).toEqual(['art_generated_3', 'art_generated_2', 'art_generated_1', 'art_evidence']);
         expect(reviewRoutingRefusal(child, stored, 'codex-cli', ctx(ws), [stored])).toBeUndefined();
         await runtime.onImplCompleted(parent.meshId, parent.id, 'completed-attempt');
         expect(source().stageState!.reviewTaskIds).toEqual([child.id]);
@@ -216,6 +244,76 @@ describe('stage readonly input attestation', () => {
         fs.writeFileSync(path.join(ws, 'oss/f.ts'), 'export {};');
         execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'changed submodule'], { cwd: path.join(ws, 'oss'), windowsHide: true, stdio: 'pipe' });
         expect(reviewRoutingRefusal(child, source(), 'codex-cli', ctx(ws), [])).toBe('review_input_unavailable');
+    });
+    it('admits review after an exact handled terminal writer settles', () => {
+        const { live, ports, store, source } = setup();
+        const writer = enqueueTask(live.meshId, 'other stage writer', { taskMode: 'code_change', difficulty: 'medium', review: true });
+        const attempt = seedMeshAttempt({ meshId: live.meshId, taskId: writer.id, stage: 'completed',
+            nodeId: 'node_a', sessionId: 'other-session', providerType: 'codex-cli' });
+        const row = store.findQueueEntryById(live.meshId, writer.id)!;
+        Object.assign(row, { status: 'assigned', assignedNodeId: attempt.nodeId, assignedSessionId: attempt.sessionId,
+            assignedProviderType: attempt.providerType, attemptId: attempt.attemptId, dispatchNonce: attempt.dispatchNonce ?? undefined });
+        Object.assign(row.stageState!, { phase: 'self_checking', handledAttemptIds: [attempt.attemptId] });
+        store.turnStore().upsertAttempt({ ...attempt, ownerDaemonId: 'test-machine' }, Date.now());
+        store.updateQueueEntry(row);
+        expect(() => ports.queue.enqueueReviewChild(source(), spec)).toThrow('review_input_busy');
+        row.stageState!.phase = 'awaiting_review';
+        store.updateQueueEntry(row);
+        for (const terminal of [
+            { ...attempt, state: 'generating', terminal: null },
+            { ...attempt, state: 'cancelled', terminal: { ...attempt.terminal, outcome: 'cancelled' } },
+            { ...attempt, state: 'failed', terminal: { ...attempt.terminal, outcome: 'failed' } },
+            { ...attempt, data: { writerStop: { confirmed: true, settledBy: 'unreachable_bound' } } },
+            { ...attempt, dispatchNonce: 999 },
+        ]) {
+            store.turnStore().upsertAttempt({ ...terminal, ownerDaemonId: 'test-machine' } as typeof attempt, Date.now());
+            expect(() => ports.queue.enqueueReviewChild(source(), spec)).toThrow('review_input_busy');
+        }
+        store.turnStore().upsertAttempt({ ...attempt, ownerDaemonId: 'test-machine' }, Date.now());
+        const child = ports.queue.enqueueReviewChild(source(), spec);
+        expect(ports.queue.enqueueReviewChild(source(), spec).id).toBe(child.id);
+        expect(source().stageState!.reviewTaskIds).toEqual([child.id]);
+    });
+    it('links each integration parent once after both terminal attempts settle', async () => {
+        const { live, ports, store, source, ws, g } = setup();
+        const peer = path.join(path.dirname(ws), `${path.basename(ws)}-peer`); dirs.push(peer);
+        g('worktree', 'add', '--detach', peer);
+        const config = meshConfigMocks.getMesh();
+        config.nodes.push({ id: 'node_b', daemonId: 'test-machine', workspace: peer });
+        const second = enqueueTask(live.meshId, 'parallel integration', { taskMode: 'code_change', difficulty: 'medium', review: true });
+        const secondRow = store.findQueueEntryById(live.meshId, second.id)!;
+        const head = g('rev-parse', 'HEAD');
+        const paths = normalizeOwnedPaths(['oss']).declaration;
+        for (const [row, dir, nodeId] of [[source(), ws, 'node_a'], [secondRow, peer, 'node_b']] as const) {
+            const attempt = seedMeshAttempt({ meshId: live.meshId, taskId: row.id, stage: 'completed',
+                nodeId, sessionId: `impl-${nodeId}`, providerType: 'codex-cli' });
+            if (nodeId === 'node_b') {
+                attempt.terminal = { ...attempt.terminal!, strength: 'tool_report', source: 'scheduler' };
+                attempt.data.report = { generation: attempt.generation, outcome: 'completed', eventId: 'accepted-report', at: Date.now() };
+            }
+            store.turnStore().upsertAttempt({ ...attempt, ownerDaemonId: 'test-machine' }, Date.now());
+            Object.assign(row, { status: 'assigned', assignedNodeId: nodeId, assignedSessionId: attempt.sessionId,
+                assignedProviderType: attempt.providerType, attemptId: attempt.attemptId, ownedPaths: paths,
+                ownershipScope: attestLocalOwnership({ workspace: dir, paths, phase: 'integration',
+                    repoIdentity: config.repoIdentity, machineId: 'test-machine', nodeId }) });
+            Object.assign(row.stageState!, { phase: 'awaiting_review', round: 1, baseSha: head,
+                stageHeads: [{ round: 1, rootSha: head }], handledAttemptIds: [attempt.attemptId] });
+            row.inputArtifactIds = spec.inputArtifactIds;
+            store.updateQueueEntry(row);
+        }
+        const openPorts = () => createProductionStagePorts({ statusInstanceId: 'test-machine',
+            instanceManager: { getInstance: () => ({ category: 'cli', getState: () => ({ status: 'idle' }) }) },
+        } as any);
+        expect(() => ports.queue.enqueueReviewChild(source(), spec)).toThrow('review_input_busy');
+        const activePorts = openPorts();
+        const enqueue = (id: string) => activePorts.queue.enqueueReviewChild(store.findQueueEntryById(live.meshId, id)!, spec);
+        await Promise.all([live.id, second.id].map(async id => enqueue(id)));
+        const restart = openPorts();
+        for (const id of [live.id, second.id]) {
+            const parent = store.findQueueEntryById(live.meshId, id)!;
+            expect(parent.stageState!.reviewTaskIds).toHaveLength(1);
+            expect(restart.queue.enqueueReviewChild(parent, spec).id).toBe(parent.stageState!.reviewTaskIds[0]);
+        }
     });
     it('unrelated active writers remain fenced', () => {
         const { live, ports, store, source } = setup();

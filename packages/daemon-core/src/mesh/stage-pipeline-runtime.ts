@@ -12,12 +12,12 @@ import { dropStageReport, peekStageReport } from './stage-report-stash.js';
 import { buildFinalReport, buildReviewerMessage, buildRevisionMemo } from './stage-synthesis.js';
 import { isStageBlockOverwritten, isStageChild, isStageParent, selectStageInputArtifacts } from './stage-state.js';
 import { independenceRefusalExceeded } from './stage-independence.js';
+import { registerStageDiff } from './stage-diff-stream.js';
 import { StageEffectFailureTracker } from './stage-effect-failures.js';
 
 const STAGE_PARENT_ENDED = new Set(['completed', 'failed', 'blocked', 'cancelled']);
 
 const SELF_CHECK_LOG_MAX = 60_000;
-const DIFF_MAX = 1_500_000;
 /** Queue-row inline ceiling when disk recovery write fails (honest fail-closed above this). */
 const INLINE_EVIDENCE_MAX = 256_000;
 
@@ -258,7 +258,22 @@ function parseHeldReviewPayload(body: string): {
  * create_review_child failures that retrying cannot fix: the required input evidence is unauthorized, gone or
  * changed. Everything else (busy checkout, missing local context, a raced parent) is retried on the next tick.
  */
-const isLastingReviewInputError = (detail: string): boolean => /^(review_input_artifact(s_missing|_unauthorized|_path|_hash)|review_unsupported_for_light_task)\b/.test(detail);
+function sameStageOwner(before: MeshWorkQueueEntry, after: MeshWorkQueueEntry): boolean {
+    return after.status === 'assigned' && !after.stageState?.released
+        && before.attemptId === after.attemptId && before.dispatchNonce === after.dispatchNonce
+        && before.assignedSessionId === after.assignedSessionId && before.assignedNodeId === after.assignedNodeId
+        && before.assignedProviderType === after.assignedProviderType
+        && JSON.stringify(before.ownershipScope) === JSON.stringify(after.ownershipScope);
+}
+
+function sameStageSource(before: MeshWorkQueueEntry, after: MeshWorkQueueEntry): boolean {
+    const st = before.stageState, current = after.stageState;
+    return sameStageOwner(before, after) && !!st && !!current
+        && current.phase === st.phase && current.round === st.round
+        && st.baseSha === current.baseSha && st.stageHeads.at(-1)?.rootSha === current.stageHeads.at(-1)?.rootSha;
+}
+
+const isLastingReviewInputError = (detail: string): boolean => /^(review_diff_capture_blocked|review_input_artifact(s_missing|_unauthorized|_path|_hash)|review_unsupported_for_light_task)\b/.test(detail);
 
 export class StagePipelineRuntime {
     /** Parents with an effect chain in flight (serializes per parent; events arriving meanwhile queue behind it). */
@@ -307,6 +322,7 @@ export class StagePipelineRuntime {
             if (!parent || !isStageParent(parent) || parent.stageState!.released) return;
             const phase = parent.stageState!.phase;
             if (phase !== 'implementing' && phase !== 'revising') return;
+            if (parent.attemptId && parent.attemptId !== attemptId) return;
             const workspace = this.ports.workspaceOf(parent);
             let head: string | null = null;
             let base = parent.stageState!.baseSha || null;
@@ -317,11 +333,11 @@ export class StagePipelineRuntime {
                 if (base && head) hasDiff = base !== head;
             }
             const stash = peekStageReport(meshId, parentId);
-            if (workspace && hasDiff && base && head) await this.registerDiff(parentId, workspace, base, head);
+            if (!this.ports.git.diffStream && workspace && hasDiff && base && head) await this.registerDiff(parentId, workspace, base, head);
             await this.apply(meshId, parentId, { kind: 'impl_completed', hasDiff, ...(attemptId ? { attemptId } : {}), ...(head ? { headSha: head } : {}), at: this.iso() }, state => {
                 if (base && !state.baseSha) state.baseSha = base;
                 if (stash?.artifactIds?.length) state.workerArtifactIds = [...new Set([...(state.workerArtifactIds ?? []), ...stash.artifactIds])].slice(-8);
-            });
+            }, current => sameStageSource(parent, current));
         });
     }
 
@@ -554,7 +570,10 @@ export class StagePipelineRuntime {
                 const pendingVerdict = Object.values(st.artifactFailures ?? {}).some(
                     (h) => h.kind === 'review_verdict' && !!(h.inlineEvidence || h.recoveryRelPath),
                 );
-                if (!pendingVerdict) {
+                const settledLegacyHandoff = st.phase === 'awaiting_review' && st.round === 1
+                    && st.selfCheck === 'passed' && st.artifacts.selfCheck.length > 0 && !st.reviewTaskIds.length && !st.artifacts.diff.length
+                    && this.ports.queue.reviewWriterSettled?.(parent) === true;
+                if (!pendingVerdict && !settledLegacyHandoff) {
                     void this.serial(parent.meshId, parent.id, () => this.apply(parent.meshId, parent.id, { kind: 'ceiling', at: this.iso() }));
                     continue;
                 }
@@ -669,10 +688,10 @@ export class StagePipelineRuntime {
 
     // ── reducer driver ──────────────────────────────────────────────
 
-    private async apply(meshId: string, parentId: string, event: StageEvent, pre?: (s: MeshTaskStageState) => void): Promise<void> {
+    private async apply(meshId: string, parentId: string, event: StageEvent, pre?: (s: MeshTaskStageState) => void, expected?: (row: MeshWorkQueueEntry) => boolean): Promise<void> {
         let effects: StageEffect[] = [];
         this.ports.queue.mutate(meshId, parentId, e => {
-            if (!e.stagePlan || !e.stageState) return;
+            if (!e.stagePlan || !e.stageState || (expected && !expected(e))) return;
             const r = reduceStage(e.stagePlan, e.stageState, event);
             if (r.state === e.stageState) return;
             effects = r.effects;
@@ -696,14 +715,14 @@ export class StagePipelineRuntime {
                 // A reviewer whose required evidence is invalid would otherwise retry silently forever (and an
                 // earlier round's child would look like this round's): block with the real reason instead.
                 if (effect.kind === 'create_review_child' && isLastingReviewInputError(detail)) {
-                    await this.apply(meshId, parentId, { kind: 'review_input_failed', detail, at: this.iso() });
+                    await this.apply(meshId, parentId, { kind: 'review_input_failed', detail, at: this.iso() }, undefined, current => sameStageSource(parent, current));
                     this.failures.clear(meshId, parentId);
                 } else if (effect.kind === 'create_review_child' && verdict.escalate) {
                     // The same error N ticks in a row is not transient: block the stage (blocked_review for the
                     // coordinator, via the normal release/notice path) instead of retrying for ever.
                     const text = `create_review_child failed ${verdict.count}x in a row: ${detail}`;
                     this.ports.events.progress(meshId, parentId, `stage effect ${effect.kind} gave up: ${text}`);
-                    await this.apply(meshId, parentId, { kind: 'review_input_failed', detail: text, at: this.iso() });
+                    await this.apply(meshId, parentId, { kind: 'review_input_failed', detail: text, at: this.iso() }, undefined, current => sameStageSource(parent, current));
                     this.failures.clear(meshId, parentId);
                 }
             }
@@ -731,6 +750,12 @@ export class StagePipelineRuntime {
                 else {
                     try { result = await this.ports.selfCheck.run({ meshId, taskId: id, workspace, baseSha: st.baseSha, profile: 'fast' }); }
                     catch (e: any) { result = { status: 'skipped_infra_error', log: `self-check runner error: ${e?.message || e}` }; }
+                }
+                const current = this.ports.queue.get(meshId, id);
+                if (!current || !sameStageSource(parent, current)) return;
+                const checkedHead = st.stageHeads.at(-1)?.rootSha;
+                if (this.ports.git.diffStream && workspace && checkedHead && await this.ports.git.headSha(workspace) !== checkedHead) {
+                    result = { status: 'failed', log: 'committed HEAD changed during self-check' };
                 }
                 const selfCheckOpKey = `self_check-r${st.round}-b${st.selfCheckBounces}`;
                 const selfCheckContent = `# Self-check (${result.status})\n\n${result.log.slice(-SELF_CHECK_LOG_MAX)}\n`;
@@ -765,14 +790,14 @@ export class StagePipelineRuntime {
                         result.status === 'failed' || result.status === 'unavailable'
                             ? result.status
                             : 'skipped_infra_error';
-                    await this.apply(meshId, id, { kind: 'self_check_done', status, at: this.iso() });
+                    await this.apply(meshId, id, { kind: 'self_check_done', status, at: this.iso() }, undefined, current => sameStageSource(parent, current));
                     return;
                 }
                 clearStageArtifactFailureOp(this.ports, meshId, id, selfCheckOpKey, contentSha256(selfCheckContent));
                 // A restart in self_checking may not have registered the round diff yet.
                 const head = st.stageHeads.at(-1)?.rootSha;
-                if (workspace && st.baseSha && head && !st.artifacts.diff.length) await this.registerDiff(id, workspace, st.baseSha, head);
-                await this.apply(meshId, id, { kind: 'self_check_done', status: result.status, at: this.iso() }, s => { s.artifacts.selfCheck.push(art.artifactId); });
+                if (!this.ports.git.diffStream && workspace && st.baseSha && head && !st.artifacts.diff.length) await this.registerDiff(id, workspace, st.baseSha, head);
+                await this.apply(meshId, id, { kind: 'self_check_done', status: result.status, at: this.iso() }, s => { s.artifacts.selfCheck.push(art.artifactId); }, current => sameStageSource(parent, current));
                 return;
             }
             case 'create_review_child': {
@@ -784,6 +809,43 @@ export class StagePipelineRuntime {
                 const plan = parent.stagePlan!;
                 const child0 = st.reviewTaskIds.length;
                 const reviewId = `${id}:review:${effect.round}:${child0}`;
+                if (this.ports.git.diffStream && this.ports.queue.reviewDiffCurrent
+                    && !this.ports.queue.reviewDiffCurrent(parent)) {
+                    if (!this.ports.queue.reviewWriterSettled?.(parent)) throw new Error('review_input_busy: source writer settlement pending');
+                    const originDaemonId = this.ports.artifactOrigin?.();
+                    if (!workspace || !head || !st.baseSha || !originDaemonId) throw new Error('review_diff_capture_blocked: missing committed checkout or origin evidence. Restore the pinned source and request rereview.');
+                    try {
+                        this.ports.queue.validateReviewCapture?.(parent);
+                        const { artifactId } = await registerStageDiff({
+                            git: this.ports.git, artifacts: this.ports.artifacts, workspace, head, base: st.baseSha,
+                            meshId, taskId: id, missionId: parent.missionId, round: effect.round, originDaemonId,
+                            operationKey: `diff-stage-${contentSha256(JSON.stringify([st.baseSha, head, effect.round])).slice(0, 40)}`, sourceGenerated: this.ports.sourceGenerated,
+                        });
+                        let linked = false;
+                        this.ports.queue.mutate(meshId, id, current => {
+                            if (!sameStageSource(parent, current) || (current.revision ?? 0) !== (parent.revision ?? 0)
+                                || !this.ports.queue.reviewWriterSettled?.(current)) return;
+                            if (this.ports.now() - Date.parse(st.startedAt) > this.ports.pipelineCeilingMs()) {
+                                current.stageState!.startedAt = this.iso();
+                            }
+                            if (!current.stageState!.artifacts.diff.includes(artifactId)) current.stageState!.artifacts.diff.push(artifactId);
+                            linked = true;
+                        });
+                        if (!linked) throw new Error('stage_review_stale_parent');
+                    } catch (error) {
+                        if ((error as Error)?.message === 'stage_review_stale_parent') throw error;
+                        const code = (error as { code?: string })?.code ?? (error as Error)?.message;
+                        const reason = code && /^[a-z][a-z0-9_]+$/.test(code) ? code : 'review_diff_producer_failed';
+                        const next = reason.startsWith('review_source_generated_producer')
+                            ? 'Restore signed vendor replay evidence for the pinned base and head, then request rereview.'
+                            : reason === 'secret_file_refused'
+                                ? 'Request a clean source revision before review.'
+                                : 'Restore committed checkout or artifact admission, then request rereview.';
+                        throw new Error(`review_diff_capture_blocked: ${reason}. ${next}`);
+                    }
+                    // Read the persisted manifest and grants through the ordinary enqueue path.
+                    return this.runEffect(this.ports.queue.get(meshId, id)!, effect);
+                }
                 const required = this.ports.queue.requiresDetachedReview?.(parent) ?? false;
                 const ws = workspace && head
                     ? await this.ports.reviewerWorkspace.prepare({ meshId, parentTaskId: id, reviewTaskId: reviewId, round: effect.round, rootSha: head, required, baseSha: st.baseSha, sourceWorkspace: workspace })
@@ -826,7 +888,10 @@ export class StagePipelineRuntime {
                     // refused `stage_review_stale_parent`. Re-read right before the (synchronous, locked) enqueue;
                     // the port still refuses when the stage genuinely moved on (phase/round/released).
                     const current = this.ports.queue.get(meshId, id);
-                    if (!current || !isStageParent(current)) throw new Error('stage_review_stale_parent');
+                    if (!current || !sameStageSource(parent, current)
+                        || JSON.stringify(selectStageInputArtifacts(current.stageState!)) !== JSON.stringify(inputs)) {
+                        throw new Error('stage_review_stale_parent');
+                    }
                     child = this.ports.queue.enqueueReviewChild(current, {
                         round: effect.round, message: msg, inputArtifactIds: inputs,
                         independence: 'different_provider',
@@ -871,7 +936,7 @@ export class StagePipelineRuntime {
                 const skipped = st.round === 0 && effect.status === 'completed';
                 const summary = peekStageReport(meshId, id)?.summary ?? 'Stage task finished.';
                 const text = buildFinalReport({
-                    outcome: effect.status, implementerSummary: summary, state: st, skippedNoDiff: skipped,
+                    outcome: effect.status, implementerSummary: summary, state: st, skippedNoDiff: skipped, blockedDetail: st.blockedDetail,
                     reviewerProvider: (st as MeshTaskStageState & { reviewerProvider?: string }).reviewerProvider,
                 });
                 const lifted = this.ports.queue.mutate(meshId, id, e => { e.stageState!.released = true; });
@@ -903,7 +968,7 @@ export class StagePipelineRuntime {
         const parent = this.findParentById(parentId);
         if (!parent) return;
         let diff = '';
-        try { diff = (await this.ports.git.diff(workspace, base, head)).slice(0, DIFF_MAX); } catch { return; }
+        diff = await this.ports.git.diff(workspace, base, head);
         const diffOpKey = `diff-${base.slice(0, 12)}-${head.slice(0, 12)}`;
         const registered = this.ports.artifacts.register({
             meshId: parent.meshId, ...(parent.missionId ? { missionId: parent.missionId } : {}), taskId: parentId, kind: 'diff',

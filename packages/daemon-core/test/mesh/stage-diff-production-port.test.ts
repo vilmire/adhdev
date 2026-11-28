@@ -308,7 +308,7 @@ it('aggregate guard rejects an absent scan-completion result before publication'
     expect(store.listBySession('stage:parent')).toHaveLength(0);
 });
 
-it('registerDiff issues source plus replayed generated evidence, and native reader binds detached review and grants', async () => {
+it('resumes a zero-child handoff with large generated evidence and binds the detached review grants', async () => {
     const root = join(state.config, 'root'), upstream = join(state.config, 'oss-history');
     fs.mkdirSync(root);
     fs.mkdirSync(upstream);
@@ -318,7 +318,7 @@ it('registerDiff issues source plus replayed generated evidence, and native read
     const generatedPath = 'packages/daemon-standalone/vendor/example.bin';
     const unchangedPath = 'packages/daemon-standalone/vendor/unchanged.bin';
     const unchanged = Buffer.from('independent generated output');
-    const output = (seed: Buffer) => Buffer.alloc(5 * 1024 * 1024 + 3, seed[0]);
+    const output = (seed: Buffer) => Buffer.alloc(17 * 1024 * 1024 + 3, seed[0]);
     fs.mkdirSync(join(upstream, 'packages/daemon-standalone/vendor'), { recursive: true });
     fs.writeFileSync(join(upstream, 'seed.txt'), 'a');
     fs.writeFileSync(join(upstream, unchangedPath), unchanged);
@@ -358,18 +358,22 @@ it('registerDiff issues source plus replayed generated evidence, and native read
     Object.assign(state.parent, { missionId: 'fixture-mission', status: 'assigned', message: 'Review fixture',
         assignedNodeId: 'fixture-node', assignedProviderType: 'implementer', assignedSessionId: 'implementer-session',
         stagePlan: { review: true, maxRevisions: 1 }, stageState: {
-            phase: 'awaiting_review', round: 1, baseSha: base, stageHeads: [{ round: 1, rootSha: head }], openFindingIds: [],
+            phase: 'awaiting_review', round: 1, baseSha: base, startedAt: new Date().toISOString(), stageHeads: [{ round: 1, rootSha: head }], openFindingIds: [],
             artifacts: { diff: [], selfCheck: [], verdict: [] }, reviewTaskIds: [],
         },
     });
     const st = state.parent.stageState;
     const makePorts = () => createProductionStagePorts({ statusInstanceId: 'host-test' });
-    const ports = makePorts(), runtime = new StagePipelineRuntime(ports);
-    const captured = await registerStageDiff({ git: ports.git, artifacts: ports.artifacts, workspace: root,
-        base, head, meshId: 'mesh-test', taskId: 'parent', missionId: 'fixture-mission',
-        round: 1, originDaemonId: 'host-test', operationKey: 'diff-fixture', sourceGenerated: ports.sourceGenerated });
-    const id = captured.artifactId;
-    st.artifacts.diff.push(id);
+    const ports = makePorts();
+    // Settlement is exercised with the real attempt ledger in the integration fixture.
+    ports.queue.reviewWriterSettled = () => true;
+    const runtime = new StagePipelineRuntime(ports);
+    const optionalCheckout = vi.fn(async () => null);
+    setStagePorts({ reviewerWorkspace: { prepare: optionalCheckout } });
+    await runtime.tick();
+    await runtime.idle();
+    const id = st.artifacts.diff.at(-1)!;
+    expect(id).toBeDefined();
     const manifest = decodeStageSourceGenerated(verifyAndReadArtifactBuffer(store.get(id)!).buffer)!;
     expect(manifest.inventory.map(c => [c.repo, c.path, c.kind])).toEqual([
         ['root', 'oss', 'source'], ['root', 'root.txt', 'source'], ['oss', generatedPath, 'generated'], ['oss', 'seed.txt', 'source'],
@@ -379,9 +383,6 @@ it('registerDiff issues source plus replayed generated evidence, and native read
     expect(store.listBySession('stage:parent')).toHaveLength(2);
     const grants = stageReviewArtifactGrants({ db }, state.parent, [id]);
     expect(verifyAndReadArtifactBuffer(store.get(grants[1].id)!).buffer.toString()).toContain('+root source change');
-    const optionalCheckout = vi.fn(async () => null);
-    setStagePorts({ reviewerWorkspace: { prepare: optionalCheckout } });
-    await runtime['runEffect'](state.parent, { kind: 'create_review_child', round: 1 });
     expect(optionalCheckout).not.toHaveBeenCalled();
     const child = state.child;
     const reviewer = child?.reviewerWorkspace.path;
