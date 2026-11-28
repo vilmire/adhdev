@@ -43,7 +43,8 @@ jobs:
       github.ref == 'refs/heads/main' &&
       github.actor_id == '5513793' &&
       github.triggering_actor == 'vilmire' &&
-      inputs.oss_sha == github.sha
+      inputs.oss_sha == github.sha &&
+      inputs.approved_cohort_json != ''
     runs-on: ubuntu-26.04
     environment: npm-preview
     permissions:

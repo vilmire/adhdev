@@ -99,13 +99,12 @@ export function defaultGhApiJson(endpoint) {
 }
 
 /**
- * Verifies that a tag ref in `repository` points to `headSha` AND that `headSha`
- * equals the exact current `refs/heads/main` head commit (`compare/main...<headSha>`
- * has `status === 'identical'`, `ahead_by === 0`, `behind_by === 0`) unless an explicit
- * `expectedTargetSha` is independently supplied by an owner `workflow_dispatch`
- * (in which case `headSha === expectedTargetSha` AND `headSha` must be reachable on `main`).
- * This prevents an automatic tag push from selecting an unintended historical `main` commit
- * or an unmerged branch commit (`R2`).
+ * Verifies that a tag ref in `repository` points to `headSha`, that `headSha`
+ * equals the independently approved `expectedTargetSha` supplied by an owner
+ * `workflow_dispatch` on protected `main`, and that `headSha` is reachable on
+ * `refs/heads/main` (`compare/main...<headSha>` has `status === 'identical'` or
+ * `status === 'behind'`, `ahead_by === 0`). Both historical and current-tip tags
+ * without an independent `expectedTargetSha` approval are rejected (`R2`).
  */
 export function verifyApprovedTagTarget({
   repository,
@@ -117,10 +116,13 @@ export function verifyApprovedTagTarget({
   if (!headSha || !/^[0-9a-f]{40}$/.test(headSha)) {
     throw new Error(`invalid_head_sha: expected 40-char hex SHA, got ${headSha || '<unset>'}`);
   }
-  if (expectedTargetSha) {
-    if (!/^[0-9a-f]{40}$/.test(expectedTargetSha) || expectedTargetSha !== headSha) {
-      throw new Error(`approved_target_sha_mismatch: checkout HEAD (${headSha}) does not match independently approved target SHA (${expectedTargetSha})`);
-    }
+  if (!expectedTargetSha || !/^[0-9a-f]{40}$/.test(expectedTargetSha)) {
+    throw new Error(
+      `approved_target_sha_required: stable publication requires an independently approved 40-char hex target SHA from protected main workflow_dispatch (got ${expectedTargetSha || '<unset>'})`,
+    );
+  }
+  if (expectedTargetSha !== headSha) {
+    throw new Error(`approved_target_sha_mismatch: checkout HEAD (${headSha}) does not match independently approved target SHA (${expectedTargetSha})`);
   }
   const refData = ghApiJson(`repos/${repository}/git/ref/tags/${tagName}`);
   if (refData?.ref !== `refs/tags/${tagName}` || !refData?.object?.sha) {
@@ -144,16 +146,9 @@ export function verifyApprovedTagTarget({
   const compare = ghApiJson(`repos/${repository}/compare/main...${headSha}`);
   const status = compare?.status;
   const aheadBy = compare?.ahead_by;
-  const behindBy = compare?.behind_by ?? 0;
   if ((status !== 'identical' && status !== 'behind') || aheadBy !== 0) {
     throw new Error(
       `unapproved_tag_commit_not_on_main: commit ${headSha} for tag ${tagName} is not reachable on ${repository} refs/heads/main (status=${status ?? '<unknown>'}, ahead_by=${aheadBy ?? '<unknown>'})`,
-    );
-  }
-  // On automatic tag routes without an explicit expectedTargetSha pin, the tag MUST point to the exact current main tip (identical, behind_by === 0).
-  if (!expectedTargetSha && (status !== 'identical' || behindBy !== 0)) {
-    throw new Error(
-      `historical_main_commit_requires_explicit_pin: tag ${tagName} points to historical main commit ${headSha} (status=${status}, behind_by=${behindBy}); automatic tag publication requires exact main tip (status=identical) or explicit workflow_dispatch tag_sha pin`,
     );
   }
   return { tagName, commitSha };
@@ -161,14 +156,17 @@ export function verifyApprovedTagTarget({
 
 /**
  * Verifies at runtime via GitHub API that the active deployment environment
- * enforces `can_admins_bypass === false`, requires owner review (`User: vilmire`, id `5513793`),
- * and enforces the expected deployment branch/tag policy (`R4`).
+ * enforces `can_admins_bypass === false`, enforces the exact allowed deployment
+ * branch/tag policy pairs (with no missing `deployment_branch_policy`, no extra
+ * wildcard policies, and no swapped type/name pairs), and requires owner review
+ * (`User: vilmire`, id `5513793`) (`R4`).
  */
 export function verifyProtectedEnvironmentGate({
   repository,
   environmentName,
   expectedBranchPolicyType = null,
   expectedBranchPolicyName = null,
+  expectedBranchPolicies = null,
   ghApiJson = defaultGhApiJson,
 }) {
   let envData;
@@ -183,6 +181,38 @@ export function verifyProtectedEnvironmentGate({
   if (envData.can_admins_bypass !== false) {
     throw new Error(`environment_admin_bypass_enabled: ${repository} environment "${environmentName}" must set can_admins_bypass=false`);
   }
+
+  // Validate custom deployment branch/tag policy status and exact allowed type:name pairs BEFORE evaluating reviewer availability (R4).
+  const requiredPairs = Array.isArray(expectedBranchPolicies) && expectedBranchPolicies.length > 0
+    ? expectedBranchPolicies.map((p) => `${p.type}:${p.name}`)
+    : (expectedBranchPolicyType && expectedBranchPolicyName)
+      ? (() => {
+        const types = Array.isArray(expectedBranchPolicyType) ? expectedBranchPolicyType : [expectedBranchPolicyType];
+        const names = Array.isArray(expectedBranchPolicyName) ? expectedBranchPolicyName : [expectedBranchPolicyName];
+        return names.map((n, idx) => `${types[idx] ?? types[0]}:${n}`);
+      })()
+      : null;
+
+  if (requiredPairs && requiredPairs.length > 0) {
+    if (!envData.deployment_branch_policy || envData.deployment_branch_policy.custom_branch_policies !== true) {
+      throw new Error(
+        `environment_branch_policy_disabled: ${repository} environment "${environmentName}" must enable custom_branch_policies`,
+      );
+    }
+    const policy = ghApiJson(`repos/${repository}/environments/${environmentName}/deployment-branch-policies`);
+    const policies = Array.isArray(policy?.branch_policies) ? policy.branch_policies : [];
+    const allowedSet = new Set(requiredPairs);
+    const actualKeys = policies.map((p) => `${p?.type ?? 'branch'}:${p?.name ?? ''}`);
+    const hasExactAllowedSubset = actualKeys.length > 0
+      && actualKeys.every((k) => allowedSet.has(k))
+      && new Set(actualKeys).size === actualKeys.length;
+    if (!hasExactAllowedSubset) {
+      throw new Error(
+        `environment_branch_policy_mismatch: ${repository} environment "${environmentName}" has policies [${actualKeys.join(', ')}], expected only subset of [${[...allowedSet].join(', ')}]`,
+      );
+    }
+  }
+
   const rules = Array.isArray(envData.protection_rules) ? envData.protection_rules : [];
   const reviewerRules = rules.filter((r) => r?.type === 'required_reviewers');
   if (reviewerRules.length !== 1) {
@@ -196,23 +226,6 @@ export function verifyProtectedEnvironmentGate({
     && (reviewers[0]?.reviewer?.login === EXPECTED_OWNER_LOGIN || reviewers[0]?.reviewer?.id === EXPECTED_OWNER_ID);
   if (!hasOwnerReviewer) {
     throw new Error(`environment_owner_reviewer_mismatch: ${repository} environment "${environmentName}" must require sole User reviewer ${EXPECTED_OWNER_LOGIN}`);
-  }
-  if (expectedBranchPolicyType && expectedBranchPolicyName) {
-    if (envData.deployment_branch_policy && envData.deployment_branch_policy.custom_branch_policies !== true) {
-      throw new Error(
-        `environment_branch_policy_disabled: ${repository} environment "${environmentName}" must enable custom_branch_policies`,
-      );
-    }
-    const policy = ghApiJson(`repos/${repository}/environments/${environmentName}/deployment-branch-policies`);
-    const policies = Array.isArray(policy?.branch_policies) ? policy.branch_policies : [];
-    const allowedNames = Array.isArray(expectedBranchPolicyName) ? expectedBranchPolicyName : [expectedBranchPolicyName];
-    const allowedTypes = Array.isArray(expectedBranchPolicyType) ? expectedBranchPolicyType : [expectedBranchPolicyType];
-    const matched = policies.length > 0 && policies.some((p) => allowedNames.includes(p?.name) && allowedTypes.includes(p?.type ?? 'branch'));
-    if (!matched) {
-      throw new Error(
-        `environment_branch_policy_mismatch: ${repository} environment "${environmentName}" must enforce ${allowedTypes.join('/')} policy "${allowedNames.join('|')}"`,
-      );
-    }
   }
   return envData;
 }
@@ -257,13 +270,22 @@ export function verifyStableTagAndManifests({
       verifyProtectedEnvironmentGate({
         repository: EXPECTED_REPO,
         environmentName: EXPECTED_STABLE_ENVIRONMENT,
-        expectedBranchPolicyType: ['tag', 'branch'],
-        expectedBranchPolicyName: ['v*', 'main'],
+        expectedBranchPolicies: [
+          { type: 'tag', name: 'v*' },
+          { type: 'branch', name: 'main' },
+        ],
         ghApiJson,
       });
     }
-  } else if (expectedTargetSha && expectedTargetSha !== headSha) {
-    throw new Error(`approved_target_sha_mismatch: checkout HEAD (${headSha}) does not match independently approved target SHA (${expectedTargetSha})`);
+  } else {
+    if (!expectedTargetSha || !/^[0-9a-f]{40}$/.test(expectedTargetSha)) {
+      throw new Error(
+        `approved_target_sha_required: stable publication requires an independently approved 40-char hex target SHA from protected main workflow_dispatch (got ${expectedTargetSha || '<unset>'})`,
+      );
+    }
+    if (expectedTargetSha !== headSha) {
+      throw new Error(`approved_target_sha_mismatch: checkout HEAD (${headSha}) does not match independently approved target SHA (${expectedTargetSha})`);
+    }
   }
 
   const rootPkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));

@@ -282,11 +282,11 @@ jobs:
         run: npm run typecheck -w packages/daemon-standalone
 
       - name: Pre-OIDC owner approval and exact release source gate
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
-          EXPECTED_TAG: ${{ inputs.tag || github.ref_name }}
-          EXPECTED_TAG_SHA: ${{ inputs.tag_sha || '' }}
+          EXPECTED_TAG: ${{ inputs.tag }}
+          EXPECTED_TAG_SHA: ${{ inputs.tag_sha }}
         run: node scripts/publish-stable-npm.mjs --verify-only
 
   publish:
@@ -295,12 +295,10 @@ jobs:
       github.repository == 'vilmire/adhdev' &&
       github.actor_id == '5513793' &&
       github.triggering_actor == 'vilmire' &&
-      ((github.event_name == 'workflow_dispatch' &&
-        github.ref == 'refs/heads/main' &&
-        startsWith(inputs.tag, 'v') &&
-        inputs.tag_sha == github.sha) ||
-       (github.event_name == 'push' &&
-        startsWith(github.ref, 'refs/tags/v')))
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      startsWith(inputs.tag, 'v') &&
+      inputs.tag_sha == github.sha
     runs-on: ubuntu-26.04
     environment: npm-stable
     permissions:
@@ -389,8 +387,8 @@ jobs:
       - name: Pack, verify reviewed bytes, and publish OSS packages to npm latest via OIDC
         env:
           GH_TOKEN: ${{ github.token }}
-          EXPECTED_TAG: ${{ inputs.tag || github.ref_name }}
-          EXPECTED_TAG_SHA: ${{ inputs.tag_sha || '' }}
+          EXPECTED_TAG: ${{ inputs.tag }}
+          EXPECTED_TAG_SHA: ${{ inputs.tag_sha }}
           NODE_AUTH_TOKEN: ''
           NPM_TOKEN: ''
         run: |

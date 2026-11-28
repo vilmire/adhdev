@@ -219,26 +219,59 @@ export function assertFrozenOssPreviewStamps(packedRecords) {
   }
 }
 
-export function verifyApprovedCohortDigests(packedRecords, approvedCohort, { previewVersion = '', ossSha = '' } = {}) {
+const FULL_PREVIEW_COHORT_NAMES = [
+  '@adhdev/ghostty-vt-node',
+  '@adhdev/mesh-shared',
+  '@adhdev/session-host-core',
+  '@adhdev/daemon-core',
+  'adhdev',
+];
+
+export function verifyApprovedCohortDigests(packedRecords, approvedCohort, { previewVersion = '', ossSha = '', rootSha = '' } = {}) {
   if (!approvedCohort || typeof approvedCohort !== 'object') {
     throw new Error('approved_cohort_manifest_required: OSS preview OIDC publish requires a pre-validated approved_cohort_json manifest from the full frozen cohort gate');
   }
-  if (previewVersion && approvedCohort.version && approvedCohort.version !== previewVersion) {
+  if (!approvedCohort.version || !/^\d+\.\d+\.\d+-rc\.\d+$/.test(String(approvedCohort.version))) {
+    throw new Error(`approved_cohort_version_missing: approved cohort manifest must declare an exact X.Y.Z-rc.N version (got ${approvedCohort.version || '<unset>'})`);
+  }
+  if (previewVersion && approvedCohort.version !== previewVersion) {
     throw new Error(`approved_cohort_version_mismatch: approved cohort version (${approvedCohort.version}) != previewVersion (${previewVersion})`);
   }
-  if (ossSha && approvedCohort.ossSha && approvedCohort.ossSha !== ossSha) {
+  if (approvedCohort.channel !== 'preview' || approvedCohort.distTag !== 'next') {
+    throw new Error(`approved_cohort_channel_mismatch: approved cohort manifest must declare channel="preview" and distTag="next" (got channel=${approvedCohort.channel || '<unset>'}, distTag=${approvedCohort.distTag || '<unset>'})`);
+  }
+  if (!approvedCohort.rootSha || !/^[0-9a-f]{40}$/.test(String(approvedCohort.rootSha))) {
+    throw new Error(`approved_cohort_root_sha_missing: approved cohort manifest must declare 40-hex rootSha (got ${approvedCohort.rootSha || '<unset>'})`);
+  }
+  if (rootSha && approvedCohort.rootSha !== rootSha) {
+    throw new Error(`approved_cohort_root_sha_mismatch: approved cohort rootSha (${approvedCohort.rootSha}) != rootSha (${rootSha})`);
+  }
+  if (!approvedCohort.ossSha || !/^[0-9a-f]{40}$/.test(String(approvedCohort.ossSha))) {
+    throw new Error(`approved_cohort_oss_sha_missing: approved cohort manifest must declare 40-hex ossSha (got ${approvedCohort.ossSha || '<unset>'})`);
+  }
+  if (ossSha && approvedCohort.ossSha !== ossSha) {
     throw new Error(`approved_cohort_oss_sha_mismatch: approved cohort ossSha (${approvedCohort.ossSha}) != headSha (${ossSha})`);
   }
   const approvedMap = new Map();
   const list = Array.isArray(approvedCohort.artifacts) ? approvedCohort.artifacts
     : Array.isArray(approvedCohort.packages) ? approvedCohort.packages : [];
   for (const item of list) {
-    if (item?.name && item?.sha256) {
-      approvedMap.set(item.name, item);
+    if (
+      !item?.name
+      || !/^[0-9a-f]{64}$/.test(String(item?.sha256 ?? ''))
+      || !/^sha512-[A-Za-z0-9+/=]+$/.test(String(item?.integrity ?? ''))
+    ) {
+      throw new Error(`approved_cohort_entry_invalid: every package in approved_cohort_json must declare name, 64-hex sha256, and sha512- integrity (got ${JSON.stringify(item)})`);
     }
+    approvedMap.set(item.name, item);
   }
   if (approvedMap.size === 0) {
     throw new Error('approved_cohort_manifest_empty: approved_cohort_json contains no package digests');
+  }
+  for (const requiredPkg of FULL_PREVIEW_COHORT_NAMES) {
+    if (!approvedMap.has(requiredPkg)) {
+      throw new Error(`approved_cohort_incomplete: approved cohort manifest must bind the complete preview cohort including ${requiredPkg}`);
+    }
   }
   for (const record of packedRecords) {
     const expected = approvedMap.get(record.name);
@@ -250,7 +283,7 @@ export function verifyApprovedCohortDigests(packedRecords, approvedCohort, { pre
         `approved_cohort_sha256_mismatch: ${record.name} packed sha256 (${record.sha256}) does not match approved cohort sha256 (${expected.sha256})`,
       );
     }
-    if (expected.integrity && expected.integrity !== record.integrity) {
+    if (expected.integrity !== record.integrity) {
       throw new Error(
         `approved_cohort_integrity_mismatch: ${record.name} packed integrity (${record.integrity}) does not match approved cohort integrity (${expected.integrity})`,
       );
