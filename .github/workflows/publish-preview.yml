@@ -139,6 +139,7 @@ jobs:
           APPROVED_COHORT_JSON: ${{ inputs.approved_cohort_json }}
           GATE_RUN_ID: ${{ inputs.gate_run_id }}
           GATE_ATTESTATION_SIGNATURE: ${{ inputs.gate_attestation_signature }}
+          ADHDEV_PREVIEW_GATE_VERIFY_PUBLIC_KEY: ${{ vars.ADHDEV_PREVIEW_GATE_VERIFY_PUBLIC_KEY }}
           NODE_AUTH_TOKEN: ''
           NPM_TOKEN: ''
         run: |

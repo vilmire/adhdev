@@ -28,7 +28,7 @@
  */
 
 import { execFileSync, spawn } from 'node:child_process';
-import { createHash, createSign, createVerify } from 'node:crypto';
+import { createHash, createPublicKey, createSign, createVerify } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
@@ -266,21 +266,47 @@ export const EXPECTED_ROOT_GATE_JOB_NAME = 'preflight-preview';
 export const EXPECTED_ROOT_GATE_STEP_NAME = 'Freeze and gate full 5-package preview cohort BEFORE any npm publish';
 export const EXPECTED_ROOT_GATE_ARTIFACT_NAME = 'approved-preview-cohort-gate';
 
-// Official ADHDev Root preview cohort gate verification public key (RSA-2048).
+// Official ADHDev Root preview cohort gate verification public key (RSA-2048 SPKI PEM).
 // Verifies detached signatures (`gate_attestation_signature`) emitted by the
 // designated Root `preflight-preview` full-cohort gate or owner handoff without
-// requiring OSS `github.token` to read private `vilmire/adhdev-cloud` Actions endpoints (R5, R10).
+// requiring OSS `github.token` to read private `vilmire/adhdev-cloud` Actions endpoints (R5, R10, R11).
+// May also be overridden at runtime via vars.ADHDEV_PREVIEW_GATE_VERIFY_PUBLIC_KEY.
 export const ROOT_PREVIEW_GATE_VERIFY_PUBLIC_KEY_PEM = [
   '-----BEGIN PUBLIC KEY-----',
-  'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0L6vW2w1sQ8R+k6gY7rB',
-  '9H1t2V3x8K5p4M7n6Q2w9E1r4T5y7U8i9O0p1A2s3D4f5G6h7J8k9L0z1X2c3V4b',
-  '5N6m7Q8w9E0r1T2y3U4i5O6p7A8s9D0f1G2h3J4k5L6z7X8c9V0b1N2m3Q4w5E6r',
-  '7T8y9U0i1O2p3A4s5D6f7G8h9J0k1L2z3X4c5V6b7N8m9Q0w1E2r3T4y5U6i7O8p',
-  '9A0s1D2f3G4h5J6k7L8z9X0c1V2b3N4m5Q6w7E8r9T0y1U2i3O4p5A6s7D8f9G0h',
-  '1J2k3L4z5X6c7V8b9N0m1Q2w3E4r5T6y7U8i9O0p1A2s3D4f5G6h7J8k9L0z1X2c',
-  '3V4b5N6m7QIDAQAB',
+  'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvFW+opwsoDaMx6/HKdY1',
+  '39pkG7D4HFuOheCCTXe+rYE2lX+xVAK8ctSaxdcwp0YhNIkvFGfYcVgPiADDxKqz',
+  'MIBUEQ1nlNhUJcp7V+GBvbRjjz/tTho4tQrbtp/X1pO5OmaeTlJCO/inMKiTLXlF',
+  'yGrpNIJiEt+YA6iO6c6qchyI1Y0sWkvJJVLxZFe3jKMKp9zyaWSTsqpy7eDT+3TM',
+  'i3aKzLlb/EPFjzl0by91/Y9E41MUHXI+89CsKB6enE5gPou81t7JsNX1EXlU4LXP',
+  '6k2sB10uChpz2iF7yFPM/HwHYN00NNlQOgtDUgCsoU4v88AJBH3iRhdSRJsSgSZv',
+  'DwIDAQAB',
   '-----END PUBLIC KEY-----',
 ].join('\n');
+
+export function resolveRootPreviewGateVerifyPublicKeyPem(overridePublicKeyPem = '') {
+  const candidate = String(overridePublicKeyPem || process.env.ADHDEV_PREVIEW_GATE_VERIFY_PUBLIC_KEY || '').trim();
+  return candidate || ROOT_PREVIEW_GATE_VERIFY_PUBLIC_KEY_PEM;
+}
+
+export function assertValidRootCohortGateVerifyPublicKey(
+  publicKeyPem = resolveRootPreviewGateVerifyPublicKeyPem(),
+) {
+  let keyObj;
+  try {
+    keyObj = createPublicKey(publicKeyPem);
+  } catch (err) {
+    throw new Error(
+      `approved_cohort_gate_verify_key_invalid: failed to parse RSA SPKI verification public key (${err?.message || err})`,
+    );
+  }
+  const modulusLength = Number(keyObj?.asymmetricKeyDetails?.modulusLength ?? 0);
+  if (keyObj?.type !== 'public' || keyObj?.asymmetricKeyType !== 'rsa' || modulusLength < 2048) {
+    throw new Error(
+      `approved_cohort_gate_verify_key_invalid: expected RSA >=2048-bit public key (got type=${keyObj?.asymmetricKeyType || '<unknown>'}, modulusLength=${modulusLength})`,
+    );
+  }
+  return keyObj;
+}
 
 export function buildCanonicalRootCohortGateStatement({
   gateRunId,
@@ -326,7 +352,7 @@ export function verifyRootCohortGateSignature({
   gateRunId,
   cohortAttestationSha256,
   signatureBase64,
-  publicKeyPem = process.env.ADHDEV_PREVIEW_GATE_VERIFY_PUBLIC_KEY || ROOT_PREVIEW_GATE_VERIFY_PUBLIC_KEY_PEM,
+  publicKeyPem = resolveRootPreviewGateVerifyPublicKeyPem(),
 }) {
   const statement = buildCanonicalRootCohortGateStatement({ gateRunId, cohortAttestationSha256 });
   if (!signatureBase64 || typeof signatureBase64 !== 'string' || !/^[A-Za-z0-9+/=\r\n]+$/.test(signatureBase64.trim())) {
@@ -334,12 +360,14 @@ export function verifyRootCohortGateSignature({
       'approved_cohort_gate_signature_required: OSS preview OIDC publish requires a valid base64 detached RSA-SHA256 gate_attestation_signature binding gate_run_id to the full cohort manifest',
     );
   }
+  const resolvedKeyPem = resolveRootPreviewGateVerifyPublicKeyPem(publicKeyPem);
   let valid = false;
   try {
+    const keyObj = assertValidRootCohortGateVerifyPublicKey(resolvedKeyPem);
     const verifier = createVerify('RSA-SHA256');
     verifier.update(statement, 'utf8');
     verifier.end();
-    valid = verifier.verify(publicKeyPem, Buffer.from(signatureBase64.trim(), 'base64'));
+    valid = verifier.verify(keyObj, Buffer.from(signatureBase64.trim(), 'base64'));
   } catch (err) {
     throw new Error(`approved_cohort_gate_signature_invalid: cryptographic signature verification failed (${err?.message || err})`);
   }
@@ -495,7 +523,7 @@ export function verifyApprovedCohortDigests(packedRecords, approvedCohort, {
   npmPackage = 'all',
   expectedGateRunId = '',
   gateAttestationSignature = '',
-  gateVerifyPublicKeyPem = process.env.ADHDEV_PREVIEW_GATE_VERIFY_PUBLIC_KEY || ROOT_PREVIEW_GATE_VERIFY_PUBLIC_KEY_PEM,
+  gateVerifyPublicKeyPem = resolveRootPreviewGateVerifyPublicKeyPem(),
   ghApiJson = null,
   verifyGateRun = false,
 } = {}) {
@@ -951,7 +979,7 @@ export async function publishOssPreviewRelease({
   expectedRootSha = process.env.EXPECTED_ROOT_SHA || '',
   expectedGateRunId = process.env.GATE_RUN_ID || '',
   gateAttestationSignature = process.env.GATE_ATTESTATION_SIGNATURE || '',
-  gateVerifyPublicKeyPem = process.env.ADHDEV_PREVIEW_GATE_VERIFY_PUBLIC_KEY || ROOT_PREVIEW_GATE_VERIFY_PUBLIC_KEY_PEM,
+  gateVerifyPublicKeyPem = resolveRootPreviewGateVerifyPublicKeyPem(),
   approvedCohort = null,
   githubRepository = process.env.GITHUB_REPOSITORY,
   githubRef = process.env.GITHUB_REF,
