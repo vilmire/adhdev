@@ -3,16 +3,23 @@
  * Guarded OIDC Trusted Publishing helper for stable OSS releases (`oss/.github/workflows/ci.yml`).
  *
  * Enforces:
- *   1. Authorized tag & source binding (`R2`):
+ *   1. Authorized tag & independently approved source binding (`R2`):
  *      - `GITHUB_REPOSITORY === 'vilmire/adhdev'`
  *      - `GITHUB_REF === 'refs/tags/v' + version` where `version` is strict stable `X.Y.Z` (never prerelease/-rc)
  *      - `git rev-parse HEAD === GITHUB_SHA`
+ *      - Remote tag object resolution via GitHub API (`repos/vilmire/adhdev/git/ref/tags/v<X.Y.Z>` -> peeling annotated tag if needed)
+ *        must resolve to `commit` SHA === `headSha`
+ *      - `headSha` must be reachable on `refs/heads/main` (`repos/vilmire/adhdev/compare/main...<headSha>` has `ahead_by === 0`
+ *        and `status` in `['identical', 'behind']`)
+ *      - When `expectedTargetSha` is provided (`workflow_dispatch` `tag_sha`), `headSha === expectedTargetSha`
+ *      - Active deployment environment verification (`R4`): `repos/vilmire/adhdev/environments/npm-stable` must have
+ *        `can_admins_bypass === false` and required reviewer `User: vilmire` (`id: 5513793`)
  *      - Root `package.json` version === tag version
  *      - Every published package manifest (`mesh-shared`, `session-host-core`, `mcp-server`, `daemon-core`, `daemon-standalone`)
  *        has exact `name`, `version === tagVersion`, `private !== true`, and `repository.url === 'https://github.com/vilmire/adhdev.git'`
  *      - `@adhdev/ghostty-vt-node` has exact `name`, strict stable `X.Y.Z` version (`<= tagVersion`), and matching `repository.url`
  *        (matching `oss/scripts/version-bump.sh`'s intentional `GHOSTTY_CHANGED=0` version retention when ghostty paths are unchanged).
- *   2. Reviewed-byte idempotency & explicit `--tag=latest` (`R2`, `R3`):
+ *   2. Reviewed-byte idempotency, explicit `--tag=latest`, and post-publish readback (`R2`, `R3`, `R7`):
  *      - Packs each package with `npm pack --ignore-scripts --json --pack-destination <bundleDir>`
  *      - Computes SHA-256 and `sha512-...` `dist.integrity` from the exact packed `.tgz` bytes
  *      - Queries live npm registry `https://registry.npmjs.org/<pkg>/<version>` and `/latest`:
@@ -20,7 +27,8 @@
  *        * If `<version>` already exists on npm, its `dist.integrity` MUST equal the packed `.tgz` integrity AND `/latest`
  *          must already point to `<version>` with matching integrity (idempotent skip); otherwise fails closed (`registry_bytes_differ` / `channel_mismatch`)
  *      - Publishes the exact `.tgz` file with `npm publish <tarball> --access=public --ignore-scripts --tag=latest`
- *        using a sanitized OIDC environment (`NODE_AUTH_TOKEN`, `NPM_TOKEN`, `npm_config__authToken` stripped; `ACTIONS_ID_TOKEN_REQUEST_*` required).
+ *        using a sanitized OIDC environment (`NODE_AUTH_TOKEN`, `NPM_TOKEN`, `npm_config__authToken` stripped; `ACTIONS_ID_TOKEN_REQUEST_*` required)
+ *      - Polls registry readback after each publish to verify `<pkg>@<version>` and `/latest` serve the exact `dist.integrity`.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -31,6 +39,9 @@ import { fileURLToPath } from 'node:url';
 
 export const EXPECTED_REPO = 'vilmire/adhdev';
 export const EXPECTED_REPO_URL = 'https://github.com/vilmire/adhdev.git';
+export const EXPECTED_OWNER_LOGIN = 'vilmire';
+export const EXPECTED_OWNER_ID = 5513793;
+export const EXPECTED_STABLE_ENVIRONMENT = 'npm-stable';
 export const REGISTRY = 'https://registry.npmjs.org';
 export const STABLE_SEMVER_RE = /^\d+\.\d+\.\d+$/;
 export const OSS_PUBLISH_PACKAGES = Object.freeze([
@@ -79,12 +90,125 @@ export function assertOidcAmbientCredentials(env = process.env) {
   }
 }
 
+export function defaultGhApiJson(endpoint) {
+  const out = execFileSync('gh', ['api', endpoint], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  return JSON.parse(out);
+}
+
+/**
+ * Verifies that a tag ref in `repository` points to `headSha` AND that `headSha`
+ * is an approved commit reachable on `refs/heads/main` (never an unmerged/rogue branch tag).
+ * If `expectedTargetSha` is supplied, also asserts `headSha === expectedTargetSha`.
+ */
+export function verifyApprovedTagTarget({
+  repository,
+  tagName,
+  headSha,
+  expectedTargetSha = '',
+  ghApiJson = defaultGhApiJson,
+}) {
+  if (!headSha || !/^[0-9a-f]{40}$/.test(headSha)) {
+    throw new Error(`invalid_head_sha: expected 40-char hex SHA, got ${headSha || '<unset>'}`);
+  }
+  if (expectedTargetSha) {
+    if (!/^[0-9a-f]{40}$/.test(expectedTargetSha) || expectedTargetSha !== headSha) {
+      throw new Error(`approved_target_sha_mismatch: checkout HEAD (${headSha}) does not match independently approved target SHA (${expectedTargetSha})`);
+    }
+  }
+  const refData = ghApiJson(`repos/${repository}/git/ref/tags/${tagName}`);
+  if (refData?.ref !== `refs/tags/${tagName}` || !refData?.object?.sha) {
+    throw new Error(`tag_ref_not_found: refs/tags/${tagName} in ${repository}`);
+  }
+  let commitSha = refData.object.sha;
+  if (refData.object.type === 'tag') {
+    const tagObj = ghApiJson(`repos/${repository}/git/tags/${commitSha}`);
+    if (tagObj?.object?.type !== 'commit' || !tagObj?.object?.sha) {
+      throw new Error(`tag_object_not_commit: refs/tags/${tagName} in ${repository} does not peel to a commit`);
+    }
+    commitSha = tagObj.object.sha;
+  } else if (refData.object.type !== 'commit') {
+    throw new Error(`tag_object_invalid_type: refs/tags/${tagName} has object.type=${refData.object.type}`);
+  }
+  if (commitSha !== headSha) {
+    throw new Error(`tag_commit_mismatch: remote refs/tags/${tagName} points to ${commitSha}, but checkout HEAD is ${headSha}`);
+  }
+
+  // Verify the tagged commit is contained in the protected main branch history.
+  const compare = ghApiJson(`repos/${repository}/compare/main...${headSha}`);
+  const status = compare?.status;
+  const aheadBy = compare?.ahead_by;
+  if ((status !== 'identical' && status !== 'behind') || aheadBy !== 0) {
+    throw new Error(
+      `unapproved_tag_commit_not_on_main: commit ${headSha} for tag ${tagName} is not reachable on ${repository} refs/heads/main (status=${status ?? '<unknown>'}, ahead_by=${aheadBy ?? '<unknown>'})`,
+    );
+  }
+  return { tagName, commitSha };
+}
+
+/**
+ * Verifies at runtime via GitHub API that the active deployment environment
+ * enforces `can_admins_bypass === false` and requires owner review (`User: vilmire`, id `5513793`).
+ * Prevents silent downgrade if an environment was auto-created without protection rules
+ * or if the repository's billing plan does not enforce required reviewers.
+ */
+export function verifyProtectedEnvironmentGate({
+  repository,
+  environmentName,
+  expectedBranchPolicyType = null,
+  expectedBranchPolicyName = null,
+  ghApiJson = defaultGhApiJson,
+}) {
+  let envData;
+  try {
+    envData = ghApiJson(`repos/${repository}/environments/${environmentName}`);
+  } catch (err) {
+    throw new Error(`environment_verification_failed: could not query repos/${repository}/environments/${environmentName}: ${err?.message || err}`);
+  }
+  if (!envData || envData.name !== environmentName) {
+    throw new Error(`environment_missing: ${repository} environment "${environmentName}" does not exist`);
+  }
+  if (envData.can_admins_bypass !== false) {
+    throw new Error(`environment_admin_bypass_enabled: ${repository} environment "${environmentName}" must set can_admins_bypass=false`);
+  }
+  const rules = Array.isArray(envData.protection_rules) ? envData.protection_rules : [];
+  const reviewerRules = rules.filter((r) => r?.type === 'required_reviewers');
+  if (reviewerRules.length !== 1) {
+    throw new Error(
+      `environment_required_reviewers_missing: ${repository} environment "${environmentName}" has no active required_reviewers protection rule (note: private repositories on GitHub Free/Pro/Team do not support environment required_reviewers; an enforceable approval gate is required before OIDC publish)`,
+    );
+  }
+  const reviewers = Array.isArray(reviewerRules[0].reviewers) ? reviewerRules[0].reviewers : [];
+  const hasOwnerReviewer = reviewers.length === 1
+    && reviewers[0]?.type === 'User'
+    && (reviewers[0]?.reviewer?.login === EXPECTED_OWNER_LOGIN || reviewers[0]?.reviewer?.id === EXPECTED_OWNER_ID);
+  if (!hasOwnerReviewer) {
+    throw new Error(`environment_owner_reviewer_mismatch: ${repository} environment "${environmentName}" must require sole User reviewer ${EXPECTED_OWNER_LOGIN}`);
+  }
+  if (expectedBranchPolicyType && expectedBranchPolicyName) {
+    const policy = ghApiJson(`repos/${repository}/environments/${environmentName}/deployment-branch-policies`);
+    const policies = Array.isArray(policy?.branch_policies) ? policy.branch_policies : [];
+    const matched = policies.some((p) => p?.name === expectedBranchPolicyName && (p?.type ?? 'branch') === expectedBranchPolicyType);
+    if (!matched) {
+      throw new Error(
+        `environment_branch_policy_mismatch: ${repository} environment "${environmentName}" must enforce ${expectedBranchPolicyType} policy "${expectedBranchPolicyName}"`,
+      );
+    }
+  }
+  return envData;
+}
+
 export function verifyStableTagAndManifests({
   repoRoot,
   githubRepository,
   githubRef,
   githubSha,
   headSha,
+  expectedTargetSha = '',
+  ghApiJson = null,
+  verifyEnvironment = false,
 }) {
   if (githubRepository !== EXPECTED_REPO) {
     throw new Error(`unauthorized_repository: expected ${EXPECTED_REPO}, got ${githubRepository || '<unset>'}`);
@@ -100,6 +224,25 @@ export function verifyStableTagAndManifests({
   if (!githubSha || !/^[0-9a-f]{40}$/.test(githubSha) || headSha !== githubSha) {
     throw new Error(`source_sha_mismatch: checkout HEAD (${headSha}) does not match GITHUB_SHA (${githubSha})`);
   }
+  if (ghApiJson) {
+    verifyApprovedTagTarget({
+      repository: EXPECTED_REPO,
+      tagName: `v${tagVersion}`,
+      headSha,
+      expectedTargetSha,
+      ghApiJson,
+    });
+    if (verifyEnvironment) {
+      verifyProtectedEnvironmentGate({
+        repository: EXPECTED_REPO,
+        environmentName: EXPECTED_STABLE_ENVIRONMENT,
+        ghApiJson,
+      });
+    }
+  } else if (expectedTargetSha && expectedTargetSha !== headSha) {
+    throw new Error(`approved_target_sha_mismatch: checkout HEAD (${headSha}) does not match independently approved target SHA (${expectedTargetSha})`);
+  }
+
   const rootPkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
   if (rootPkg.version !== tagVersion) {
     throw new Error(`tag_manifest_version_mismatch: tag v${tagVersion} != oss/package.json version ${rootPkg.version}`);
@@ -183,6 +326,47 @@ export async function evaluateStableIdempotency(record, { fetchRecord = fetchReg
   return { action: 'publish' };
 }
 
+export async function verifyRegistryPublicationReadback({
+  packageName,
+  version,
+  expectedIntegrity,
+  expectedDistTag = 'latest',
+  fetchRecord = fetchRegistryVersionRecord,
+  pollAttempts = 18,
+  pollDelayMs = 10_000,
+}) {
+  let lastVersionRecord = null;
+  let lastTagRecord = null;
+  for (let attempt = 1; attempt <= pollAttempts; attempt += 1) {
+    lastVersionRecord = await fetchRecord(packageName, version);
+    lastTagRecord = await fetchRecord(packageName, expectedDistTag);
+    if (lastVersionRecord !== null) {
+      const remoteIntegrity = lastVersionRecord?.dist?.integrity;
+      if (remoteIntegrity && remoteIntegrity !== expectedIntegrity) {
+        throw new Error(
+          `registry_readback_bytes_differ: ${packageName}@${version} on npm has integrity ${remoteIntegrity}, expected ${expectedIntegrity}`,
+        );
+      }
+      if (
+        remoteIntegrity === expectedIntegrity
+        && lastTagRecord !== null
+        && lastTagRecord.version === version
+        && lastTagRecord?.dist?.integrity === expectedIntegrity
+      ) {
+        return { versionRecord: lastVersionRecord, tagRecord: lastTagRecord };
+      }
+    }
+    if (attempt < pollAttempts && pollDelayMs > 0) {
+      await new Promise((r) => setTimeout(r, pollDelayMs));
+    }
+  }
+  const tagVer = lastTagRecord?.version ?? '<none>';
+  const verIntegrity = lastVersionRecord?.dist?.integrity ?? '<missing>';
+  throw new Error(
+    `registry_readback_unverified: ${packageName}@${version} failed post-publish registry verification after ${pollAttempts} attempts (versionIntegrity=${verIntegrity}, ${expectedDistTag}=${tagVer})`,
+  );
+}
+
 export function packStableTarballs({ repoRoot, bundleDir, packages, execNpm = (args, opts) => execFileSync('npm', args, opts) }) {
   mkdirSync(bundleDir, { recursive: true, mode: 0o700 });
   const records = [];
@@ -217,9 +401,14 @@ export async function publishStableOssRelease({
   githubRepository = process.env.GITHUB_REPOSITORY,
   githubRef = process.env.GITHUB_REF,
   githubSha = process.env.GITHUB_SHA,
+  expectedTargetSha = process.env.EXPECTED_TAG_SHA || '',
   env = process.env,
   fetchRecord = fetchRegistryVersionRecord,
   execNpm,
+  ghApiJson = defaultGhApiJson,
+  verifyEnvironment = Boolean(process.env.GH_TOKEN || process.env.GITHUB_TOKEN),
+  pollAttempts = 18,
+  pollDelayMs = 10_000,
 }) {
   assertOidcAmbientCredentials(env);
   const cleanEnv = sanitizeOidcPublishEnv(env);
@@ -230,6 +419,9 @@ export async function publishStableOssRelease({
     githubRef,
     githubSha,
     headSha,
+    expectedTargetSha,
+    ghApiJson,
+    verifyEnvironment,
   });
   const runNpm = execNpm ?? ((args, opts = {}) => execFileSync('npm', args, {
     encoding: 'utf8',
@@ -282,7 +474,16 @@ export async function publishStableOssRelease({
       '--tag=latest',
       `--registry=${REGISTRY}`,
     ], { cwd: bundleDir });
-    console.log(`✓ Published ${record.name}@${record.version} to latest`);
+    await verifyRegistryPublicationReadback({
+      packageName: record.name,
+      version: record.version,
+      expectedIntegrity: record.integrity,
+      expectedDistTag: 'latest',
+      fetchRecord,
+      pollAttempts,
+      pollDelayMs,
+    });
+    console.log(`✓ Published and verified ${record.name}@${record.version} on latest (${record.integrity})`);
   }
   return manifest;
 }

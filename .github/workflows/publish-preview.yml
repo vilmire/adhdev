@@ -20,6 +20,11 @@ on:
           - all
           - daemon-core
           - standalone
+      approved_cohort_json:
+        description: 'Optional JSON manifest of pre-validated frozen cohort SHA-256 digests'
+        required: false
+        default: ''
+        type: string
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -96,8 +101,10 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/oidc-npm" --no-save --no-audit --no-fund npm@11.21.0
           echo "$RUNNER_TEMP/oidc-npm/node_modules/.bin" >> "$GITHUB_PATH"
 
-      - name: Freeze, verify reviewed bytes, and publish OSS preview cohort to npm next via OIDC
+      - name: Freeze, gate all OSS preview tarballs, and publish to npm next via OIDC
         env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVED_COHORT_JSON: ${{ inputs.approved_cohort_json }}
           NODE_AUTH_TOKEN: ''
           NPM_TOKEN: ''
         run: |

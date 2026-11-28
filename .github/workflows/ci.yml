@@ -360,6 +360,7 @@ jobs:
 
       - name: Pack, verify reviewed bytes, and publish OSS packages to npm latest via OIDC
         env:
+          GH_TOKEN: ${{ github.token }}
           NODE_AUTH_TOKEN: ''
           NPM_TOKEN: ''
         run: |
