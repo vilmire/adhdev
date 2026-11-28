@@ -1,3 +1,7 @@
+import { daemonIdsEquivalent, meshNodeIdMatches, sessionIdsEquivalent } from '@adhdev/mesh-shared';
+import { getMesh } from '../config/mesh-config.js';
+import type { SessionBusyVerdict } from './mesh-candidacy-predicates.js';
+import { sessionStopPending } from './mesh-session-stop-fence.js';
 import { pinnedMeshNodeIdMatches } from './mesh-pinned-node-identity.js';
 import { realpathSync } from 'node:fs';
 import type { MeshRoutingPreferences, MeshTaskStatus, PhysicalOwnershipScope } from '@adhdev/mesh-shared';
@@ -26,13 +30,16 @@ export function normalizeRoutingPreferences(value: unknown): MeshRoutingPreferen
     return result;
 }
 
+type WriterActivity = (sessionId: string) => SessionBusyVerdict;
+
 export interface ReviewRoutingContext {
     workspace: string; machineId: string; repoIdentity?: string;
+    reviewWriterActivity?: WriterActivity;
     /** Set when the claiming node is on another machine: that machine's attestation, never a local one. */
     remoteOwnership?: (candidate: MeshWorkQueueEntry) => { scope: import('@adhdev/mesh-shared').PhysicalOwnershipScope } | { error: string };
 }
 /** Input availability is proven locally; a remote source needs a future verified transfer contract. */
-export function reviewRoutingRefusal(task: Pick<MeshWorkQueueEntry, 'review' | 'readonly' | 'taskMode'> & Partial<MeshWorkQueueEntry>, source: MeshWorkQueueEntry | undefined | null, provider: string | undefined, context: ReviewRoutingContext | undefined, active: readonly MeshWorkQueueEntry[] = [], claimingSessionId?: string, artifactStore?: Pick<MeshRuntimeStore, 'db'>): string | undefined {
+export function reviewRoutingRefusal(task: Pick<MeshWorkQueueEntry, 'review' | 'readonly' | 'taskMode'> & Partial<MeshWorkQueueEntry>, source: MeshWorkQueueEntry | undefined | null, provider: string | undefined, context: ReviewRoutingContext | undefined, active: readonly MeshWorkQueueEntry[] = [], claimingSessionId?: string, artifactStore?: Pick<MeshRuntimeStore, 'db'>, writerStore?: Pick<MeshRuntimeStore, 'db' | 'turnStore'>): string | undefined {
     if (!task.review) return undefined;
     if (!task.readonly && task.taskMode !== 'live_debug_readonly') return 'review_requires_readonly';
     if (!source?.assignedProviderType || !provider) return 'review_independence_required';
@@ -57,25 +64,66 @@ export function reviewRoutingRefusal(task: Pick<MeshWorkQueueEntry, 'review' | '
     const scope = stageSource ? currentStageReviewScope(source, task) : source.ownedPaths && currentPhysicalScope(source.ownershipScope, source.ownedPaths);
     if ((source.status !== 'completed' && !stageSource) || !scope || !context || context.machineId !== scope.machineId || (context.repoIdentity && context.repoIdentity !== scope.repoIdentity)) return 'review_input_unavailable';
     try { if (realpathSync.native(context.workspace) !== scope.worktree) return 'review_input_unavailable'; } catch { return 'review_input_unavailable'; }
-    if (reviewInputBusy(source, scope, active, stageSource)) return 'review_input_busy';
+    if (stageSource && source.attemptId && writerStore && !stageReviewWriterSettled(writerStore, source, context.reviewWriterActivity)) return 'review_input_busy';
+    if (reviewInputBusy(source, scope, active, stageSource, writerStore, context.reviewWriterActivity)) return 'review_input_busy';
     return undefined;
 }
 
 /** Same physical writer fence before enqueue and inside actual reviewer admission. */
-export function reviewInputBusy(source: MeshWorkQueueEntry, scope: PhysicalOwnershipScope, active: readonly MeshWorkQueueEntry[], stageSource: boolean): boolean {
+export function reviewInputBusy(source: MeshWorkQueueEntry, scope: PhysicalOwnershipScope, active: readonly MeshWorkQueueEntry[], stageSource: boolean, store?: Pick<MeshRuntimeStore, 'db' | 'turnStore'>, activity?: WriterActivity): boolean {
     return active.some(writer => {
         if (stageSource && writer.id === source.id) return false;
         if ((writer.status !== 'assigned' && !pendingLaunchReservation(writer)) || writer.readonly || writer.taskMode === 'live_debug_readonly') return false;
-        if (pinnedMeshNodeIdMatches(writer.assignedNodeId, scope.nodeId)) return true;
+        const settled = () => store && stageReviewWriterSettled(store, writer, activity);
+        if (pinnedMeshNodeIdMatches(writer.assignedNodeId, scope.nodeId)) return !settled();
         const paths = writer.ownedPaths ?? { paths: [{ path: '', subtree: true }] };
         const writerScope = currentPhysicalScope(writer.ownershipScope, paths);
-        // A writer in ANOTHER checkout cannot change the reviewed tree. With the path-ownership gate not mesh_wide, its
-        // missing scope (the default now: owned_paths are optional) must not read as "unknown writer of every checkout";
-        // only two attested scopes that provably share a physical resource still count.
+        // Keep the existing cross-checkout routing policy for writers without declared ownership.
         const crossCheckout = (!!writer.light || !!(writer.assignedNodeId ?? writer.autoLaunch?.nodeId)) && resolvePathOwnershipGate(source.meshId) !== 'mesh_wide';
-        if (crossCheckout && !writerScope) return false;
-        return comparePhysicalOwnership(stageSource ? { paths: [] } : source.ownedPaths ?? { paths: [] }, scope, paths, writerScope).physicalConflict;
+        if (crossCheckout && !writerScope && !writer.ownershipScope) return false;
+        return comparePhysicalOwnership(stageSource ? { paths: [] } : source.ownedPaths ?? { paths: [] }, scope, paths, writerScope).physicalConflict
+            && !settled();
     });
+}
+
+/**
+ * Release only the review-input fence. An assigned stage still reserves its
+ * write slot for the revision loop. A self-check can also run Git/build tools,
+ * so its phase cannot prove a writer stopped.
+ */
+export function stageReviewWriterSettled(store: Pick<MeshRuntimeStore, 'db' | 'turnStore'>, row: MeshWorkQueueEntry, activity?: WriterActivity): boolean {
+    const st = row.stageState;
+    if (row.status !== 'assigned' || !isStageParent(row) || !st || st.released
+        || (st.phase !== 'awaiting_review' && st.phase !== 'reviewing')
+        || !row.attemptId || st.handledAttemptIds?.at(-1) !== row.attemptId
+        || !row.assignedNodeId || !row.assignedSessionId || !row.assignedProviderType) return false;
+    try {
+        const node = getMesh(row.meshId)?.nodes?.find(n => meshNodeIdMatches({ id: n.id }, row.assignedNodeId!));
+        if (row.ownershipScope && (!row.ownedPaths || !node?.workspace
+            || realpathSync.native(node.workspace) !== row.ownershipScope.worktree
+            || !currentPhysicalScope(row.ownershipScope, row.ownedPaths))) return false;
+        const turns = store.turnStore();
+        const attempt = turns.findLatestAttemptForTask(row.meshId, row.id);
+        if (!node?.daemonId || !attempt || attempt.scope !== 'mesh_queue'
+            || attempt.attemptId !== row.attemptId || attempt.state !== 'completed' || attempt.terminal?.outcome !== 'completed'
+            || !attempt.nodeId || !meshNodeIdMatches({ id: attempt.nodeId }, row.assignedNodeId)
+            || !sessionIdsEquivalent(attempt.sessionId, row.assignedSessionId)
+            || attempt.providerType !== row.assignedProviderType
+            || !daemonIdsEquivalent(attempt.ownerDaemonId, node.daemonId)
+            || attempt.dispatchNonce !== (row.dispatchNonce ?? null)) return false;
+        const stop = attempt.data.writerStop;
+        if (stop && (!stop.confirmed || stop.settledBy)) return false;
+        const report = attempt.data.report;
+        const reported = (report?.generation === attempt.generation && report.outcome === 'completed')
+            || (attempt.terminal.strength === 'tool_report' && attempt.terminal.source === 'worker_tool'
+                && attempt.terminal.reason === 'worker_reported');
+        const observedEnd = attempt.terminal.strength === 'genuine'
+            && ['turn_end', 'transcript_final'].includes(attempt.terminal.reason);
+        const runtime = activity?.(row.assignedSessionId);
+        if (runtime === 'GENERATING' || (!observedEnd && !(reported && (stop?.confirmed || runtime === 'IDLE_CONFIRMED')))) return false;
+        if (sessionStopPending(store.db, row.assignedSessionId) || turns.findOpenAttemptForSession(row.assignedSessionId)) return false;
+        return !turns.listOpenAttempts({ meshId: row.meshId }).some(open => open.taskId === row.id);
+    } catch { return false; }
 }
 
 /**

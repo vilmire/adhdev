@@ -171,6 +171,14 @@ function stageReviewArtifactGrant(store: Pick<MeshRuntimeStore, 'db'>, parent: M
     return grant;
 }
 
+/** Inspect the retained manifest pin without re-running the producer merely to decide whether to capture. */
+export function retainedStageDiff(store: Pick<MeshRuntimeStore, 'db'>, parent: MeshWorkQueueEntry) {
+    const id = parent.stageState?.artifacts.diff.at(-1);
+    if (!id) return null;
+    const content = readStageReviewArtifact(stageReviewArtifactGrant(store, parent, id));
+    return decodeStageSourceGenerated(content) ?? decodeStageDiffManifest(content);
+}
+
 export function attestStageReviewInput(parent: MeshWorkQueueEntry, input: {
     repoIdentity: string; machineId: string; nodeId: string; workspace: string;
 }, artifacts: StageReviewInput['artifacts']): StageReviewInput {

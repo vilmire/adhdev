@@ -362,6 +362,7 @@ function buildClaimOptions(p: {
                 workspace: stageReviewerTaskId ? sessionWorkspace : (lightWorkspaceId && sessionWorkspace) || readText(node?.workspace),
                 machineId: getMachineId() ?? '',
                 repoIdentity: mesh.repoIdentity,
+                reviewWriterActivity: (id: string) => resolveSessionBusyVerdict(components, id),
                 ...(remoteOwnership ? { remoteOwnership } : {}),
             },
             ...(lightWorkspaceId ? { lightWorkspaceId } : {}),

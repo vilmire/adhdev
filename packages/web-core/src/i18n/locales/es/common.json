@@ -4831,6 +4831,13 @@
             "deviceShotCaption": "Dispositivo real — notificaciones push reales en un teléfono",
             "point4": "Sin port forwarding, VPN ni DMZ — P2P con relé TURN conecta desde cafeterías, hotspots, escritorio o portátil, cualquier red con internet"
         },
+        "projectResults": {
+            "assistantTitle": "Consulta los resultados de un proyecto en un chat",
+            "assistantDescription": "Pide al asistente el estado de un proyecto o que transmita una solicitud al coordinador.",
+            "artifactsTitle": "Abre los archivos de un informe",
+            "artifactsDescription": "Abre o descarga informes de pruebas, registros y capturas desde el chat o la pestaña de artefactos del proyecto.",
+            "guide": "Asistente y artefactos"
+        },
         "brain": {
             "sectionTitle": "El modelo adecuado para cada tarea, en la suscripción que aún tiene margen.",
             "sectionSubtitle": "Etiqueta una tarea como fácil, media o difícil y la malla aplica un preset acorde: proveedor, modelo y presupuesto de razonamiento. Cada máquina también lee cuánto queda de la ventana de 5 horas y la semanal de cada suscripción: un plan casi agotado se salta, y la cuota que caducaría sin usar en el siguiente reinicio se gasta primero.",
