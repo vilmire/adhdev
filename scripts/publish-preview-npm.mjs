@@ -28,6 +28,7 @@
  */
 
 import { execFileSync, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
@@ -227,7 +228,42 @@ const FULL_PREVIEW_COHORT_NAMES = [
   'adhdev',
 ];
 
-export function verifyApprovedCohortDigests(packedRecords, approvedCohort, { previewVersion = '', ossSha = '', rootSha = '' } = {}) {
+export function computeApprovedCohortAttestation({
+  version,
+  channel = 'preview',
+  distTag = 'next',
+  rootSha,
+  ossSha,
+  npmPackage = 'all',
+  artifacts,
+}) {
+  const ordered = [...(Array.isArray(artifacts) ? artifacts : [])]
+    .map((a) => ({
+      name: String(a?.name ?? ''),
+      sha256: String(a?.sha256 ?? ''),
+      integrity: String(a?.integrity ?? ''),
+      filesCount: Number(a?.filesCount ?? 0),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const canonicalPayload = JSON.stringify({
+    schema: 'adhdev-preview-full-cohort-gate-v1',
+    version: String(version ?? ''),
+    channel: String(channel ?? ''),
+    distTag: String(distTag ?? ''),
+    rootSha: String(rootSha ?? ''),
+    ossSha: String(ossSha ?? ''),
+    npmPackage: String(npmPackage ?? 'all'),
+    artifacts: ordered,
+  });
+  return createHash('sha256').update(canonicalPayload, 'utf8').digest('hex');
+}
+
+export function verifyApprovedCohortDigests(packedRecords, approvedCohort, {
+  previewVersion = '',
+  ossSha = '',
+  rootSha = '',
+  npmPackage = 'all',
+} = {}) {
   if (!approvedCohort || typeof approvedCohort !== 'object') {
     throw new Error('approved_cohort_manifest_required: OSS preview OIDC publish requires a pre-validated approved_cohort_json manifest from the full frozen cohort gate');
   }
@@ -243,14 +279,20 @@ export function verifyApprovedCohortDigests(packedRecords, approvedCohort, { pre
   if (!approvedCohort.rootSha || !/^[0-9a-f]{40}$/.test(String(approvedCohort.rootSha))) {
     throw new Error(`approved_cohort_root_sha_missing: approved cohort manifest must declare 40-hex rootSha (got ${approvedCohort.rootSha || '<unset>'})`);
   }
-  if (rootSha && approvedCohort.rootSha !== rootSha) {
-    throw new Error(`approved_cohort_root_sha_mismatch: approved cohort rootSha (${approvedCohort.rootSha}) != rootSha (${rootSha})`);
+  if (!rootSha || !/^[0-9a-f]{40}$/.test(String(rootSha))) {
+    throw new Error(`approved_cohort_expected_root_sha_required: OSS preview OIDC publish requires an explicit 40-hex expected rootSha input to bind the approved cohort manifest (got ${rootSha || '<unset>'})`);
+  }
+  if (approvedCohort.rootSha !== rootSha) {
+    throw new Error(`approved_cohort_root_sha_mismatch: approved cohort rootSha (${approvedCohort.rootSha}) != expected rootSha (${rootSha})`);
   }
   if (!approvedCohort.ossSha || !/^[0-9a-f]{40}$/.test(String(approvedCohort.ossSha))) {
     throw new Error(`approved_cohort_oss_sha_missing: approved cohort manifest must declare 40-hex ossSha (got ${approvedCohort.ossSha || '<unset>'})`);
   }
   if (ossSha && approvedCohort.ossSha !== ossSha) {
     throw new Error(`approved_cohort_oss_sha_mismatch: approved cohort ossSha (${approvedCohort.ossSha}) != headSha (${ossSha})`);
+  }
+  if (approvedCohort.npmPackage && npmPackage && approvedCohort.npmPackage !== npmPackage && !(approvedCohort.npmPackage === 'all' && npmPackage === 'all')) {
+    throw new Error(`approved_cohort_package_selection_mismatch: approved cohort npmPackage (${approvedCohort.npmPackage}) != requested npmPackage (${npmPackage})`);
   }
   const approvedMap = new Map();
   const list = Array.isArray(approvedCohort.artifacts) ? approvedCohort.artifacts
@@ -260,18 +302,56 @@ export function verifyApprovedCohortDigests(packedRecords, approvedCohort, { pre
       !item?.name
       || !/^[0-9a-f]{64}$/.test(String(item?.sha256 ?? ''))
       || !/^sha512-[A-Za-z0-9+/=]+$/.test(String(item?.integrity ?? ''))
+      || typeof item?.filesCount !== 'number'
+      || item.filesCount <= 0
     ) {
-      throw new Error(`approved_cohort_entry_invalid: every package in approved_cohort_json must declare name, 64-hex sha256, and sha512- integrity (got ${JSON.stringify(item)})`);
+      throw new Error(`approved_cohort_entry_invalid: every package in approved_cohort_json must declare name, 64-hex sha256, sha512- integrity, and positive filesCount (got ${JSON.stringify(item)})`);
+    }
+    const expectedSha512FromIntegrity = item.integrity.slice('sha512-'.length);
+    const decodedIntegrityBytes = Buffer.from(expectedSha512FromIntegrity, 'base64');
+    if (decodedIntegrityBytes.length !== 64 || decodedIntegrityBytes.toString('base64') !== expectedSha512FromIntegrity) {
+      throw new Error(`approved_cohort_entry_integrity_malformed: ${item.name} sha512 integrity is not a valid 64-byte SHA-512 base64 digest (${item.integrity})`);
     }
     approvedMap.set(item.name, item);
   }
   if (approvedMap.size === 0) {
     throw new Error('approved_cohort_manifest_empty: approved_cohort_json contains no package digests');
   }
-  for (const requiredPkg of FULL_PREVIEW_COHORT_NAMES) {
+  const includeStandalone = npmPackage === 'standalone';
+  const requiredCohortNames = [...FULL_PREVIEW_COHORT_NAMES, ...(includeStandalone ? ['@adhdev/daemon-standalone'] : [])];
+  for (const requiredPkg of requiredCohortNames) {
     if (!approvedMap.has(requiredPkg)) {
       throw new Error(`approved_cohort_incomplete: approved cohort manifest must bind the complete preview cohort including ${requiredPkg}`);
     }
+  }
+  // Verify full-cohort gate evidence & cryptographic attestation digest over all 5+ packages (including Root adhdev)
+  const gateEvidence = approvedCohort.fullCohortGateEvidence;
+  if (
+    !gateEvidence
+    || typeof gateEvidence !== 'object'
+    || gateEvidence.schema !== 'adhdev-preview-full-cohort-gate-v1'
+    || gateEvidence.prescanPassed !== true
+    || gateEvidence.previewStampVerified !== true
+    || gateEvidence.consumerInstallVerified !== true
+    || gateEvidence.nativeBindingLoaded !== true
+    || gateEvidence.cloudBootSmokePassed !== true
+    || (includeStandalone && gateEvidence.standaloneBootSmokePassed !== true)
+  ) {
+    throw new Error('approved_cohort_gate_evidence_missing: approved_cohort_json lacks verified fullCohortGateEvidence proving Root adhdev and all OSS tarballs passed prescan, preview stamp, consumer install, native load, and daemon boot smoke gates');
+  }
+  const expectedAttestation = computeApprovedCohortAttestation({
+    version: approvedCohort.version,
+    channel: approvedCohort.channel,
+    distTag: approvedCohort.distTag,
+    rootSha: approvedCohort.rootSha,
+    ossSha: approvedCohort.ossSha,
+    npmPackage: approvedCohort.npmPackage || npmPackage,
+    artifacts: list,
+  });
+  if (!gateEvidence.cohortAttestationSha256 || gateEvidence.cohortAttestationSha256 !== expectedAttestation) {
+    throw new Error(
+      `approved_cohort_attestation_mismatch: fullCohortGateEvidence.cohortAttestationSha256 (${gateEvidence.cohortAttestationSha256 || '<unset>'}) does not match computed cohort attestation (${expectedAttestation})`,
+    );
   }
   for (const record of packedRecords) {
     const expected = approvedMap.get(record.name);
@@ -595,6 +675,7 @@ export async function publishOssPreviewRelease({
   bundleDir,
   previewVersion,
   npmPackage = 'all',
+  expectedRootSha = process.env.EXPECTED_ROOT_SHA || '',
   approvedCohort = null,
   githubRepository = process.env.GITHUB_REPOSITORY,
   githubRef = process.env.GITHUB_REF,
@@ -717,8 +798,13 @@ export async function publishOssPreviewRelease({
     // Gate 1: Verify frozen tarball preview stamps directly inside the packed archives (R5)
     assertFrozenOssPreviewStamps(packedRecords);
 
-    // Gate 2: Verify exact SHA-256 / integrity match against approved cohort handoff (R5 — mandatory)
-    verifyApprovedCohortDigests(packedRecords, approvedCohort, { previewVersion, ossSha: headSha });
+    // Gate 2: Verify exact SHA-256 / integrity / rootSha / full-cohort gate attestation match against approved cohort handoff (R5 — mandatory)
+    verifyApprovedCohortDigests(packedRecords, approvedCohort, {
+      previewVersion,
+      ossSha: headSha,
+      rootSha: expectedRootSha,
+      npmPackage,
+    });
 
     // Gate 3: Run isolated consumer install, native load, bin probes, and standalone boot smoke BEFORE any upload (R5)
     if (consumerGateFn) {
@@ -806,11 +892,13 @@ if (isMain) {
   const argv = process.argv.slice(2);
   let previewVersion = '';
   let npmPackage = 'all';
+  let expectedRootSha = process.env.EXPECTED_ROOT_SHA || '';
   let bundleDir = resolve(process.env.RUNNER_TEMP || '/tmp', 'oss-npm-preview-release');
   let approvedCohortJson = process.env.APPROVED_COHORT_JSON || '';
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--preview-version') previewVersion = argv[++i] ?? '';
     else if (argv[i] === '--npm-package') npmPackage = argv[++i] ?? 'all';
+    else if (argv[i] === '--root-sha') expectedRootSha = argv[++i] ?? '';
     else if (argv[i] === '--bundle-dir') bundleDir = resolve(argv[++i] ?? '');
     else if (argv[i] === '--approved-cohort-json') approvedCohortJson = argv[++i] ?? '';
     else throw new Error(`Unknown argument: ${argv[i]}`);
@@ -824,6 +912,7 @@ if (isMain) {
     bundleDir,
     previewVersion,
     npmPackage,
+    expectedRootSha,
     approvedCohort,
   }).catch((err) => {
     console.error(`❌ OSS preview OIDC publish failed: ${err?.message || err}`);

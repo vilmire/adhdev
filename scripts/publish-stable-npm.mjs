@@ -201,14 +201,20 @@ export function verifyProtectedEnvironmentGate({
     }
     const policy = ghApiJson(`repos/${repository}/environments/${environmentName}/deployment-branch-policies`);
     const policies = Array.isArray(policy?.branch_policies) ? policy.branch_policies : [];
+    const totalCount = typeof policy?.total_count === 'number' ? policy.total_count : policies.length;
+    if (totalCount !== policies.length) {
+      throw new Error(
+        `environment_branch_policy_incomplete_page: ${repository} environment "${environmentName}" reported total_count=${totalCount} but returned ${policies.length} policy entries`,
+      );
+    }
     const allowedSet = new Set(requiredPairs);
     const actualKeys = policies.map((p) => `${p?.type ?? 'branch'}:${p?.name ?? ''}`);
-    const hasExactAllowedSubset = actualKeys.length > 0
+    const hasExactCompletePolicySet = actualKeys.length === allowedSet.size
       && actualKeys.every((k) => allowedSet.has(k))
-      && new Set(actualKeys).size === actualKeys.length;
-    if (!hasExactAllowedSubset) {
+      && new Set(actualKeys).size === allowedSet.size;
+    if (!hasExactCompletePolicySet) {
       throw new Error(
-        `environment_branch_policy_mismatch: ${repository} environment "${environmentName}" has policies [${actualKeys.join(', ')}], expected only subset of [${[...allowedSet].join(', ')}]`,
+        `environment_branch_policy_mismatch: ${repository} environment "${environmentName}" has policies [${actualKeys.join(', ')}], expected exact set [${[...allowedSet].join(', ')}]`,
       );
     }
   }
@@ -271,7 +277,6 @@ export function verifyStableTagAndManifests({
         repository: EXPECTED_REPO,
         environmentName: EXPECTED_STABLE_ENVIRONMENT,
         expectedBranchPolicies: [
-          { type: 'tag', name: 'v*' },
           { type: 'branch', name: 'main' },
         ],
         ghApiJson,

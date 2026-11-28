@@ -3,6 +3,10 @@ name: Publish Preview
 on:
   workflow_dispatch:
     inputs:
+      root_sha:
+        description: 'Exact approved Root commit SHA on main (40-char hex)'
+        required: true
+        type: string
       oss_sha:
         description: 'Exact approved OSS commit SHA on main (40-char hex)'
         required: true
@@ -43,6 +47,7 @@ jobs:
       github.ref == 'refs/heads/main' &&
       github.actor_id == '5513793' &&
       github.triggering_actor == 'vilmire' &&
+      inputs.root_sha != '' &&
       inputs.oss_sha == github.sha &&
       inputs.approved_cohort_json != ''
     runs-on: ubuntu-26.04
@@ -104,10 +109,11 @@ jobs:
       - name: Freeze, gate all OSS preview tarballs, and publish to npm next via OIDC
         env:
           GH_TOKEN: ${{ github.token }}
+          EXPECTED_ROOT_SHA: ${{ inputs.root_sha }}
           APPROVED_COHORT_JSON: ${{ inputs.approved_cohort_json }}
           NODE_AUTH_TOKEN: ''
           NPM_TOKEN: ''
         run: |
           set -euo pipefail
           unset NODE_AUTH_TOKEN NPM_TOKEN npm_config__authToken
-          node scripts/publish-preview-npm.mjs --preview-version "${{ inputs.preview_version }}" --npm-package "${{ inputs.npm_package }}" --bundle-dir "$RUNNER_TEMP/oss-npm-preview-release"
+          node scripts/publish-preview-npm.mjs --preview-version "${{ inputs.preview_version }}" --npm-package "${{ inputs.npm_package }}" --root-sha "${{ inputs.root_sha }}" --bundle-dir "$RUNNER_TEMP/oss-npm-preview-release"
