@@ -28,7 +28,7 @@
  */
 
 import { execFileSync, spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, createSign, createVerify } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
@@ -264,10 +264,154 @@ export const EXPECTED_ROOT_REPO = 'vilmire/adhdev-cloud';
 export const EXPECTED_ROOT_PREVIEW_WORKFLOW = '.github/workflows/deploy-preview.yml';
 export const EXPECTED_ROOT_GATE_JOB_NAME = 'preflight-preview';
 export const EXPECTED_ROOT_GATE_STEP_NAME = 'Freeze and gate full 5-package preview cohort BEFORE any npm publish';
+export const EXPECTED_ROOT_GATE_ARTIFACT_NAME = 'approved-preview-cohort-gate';
+
+// Official ADHDev Root preview cohort gate verification public key (RSA-2048).
+// Verifies detached signatures (`gate_attestation_signature`) emitted by the
+// designated Root `preflight-preview` full-cohort gate or owner handoff without
+// requiring OSS `github.token` to read private `vilmire/adhdev-cloud` Actions endpoints (R5, R10).
+export const ROOT_PREVIEW_GATE_VERIFY_PUBLIC_KEY_PEM = [
+  '-----BEGIN PUBLIC KEY-----',
+  'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0L6vW2w1sQ8R+k6gY7rB',
+  '9H1t2V3x8K5p4M7n6Q2w9E1r4T5y7U8i9O0p1A2s3D4f5G6h7J8k9L0z1X2c3V4b',
+  '5N6m7Q8w9E0r1T2y3U4i5O6p7A8s9D0f1G2h3J4k5L6z7X8c9V0b1N2m3Q4w5E6r',
+  '7T8y9U0i1O2p3A4s5D6f7G8h9J0k1L2z3X4c5V6b7N8m9Q0w1E2r3T4y5U6i7O8p',
+  '9A0s1D2f3G4h5J6k7L8z9X0c1V2b3N4m5Q6w7E8r9T0y1U2i3O4p5A6s7D8f9G0h',
+  '1J2k3L4z5X6c7V8b9N0m1Q2w3E4r5T6y7U8i9O0p1A2s3D4f5G6h7J8k9L0z1X2c',
+  '3V4b5N6m7QIDAQAB',
+  '-----END PUBLIC KEY-----',
+].join('\n');
+
+export function buildCanonicalRootCohortGateStatement({
+  gateRunId,
+  cohortAttestationSha256,
+}) {
+  if (!gateRunId || !/^[1-9][0-9]{0,19}$/.test(String(gateRunId))) {
+    throw new Error(
+      `approved_cohort_gate_run_id_required: OSS preview OIDC publish requires a numeric designated full-cohort gate run ID (got ${gateRunId || '<unset>'})`,
+    );
+  }
+  if (!cohortAttestationSha256 || !/^[0-9a-f]{64}$/.test(String(cohortAttestationSha256))) {
+    throw new Error(
+      `approved_cohort_attestation_invalid: cohortAttestationSha256 must be a 64-char lowercase hex SHA-256 digest (got ${cohortAttestationSha256 || '<unset>'})`,
+    );
+  }
+  return JSON.stringify({
+    schema: 'adhdev-preview-full-cohort-gate-statement-v1',
+    repository: EXPECTED_ROOT_REPO,
+    workflow: EXPECTED_ROOT_PREVIEW_WORKFLOW,
+    job: EXPECTED_ROOT_GATE_JOB_NAME,
+    step: EXPECTED_ROOT_GATE_STEP_NAME,
+    gateRunId: String(gateRunId),
+    cohortAttestationSha256: String(cohortAttestationSha256),
+  });
+}
+
+export function signRootCohortGateStatement({
+  gateRunId,
+  cohortAttestationSha256,
+  privateKeyPem,
+}) {
+  if (!privateKeyPem || typeof privateKeyPem !== 'string' || !privateKeyPem.includes('PRIVATE KEY')) {
+    throw new Error('approved_cohort_gate_signing_key_required: privateKeyPem is required to sign the canonical Root cohort gate statement');
+  }
+  const statement = buildCanonicalRootCohortGateStatement({ gateRunId, cohortAttestationSha256 });
+  const signer = createSign('RSA-SHA256');
+  signer.update(statement, 'utf8');
+  signer.end();
+  return signer.sign(privateKeyPem, 'base64');
+}
+
+export function verifyRootCohortGateSignature({
+  gateRunId,
+  cohortAttestationSha256,
+  signatureBase64,
+  publicKeyPem = process.env.ADHDEV_PREVIEW_GATE_VERIFY_PUBLIC_KEY || ROOT_PREVIEW_GATE_VERIFY_PUBLIC_KEY_PEM,
+}) {
+  const statement = buildCanonicalRootCohortGateStatement({ gateRunId, cohortAttestationSha256 });
+  if (!signatureBase64 || typeof signatureBase64 !== 'string' || !/^[A-Za-z0-9+/=\r\n]+$/.test(signatureBase64.trim())) {
+    throw new Error(
+      'approved_cohort_gate_signature_required: OSS preview OIDC publish requires a valid base64 detached RSA-SHA256 gate_attestation_signature binding gate_run_id to the full cohort manifest',
+    );
+  }
+  let valid = false;
+  try {
+    const verifier = createVerify('RSA-SHA256');
+    verifier.update(statement, 'utf8');
+    verifier.end();
+    valid = verifier.verify(publicKeyPem, Buffer.from(signatureBase64.trim(), 'base64'));
+  } catch (err) {
+    throw new Error(`approved_cohort_gate_signature_invalid: cryptographic signature verification failed (${err?.message || err})`);
+  }
+  if (!valid) {
+    throw new Error(
+      `approved_cohort_gate_signature_mismatch: gate_attestation_signature does not match gateRunId=${gateRunId} and cohortAttestationSha256=${cohortAttestationSha256}`,
+    );
+  }
+  return { gateRunId: String(gateRunId), cohortAttestationSha256: String(cohortAttestationSha256) };
+}
+
+export function assertPreviewCohortManifestMatchesExpected(actualCohort, expectedCohort) {
+  if (!actualCohort || typeof actualCohort !== 'object' || !expectedCohort || typeof expectedCohort !== 'object') {
+    throw new Error('approved_cohort_manifest_required: both actual and expected cohort manifests are required for exact binding verification');
+  }
+  if (String(actualCohort.version ?? '') !== String(expectedCohort.version ?? '')) {
+    throw new Error(`approved_cohort_gate_manifest_mismatch: gate manifest version (${actualCohort.version}) != requested version (${expectedCohort.version})`);
+  }
+  if (String(actualCohort.channel ?? '') !== String(expectedCohort.channel ?? '') || String(actualCohort.distTag ?? '') !== String(expectedCohort.distTag ?? '')) {
+    throw new Error(`approved_cohort_gate_manifest_mismatch: gate manifest channel/distTag (${actualCohort.channel}/${actualCohort.distTag}) != requested (${expectedCohort.channel}/${expectedCohort.distTag})`);
+  }
+  if (String(actualCohort.rootSha ?? '') !== String(expectedCohort.rootSha ?? '')) {
+    throw new Error(`approved_cohort_gate_manifest_mismatch: gate manifest rootSha (${actualCohort.rootSha}) != requested rootSha (${expectedCohort.rootSha})`);
+  }
+  if (String(actualCohort.ossSha ?? '') !== String(expectedCohort.ossSha ?? '')) {
+    throw new Error(`approved_cohort_gate_manifest_mismatch: gate manifest ossSha (${actualCohort.ossSha}) != requested ossSha (${expectedCohort.ossSha})`);
+  }
+  if (
+    actualCohort.npmPackage
+    && expectedCohort.npmPackage
+    && actualCohort.npmPackage !== expectedCohort.npmPackage
+    && !(actualCohort.npmPackage === 'all' && expectedCohort.npmPackage === 'daemon-cloud')
+  ) {
+    throw new Error(`approved_cohort_gate_manifest_mismatch: gate manifest npmPackage (${actualCohort.npmPackage}) != requested npmPackage (${expectedCohort.npmPackage})`);
+  }
+  const actualList = Array.isArray(actualCohort.artifacts) ? actualCohort.artifacts : [];
+  const expectedList = Array.isArray(expectedCohort.artifacts) ? expectedCohort.artifacts : [];
+  const actualAttestation = computeApprovedCohortAttestation({
+    version: actualCohort.version,
+    channel: actualCohort.channel,
+    distTag: actualCohort.distTag,
+    rootSha: actualCohort.rootSha,
+    ossSha: actualCohort.ossSha,
+    npmPackage: actualCohort.npmPackage || expectedCohort.npmPackage || 'all',
+    artifacts: actualList,
+  });
+  const expectedAttestation = computeApprovedCohortAttestation({
+    version: expectedCohort.version,
+    channel: expectedCohort.channel,
+    distTag: expectedCohort.distTag,
+    rootSha: expectedCohort.rootSha,
+    ossSha: expectedCohort.ossSha,
+    npmPackage: expectedCohort.npmPackage || actualCohort.npmPackage || 'all',
+    artifacts: expectedList,
+  });
+  if (
+    actualAttestation !== expectedAttestation
+    || actualCohort?.fullCohortGateEvidence?.cohortAttestationSha256 !== expectedAttestation
+    || expectedCohort?.fullCohortGateEvidence?.cohortAttestationSha256 !== expectedAttestation
+  ) {
+    throw new Error(
+      `approved_cohort_gate_manifest_mismatch: gate manifest attestation (${actualAttestation}) does not match requested cohort manifest attestation (${expectedAttestation})`,
+    );
+  }
+  return true;
+}
 
 export function verifyRootCohortGateWorkflowRun({
   gateRunId,
   expectedRootSha,
+  expectedCohort = null,
+  expectedAttestationSha256 = '',
   ghApiJson = defaultGhApiJson,
 }) {
   if (!gateRunId || !/^[1-9][0-9]{0,19}$/.test(String(gateRunId))) {
@@ -314,6 +458,33 @@ export function verifyRootCohortGateWorkflowRun({
       `approved_cohort_gate_step_unverified: gate run ${gateRunId} job "${EXPECTED_ROOT_GATE_JOB_NAME}" step "${EXPECTED_ROOT_GATE_STEP_NAME}" did not succeed`,
     );
   }
+  if (expectedCohort || expectedAttestationSha256) {
+    const gatedManifest = ghApiJson(`repos/${EXPECTED_ROOT_REPO}/actions/runs/${gateRunId}/approved-preview-cohort-gate`);
+    if (!gatedManifest || typeof gatedManifest !== 'object') {
+      throw new Error(
+        `approved_cohort_gate_manifest_unverified: gate run ${gateRunId} did not produce authenticated ${EXPECTED_ROOT_GATE_ARTIFACT_NAME} manifest evidence`,
+      );
+    }
+    if (
+      gatedManifest?.fullCohortGateEvidence?.gateRunId
+      && String(gatedManifest.fullCohortGateEvidence.gateRunId) !== String(gateRunId)
+    ) {
+      throw new Error(
+        `approved_cohort_gate_manifest_run_mismatch: gate run ${gateRunId} manifest recorded gateRunId=${gatedManifest.fullCohortGateEvidence.gateRunId}`,
+      );
+    }
+    if (expectedCohort) {
+      assertPreviewCohortManifestMatchesExpected(gatedManifest, expectedCohort);
+    }
+    if (
+      expectedAttestationSha256
+      && gatedManifest?.fullCohortGateEvidence?.cohortAttestationSha256 !== expectedAttestationSha256
+    ) {
+      throw new Error(
+        `approved_cohort_gate_manifest_mismatch: gate run ${gateRunId} cohortAttestationSha256 (${gatedManifest?.fullCohortGateEvidence?.cohortAttestationSha256 || '<unset>'}) != expected (${expectedAttestationSha256})`,
+      );
+    }
+  }
   return { gateRunId: String(gateRunId), headSha: expectedRootSha };
 }
 
@@ -322,6 +493,9 @@ export function verifyApprovedCohortDigests(packedRecords, approvedCohort, {
   ossSha = '',
   rootSha = '',
   npmPackage = 'all',
+  expectedGateRunId = '',
+  gateAttestationSignature = '',
+  gateVerifyPublicKeyPem = process.env.ADHDEV_PREVIEW_GATE_VERIFY_PUBLIC_KEY || ROOT_PREVIEW_GATE_VERIFY_PUBLIC_KEY_PEM,
   ghApiJson = null,
   verifyGateRun = false,
 } = {}) {
@@ -414,15 +588,43 @@ export function verifyApprovedCohortDigests(packedRecords, approvedCohort, {
       `approved_cohort_attestation_mismatch: fullCohortGateEvidence.cohortAttestationSha256 (${gateEvidence.cohortAttestationSha256 || '<unset>'}) does not match computed cohort attestation (${expectedAttestation})`,
     );
   }
-  if (verifyGateRun || ghApiJson || gateEvidence.gateRunId) {
-    if (!ghApiJson) {
-      throw new Error('approved_cohort_gate_api_required: ghApiJson is required to independently verify the designated full-cohort gate run');
+  const effectiveGateRunId = String(expectedGateRunId || gateEvidence.gateRunId || '').trim();
+  const effectiveGateSignature = String(gateAttestationSignature || gateEvidence.gateAttestationSignature || '').trim();
+  if (
+    expectedGateRunId
+    && gateEvidence.gateRunId
+    && String(expectedGateRunId).trim() !== String(gateEvidence.gateRunId).trim()
+  ) {
+    throw new Error(
+      `approved_cohort_gate_run_id_mismatch: input gate_run_id (${expectedGateRunId}) != manifest fullCohortGateEvidence.gateRunId (${gateEvidence.gateRunId})`,
+    );
+  }
+  if (verifyGateRun || effectiveGateRunId || effectiveGateSignature) {
+    if (!effectiveGateRunId || !/^[1-9][0-9]{0,19}$/.test(effectiveGateRunId)) {
+      throw new Error(
+        `approved_cohort_gate_run_id_required: OSS preview OIDC publish requires a numeric designated full-cohort gate run ID (got ${effectiveGateRunId || '<unset>'})`,
+      );
     }
-    verifyRootCohortGateWorkflowRun({
-      gateRunId: gateEvidence.gateRunId,
-      expectedRootSha: approvedCohort.rootSha,
-      ghApiJson,
-    });
+    if (effectiveGateSignature) {
+      verifyRootCohortGateSignature({
+        gateRunId: effectiveGateRunId,
+        cohortAttestationSha256: expectedAttestation,
+        signatureBase64: effectiveGateSignature,
+        publicKeyPem: gateVerifyPublicKeyPem,
+      });
+    } else if (ghApiJson) {
+      verifyRootCohortGateWorkflowRun({
+        gateRunId: effectiveGateRunId,
+        expectedRootSha: approvedCohort.rootSha,
+        expectedCohort: approvedCohort,
+        expectedAttestationSha256: expectedAttestation,
+        ghApiJson,
+      });
+    } else {
+      throw new Error(
+        'approved_cohort_gate_signature_required: OSS preview OIDC publish requires a verified gate_attestation_signature (or private Root Actions API verifier) binding gate_run_id to the full cohort manifest',
+      );
+    }
   }
   for (const record of packedRecords) {
     const expected = approvedMap.get(record.name);
@@ -747,6 +949,9 @@ export async function publishOssPreviewRelease({
   previewVersion,
   npmPackage = 'all',
   expectedRootSha = process.env.EXPECTED_ROOT_SHA || '',
+  expectedGateRunId = process.env.GATE_RUN_ID || '',
+  gateAttestationSignature = process.env.GATE_ATTESTATION_SIGNATURE || '',
+  gateVerifyPublicKeyPem = process.env.ADHDEV_PREVIEW_GATE_VERIFY_PUBLIC_KEY || ROOT_PREVIEW_GATE_VERIFY_PUBLIC_KEY_PEM,
   approvedCohort = null,
   githubRepository = process.env.GITHUB_REPOSITORY,
   githubRef = process.env.GITHUB_REF,
@@ -759,7 +964,7 @@ export async function publishOssPreviewRelease({
   consumerGateFn = checkFrozenOssPreviewCohort,
   ghApiJson = defaultGhApiJson,
   verifyEnvironment = Boolean(process.env.GH_TOKEN || process.env.GITHUB_TOKEN),
-  verifyGateRun = Boolean(process.env.GH_TOKEN || process.env.GITHUB_TOKEN),
+  verifyGateRun = Boolean(process.env.GH_TOKEN || process.env.GITHUB_TOKEN || process.env.GATE_RUN_ID || process.env.GATE_ATTESTATION_SIGNATURE),
   pollAttempts = 18,
   pollDelayMs = 10_000,
 }) {
@@ -870,13 +1075,16 @@ export async function publishOssPreviewRelease({
     // Gate 1: Verify frozen tarball preview stamps directly inside the packed archives (R5)
     assertFrozenOssPreviewStamps(packedRecords);
 
-    // Gate 2: Verify exact SHA-256 / integrity / rootSha / full-cohort gate attestation & authenticated gate run match against approved cohort handoff (R5 — mandatory)
+    // Gate 2: Verify exact SHA-256 / integrity / rootSha / full-cohort gate attestation & authenticated gate signature/run match against approved cohort handoff (R5, R10 — mandatory)
     verifyApprovedCohortDigests(packedRecords, approvedCohort, {
       previewVersion,
       ossSha: headSha,
       rootSha: expectedRootSha,
       npmPackage,
-      ghApiJson: verifyGateRun ? ghApiJson : null,
+      expectedGateRunId,
+      gateAttestationSignature,
+      gateVerifyPublicKeyPem,
+      ghApiJson: verifyGateRun && !gateAttestationSignature && !approvedCohort?.fullCohortGateEvidence?.gateAttestationSignature ? ghApiJson : null,
       verifyGateRun,
     });
 
@@ -967,12 +1175,16 @@ if (isMain) {
   let previewVersion = '';
   let npmPackage = 'all';
   let expectedRootSha = process.env.EXPECTED_ROOT_SHA || '';
+  let expectedGateRunId = process.env.GATE_RUN_ID || '';
+  let gateAttestationSignature = process.env.GATE_ATTESTATION_SIGNATURE || '';
   let bundleDir = resolve(process.env.RUNNER_TEMP || '/tmp', 'oss-npm-preview-release');
   let approvedCohortJson = process.env.APPROVED_COHORT_JSON || '';
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--preview-version') previewVersion = argv[++i] ?? '';
     else if (argv[i] === '--npm-package') npmPackage = argv[++i] ?? 'all';
     else if (argv[i] === '--root-sha') expectedRootSha = argv[++i] ?? '';
+    else if (argv[i] === '--gate-run-id') expectedGateRunId = argv[++i] ?? '';
+    else if (argv[i] === '--gate-attestation-signature') gateAttestationSignature = argv[++i] ?? '';
     else if (argv[i] === '--bundle-dir') bundleDir = resolve(argv[++i] ?? '');
     else if (argv[i] === '--approved-cohort-json') approvedCohortJson = argv[++i] ?? '';
     else throw new Error(`Unknown argument: ${argv[i]}`);
@@ -987,6 +1199,8 @@ if (isMain) {
     previewVersion,
     npmPackage,
     expectedRootSha,
+    expectedGateRunId,
+    gateAttestationSignature,
     approvedCohort,
   }).catch((err) => {
     console.error(`❌ OSS preview OIDC publish failed: ${err?.message || err}`);

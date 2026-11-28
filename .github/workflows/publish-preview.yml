@@ -28,6 +28,14 @@ on:
         description: 'JSON manifest of pre-validated frozen cohort SHA-256 and sha512 integrity digests'
         required: true
         type: string
+      gate_run_id:
+        description: 'Numeric GitHub Actions run ID of the designated Root preflight-preview full-cohort gate'
+        required: true
+        type: string
+      gate_attestation_signature:
+        description: 'Detached RSA-SHA256 base64 signature binding gate_run_id to the full cohort attestation digest'
+        required: true
+        type: string
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -49,7 +57,9 @@ jobs:
       github.triggering_actor == 'vilmire' &&
       inputs.root_sha != '' &&
       inputs.oss_sha == github.sha &&
-      inputs.approved_cohort_json != ''
+      inputs.approved_cohort_json != '' &&
+      inputs.gate_run_id != '' &&
+      inputs.gate_attestation_signature != ''
     runs-on: ubuntu-26.04
     environment: npm-preview
     permissions:
@@ -75,6 +85,7 @@ jobs:
           EXPECTED_ROOT_SHA: ${{ inputs.root_sha }}
           EXPECTED_OSS_SHA: ${{ inputs.oss_sha }}
           PREVIEW_VERSION: ${{ inputs.preview_version }}
+          GATE_RUN_ID: ${{ inputs.gate_run_id }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -89,6 +100,10 @@ jobs:
           fi
           if [[ ! "$PREVIEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]; then
             echo "❌ preview_version must be an exact X.Y.Z-rc.N preview version (got: $PREVIEW_VERSION)"
+            exit 1
+          fi
+          if [[ ! "$GATE_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]; then
+            echo "❌ gate_run_id must be a numeric GitHub Actions workflow run ID (got: $GATE_RUN_ID)"
             exit 1
           fi
 
@@ -122,9 +137,11 @@ jobs:
           NPM_PACKAGE: ${{ inputs.npm_package }}
           EXPECTED_ROOT_SHA: ${{ inputs.root_sha }}
           APPROVED_COHORT_JSON: ${{ inputs.approved_cohort_json }}
+          GATE_RUN_ID: ${{ inputs.gate_run_id }}
+          GATE_ATTESTATION_SIGNATURE: ${{ inputs.gate_attestation_signature }}
           NODE_AUTH_TOKEN: ''
           NPM_TOKEN: ''
         run: |
           set -euo pipefail
           unset NODE_AUTH_TOKEN NPM_TOKEN npm_config__authToken
-          node scripts/publish-preview-npm.mjs --preview-version "$PREVIEW_VERSION" --npm-package "$NPM_PACKAGE" --root-sha "$EXPECTED_ROOT_SHA" --bundle-dir "$RUNNER_TEMP/oss-npm-preview-release"
+          node scripts/publish-preview-npm.mjs --preview-version "$PREVIEW_VERSION" --npm-package "$NPM_PACKAGE" --root-sha "$EXPECTED_ROOT_SHA" --gate-run-id "$GATE_RUN_ID" --gate-attestation-signature "$GATE_ATTESTATION_SIGNATURE" --bundle-dir "$RUNNER_TEMP/oss-npm-preview-release"
