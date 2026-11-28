@@ -276,6 +276,7 @@ jobs:
     needs: [build, test]
     if: github.repository == 'vilmire/adhdev' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-26.04
+    environment: npm-stable
     permissions:
       actions: read
       contents: read
@@ -357,93 +358,11 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/oidc-npm" --no-save --no-audit --no-fund npm@11.21.0
           echo "$RUNNER_TEMP/oidc-npm/node_modules/.bin" >> "$GITHUB_PATH"
 
-      - name: Publish @adhdev/mesh-shared
+      - name: Pack, verify reviewed bytes, and publish OSS packages to npm latest via OIDC
         env:
           NODE_AUTH_TOKEN: ''
           NPM_TOKEN: ''
         run: |
           set -euo pipefail
           unset NODE_AUTH_TOKEN NPM_TOKEN npm_config__authToken
-          pkg="@adhdev/mesh-shared"
-          ver="$(node -p "require('./packages/mesh-shared/package.json').version")"
-          if [ "$(npm view "${pkg}@${ver}" version 2>/dev/null || true)" = "${ver}" ]; then
-            echo "⏭ ${pkg}@${ver} already published; skipping"
-          else
-            (cd packages/mesh-shared && npm publish --access public --ignore-scripts)
-          fi
-
-      - name: Publish @adhdev/session-host-core
-        env:
-          NODE_AUTH_TOKEN: ''
-          NPM_TOKEN: ''
-        run: |
-          set -euo pipefail
-          unset NODE_AUTH_TOKEN NPM_TOKEN npm_config__authToken
-          pkg="@adhdev/session-host-core"
-          ver="$(node -p "require('./packages/session-host-core/package.json').version")"
-          if [ "$(npm view "${pkg}@${ver}" version 2>/dev/null || true)" = "${ver}" ]; then
-            echo "⏭ ${pkg}@${ver} already published; skipping"
-          else
-            (cd packages/session-host-core && npm publish --access public --ignore-scripts)
-          fi
-
-      - name: Publish @adhdev/ghostty-vt-node
-        if: steps.ghostty_release.outputs.publish == 'true'
-        env:
-          NODE_AUTH_TOKEN: ''
-          NPM_TOKEN: ''
-        run: |
-          set -euo pipefail
-          unset NODE_AUTH_TOKEN NPM_TOKEN npm_config__authToken
-          pkg="@adhdev/ghostty-vt-node"
-          ver="$(node -p "require('./packages/ghostty-vt-node/package.json').version")"
-          if [ "$(npm view "${pkg}@${ver}" version 2>/dev/null || true)" = "${ver}" ]; then
-            echo "⏭ ${pkg}@${ver} already published; skipping"
-          else
-            (cd packages/ghostty-vt-node && npm publish --access public --ignore-scripts)
-          fi
-
-      - name: Publish @adhdev/mcp-server
-        env:
-          NODE_AUTH_TOKEN: ''
-          NPM_TOKEN: ''
-        run: |
-          set -euo pipefail
-          unset NODE_AUTH_TOKEN NPM_TOKEN npm_config__authToken
-          pkg="@adhdev/mcp-server"
-          ver="$(node -p "require('./packages/mcp-server/package.json').version")"
-          if [ "$(npm view "${pkg}@${ver}" version 2>/dev/null || true)" = "${ver}" ]; then
-            echo "⏭ ${pkg}@${ver} already published; skipping"
-          else
-            (cd packages/mcp-server && npm publish --access public --ignore-scripts)
-          fi
-
-      - name: Publish @adhdev/daemon-core
-        env:
-          NODE_AUTH_TOKEN: ''
-          NPM_TOKEN: ''
-        run: |
-          set -euo pipefail
-          unset NODE_AUTH_TOKEN NPM_TOKEN npm_config__authToken
-          pkg="@adhdev/daemon-core"
-          ver="$(node -p "require('./packages/daemon-core/package.json').version")"
-          if [ "$(npm view "${pkg}@${ver}" version 2>/dev/null || true)" = "${ver}" ]; then
-            echo "⏭ ${pkg}@${ver} already published; skipping"
-          else
-            (cd packages/daemon-core && npm publish --access public --ignore-scripts)
-          fi
-
-      - name: Publish @adhdev/daemon-standalone
-        env:
-          NODE_AUTH_TOKEN: ''
-          NPM_TOKEN: ''
-        run: |
-          set -euo pipefail
-          unset NODE_AUTH_TOKEN NPM_TOKEN npm_config__authToken
-          pkg="@adhdev/daemon-standalone"
-          ver="$(node -p "require('./packages/daemon-standalone/package.json').version")"
-          if [ "$(npm view "${pkg}@${ver}" version 2>/dev/null || true)" = "${ver}" ]; then
-            echo "⏭ ${pkg}@${ver} already published; skipping"
-          else
-            (cd packages/daemon-standalone && npm publish --access public --ignore-scripts)
-          fi
+          node scripts/publish-stable-npm.mjs "$RUNNER_TEMP/oss-npm-stable-release"

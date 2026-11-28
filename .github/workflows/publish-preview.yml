@@ -1,0 +1,106 @@
+name: Publish Preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      oss_sha:
+        description: 'Exact approved OSS commit SHA on main (40-char hex)'
+        required: true
+        type: string
+      preview_version:
+        description: 'Exact pinned preview RC version (X.Y.Z-rc.N)'
+        required: true
+        type: string
+      npm_package:
+        description: 'Limit publish/dist-tag to one package group'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - daemon-core
+          - standalone
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  ADHDEV_SKIP_GHOSTTY_VT_BUILD: '1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-preview-oss-${{ inputs.preview_version || 'manual' }}
+  cancel-in-progress: false
+
+jobs:
+  publish-preview:
+    if: >-
+      github.repository == 'vilmire/adhdev' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor_id == '5513793' &&
+      github.triggering_actor == 'vilmire' &&
+      inputs.oss_sha == github.sha
+    runs-on: ubuntu-26.04
+    environment: npm-preview
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Verify exact pinned OSS source and preview RC version
+        env:
+          EXPECTED_OSS_SHA: ${{ inputs.oss_sha }}
+          PREVIEW_VERSION: ${{ inputs.preview_version }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$EXPECTED_OSS_SHA" = "$GITHUB_SHA"
+          if [[ ! "$PREVIEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]; then
+            echo "❌ preview_version must be an exact X.Y.Z-rc.N preview version (got: $PREVIEW_VERSION)"
+            exit 1
+          fi
+
+      - name: Verify package lock is in sync and install dependencies
+        run: |
+          npm install --package-lock-only --ignore-scripts
+          git diff --exit-code -- package-lock.json
+          npm ci --include=optional
+          npm install --no-save @rollup/rollup-linux-x64-gnu lightningcss-linux-x64-gnu @tailwindcss/oxide-linux-x64-gnu
+
+      - name: Verify committed Ghostty prebuilts (release gate)
+        run: bash packages/ghostty-vt-node/scripts/check-release-prebuilts.sh
+
+      - name: Pin isolated npm CLI for OIDC Trusted Publishing
+        run: |
+          set -euo pipefail
+          node -e '
+            const [major, minor] = process.versions.node.split(".").map(Number);
+            if (major < 22 || (major === 22 && minor < 14)) {
+              console.error(`OIDC Trusted Publishing requires Node.js >=22.14.0 (got ${process.version})`);
+              process.exit(1);
+            }
+          '
+          npm install --prefix "$RUNNER_TEMP/oidc-npm" --no-save --no-audit --no-fund npm@11.21.0
+          echo "$RUNNER_TEMP/oidc-npm/node_modules/.bin" >> "$GITHUB_PATH"
+
+      - name: Freeze, verify reviewed bytes, and publish OSS preview cohort to npm next via OIDC
+        env:
+          NODE_AUTH_TOKEN: ''
+          NPM_TOKEN: ''
+        run: |
+          set -euo pipefail
+          unset NODE_AUTH_TOKEN NPM_TOKEN npm_config__authToken
+          node scripts/publish-preview-npm.mjs --preview-version "${{ inputs.preview_version }}" --npm-package "${{ inputs.npm_package }}" --bundle-dir "$RUNNER_TEMP/oss-npm-preview-release"
