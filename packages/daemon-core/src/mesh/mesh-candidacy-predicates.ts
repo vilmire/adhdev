@@ -229,7 +229,7 @@ export function isHeldRemoteSessionGenerating(
  * found (closing the same id-form-skew hole class e245c2f9's F1 fixed elsewhere).
  */
 export type SessionBusyVerdict = 'GENERATING' | 'IDLE_CONFIRMED' | 'UNKNOWN';
-export function resolveSessionBusyVerdict(components: DaemonComponents, sessionId: string): SessionBusyVerdict {
+export function resolveSessionBusyVerdict(components: Pick<DaemonComponents, 'instanceManager'>, sessionId: string): SessionBusyVerdict {
     if (!sessionId) return 'UNKNOWN';
     try {
         const inst = findLocalCliInstance(components, sessionId);

@@ -87,7 +87,7 @@ Your agents run locally; you watch and drive them from any browser. The dashboar
   </tr>
 </table>
 
-Sessions can also put files into the chat as **artifacts** — Markdown, images, diffs, JSON and text from the workspace, previewed inline and opened, copied or downloaded on demand. Files never leave the registered workspace.
+Open the Assistant from the dashboard to ask about a project. Open a test report, log or screenshot from its artifact link. [Assistant and artifacts](https://docs.adhf.dev/guide/assistant-and-artifacts)
 
 ### 🛡️ Approvals that stay narrow
 - **Auto-approve presses only the one-time option.** With auto-approve on, the daemon answers a worker's permission prompt with a single "yes" — never "always", "don't ask again", or a session- or project-wide grant.

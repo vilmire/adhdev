@@ -4828,6 +4828,13 @@
             "deviceShotCaption": "실기기 — 실제 폰에 도착한 푸시 알림",
             "point4": "포트포워딩·VPN·DMZ 설정 없음 — P2P와 TURN 릴레이로 카페든 핫스팟이든, 데스크톱이든 랩톱이든, 인터넷만 되면 어디서든 연결됩니다"
         },
+        "projectResults": {
+            "assistantTitle": "한 채팅에서 프로젝트 결과 확인",
+            "assistantDescription": "비서에게 프로젝트 상황을 묻거나 코디네이터에게 작업을 전달해 달라고 하세요.",
+            "artifactsTitle": "보고서에 딸린 파일 열기",
+            "artifactsDescription": "채팅이나 프로젝트의 아티팩트 탭에서 등록된 테스트 보고서, 로그, 스크린샷을 열거나 내려받으세요.",
+            "guide": "비서와 아티팩트"
+        },
         "brain": {
             "sectionTitle": "작업마다 맞는 모델을, 아직 여유가 있는 구독으로.",
             "sectionSubtitle": "작업을 쉬움·보통·어려움으로 태그하면 메시가 그에 맞는 프리셋 — provider, model, thinking 예산 — 을 적용합니다. 머신마다 각 구독의 5시간·주간 한도가 얼마나 남았는지도 읽어서, 거의 다 쓴 플랜은 건너뛰고 다음 리셋 때 그냥 사라질 남은 사용량부터 먼저 씁니다.",

@@ -87,7 +87,7 @@ Tus agentes se ejecutan en local; tú los observas y los manejas desde cualquier
   </tr>
 </table>
 
-Las sesiones también pueden poner archivos en el chat como **artefactos** — Markdown, imágenes, diffs, JSON y texto del espacio de trabajo, con vista previa en línea y que se abren, copian o descargan bajo demanda. Los archivos nunca salen del espacio de trabajo registrado.
+Pregunta al asistente por un proyecto desde el panel y abre un informe de pruebas, un registro o una captura desde su enlace. [Asistente y artefactos](https://docs.adhf.dev/es/guide/assistant-and-artifacts)
 
 ### 🛡️ Aprobaciones que se mantienen acotadas
 - **La aprobación automática solo pulsa la opción de una sola vez.** Con la aprobación automática activada, el daemon responde al aviso de permiso de un trabajador con un único “yes” — nunca “always”, “don't ask again” ni una concesión a nivel de sesión o de proyecto.

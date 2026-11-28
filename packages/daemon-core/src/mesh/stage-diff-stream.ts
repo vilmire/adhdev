@@ -9,7 +9,7 @@ import type { StageGitPort, StageArtifactPort } from './stage-ports.js';
 import { StageDiffBlocked, STAGE_DIFF_CHUNK_BYTES, stageDiffArgs, writeStageDiffManifest, type StageDiffScope, type StageDiffSource } from './stage-diff-manifest.js';
 
 export async function* streamStageGit(workspace: string, args: string[]): AsyncGenerator<Buffer> {
-    const child = spawn('git', args, { cwd: workspace, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('git', ['--no-replace-objects', ...args], { cwd: workspace, env: gitChildEnv(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let stderr = '';
     child.stderr.on('data', (b: Buffer) => { stderr = (stderr + b.toString('utf8')).slice(-64 * 1024); });
     const exited = new Promise<{ code: number | null; signal: string | null }>((resolve, reject) => {

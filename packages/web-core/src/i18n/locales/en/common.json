@@ -4828,6 +4828,13 @@
             "deviceShotCaption": "Real device — actual push notifications on a phone",
             "point4": "No port forwarding, no VPN, no DMZ — P2P with TURN relay connects from cafés, hotspots, desktop or laptop, anywhere with internet"
         },
+        "projectResults": {
+            "assistantTitle": "Check project results from one chat",
+            "assistantDescription": "Ask the Assistant for a project update or send a request to its coordinator.",
+            "artifactsTitle": "Open the files behind a report",
+            "artifactsDescription": "Open or download a registered test report, log, or screenshot from chat or the project’s Artifacts tab.",
+            "guide": "Assistant and artifacts"
+        },
         "brain": {
             "sectionTitle": "The right model for each task, on the subscription that still has room.",
             "sectionSubtitle": "Tag a task easy, medium, or difficult and the mesh applies a matching preset — provider, model, and thinking budget. Every machine also reads how much of each subscription's 5-hour and weekly window is left: a plan that is nearly out gets skipped, and quota that would expire unused at the next reset is spent first.",

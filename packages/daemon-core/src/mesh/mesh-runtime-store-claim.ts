@@ -519,7 +519,7 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
         let reviewActive: MeshWorkQueueEntry[] | undefined;
         const reviewRefusal = (candidate: MeshWorkQueueEntry) => candidate.review
             ? noteStageReviewRefusal(candidate, reviewRoutingRefusal(candidate, reviewSource(candidate.review.sourceTaskId), providerType, opts?.physicalContext,
-                reviewActive ??= host.getQueueEntries(meshId, ['pending', 'assigned']), sessionId, host))
+                reviewActive ??= host.getQueueEntries(meshId, ['pending', 'assigned']), sessionId, host, host))
             : undefined;
         const targetMatches = (candidate: MeshWorkQueueEntry): boolean => {
             // Session ids are single-form (unlike node/daemon ids with their 3
