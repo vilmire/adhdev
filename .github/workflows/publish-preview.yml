@@ -21,9 +21,8 @@ on:
           - daemon-core
           - standalone
       approved_cohort_json:
-        description: 'Optional JSON manifest of pre-validated frozen cohort SHA-256 digests'
-        required: false
-        default: ''
+        description: 'JSON manifest of pre-validated frozen cohort SHA-256 and sha512 integrity digests'
+        required: true
         type: string
 
 env:

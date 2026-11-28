@@ -100,8 +100,12 @@ export function defaultGhApiJson(endpoint) {
 
 /**
  * Verifies that a tag ref in `repository` points to `headSha` AND that `headSha`
- * is an approved commit reachable on `refs/heads/main` (never an unmerged/rogue branch tag).
- * If `expectedTargetSha` is supplied, also asserts `headSha === expectedTargetSha`.
+ * equals the exact current `refs/heads/main` head commit (`compare/main...<headSha>`
+ * has `status === 'identical'`, `ahead_by === 0`, `behind_by === 0`) unless an explicit
+ * `expectedTargetSha` is independently supplied by an owner `workflow_dispatch`
+ * (in which case `headSha === expectedTargetSha` AND `headSha` must be reachable on `main`).
+ * This prevents an automatic tag push from selecting an unintended historical `main` commit
+ * or an unmerged branch commit (`R2`).
  */
 export function verifyApprovedTagTarget({
   repository,
@@ -136,13 +140,20 @@ export function verifyApprovedTagTarget({
     throw new Error(`tag_commit_mismatch: remote refs/tags/${tagName} points to ${commitSha}, but checkout HEAD is ${headSha}`);
   }
 
-  // Verify the tagged commit is contained in the protected main branch history.
+  // Verify the tagged commit against the protected main branch tip.
   const compare = ghApiJson(`repos/${repository}/compare/main...${headSha}`);
   const status = compare?.status;
   const aheadBy = compare?.ahead_by;
+  const behindBy = compare?.behind_by ?? 0;
   if ((status !== 'identical' && status !== 'behind') || aheadBy !== 0) {
     throw new Error(
       `unapproved_tag_commit_not_on_main: commit ${headSha} for tag ${tagName} is not reachable on ${repository} refs/heads/main (status=${status ?? '<unknown>'}, ahead_by=${aheadBy ?? '<unknown>'})`,
+    );
+  }
+  // On automatic tag routes without an explicit expectedTargetSha pin, the tag MUST point to the exact current main tip (identical, behind_by === 0).
+  if (!expectedTargetSha && (status !== 'identical' || behindBy !== 0)) {
+    throw new Error(
+      `historical_main_commit_requires_explicit_pin: tag ${tagName} points to historical main commit ${headSha} (status=${status}, behind_by=${behindBy}); automatic tag publication requires exact main tip (status=identical) or explicit workflow_dispatch tag_sha pin`,
     );
   }
   return { tagName, commitSha };
@@ -150,9 +161,8 @@ export function verifyApprovedTagTarget({
 
 /**
  * Verifies at runtime via GitHub API that the active deployment environment
- * enforces `can_admins_bypass === false` and requires owner review (`User: vilmire`, id `5513793`).
- * Prevents silent downgrade if an environment was auto-created without protection rules
- * or if the repository's billing plan does not enforce required reviewers.
+ * enforces `can_admins_bypass === false`, requires owner review (`User: vilmire`, id `5513793`),
+ * and enforces the expected deployment branch/tag policy (`R4`).
  */
 export function verifyProtectedEnvironmentGate({
   repository,
@@ -188,12 +198,19 @@ export function verifyProtectedEnvironmentGate({
     throw new Error(`environment_owner_reviewer_mismatch: ${repository} environment "${environmentName}" must require sole User reviewer ${EXPECTED_OWNER_LOGIN}`);
   }
   if (expectedBranchPolicyType && expectedBranchPolicyName) {
+    if (envData.deployment_branch_policy && envData.deployment_branch_policy.custom_branch_policies !== true) {
+      throw new Error(
+        `environment_branch_policy_disabled: ${repository} environment "${environmentName}" must enable custom_branch_policies`,
+      );
+    }
     const policy = ghApiJson(`repos/${repository}/environments/${environmentName}/deployment-branch-policies`);
     const policies = Array.isArray(policy?.branch_policies) ? policy.branch_policies : [];
-    const matched = policies.some((p) => p?.name === expectedBranchPolicyName && (p?.type ?? 'branch') === expectedBranchPolicyType);
+    const allowedNames = Array.isArray(expectedBranchPolicyName) ? expectedBranchPolicyName : [expectedBranchPolicyName];
+    const allowedTypes = Array.isArray(expectedBranchPolicyType) ? expectedBranchPolicyType : [expectedBranchPolicyType];
+    const matched = policies.length > 0 && policies.some((p) => allowedNames.includes(p?.name) && allowedTypes.includes(p?.type ?? 'branch'));
     if (!matched) {
       throw new Error(
-        `environment_branch_policy_mismatch: ${repository} environment "${environmentName}" must enforce ${expectedBranchPolicyType} policy "${expectedBranchPolicyName}"`,
+        `environment_branch_policy_mismatch: ${repository} environment "${environmentName}" must enforce ${allowedTypes.join('/')} policy "${allowedNames.join('|')}"`,
       );
     }
   }
@@ -206,6 +223,7 @@ export function verifyStableTagAndManifests({
   githubRef,
   githubSha,
   headSha,
+  expectedTag = '',
   expectedTargetSha = '',
   ghApiJson = null,
   verifyEnvironment = false,
@@ -213,13 +231,16 @@ export function verifyStableTagAndManifests({
   if (githubRepository !== EXPECTED_REPO) {
     throw new Error(`unauthorized_repository: expected ${EXPECTED_REPO}, got ${githubRepository || '<unset>'}`);
   }
-  if (!githubRef || !githubRef.startsWith('refs/tags/v')) {
-    throw new Error(`unauthorized_ref: stable publish requires refs/tags/v<X.Y.Z>, got ${githubRef || '<unset>'}`);
+  const effectiveRef = expectedTag
+    ? (expectedTag.startsWith('refs/tags/') ? expectedTag : `refs/tags/${expectedTag}`)
+    : githubRef;
+  if (!effectiveRef || !effectiveRef.startsWith('refs/tags/v')) {
+    throw new Error(`unauthorized_ref: stable publish requires refs/tags/v<X.Y.Z>, got ${effectiveRef || '<unset>'}`);
   }
-  const tagVersion = githubRef.slice('refs/tags/v'.length);
+  const tagVersion = effectiveRef.slice('refs/tags/v'.length);
   const tagTuple = parseSemverTuple(tagVersion);
   if (!tagTuple) {
-    throw new Error(`non_stable_tag_version: stable publish refuses non-stable tag ${githubRef}`);
+    throw new Error(`non_stable_tag_version: stable publish refuses non-stable tag ${effectiveRef}`);
   }
   if (!githubSha || !/^[0-9a-f]{40}$/.test(githubSha) || headSha !== githubSha) {
     throw new Error(`source_sha_mismatch: checkout HEAD (${headSha}) does not match GITHUB_SHA (${githubSha})`);
@@ -236,6 +257,8 @@ export function verifyStableTagAndManifests({
       verifyProtectedEnvironmentGate({
         repository: EXPECTED_REPO,
         environmentName: EXPECTED_STABLE_ENVIRONMENT,
+        expectedBranchPolicyType: ['tag', 'branch'],
+        expectedBranchPolicyName: ['v*', 'main'],
         ghApiJson,
       });
     }
@@ -401,6 +424,7 @@ export async function publishStableOssRelease({
   githubRepository = process.env.GITHUB_REPOSITORY,
   githubRef = process.env.GITHUB_REF,
   githubSha = process.env.GITHUB_SHA,
+  expectedTag = process.env.EXPECTED_TAG || '',
   expectedTargetSha = process.env.EXPECTED_TAG_SHA || '',
   env = process.env,
   fetchRecord = fetchRegistryVersionRecord,
@@ -419,6 +443,7 @@ export async function publishStableOssRelease({
     githubRef,
     githubSha,
     headSha,
+    expectedTag,
     expectedTargetSha,
     ghApiJson,
     verifyEnvironment,
@@ -491,12 +516,29 @@ export async function publishStableOssRelease({
 const isMain = process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
 if (isMain) {
   const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
-  const bundleDir = process.argv[2] ? resolve(process.argv[2]) : resolve(process.env.RUNNER_TEMP || '/tmp', 'oss-npm-stable-release');
-  if (existsSync(bundleDir)) {
-    throw new Error(`Bundle directory already exists: ${bundleDir}`);
+  const args = process.argv.slice(2);
+  if (args.includes('--verify-only')) {
+    const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim();
+    const verified = verifyStableTagAndManifests({
+      repoRoot,
+      githubRepository: process.env.GITHUB_REPOSITORY,
+      githubRef: process.env.GITHUB_REF,
+      githubSha: process.env.GITHUB_SHA,
+      headSha,
+      expectedTag: process.env.EXPECTED_TAG || '',
+      expectedTargetSha: process.env.EXPECTED_TAG_SHA || '',
+      ghApiJson: defaultGhApiJson,
+      verifyEnvironment: true,
+    });
+    console.log(`✓ Pre-OIDC stable release gate verified ${verified.tag} at ${verified.sourceSha}`);
+  } else {
+    const bundleDir = args[0] ? resolve(args[0]) : resolve(process.env.RUNNER_TEMP || '/tmp', 'oss-npm-stable-release');
+    if (existsSync(bundleDir)) {
+      throw new Error(`Bundle directory already exists: ${bundleDir}`);
+    }
+    publishStableOssRelease({ repoRoot, bundleDir }).catch((err) => {
+      console.error(`❌ Stable OSS OIDC publish failed: ${err?.message || err}`);
+      process.exit(1);
+    });
   }
-  publishStableOssRelease({ repoRoot, bundleDir }).catch((err) => {
-    console.error(`❌ Stable OSS OIDC publish failed: ${err?.message || err}`);
-    process.exit(1);
-  });
 }

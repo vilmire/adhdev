@@ -219,8 +219,16 @@ export function assertFrozenOssPreviewStamps(packedRecords) {
   }
 }
 
-export function verifyApprovedCohortDigests(packedRecords, approvedCohort) {
-  if (!approvedCohort) return;
+export function verifyApprovedCohortDigests(packedRecords, approvedCohort, { previewVersion = '', ossSha = '' } = {}) {
+  if (!approvedCohort || typeof approvedCohort !== 'object') {
+    throw new Error('approved_cohort_manifest_required: OSS preview OIDC publish requires a pre-validated approved_cohort_json manifest from the full frozen cohort gate');
+  }
+  if (previewVersion && approvedCohort.version && approvedCohort.version !== previewVersion) {
+    throw new Error(`approved_cohort_version_mismatch: approved cohort version (${approvedCohort.version}) != previewVersion (${previewVersion})`);
+  }
+  if (ossSha && approvedCohort.ossSha && approvedCohort.ossSha !== ossSha) {
+    throw new Error(`approved_cohort_oss_sha_mismatch: approved cohort ossSha (${approvedCohort.ossSha}) != headSha (${ossSha})`);
+  }
   const approvedMap = new Map();
   const list = Array.isArray(approvedCohort.artifacts) ? approvedCohort.artifacts
     : Array.isArray(approvedCohort.packages) ? approvedCohort.packages : [];
@@ -228,6 +236,9 @@ export function verifyApprovedCohortDigests(packedRecords, approvedCohort) {
     if (item?.name && item?.sha256) {
       approvedMap.set(item.name, item);
     }
+  }
+  if (approvedMap.size === 0) {
+    throw new Error('approved_cohort_manifest_empty: approved_cohort_json contains no package digests');
   }
   for (const record of packedRecords) {
     const expected = approvedMap.get(record.name);
@@ -673,8 +684,8 @@ export async function publishOssPreviewRelease({
     // Gate 1: Verify frozen tarball preview stamps directly inside the packed archives (R5)
     assertFrozenOssPreviewStamps(packedRecords);
 
-    // Gate 2: Verify exact SHA-256 / integrity match against approved cohort handoff when provided (R5)
-    verifyApprovedCohortDigests(packedRecords, approvedCohort);
+    // Gate 2: Verify exact SHA-256 / integrity match against approved cohort handoff (R5 — mandatory)
+    verifyApprovedCohortDigests(packedRecords, approvedCohort, { previewVersion, ossSha: headSha });
 
     // Gate 3: Run isolated consumer install, native load, bin probes, and standalone boot smoke BEFORE any upload (R5)
     if (consumerGateFn) {
