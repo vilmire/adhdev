@@ -73883,7 +73883,8 @@ ${result.log.slice(-SELF_CHECK_LOG_MAX)}
                   if (!workspace || !head || !st.baseSha || !originDaemonId) throw new Error("review_diff_capture_blocked: missing committed checkout or origin evidence. Restore the pinned source and request rereview.");
                   try {
                     this.ports.queue.validateReviewCapture?.(parent);
-                    const { artifactId: artifactId2 } = await registerStageDiff({
+                    const operationKey = `diff-stage-${contentSha256(JSON.stringify([st.baseSha, head, effect.round])).slice(0, 40)}`;
+                    const artifactId2 = this.ports.queue.findCapturedReviewDiff?.(parent, operationKey) ?? (await registerStageDiff({
                       git: this.ports.git,
                       artifacts: this.ports.artifacts,
                       workspace,
@@ -73894,9 +73895,9 @@ ${result.log.slice(-SELF_CHECK_LOG_MAX)}
                       missionId: parent.missionId,
                       round: effect.round,
                       originDaemonId,
-                      operationKey: `diff-stage-${contentSha256(JSON.stringify([st.baseSha, head, effect.round])).slice(0, 40)}`,
+                      operationKey,
                       sourceGenerated: this.ports.sourceGenerated
-                    });
+                    })).artifactId;
                     let linked = false;
                     this.ports.queue.mutate(meshId2, id4, (current5) => {
                       if (!sameStageSource(parent, current5) || (current5.revision ?? 0) !== (parent.revision ?? 0) || !this.ports.queue.reviewWriterSettled?.(current5)) return;
@@ -81901,6 +81902,26 @@ ${asText(streams.stderr)}
             if (!evidence.toString("utf8").startsWith("# Self-check (passed)\n\n")) {
               throw new StageDiffBlocked("review_self_check_evidence_missing", {});
             }
+          },
+          findCapturedReviewDiff(parent, operationKey) {
+            const row2 = store5().db.prepare(`SELECT artifact_id FROM session_artifacts
+                    WHERE mesh_id = ? AND task_id = ? AND session_id = ? AND producer_role = 'pipeline'
+                    AND origin_daemon_id = ? AND workspace_root = ? AND rel_path = ?`).get(
+              parent.meshId,
+              parent.id,
+              `stage:${parent.id}`,
+              components.statusInstanceId ?? "",
+              stageArtifactDir(parent.id),
+              `${operationKey}-manifest.json`
+            );
+            if (!row2) return void 0;
+            const prepared = structuredClone(parent);
+            prepared.stageState.artifacts.diff.push(row2.artifact_id);
+            const grants = stageReviewArtifactGrants(store5(), prepared, [row2.artifact_id]);
+            const manifest = retainedStageDiff(store5(), prepared);
+            if (!manifest) throw new StageDiffBlocked("review_diff_manifest_invalid", {});
+            validateCurrentDiff(prepared, grants);
+            return row2.artifact_id;
           },
           reviewDiffCurrent(parent) {
             const st = parent.stageState;

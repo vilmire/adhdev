@@ -558,6 +558,23 @@ export function createProductionStagePorts(components: Pick<DaemonComponents, 's
                     throw new StageDiffBlocked('review_self_check_evidence_missing', {});
                 }
             },
+            findCapturedReviewDiff(parent, operationKey) {
+                // A crash can occur after commit-last publication and before the parent update.
+                // Locate only the exact locally published manifest, then run the regular grant verifier.
+                const row = store().db.prepare(`SELECT artifact_id FROM session_artifacts
+                    WHERE mesh_id = ? AND task_id = ? AND session_id = ? AND producer_role = 'pipeline'
+                    AND origin_daemon_id = ? AND workspace_root = ? AND rel_path = ?`)
+                    .get(parent.meshId, parent.id, `stage:${parent.id}`, components.statusInstanceId ?? '',
+                        stageArtifactDir(parent.id), `${operationKey}-manifest.json`) as { artifact_id: string } | undefined;
+                if (!row) return undefined;
+                const prepared = structuredClone(parent);
+                prepared.stageState!.artifacts.diff.push(row.artifact_id);
+                const grants = stageReviewArtifactGrants(store(), prepared, [row.artifact_id]);
+                const manifest = retainedStageDiff(store(), prepared);
+                if (!manifest) throw new StageDiffBlocked('review_diff_manifest_invalid', {});
+                validateCurrentDiff(prepared, grants);
+                return row.artifact_id;
+            },
             reviewDiffCurrent(parent) {
                 const st = parent.stageState!;
                 const manifest = retainedStageDiff(store(), parent);

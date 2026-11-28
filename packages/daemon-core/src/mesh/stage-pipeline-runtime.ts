@@ -816,11 +816,13 @@ export class StagePipelineRuntime {
                     if (!workspace || !head || !st.baseSha || !originDaemonId) throw new Error('review_diff_capture_blocked: missing committed checkout or origin evidence. Restore the pinned source and request rereview.');
                     try {
                         this.ports.queue.validateReviewCapture?.(parent);
-                        const { artifactId } = await registerStageDiff({
-                            git: this.ports.git, artifacts: this.ports.artifacts, workspace, head, base: st.baseSha,
-                            meshId, taskId: id, missionId: parent.missionId, round: effect.round, originDaemonId,
-                            operationKey: `diff-stage-${contentSha256(JSON.stringify([st.baseSha, head, effect.round])).slice(0, 40)}`, sourceGenerated: this.ports.sourceGenerated,
-                        });
+                        const operationKey = `diff-stage-${contentSha256(JSON.stringify([st.baseSha, head, effect.round])).slice(0, 40)}`;
+                        const artifactId = this.ports.queue.findCapturedReviewDiff?.(parent, operationKey)
+                            ?? (await registerStageDiff({
+                                git: this.ports.git, artifacts: this.ports.artifacts, workspace, head, base: st.baseSha,
+                                meshId, taskId: id, missionId: parent.missionId, round: effect.round, originDaemonId,
+                                operationKey, sourceGenerated: this.ports.sourceGenerated,
+                            })).artifactId;
                         let linked = false;
                         this.ports.queue.mutate(meshId, id, current => {
                             if (!sameStageSource(parent, current) || (current.revision ?? 0) !== (parent.revision ?? 0)

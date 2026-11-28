@@ -367,6 +367,17 @@ it('resumes a zero-child handoff with large generated evidence and binds the det
     const ports = makePorts();
     // Settlement is exercised with the real attempt ledger in the integration fixture.
     ports.queue.reviewWriterSettled = () => true;
+    const mutate = ports.queue.mutate;
+    ports.queue.mutate = () => null; // Interrupt after manifest publication and before parent linkage.
+    const first = new StagePipelineRuntime(ports);
+    await first.tick();
+    await first.idle();
+    expect(st.artifacts.diff).toEqual([]);
+    expect(store.listBySession('stage:parent')).toHaveLength(2);
+    expect(state.child).toBeUndefined();
+    ports.queue.mutate = mutate;
+    const collect = vi.fn(() => { throw new Error('unexpected second capture'); });
+    ports.sourceGenerated = collect;
     const runtime = new StagePipelineRuntime(ports);
     const optionalCheckout = vi.fn(async () => null);
     setStagePorts({ reviewerWorkspace: { prepare: optionalCheckout } });
@@ -374,6 +385,7 @@ it('resumes a zero-child handoff with large generated evidence and binds the det
     await runtime.idle();
     const id = st.artifacts.diff.at(-1)!;
     expect(id).toBeDefined();
+    expect(collect).not.toHaveBeenCalled();
     const manifest = decodeStageSourceGenerated(verifyAndReadArtifactBuffer(store.get(id)!).buffer)!;
     expect(manifest.inventory.map(c => [c.repo, c.path, c.kind])).toEqual([
         ['root', 'oss', 'source'], ['root', 'root.txt', 'source'], ['oss', generatedPath, 'generated'], ['oss', 'seed.txt', 'source'],
@@ -471,4 +483,4 @@ it('resumes a zero-child handoff with large generated evidence and binds the det
     fs.truncateSync(privateFile, 1);
     expect(() => validateStageSourceGeneratedRead({ db }, state.parent, child)).toThrow();
     expect(ports.queue.reviewInputValid!(state.parent, child)).toBe(false);
-}, 90_000);
+}, 120_000);
