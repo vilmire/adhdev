@@ -157,6 +157,7 @@ jobs:
     permissions:
       actions: read
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v5
         with:
@@ -166,8 +167,12 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
-          registry-url: https://registry.npmjs.org
           package-manager-cache: false
+      - name: Pin isolated npm CLI for OIDC Trusted Publishing
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/oidc-npm" --no-save --no-audit --no-fund npm@11.21.0
+          echo "$RUNNER_TEMP/oidc-npm/node_modules/.bin" >> "$GITHUB_PATH"
       - name: Recheck the immutable tag and environment after approval
         env:
           GH_TOKEN: ${{ github.token }}
@@ -181,5 +186,6 @@ jobs:
       - name: Publish only the reviewed tarballs and verify registry integrity
         env:
           MANIFEST_SHA: ${{ needs.prepare.outputs.manifest_sha }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ''
+          NPM_TOKEN: ''
         run: python3 control/.github/scripts/recover-v1.0.82.py publish "$RUNNER_TEMP/npm-release" "$MANIFEST_SHA" "$GITHUB_SHA"

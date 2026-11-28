@@ -77,6 +77,8 @@ def verify_tag():
 def verify_environment():
     path = f"environments/{ENVIRONMENT}"
     environment = api(path)
+    require(not environment.get("can_admins_bypass", True),
+            "The recovery environment must disable administrator bypass")
     rules = [rule for rule in environment["protection_rules"] if rule["type"] == "required_reviewers"]
     require(len(rules) == 1 and not rules[0]["prevent_self_review"]
             and [(item["type"], item["reviewer"].get("login")) for item in rules[0]["reviewers"]] ==
@@ -262,6 +264,12 @@ def verify_registry_tarball(slug, record):
 
 
 def publish(bundle, expected_sha, control_sha):
+    publish_env = {key: value for key, value in os.environ.items()
+                   if key not in ("NODE_AUTH_TOKEN", "NPM_TOKEN")
+                   and not key.lower().startswith("npm_config__authtoken")}
+    require(bool(publish_env.get("ACTIONS_ID_TOKEN_REQUEST_URL"))
+            and bool(publish_env.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN")),
+            "OIDC Trusted Publishing requires GitHub Actions id-token: write credentials")
     payload = (bundle / "manifest.json").read_bytes()
     require(hashlib.sha256(payload).hexdigest() == expected_sha, "Prepared manifest digest mismatch")
     manifest = json.loads(payload)
@@ -283,7 +291,8 @@ def publish(bundle, expected_sha, control_sha):
         require(state is not False, f"{name}: latest changed since preflight")
         if state is None:
             subprocess.run(["npm", "publish", str(bundle / record["filename"]), "--access=public",
-                            "--ignore-scripts", "--tag=latest", f"--registry={REGISTRY}"], check=True)
+                            "--ignore-scripts", "--tag=latest", f"--registry={REGISTRY}"],
+                           env=publish_env, check=True)
             for _ in range(18):
                 if registry_state(record):
                     break
