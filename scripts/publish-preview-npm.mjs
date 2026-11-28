@@ -41,6 +41,8 @@ import { probeDriverList } from './driver-list-probe.mjs';
 import {
   EXPECTED_REPO,
   EXPECTED_REPO_URL,
+  EXPECTED_OWNER_LOGIN,
+  EXPECTED_OWNER_ID,
   REGISTRY,
   computeHashes,
   sanitizeOidcPublishEnv,
@@ -258,11 +260,70 @@ export function computeApprovedCohortAttestation({
   return createHash('sha256').update(canonicalPayload, 'utf8').digest('hex');
 }
 
+export const EXPECTED_ROOT_REPO = 'vilmire/adhdev-cloud';
+export const EXPECTED_ROOT_PREVIEW_WORKFLOW = '.github/workflows/deploy-preview.yml';
+export const EXPECTED_ROOT_GATE_JOB_NAME = 'preflight-preview';
+export const EXPECTED_ROOT_GATE_STEP_NAME = 'Freeze and gate full 5-package preview cohort BEFORE any npm publish';
+
+export function verifyRootCohortGateWorkflowRun({
+  gateRunId,
+  expectedRootSha,
+  ghApiJson = defaultGhApiJson,
+}) {
+  if (!gateRunId || !/^[1-9][0-9]{0,19}$/.test(String(gateRunId))) {
+    throw new Error(
+      `approved_cohort_gate_run_id_required: OSS preview OIDC publish requires a numeric designated full-cohort gate run ID (got ${gateRunId || '<unset>'})`,
+    );
+  }
+  const runData = ghApiJson(`repos/${EXPECTED_ROOT_REPO}/actions/runs/${gateRunId}`);
+  if (
+    !runData
+    || String(runData.id) !== String(gateRunId)
+    || runData.path !== EXPECTED_ROOT_PREVIEW_WORKFLOW
+    || runData.head_sha !== expectedRootSha
+    || runData.event !== 'workflow_dispatch'
+    || runData.head_branch !== 'main'
+    || runData?.repository?.full_name !== EXPECTED_ROOT_REPO
+    || runData?.head_repository?.full_name !== EXPECTED_ROOT_REPO
+    || (String(runData?.triggering_actor?.id ?? '') !== String(EXPECTED_OWNER_ID)
+      && runData?.triggering_actor?.login !== EXPECTED_OWNER_LOGIN
+      && String(runData?.actor?.id ?? '') !== String(EXPECTED_OWNER_ID)
+      && runData?.actor?.login !== EXPECTED_OWNER_LOGIN)
+  ) {
+    throw new Error(
+      `approved_cohort_gate_run_provenance_mismatch: gate run ${gateRunId} does not match ${EXPECTED_ROOT_REPO} ${EXPECTED_ROOT_PREVIEW_WORKFLOW} on main at ${expectedRootSha}`,
+    );
+  }
+  const jobsData = ghApiJson(`repos/${EXPECTED_ROOT_REPO}/actions/runs/${gateRunId}/jobs?per_page=100`);
+  const jobs = Array.isArray(jobsData?.jobs) ? jobsData.jobs : [];
+  const gateJob = jobs.find((j) => j?.name === EXPECTED_ROOT_GATE_JOB_NAME);
+  if (
+    !gateJob
+    || gateJob.head_sha !== expectedRootSha
+    || gateJob.status !== 'completed'
+    || gateJob.conclusion !== 'success'
+  ) {
+    throw new Error(
+      `approved_cohort_gate_job_unverified: gate run ${gateRunId} job "${EXPECTED_ROOT_GATE_JOB_NAME}" did not complete with conclusion=success at ${expectedRootSha}`,
+    );
+  }
+  const steps = Array.isArray(gateJob.steps) ? gateJob.steps : [];
+  const gateStep = steps.find((s) => s?.name === EXPECTED_ROOT_GATE_STEP_NAME);
+  if (!gateStep || gateStep.conclusion !== 'success') {
+    throw new Error(
+      `approved_cohort_gate_step_unverified: gate run ${gateRunId} job "${EXPECTED_ROOT_GATE_JOB_NAME}" step "${EXPECTED_ROOT_GATE_STEP_NAME}" did not succeed`,
+    );
+  }
+  return { gateRunId: String(gateRunId), headSha: expectedRootSha };
+}
+
 export function verifyApprovedCohortDigests(packedRecords, approvedCohort, {
   previewVersion = '',
   ossSha = '',
   rootSha = '',
   npmPackage = 'all',
+  ghApiJson = null,
+  verifyGateRun = false,
 } = {}) {
   if (!approvedCohort || typeof approvedCohort !== 'object') {
     throw new Error('approved_cohort_manifest_required: OSS preview OIDC publish requires a pre-validated approved_cohort_json manifest from the full frozen cohort gate');
@@ -352,6 +413,16 @@ export function verifyApprovedCohortDigests(packedRecords, approvedCohort, {
     throw new Error(
       `approved_cohort_attestation_mismatch: fullCohortGateEvidence.cohortAttestationSha256 (${gateEvidence.cohortAttestationSha256 || '<unset>'}) does not match computed cohort attestation (${expectedAttestation})`,
     );
+  }
+  if (verifyGateRun || ghApiJson || gateEvidence.gateRunId) {
+    if (!ghApiJson) {
+      throw new Error('approved_cohort_gate_api_required: ghApiJson is required to independently verify the designated full-cohort gate run');
+    }
+    verifyRootCohortGateWorkflowRun({
+      gateRunId: gateEvidence.gateRunId,
+      expectedRootSha: approvedCohort.rootSha,
+      ghApiJson,
+    });
   }
   for (const record of packedRecords) {
     const expected = approvedMap.get(record.name);
@@ -688,6 +759,7 @@ export async function publishOssPreviewRelease({
   consumerGateFn = checkFrozenOssPreviewCohort,
   ghApiJson = defaultGhApiJson,
   verifyEnvironment = Boolean(process.env.GH_TOKEN || process.env.GITHUB_TOKEN),
+  verifyGateRun = Boolean(process.env.GH_TOKEN || process.env.GITHUB_TOKEN),
   pollAttempts = 18,
   pollDelayMs = 10_000,
 }) {
@@ -798,12 +870,14 @@ export async function publishOssPreviewRelease({
     // Gate 1: Verify frozen tarball preview stamps directly inside the packed archives (R5)
     assertFrozenOssPreviewStamps(packedRecords);
 
-    // Gate 2: Verify exact SHA-256 / integrity / rootSha / full-cohort gate attestation match against approved cohort handoff (R5 — mandatory)
+    // Gate 2: Verify exact SHA-256 / integrity / rootSha / full-cohort gate attestation & authenticated gate run match against approved cohort handoff (R5 — mandatory)
     verifyApprovedCohortDigests(packedRecords, approvedCohort, {
       previewVersion,
       ossSha: headSha,
       rootSha: expectedRootSha,
       npmPackage,
+      ghApiJson: verifyGateRun ? ghApiJson : null,
+      verifyGateRun,
     });
 
     // Gate 3: Run isolated consumer install, native load, bin probes, and standalone boot smoke BEFORE any upload (R5)

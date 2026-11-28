@@ -72,12 +72,21 @@ jobs:
 
       - name: Verify exact pinned OSS source and preview RC version
         env:
+          EXPECTED_ROOT_SHA: ${{ inputs.root_sha }}
           EXPECTED_OSS_SHA: ${{ inputs.oss_sha }}
           PREVIEW_VERSION: ${{ inputs.preview_version }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$EXPECTED_OSS_SHA" = "$GITHUB_SHA"
+          if [[ ! "$EXPECTED_ROOT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "❌ root_sha must be a 40-char lowercase hex commit SHA (got: $EXPECTED_ROOT_SHA)"
+            exit 1
+          fi
+          if [[ ! "$EXPECTED_OSS_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "❌ oss_sha must be a 40-char lowercase hex commit SHA (got: $EXPECTED_OSS_SHA)"
+            exit 1
+          fi
           if [[ ! "$PREVIEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]; then
             echo "❌ preview_version must be an exact X.Y.Z-rc.N preview version (got: $PREVIEW_VERSION)"
             exit 1
@@ -109,6 +118,8 @@ jobs:
       - name: Freeze, gate all OSS preview tarballs, and publish to npm next via OIDC
         env:
           GH_TOKEN: ${{ github.token }}
+          PREVIEW_VERSION: ${{ inputs.preview_version }}
+          NPM_PACKAGE: ${{ inputs.npm_package }}
           EXPECTED_ROOT_SHA: ${{ inputs.root_sha }}
           APPROVED_COHORT_JSON: ${{ inputs.approved_cohort_json }}
           NODE_AUTH_TOKEN: ''
@@ -116,4 +127,4 @@ jobs:
         run: |
           set -euo pipefail
           unset NODE_AUTH_TOKEN NPM_TOKEN npm_config__authToken
-          node scripts/publish-preview-npm.mjs --preview-version "${{ inputs.preview_version }}" --npm-package "${{ inputs.npm_package }}" --root-sha "${{ inputs.root_sha }}" --bundle-dir "$RUNNER_TEMP/oss-npm-preview-release"
+          node scripts/publish-preview-npm.mjs --preview-version "$PREVIEW_VERSION" --npm-package "$NPM_PACKAGE" --root-sha "$EXPECTED_ROOT_SHA" --bundle-dir "$RUNNER_TEMP/oss-npm-preview-release"
