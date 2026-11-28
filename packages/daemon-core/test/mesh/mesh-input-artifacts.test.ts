@@ -59,9 +59,10 @@ describe('mission artifact auto-inherit', () => {
         store.updateQueueEntry({ ...store.findQueueEntryById(meshId, task.id)!, status } as any);
         return task;
     }
-    function art(p: { id?: string; taskId?: string | null; role?: string; mesh?: string; mission?: string | null; title?: string; preview?: string; kind?: string }) {
+    function art(p: { id?: string; taskId?: string | null; role?: string; mesh?: string; mission?: string | null; title?: string; preview?: string; kind?: string; createdAt?: number }) {
         seq += 1;
         const id = p.id ?? `art_${String(seq).padStart(16, '0')}`;
+        const createdAt = p.createdAt ?? base + seq * 1000;
         artifacts.upsertForwarded({
             artifactId: id,
             sessionId: `sess-${seq}`,
@@ -78,8 +79,8 @@ describe('mission artifact auto-inherit', () => {
             sizeBytes: 10,
             sha256: 'a'.repeat(64),
             previewText: p.preview ?? `preview ${seq}`,
-            createdAt: base + seq * 1000,
-            updatedAt: base + seq * 1000,
+            createdAt,
+            updatedAt: createdAt,
         } as any);
         return id;
     }
@@ -147,6 +148,32 @@ describe('mission artifact auto-inherit', () => {
         const task = enqueueTask(MESH, 'follow-up', { ...opts, missionId: MISSION, inputArtifactIds: explicit });
         expect(task.inputArtifactIds).toEqual([...explicit, ...ids.slice(-MAX_INHERITED_INPUT_ARTIFACTS).reverse()]);
         expect(task.inputArtifactIds).toHaveLength(2 + MAX_INHERITED_INPUT_ARTIFACTS);
+    });
+
+    it('keeps SQL insertion order across the 200-row scan boundary for equal timestamps', () => {
+        const done = finishedTask(MISSION, 'completed');
+        const explicit = ['art_ffffffffffffffff', 'art_0000000000000001'];
+        const early = enqueueTask(MESH, 'follow-up', { ...opts, missionId: MISSION, inputArtifactIds: explicit });
+        // Descending IDs deliberately oppose the newest-first insertion order.
+        const newestFirst = Array.from({ length: 201 }, (_, index) => art({
+            id: `art_${String(201 - index).padStart(16, '0')}`,
+            taskId: done.id,
+            createdAt: base,
+        })).reverse();
+        const expected = newestFirst.slice(0, MAX_INHERITED_INPUT_ARTIFACTS);
+        expect(resolveInheritedArtifactIds(MESH, MISSION)).toEqual(expected);
+        expect(resolveInheritedArtifactIds(MESH, MISSION)).toEqual(expected);
+        // Removing the first 199 eligible IDs leaves one row in the SQL window.
+        expect(resolveInheritedArtifactIds(MESH, MISSION, { explicit: newestFirst.slice(0, 199) }))
+            .toEqual(newestFirst.slice(199, 200));
+
+        const refreshed = refreshInheritedInputArtifacts(MESH, early);
+        expect(refreshed.inputArtifactIds).toEqual([...explicit, ...newestFirst.slice(1, 1 + MAX_INHERITED_INPUT_ARTIFACTS)]);
+        const refreshedAgain = refreshInheritedInputArtifacts(MESH, refreshed);
+        const expectedAfterSecondRefresh = [...explicit, ...newestFirst.slice(1, 1 + 2 * MAX_INHERITED_INPUT_ARTIFACTS)];
+        expect(refreshedAgain.inputArtifactIds).toEqual(expectedAfterSecondRefresh);
+        expect(MeshRuntimeStore.getInstance().findQueueEntryById(MESH, early.id)!.inputArtifactIds)
+            .toEqual(expectedAfterSecondRefresh);
     });
 
     it('honours the opt-out (camel and snake) and persists it', () => {

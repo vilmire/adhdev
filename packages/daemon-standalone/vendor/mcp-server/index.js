@@ -69897,7 +69897,7 @@ ${mergeTreeErr?.stderr || ""}`;
           if (!producerTask || producerTask === excludeTask) return false;
           return INHERIT_FROM_STATUSES.has(missionTaskStatus.get(producerTask) ?? "");
         });
-        return eligible.sort((a, b) => b.createdAt - a.createdAt || b.artifactId.localeCompare(a.artifactId)).slice(0, limit);
+        return eligible.slice(0, limit);
       } catch {
         return [];
       }
